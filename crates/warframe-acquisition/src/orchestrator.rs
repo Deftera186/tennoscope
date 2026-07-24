@@ -51,6 +51,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct AcquisitionFailure {
     error: AcquisitionError,
     health: AcquisitionHealth,

@@ -1,11 +1,14 @@
 use std::{
     fs,
-    io::Read,
-    path::{Path, PathBuf},
+    io::{Read, Write},
+    path::PathBuf,
     time::Duration,
 };
 
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use reqwest::blocking::Client;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::CatalogIndex;
@@ -18,7 +21,6 @@ pub enum CatalogFetch {
     Unavailable,
     TooLarge,
 }
-
 pub trait CatalogSource {
     fn fetch(&self) -> Result<Vec<u8>, CatalogFetch>;
 }
@@ -64,7 +66,6 @@ pub enum CatalogLoadSource {
     Network,
     StaleCache,
 }
-
 pub struct CatalogLoad {
     index: CatalogIndex,
     source: CatalogLoadSource,
@@ -90,6 +91,13 @@ pub enum CatalogCacheError {
     CacheWrite,
 }
 
+#[derive(Serialize, Deserialize)]
+struct Generation {
+    fetched_unix: u64,
+    catalog: serde_json::Value,
+    content_hash: String,
+}
+
 pub struct CatalogCache {
     directory: PathBuf,
 }
@@ -99,15 +107,17 @@ impl CatalogCache {
             directory: directory.into(),
         }
     }
-
     pub fn load(
         &self,
         source: &dyn CatalogSource,
         now_unix: u64,
     ) -> Result<CatalogLoad, CatalogCacheError> {
         if let Ok(bytes) = source.fetch() {
-            if let Ok(index) = CatalogIndex::from_wfcd_json(&bytes) {
-                self.store(&bytes, now_unix)?;
+            if let (Ok(index), Ok(catalog)) = (
+                CatalogIndex::from_wfcd_json(&bytes),
+                serde_json::from_slice(&bytes),
+            ) {
+                self.store(catalog, now_unix)?;
                 return Ok(CatalogLoad {
                     index,
                     source: CatalogLoadSource::Network,
@@ -118,35 +128,58 @@ impl CatalogCache {
         self.load_cached()
     }
 
-    fn store(&self, bytes: &[u8], fetched_unix: u64) -> Result<(), CatalogCacheError> {
+    fn store(
+        &self,
+        catalog: serde_json::Value,
+        fetched_unix: u64,
+    ) -> Result<(), CatalogCacheError> {
         fs::create_dir_all(&self.directory).map_err(|_| CatalogCacheError::CacheWrite)?;
-        atomic_write(&self.directory.join("All.json"), bytes)?;
-        atomic_write(
-            &self.directory.join("metadata"),
-            fetched_unix.to_string().as_bytes(),
-        )?;
-        Ok(())
+        let content_hash = generation_hash(fetched_unix, &catalog)?;
+        let bytes = serde_json::to_vec(&Generation {
+            fetched_unix,
+            catalog,
+            content_hash,
+        })
+        .map_err(|_| CatalogCacheError::CacheWrite)?;
+        let final_path = self.directory.join("catalog-generation.json");
+        AtomicFile::new(final_path, OverwriteBehavior::AllowOverwrite)
+            .write(|file| file.write_all(&bytes).and_then(|_| file.sync_all()))
+            .map_err(|_| CatalogCacheError::CacheWrite)
     }
 
     fn load_cached(&self) -> Result<CatalogLoad, CatalogCacheError> {
-        let bytes = fs::read(self.directory.join("All.json"))
+        let bytes = fs::read(self.directory.join("catalog-generation.json"))
             .map_err(|_| CatalogCacheError::Unavailable)?;
-        let fetched_unix = fs::read_to_string(self.directory.join("metadata"))
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .ok_or(CatalogCacheError::Unavailable)?;
-        let index =
-            CatalogIndex::from_wfcd_json(&bytes).map_err(|_| CatalogCacheError::Unavailable)?;
+        let generation: Generation =
+            serde_json::from_slice(&bytes).map_err(|_| CatalogCacheError::Unavailable)?;
+        if generation.content_hash
+            != generation_hash(generation.fetched_unix, &generation.catalog)
+                .map_err(|_| CatalogCacheError::Unavailable)?
+        {
+            return Err(CatalogCacheError::Unavailable);
+        }
+        let catalog_bytes =
+            serde_json::to_vec(&generation.catalog).map_err(|_| CatalogCacheError::Unavailable)?;
+        let index = CatalogIndex::from_wfcd_json(&catalog_bytes)
+            .map_err(|_| CatalogCacheError::Unavailable)?;
         Ok(CatalogLoad {
             index,
             source: CatalogLoadSource::StaleCache,
-            fetched_unix,
+            fetched_unix: generation.fetched_unix,
         })
     }
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), CatalogCacheError> {
-    let temporary = path.with_extension("tmp");
-    fs::write(&temporary, bytes).map_err(|_| CatalogCacheError::CacheWrite)?;
-    fs::rename(temporary, path).map_err(|_| CatalogCacheError::CacheWrite)
+fn generation_hash(
+    fetched_unix: u64,
+    catalog: &serde_json::Value,
+) -> Result<String, CatalogCacheError> {
+    let mut digest = Sha256::new();
+    digest.update(fetched_unix.to_le_bytes());
+    digest.update(serde_json::to_vec(catalog).map_err(|_| CatalogCacheError::CacheWrite)?);
+    Ok(digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }

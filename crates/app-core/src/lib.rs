@@ -30,6 +30,44 @@ pub struct AppCore {
     health: HealthView,
 }
 
+pub trait AcquisitionPort {
+    fn refresh(&self) -> InventoryRefreshOutcome;
+}
+
+#[derive(Clone)]
+pub enum InventoryRefreshOutcome {
+    Success {
+        result: AcquisitionResult,
+        meta: SnapshotMeta,
+        catalog_source: CatalogLoadSource,
+        catalog_fetched_unix: u64,
+    },
+    AcquisitionFailed(AcquisitionFailure),
+    CatalogFailed,
+}
+
+impl InventoryRefreshOutcome {
+    pub fn success(
+        result: AcquisitionResult,
+        meta: SnapshotMeta,
+        catalog_source: CatalogLoadSource,
+        catalog_fetched_unix: u64,
+    ) -> Self {
+        Self::Success {
+            result,
+            meta,
+            catalog_source,
+            catalog_fetched_unix,
+        }
+    }
+    pub fn acquisition_failed(failure: AcquisitionFailure) -> Self {
+        Self::AcquisitionFailed(failure)
+    }
+    pub const fn catalog_failed() -> Self {
+        Self::CatalogFailed
+    }
+}
+
 impl AppCore {
     pub fn in_memory() -> Result<Self, AppError> {
         Self::from_store(SqliteStore::in_memory()?)
@@ -129,6 +167,7 @@ impl AppCore {
                 };
             }
             Err(failure) => {
+                let last_success = self.health.game_reader.last_success.clone();
                 self.health.acquisition_stages = failure
                     .health()
                     .stages()
@@ -138,12 +177,40 @@ impl AppCore {
                     .collect();
                 self.health.game_reader =
                     match failure.health().stages().first().map(|stage| stage.state()) {
-                        Some(StageState::Degraded) => BackendHealth::degraded(failure.to_string())?,
-                        _ => BackendHealth::failed(failure.to_string())?,
+                        Some(StageState::Degraded) => BackendHealth::new(
+                            HealthState::Degraded,
+                            failure.to_string(),
+                            last_success,
+                        )?,
+                        _ => BackendHealth::new(
+                            HealthState::Failed,
+                            failure.to_string(),
+                            last_success,
+                        )?,
                     };
             }
         }
         self.current_view()
+    }
+
+    pub fn refresh_from(&mut self, port: &dyn AcquisitionPort) -> Result<AppView, AppError> {
+        match port.refresh() {
+            InventoryRefreshOutcome::Success {
+                result,
+                meta,
+                catalog_source,
+                catalog_fetched_unix,
+            } => self.finish_inventory_refresh(
+                Ok((result, meta)),
+                Some((catalog_source, catalog_fetched_unix)),
+            ),
+            InventoryRefreshOutcome::AcquisitionFailed(failure) => {
+                self.finish_inventory_refresh(Err(failure), None)
+            }
+            InventoryRefreshOutcome::CatalogFailed => {
+                self.record_catalog_failure("No valid WFCD catalog is available")
+            }
+        }
     }
 
     pub fn record_catalog_failure(

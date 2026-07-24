@@ -36,10 +36,7 @@ fn valid_download_is_atomically_cached_with_freshness_metadata() {
             .resolve("/Lotus/Powersuits/Test/Test")
             .is_some()
     );
-    assert_eq!(
-        fs::read(dir.path().join("catalog/All.json")).unwrap(),
-        VALID
-    );
+    assert!(dir.path().join("catalog/catalog-generation.json").is_file());
 }
 
 #[test]
@@ -91,9 +88,103 @@ fn invalid_download_never_replaces_the_last_complete_catalog() {
         )
         .unwrap();
     assert_eq!(loaded.source(), CatalogLoadSource::StaleCache);
-    assert_eq!(
-        fs::read(dir.path().join("catalog/All.json")).unwrap(),
-        VALID
+    assert!(
+        loaded
+            .index()
+            .resolve("/Lotus/Powersuits/Test/Test")
+            .is_some()
+    );
+}
+
+#[test]
+fn interrupted_temporary_generation_is_never_loaded() {
+    let dir = tempdir().unwrap();
+    let cache = CatalogCache::new(dir.path().join("catalog"));
+    fs::create_dir_all(dir.path().join("catalog")).unwrap();
+    fs::write(
+        dir.path().join("catalog/catalog-generation.tmp-99"),
+        b"partial",
+    )
+    .unwrap();
+    assert!(
+        cache
+            .load(
+                &Source {
+                    result: Err(CatalogFetch::Unavailable),
+                    calls: Cell::new(0)
+                },
+                100
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn mismatched_content_hash_rejects_the_entire_generation() {
+    let dir = tempdir().unwrap();
+    let cache = CatalogCache::new(dir.path().join("catalog"));
+    cache
+        .load(
+            &Source {
+                result: Ok(VALID.to_vec()),
+                calls: Cell::new(0),
+            },
+            100,
+        )
+        .unwrap();
+    let path = dir.path().join("catalog/catalog-generation.json");
+    let mut envelope: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    envelope["fetched_unix"] = 999.into();
+    fs::write(path, serde_json::to_vec(&envelope).unwrap()).unwrap();
+    assert!(
+        cache
+            .load(
+                &Source {
+                    result: Err(CatalogFetch::Unavailable),
+                    calls: Cell::new(0)
+                },
+                200
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn concurrent_writers_leave_one_whole_valid_generation() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("catalog");
+    std::thread::scope(|scope| {
+        for now in [100, 200] {
+            let path = path.clone();
+            scope.spawn(move || {
+                CatalogCache::new(path)
+                    .load(
+                        &Source {
+                            result: Ok(VALID.to_vec()),
+                            calls: Cell::new(0),
+                        },
+                        now,
+                    )
+                    .unwrap();
+            });
+        }
+    });
+    let loaded = CatalogCache::new(path)
+        .load(
+            &Source {
+                result: Err(CatalogFetch::Unavailable),
+                calls: Cell::new(0),
+            },
+            300,
+        )
+        .unwrap();
+    assert!(matches!(loaded.fetched_unix(), 100 | 200));
+    assert!(
+        loaded
+            .index()
+            .resolve("/Lotus/Powersuits/Test/Test")
+            .is_some()
     );
 }
 

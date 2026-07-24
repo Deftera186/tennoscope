@@ -1,4 +1,4 @@
-use app_core::{AppCore, HealthState};
+use app_core::{AcquisitionPort, AppCore, HealthState, InventoryRefreshOutcome};
 use local_store::SnapshotMeta;
 use warframe_acquisition::{
     AcquisitionError, AcquisitionFailure, AcquisitionHealth, AcquisitionResult, CatalogLoadSource,
@@ -59,4 +59,47 @@ fn successful_refresh_atomically_replaces_snapshot_and_reports_catalog_freshness
     assert_eq!(view.health().catalog().state(), HealthState::Degraded);
     assert!(view.health().catalog().message().contains("cached"));
     assert_eq!(view.health().acquisition_stages().len(), 5);
+}
+
+struct FakePort(InventoryRefreshOutcome);
+impl AcquisitionPort for FakePort {
+    fn refresh(&self) -> InventoryRefreshOutcome {
+        self.0.clone()
+    }
+}
+
+#[test]
+fn acquisition_port_is_the_single_refresh_seam_and_failure_keeps_last_success() {
+    let mut core = AppCore::in_memory().unwrap();
+    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let result =
+        AcquisitionResult::new(snapshot("prior"), AcquisitionHealth::successful()).unwrap();
+    core.refresh_from(&FakePort(InventoryRefreshOutcome::success(
+        result,
+        meta,
+        CatalogLoadSource::Network,
+        100,
+    )))
+    .unwrap();
+
+    let failed = FakePort(InventoryRefreshOutcome::acquisition_failed(
+        AcquisitionFailure::from_error(AcquisitionError::GameNotRunning),
+    ));
+    let view = core.refresh_from(&failed).unwrap();
+
+    assert_eq!(view.collection().items()[0].id(), "prior");
+    assert_eq!(view.health().game_reader().state(), HealthState::Degraded);
+    assert_eq!(view.health().game_reader().last_success(), Some("123"));
+}
+
+#[test]
+fn catalog_port_failure_is_published_without_replacing_collection() {
+    let mut core = AppCore::in_memory().unwrap();
+    core.apply_inventory_snapshot(snapshot("prior"), SnapshotMeta::fake("old").unwrap())
+        .unwrap();
+    let view = core
+        .refresh_from(&FakePort(InventoryRefreshOutcome::catalog_failed()))
+        .unwrap();
+    assert_eq!(view.collection().items()[0].id(), "prior");
+    assert_eq!(view.health().catalog().state(), HealthState::Failed);
 }

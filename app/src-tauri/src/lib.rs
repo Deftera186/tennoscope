@@ -3,12 +3,13 @@
 use std::{
     fs,
     io::{Read, Seek, SeekFrom},
+    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use app_core::{AppCore, AppView};
+use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome};
 use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
@@ -16,6 +17,9 @@ use warframe_acquisition::{
     CatalogCache, InventoryAcquirer, InventoryHttpTransport, LinuxProc, ProcessDiscovery,
     WfcdCatalogHttp,
 };
+
+mod monitor;
+pub use monitor::{LogObservation, MonitorInput, MonitorMachine, MonitorResult};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SetupStatus {
@@ -64,13 +68,18 @@ struct Runtime {
 type SharedRuntime = Arc<Mutex<Runtime>>;
 
 #[tauri::command]
-fn get_view(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
-    state
-        .lock()
-        .map_err(|_| "application state is unavailable".to_owned())?
-        .core
-        .current_view()
-        .map_err(|_| "application view is unavailable".to_owned())
+async fn get_view(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?
+            .core
+            .current_view()
+            .map_err(|_| "application view is unavailable".to_owned())
+    })
+    .await
+    .map_err(|_| "application view task failed".to_owned())?
 }
 
 #[tauri::command]
@@ -107,16 +116,21 @@ async fn refresh_inventory(state: State<'_, SharedRuntime>) -> Result<AppView, S
 }
 
 #[tauri::command]
-fn load_fake_session(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
+async fn load_fake_session(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     if !cfg!(debug_assertions) {
         return Err("fake session is unavailable in release builds".to_owned());
     }
-    state
-        .lock()
-        .map_err(|_| "application state is unavailable".to_owned())?
-        .core
-        .load_fake_session()
-        .map_err(|_| "fake session could not be loaded".to_owned())
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?
+            .core
+            .load_fake_session()
+            .map_err(|_| "fake session could not be loaded".to_owned())
+    })
+    .await
+    .map_err(|_| "fake session task failed".to_owned())?
 }
 
 async fn refresh_shared(shared: SharedRuntime) -> Result<AppView, String> {
@@ -147,45 +161,76 @@ fn refresh_blocking(shared: &SharedRuntime) -> Result<AppView, String> {
         runtime.last_refresh_started = Some(Instant::now());
         runtime.app_data.clone()
     };
-    let catalog_http =
-        WfcdCatalogHttp::new().map_err(|_| "catalog client could not be initialized".to_owned())?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let catalog = match CatalogCache::new(app_data.join("catalog")).load(&catalog_http, now) {
-        Ok(catalog) => catalog,
-        Err(_) => {
-            return shared
-                .lock()
-                .map_err(|_| "application state is unavailable".to_owned())?
-                .core
-                .record_catalog_failure("No valid WFCD catalog is available")
-                .map_err(|_| "catalog failure could not be recorded".to_owned());
+    let port = ProductionAcquisition { app_data };
+    let outcome = port.refresh();
+    apply_outcome(shared, outcome)
+}
+
+struct ProductionAcquisition {
+    app_data: PathBuf,
+}
+impl AcquisitionPort for ProductionAcquisition {
+    fn refresh(&self) -> InventoryRefreshOutcome {
+        let catalog_http = match WfcdCatalogHttp::new() {
+            Ok(client) => client,
+            Err(_) => return InventoryRefreshOutcome::catalog_failed(),
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let catalog =
+            match CatalogCache::new(self.app_data.join("catalog")).load(&catalog_http, now) {
+                Ok(catalog) => catalog,
+                Err(_) => return InventoryRefreshOutcome::catalog_failed(),
+            };
+        let procfs = LinuxProc::new();
+        let transport = match InventoryHttpTransport::new() {
+            Ok(transport) => transport,
+            Err(error) => {
+                return InventoryRefreshOutcome::acquisition_failed(
+                    warframe_acquisition::AcquisitionFailure::from_error(error),
+                );
+            }
+        };
+        let attempt = InventoryAcquirer::new(&procfs, &procfs, transport).acquire(catalog.index());
+        match attempt {
+            Ok(result) => {
+                let meta = SnapshotMeta::new(
+                    now.to_string(),
+                    "unknown".to_owned(),
+                    "warframe-memory".to_owned(),
+                )
+                .expect("nonblank production snapshot metadata");
+                InventoryRefreshOutcome::success(
+                    result,
+                    meta,
+                    catalog.source(),
+                    catalog.fetched_unix(),
+                )
+            }
+            Err(failure) => InventoryRefreshOutcome::acquisition_failed(failure),
         }
-    };
-    let procfs = LinuxProc::new();
-    let transport = InventoryHttpTransport::new()
-        .map_err(|_| "inventory client could not be initialized".to_owned())?;
-    let attempt = InventoryAcquirer::new(&procfs, &procfs, transport).acquire(catalog.index());
-    let attempt = match attempt {
-        Ok(result) => {
-            let meta = SnapshotMeta::new(
-                now.to_string(),
-                "unknown".to_owned(),
-                "warframe-memory".to_owned(),
-            )
-            .map_err(|_| "snapshot metadata could not be created".to_owned())?;
-            Ok((result, meta))
-        }
-        Err(failure) => Err(failure),
-    };
+    }
+}
+
+struct CompletedOutcome(InventoryRefreshOutcome);
+impl AcquisitionPort for CompletedOutcome {
+    fn refresh(&self) -> InventoryRefreshOutcome {
+        self.0.clone()
+    }
+}
+
+fn apply_outcome(
+    shared: &SharedRuntime,
+    outcome: InventoryRefreshOutcome,
+) -> Result<AppView, String> {
     shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?
         .core
-        .finish_inventory_refresh(attempt, Some((catalog.source(), catalog.fetched_unix())))
-        .map_err(|_| "inventory refresh could not be applied".to_owned())
+        .refresh_from(&CompletedOutcome(outcome))
+        .map_err(|_| "inventory health could not be applied".to_owned())
 }
 
 fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::error::Error>> {
@@ -203,63 +248,141 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
 }
 
 fn inventory_log_path(pid: u32) -> Option<PathBuf> {
-    let environment = fs::read(format!("/proc/{pid}/environ")).ok()?;
-    let prefix = environment
-        .split(|byte| *byte == 0)
-        .find_map(|entry| entry.strip_prefix(b"WINEPREFIX="))?;
-    let prefix = PathBuf::from(String::from_utf8(prefix.to_vec()).ok()?);
-    [
-        prefix.join("drive_c/users/steamuser/AppData/Local/Warframe/EE.log"),
-        prefix.join("drive_c/users/steamuser/Local Settings/Application Data/Warframe/EE.log"),
+    inventory_log_path_at(Path::new("/proc"), pid)
+}
+
+pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
+    let mut prefixes = Vec::new();
+    let process_root = proc_root.join(pid.to_string());
+    if let Ok(environment) = fs::read(process_root.join("environ")) {
+        if let Some(prefix) = environment
+            .split(|byte| *byte == 0)
+            .find_map(|entry| entry.strip_prefix(b"WINEPREFIX="))
+            .and_then(|value| String::from_utf8(value.to_vec()).ok())
+        {
+            prefixes.push(PathBuf::from(prefix));
+        }
+    }
+    for source in [
+        fs::read_link(process_root.join("exe"))
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned()),
+        fs::read_to_string(process_root.join("maps")).ok(),
     ]
     .into_iter()
-    .find(|path| path.is_file())
+    .flatten()
+    {
+        for line in source.lines() {
+            let Some(path_start) = line.find('/') else {
+                continue;
+            };
+            if let Some((prefix, _)) = line[path_start..].rsplit_once("/drive_c/") {
+                prefixes.push(PathBuf::from(prefix));
+            }
+        }
+    }
+    prefixes.sort();
+    prefixes.dedup();
+    for prefix in prefixes {
+        let users = prefix.join("drive_c/users");
+        let Ok(users) = fs::read_dir(users) else {
+            continue;
+        };
+        for user in users.flatten() {
+            for relative in [
+                "AppData/Local/Warframe/EE.log",
+                "Local Settings/Application Data/Warframe/EE.log",
+            ] {
+                let path = user.path().join(relative);
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn monitor_game(shared: SharedRuntime) {
     let procfs = LinuxProc::new();
-    let mut observed_process = None;
-    let mut log = None::<(PathBuf, u64)>;
+    let mut machine = MonitorMachine::new(15);
     loop {
-        if let Ok(Some(process)) = procfs.discover() {
-            if observed_process != Some(process.pid()) {
-                observed_process = Some(process.pid());
-                log = inventory_log_path(process.pid()).map(|path| {
-                    let offset = fs::metadata(&path)
-                        .map(|metadata| metadata.len())
-                        .unwrap_or(0);
-                    (path, offset)
-                });
-                let _ = refresh_blocking(&shared);
-            } else if let Some((path, offset)) = &mut log {
-                if let Ok(metadata) = fs::metadata(&*path) {
-                    if metadata.len() < *offset {
-                        *offset = 0;
-                    }
-                    if metadata.len() > *offset {
-                        let available = metadata.len() - *offset;
-                        let bounded = available.min(1024 * 1024);
-                        if let Ok(mut file) = fs::File::open(&*path) {
-                            let start = metadata.len() - bounded;
-                            if file.seek(SeekFrom::Start(start)).is_ok() {
-                                let mut bytes = Vec::with_capacity(bounded as usize);
-                                if file.take(bounded).read_to_end(&mut bytes).is_ok()
-                                    && contains_inventory_sync_trigger(&bytes)
-                                {
-                                    let _ = refresh_blocking(&shared);
-                                }
-                            }
-                        }
-                        *offset = metadata.len();
-                    }
-                }
-            }
-        } else {
-            observed_process = None;
-            log = None;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let input = match procfs.discover() {
+            Ok(None) => MonitorInput::absent(now),
+            Err(error) => MonitorInput::error(now, error),
+            Ok(Some(process)) => build_monitor_input(&machine, now, process.pid()),
+        };
+        let result = machine.tick(input);
+        if result.refresh {
+            let _ = refresh_blocking(&shared);
+        }
+        if let Some(error) = result.health {
+            let _ = apply_outcome(
+                &shared,
+                InventoryRefreshOutcome::acquisition_failed(
+                    warframe_acquisition::AcquisitionFailure::from_error(error),
+                ),
+            );
         }
         std::thread::sleep(Duration::from_secs(5));
     }
+}
+
+fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> MonitorInput {
+    let Some(path) = inventory_log_path(pid) else {
+        return MonitorInput::running(now, pid, None);
+    };
+    let metadata = match fs::metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(_) => return MonitorInput::running_with_log_error(now, pid),
+    };
+    let identity = format!("{}:{}", metadata.dev(), metadata.ino());
+    if machine.process_pid() != Some(pid) {
+        return MonitorInput::running(
+            now,
+            pid,
+            Some(LogObservation::new(identity, metadata.len(), Vec::new())),
+        );
+    }
+    let offset = if machine.log_identity() == Some(identity.as_str())
+        && metadata.len() >= machine.log_offset()
+    {
+        machine.log_offset()
+    } else {
+        0
+    };
+    if metadata.len() == offset {
+        return MonitorInput::running(
+            now,
+            pid,
+            Some(LogObservation::new(identity, offset, Vec::new())),
+        );
+    }
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return MonitorInput::running_with_log_error(now, pid),
+    };
+    if file.seek(SeekFrom::Start(offset)).is_err() {
+        return MonitorInput::running_with_log_error(now, pid);
+    }
+    let requested = (metadata.len() - offset).min(1024 * 1024);
+    let mut bytes = Vec::with_capacity(requested as usize);
+    if file.take(requested).read_to_end(&mut bytes).is_err() {
+        return MonitorInput::running_with_log_error(now, pid);
+    }
+    MonitorInput::running(
+        now,
+        pid,
+        Some(LogObservation::new(
+            identity,
+            offset + bytes.len() as u64,
+            bytes,
+        )),
+    )
 }
 
 fn start_monitor(shared: SharedRuntime) {
