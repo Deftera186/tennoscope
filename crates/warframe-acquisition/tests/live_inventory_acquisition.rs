@@ -1,5 +1,7 @@
 #![cfg(target_os = "linux")]
 
+use std::time::Instant;
+
 use warframe_acquisition::{
     AuthorizationScanner, InventoryHttpTransport, InventoryJsonDecoder, InventoryTransport,
     LinuxProc, ProcessDiscovery, SnapshotDecoder,
@@ -17,10 +19,15 @@ fn live_inventory_acquisition_emits_only_safe_metadata() {
         .expect("Warframe should be running");
     println!("game_discovery=ready");
 
+    let scan_started = Instant::now();
     let authorization = AuthorizationScanner::new(1024 * 1024)
         .scan(&process_access, &process)
         .expect("ephemeral authorization should be discoverable");
     println!("authorization_discovery=ready");
+    println!(
+        "authorization_scan_milliseconds={}",
+        scan_started.elapsed().as_millis()
+    );
 
     let response = InventoryHttpTransport::new()
         .expect("HTTPS client policy should initialize")

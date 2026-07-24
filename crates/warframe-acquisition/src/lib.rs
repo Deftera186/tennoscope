@@ -114,15 +114,31 @@ impl GameProcess {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum RegionScanPriority {
+    FileBacked,
+    Anonymous,
+    WritableAnonymous,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ReadableRegion {
     start: u64,
     len: usize,
+    scan_priority: RegionScanPriority,
 }
 
 impl ReadableRegion {
     pub const fn new(start: u64, len: usize) -> Self {
-        Self { start, len }
+        Self::classified(start, len, RegionScanPriority::Anonymous)
+    }
+
+    pub const fn classified(start: u64, len: usize, scan_priority: RegionScanPriority) -> Self {
+        Self {
+            start,
+            len,
+            scan_priority,
+        }
     }
 
     pub const fn start(self) -> u64 {
@@ -135,6 +151,10 @@ impl ReadableRegion {
 
     pub const fn is_empty(self) -> bool {
         self.len == 0
+    }
+
+    pub const fn scan_priority(self) -> RegionScanPriority {
+        self.scan_priority
     }
 }
 

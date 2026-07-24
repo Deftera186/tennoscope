@@ -1,5 +1,8 @@
+use std::sync::Mutex;
+
 use warframe_acquisition::{
     AcquisitionError, AuthorizationScanner, GameProcess, MemoryReader, ReadableRegion,
+    RegionScanPriority,
 };
 
 const URL_FIXTURE: &[u8] = include_bytes!("fixtures/authorization-url-encoded.bin");
@@ -199,4 +202,136 @@ fn does_not_join_candidates_across_disjoint_regions() {
 
     let result = AuthorizationScanner::new(16).scan(&SplitRegions, &GameProcess::new(7));
     assert_eq!(result.unwrap_err(), AcquisitionError::AuthorizationNotFound);
+}
+
+struct OrderedMemory {
+    regions: Vec<(ReadableRegion, Vec<u8>)>,
+    reads: Mutex<Vec<u64>>,
+}
+
+impl MemoryReader for OrderedMemory {
+    fn readable_regions(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        Ok(self.regions.iter().map(|(region, _)| *region).collect())
+    }
+
+    fn read_at(
+        &self,
+        _process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        self.reads.lock().unwrap().push(address);
+        let (region, bytes) = self
+            .regions
+            .iter()
+            .find(|(region, _)| {
+                address >= region.start()
+                    && address < region.start() + u64::try_from(region.len()).unwrap()
+            })
+            .unwrap();
+        let offset = usize::try_from(address - region.start()).unwrap();
+        let len = (bytes.len() - offset).min(buffer.len());
+        buffer[..len].copy_from_slice(&bytes[offset..offset + len]);
+        Ok(len)
+    }
+}
+
+#[test]
+fn scans_writable_anonymous_regions_before_file_backed_regions() {
+    let preferred = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
+    let memory = OrderedMemory {
+        regions: vec![
+            (
+                ReadableRegion::classified(
+                    0x1000,
+                    URL_FIXTURE.len(),
+                    RegionScanPriority::FileBacked,
+                ),
+                URL_FIXTURE.to_vec(),
+            ),
+            (
+                ReadableRegion::classified(
+                    0x2000,
+                    preferred.len(),
+                    RegionScanPriority::WritableAnonymous,
+                ),
+                preferred,
+            ),
+        ],
+        reads: Mutex::new(Vec::new()),
+    };
+
+    AuthorizationScanner::new(4096)
+        .scan(&memory, &GameProcess::new(7))
+        .unwrap();
+
+    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x2000]);
+}
+
+#[test]
+fn repeated_high_rank_candidate_returns_before_a_later_stale_conflict() {
+    let confident = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
+    let stale = b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic";
+    let memory = OrderedMemory {
+        regions: vec![
+            (
+                ReadableRegion::classified(
+                    0x3000,
+                    confident.len(),
+                    RegionScanPriority::WritableAnonymous,
+                ),
+                confident,
+            ),
+            (
+                ReadableRegion::classified(
+                    0x4000,
+                    stale.len(),
+                    RegionScanPriority::WritableAnonymous,
+                ),
+                stale.to_vec(),
+            ),
+        ],
+        reads: Mutex::new(Vec::new()),
+    };
+
+    AuthorizationScanner::new(4096)
+        .scan(&memory, &GameProcess::new(7))
+        .unwrap();
+
+    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x3000]);
+}
+
+#[test]
+fn skips_giant_regions_before_scanning_bounded_candidates() {
+    let confident = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
+    let memory = OrderedMemory {
+        regions: vec![
+            (
+                ReadableRegion::classified(
+                    0x5000,
+                    129 * 1024 * 1024,
+                    RegionScanPriority::WritableAnonymous,
+                ),
+                Vec::new(),
+            ),
+            (
+                ReadableRegion::classified(
+                    0x6000_0000,
+                    confident.len(),
+                    RegionScanPriority::WritableAnonymous,
+                ),
+                confident,
+            ),
+        ],
+        reads: Mutex::new(Vec::new()),
+    };
+
+    AuthorizationScanner::new(4096)
+        .scan(&memory, &GameProcess::new(7))
+        .unwrap();
+
+    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x6000_0000]);
 }

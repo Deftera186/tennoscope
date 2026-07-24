@@ -8,7 +8,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::{AcquisitionError, GameProcess, MemoryReader, ProcessDiscovery, ReadableRegion};
+use crate::{
+    AcquisitionError, GameProcess, MemoryReader, ProcessDiscovery, ReadableRegion,
+    RegionScanPriority,
+};
 
 const FULL_PROCESS_NAME: &str = "Warframe.x64.exe";
 const WINE_PROCESS_NAME: &str = "Warframe.x64.ex";
@@ -224,7 +227,15 @@ fn parse_readable_region(line: &str) -> Option<ReadableRegion> {
     let start = u64::from_str_radix(start, 16).ok()?;
     let end = u64::from_str_radix(end, 16).ok()?;
     let len = usize::try_from(end.checked_sub(start)?).ok()?;
-    (len != 0).then_some(ReadableRegion::new(start, len))
+    let file_backed = path.is_some_and(|path| !path.starts_with('['));
+    let scan_priority = if file_backed {
+        RegionScanPriority::FileBacked
+    } else if permissions.as_bytes().get(1) == Some(&b'w') {
+        RegionScanPriority::WritableAnonymous
+    } else {
+        RegionScanPriority::Anonymous
+    };
+    (len != 0).then_some(ReadableRegion::classified(start, len, scan_priority))
 }
 
 fn classify_io(pid: u32, error: io::Error) -> AcquisitionError {

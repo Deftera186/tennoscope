@@ -1,10 +1,24 @@
+use std::cmp::Reverse;
+
+use memchr::memmem;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::{AcquisitionError, GameProcess, InventoryAuthorization, MemoryReader};
+use crate::{
+    AcquisitionError, GameProcess, InventoryAuthorization, MemoryReader, RegionScanPriority,
+};
 
 const LOGIN_SEARCH_DISTANCE: usize = 2048;
 const CANDIDATE_OVERLAP: usize = LOGIN_SEARCH_DISTANCE + 128;
 const MAX_CHUNK_SIZE: usize = 1024 * 1024;
+// Avoid pathological Wine reservations and cap the maximum successful reads in
+// one startup scan. File-backed code/data mappings are not credential sources.
+const MAX_REGION_BYTES: usize = 128 * 1024 * 1024;
+const MAX_SCAN_BYTES: usize = 512 * 1024 * 1024;
+// Existing Linux scanners use repeated identical URL tuples as a confidence
+// signal. Distinct physical locations are required so chunk overlap cannot
+// manufacture confidence. A conflict observed before this threshold remains
+// an explicit ambiguity error.
+const CONFIDENT_URL_COPIES: usize = 3;
 const URL_ACCOUNT_MARKER: &[u8] = b"accountId=";
 const URL_NONCE_MARKER: &[u8] = b"&nonce=";
 const LOGIN_ID_MARKER: &[u8] = b"\"id\"";
@@ -26,16 +40,27 @@ impl AuthorizationScanner {
         memory: &dyn MemoryReader,
         process: &GameProcess,
     ) -> Result<InventoryAuthorization, AcquisitionError> {
-        let regions = memory.readable_regions(process)?;
+        let mut regions = memory.readable_regions(process)?;
+        regions.sort_by_key(|region| (Reverse(region.scan_priority()), region.start()));
         let mut candidates = CandidateAccumulator::default();
         let mut read_buffer = Zeroizing::new(vec![0_u8; self.chunk_size]);
+        let mut scanned_bytes = 0_usize;
 
         for region in regions {
+            if region.scan_priority() == RegionScanPriority::FileBacked
+                || region.len() > MAX_REGION_BYTES
+                || scanned_bytes >= MAX_SCAN_BYTES
+            {
+                continue;
+            }
             let mut offset = 0_usize;
             let mut overlap = Zeroizing::new(Vec::with_capacity(CANDIDATE_OVERLAP));
 
-            while offset < region.len() {
-                let requested = self.chunk_size.min(region.len() - offset);
+            while offset < region.len() && scanned_bytes < MAX_SCAN_BYTES {
+                let requested = self
+                    .chunk_size
+                    .min(region.len() - offset)
+                    .min(MAX_SCAN_BYTES - scanned_bytes);
                 let address = region
                     .start()
                     .checked_add(offset as u64)
@@ -48,16 +73,21 @@ impl AuthorizationScanner {
                 let mut window = Zeroizing::new(Vec::with_capacity(overlap.len() + read));
                 window.extend_from_slice(&overlap);
                 append_read_and_wipe(&mut window, &mut read_buffer, read);
-                collect_candidates(&window, &mut candidates);
+                let window_start = address
+                    .checked_sub(overlap.len() as u64)
+                    .ok_or(AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
+                collect_candidates_at(&window, window_start, &mut candidates);
+                if let Some(authorization) = candidates.take_confident_url() {
+                    return Ok(authorization);
+                }
 
                 let keep = CANDIDATE_OVERLAP.min(window.len());
                 wipe_bytes(&mut overlap);
                 overlap.clear();
                 overlap.extend_from_slice(&window[window.len() - keep..]);
                 offset += read;
+                scanned_bytes += read;
             }
-
-            collect_candidates(&overlap, &mut candidates);
         }
 
         select_candidate(candidates)
@@ -73,6 +103,7 @@ enum CandidateRank {
 struct Candidate {
     rank: CandidateRank,
     authorization: InventoryAuthorization,
+    location: u64,
 }
 
 #[derive(Default)]
@@ -85,7 +116,10 @@ struct CandidateAccumulator {
 enum RankState {
     #[default]
     None,
-    One(InventoryAuthorization),
+    One {
+        authorization: InventoryAuthorization,
+        locations: Vec<u64>,
+    },
     Ambiguous,
 }
 
@@ -96,12 +130,42 @@ impl CandidateAccumulator {
             CandidateRank::UrlEncoded => &mut self.url,
         };
         match state {
-            RankState::None => *state = RankState::One(candidate.authorization),
-            RankState::One(existing)
-                if existing.account_id() == candidate.authorization.account_id()
-                    && existing.nonce() == candidate.authorization.nonce() => {}
-            RankState::One(_) => *state = RankState::Ambiguous,
+            RankState::None => {
+                *state = RankState::One {
+                    authorization: candidate.authorization,
+                    locations: vec![candidate.location],
+                };
+            }
+            RankState::One {
+                authorization,
+                locations,
+            } if authorization.account_id() == candidate.authorization.account_id()
+                && authorization.nonce() == candidate.authorization.nonce() =>
+            {
+                if locations.len() < CONFIDENT_URL_COPIES
+                    && !locations.contains(&candidate.location)
+                {
+                    locations.push(candidate.location);
+                }
+            }
+            RankState::One { .. } => *state = RankState::Ambiguous,
             RankState::Ambiguous => {}
+        }
+    }
+
+    fn take_confident_url(&mut self) -> Option<InventoryAuthorization> {
+        if !matches!(
+            self.url,
+            RankState::One {
+                ref locations,
+                ..
+            } if locations.len() >= CONFIDENT_URL_COPIES
+        ) {
+            return None;
+        }
+        match std::mem::take(&mut self.url) {
+            RankState::One { authorization, .. } => Some(authorization),
+            _ => unreachable!("confidence was checked before taking the candidate"),
         }
     }
 
@@ -109,17 +173,22 @@ impl CandidateAccumulator {
     fn retained_candidate_count(&self) -> usize {
         [&self.login, &self.url]
             .into_iter()
-            .filter(|state| matches!(state, RankState::One(_)))
+            .filter(|state| matches!(state, RankState::One { .. }))
             .count()
     }
 }
 
+#[cfg(test)]
 fn collect_candidates(bytes: &[u8], output: &mut CandidateAccumulator) {
-    collect_url_candidates(bytes, output);
-    collect_login_candidates(bytes, output);
+    collect_candidates_at(bytes, 0, output);
 }
 
-fn collect_url_candidates(bytes: &[u8], output: &mut CandidateAccumulator) {
+fn collect_candidates_at(bytes: &[u8], base: u64, output: &mut CandidateAccumulator) {
+    collect_url_candidates(bytes, base, output);
+    collect_login_candidates(bytes, base, output);
+}
+
+fn collect_url_candidates(bytes: &[u8], base: u64, output: &mut CandidateAccumulator) {
     for marker_start in find_all(bytes, URL_ACCOUNT_MARKER) {
         let account_start = marker_start + URL_ACCOUNT_MARKER.len();
         let account_end = account_start + 24;
@@ -139,11 +208,12 @@ fn collect_url_candidates(bytes: &[u8], output: &mut CandidateAccumulator) {
             CandidateRank::UrlEncoded,
             &bytes[account_start..account_end],
             &bytes[nonce_marker_end..nonce_end],
+            base.saturating_add(marker_start as u64),
         );
     }
 }
 
-fn collect_login_candidates(bytes: &[u8], output: &mut CandidateAccumulator) {
+fn collect_login_candidates(bytes: &[u8], base: u64, output: &mut CandidateAccumulator) {
     for marker_start in find_all(bytes, LOGIN_ID_MARKER) {
         let Some((account, after_account)) =
             quoted_json_value(bytes, marker_start + LOGIN_ID_MARKER.len())
@@ -173,6 +243,7 @@ fn collect_login_candidates(bytes: &[u8], output: &mut CandidateAccumulator) {
             CandidateRank::LoginResponse,
             account,
             &bytes[nonce_start..nonce_end],
+            base.saturating_add(marker_start as u64),
         );
     }
 }
@@ -182,6 +253,7 @@ fn push_candidate(
     rank: CandidateRank,
     account: &[u8],
     nonce: &[u8],
+    location: u64,
 ) {
     if !(5..=20).contains(&nonce.len()) {
         return;
@@ -199,6 +271,7 @@ fn push_candidate(
     output.record(Candidate {
         rank,
         authorization,
+        location,
     });
 }
 
@@ -208,7 +281,7 @@ fn select_candidate(
     for state in [candidates.url, candidates.login] {
         match state {
             RankState::None => {}
-            RankState::One(authorization) => return Ok(authorization),
+            RankState::One { authorization, .. } => return Ok(authorization),
             RankState::Ambiguous => return Err(AcquisitionError::AuthorizationAmbiguous),
         }
     }
@@ -216,10 +289,7 @@ fn select_candidate(
 }
 
 fn find_all<'a>(bytes: &'a [u8], needle: &'a [u8]) -> impl Iterator<Item = usize> + 'a {
-    bytes
-        .windows(needle.len())
-        .enumerate()
-        .filter_map(move |(index, window)| (window == needle).then_some(index))
+    memmem::find_iter(bytes, needle)
 }
 
 fn is_account_id(value: &[u8]) -> bool {
@@ -353,6 +423,7 @@ mod tests {
                     Zeroizing::new(format!("{index:024x}")),
                     Zeroizing::new(format!("{}", index + 100_000)),
                 ),
+                location: index,
             });
         }
 

@@ -4,6 +4,7 @@ use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
 use warframe_acquisition::{
     AcquisitionError, GameProcess, LinuxProc, MemoryReader, ProcessDiscovery, ReadableRegion,
+    RegionScanPriority,
 };
 
 fn write_file(root: &Path, relative: &str, contents: impl AsRef<[u8]>) {
@@ -162,8 +163,8 @@ fn parses_only_nonempty_readable_ranges_and_skips_special_kernel_mappings() {
     assert_eq!(
         regions,
         vec![
-            ReadableRegion::new(0x1000, 0x800),
-            ReadableRegion::new(0x2000, 0x800)
+            ReadableRegion::classified(0x1000, 0x800, RegionScanPriority::FileBacked),
+            ReadableRegion::classified(0x2000, 0x800, RegionScanPriority::WritableAnonymous)
         ]
     );
 }
