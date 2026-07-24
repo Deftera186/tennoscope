@@ -47,7 +47,7 @@ impl AuthorizationScanner {
 
                 let mut window = Zeroizing::new(Vec::with_capacity(overlap.len() + read));
                 window.extend_from_slice(&overlap);
-                window.extend_from_slice(&read_buffer[..read]);
+                append_read_and_wipe(&mut window, &mut read_buffer, read);
                 collect_candidates(&window, &mut candidates);
 
                 let keep = CANDIDATE_OVERLAP.min(window.len());
@@ -279,13 +279,19 @@ fn wipe_bytes(bytes: &mut [u8]) {
     bytes.zeroize();
 }
 
+fn append_read_and_wipe(destination: &mut Vec<u8>, source: &mut [u8], read: usize) {
+    debug_assert!(read <= source.len());
+    destination.extend_from_slice(&source[..read]);
+    wipe_bytes(source);
+}
+
 #[cfg(test)]
 mod tests {
     use zeroize::Zeroizing;
 
     use super::{
-        Candidate, CandidateAccumulator, CandidateRank, collect_candidates, select_candidate,
-        wipe_bytes,
+        Candidate, CandidateAccumulator, CandidateRank, append_read_and_wipe, collect_candidates,
+        select_candidate, wipe_bytes,
     };
     use crate::InventoryAuthorization;
 
@@ -324,6 +330,17 @@ mod tests {
         wipe_bytes(&mut overlap);
 
         assert!(overlap.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn read_buffer_copy_wipes_the_copied_prefix_and_stale_suffix() {
+        let mut read_buffer = b"new-secretstale-secret".to_vec();
+        let mut window = Vec::new();
+
+        append_read_and_wipe(&mut window, &mut read_buffer, 10);
+
+        assert_eq!(window, b"new-secret");
+        assert!(read_buffer.iter().all(|byte| *byte == 0));
     }
 
     #[test]
