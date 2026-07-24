@@ -5,6 +5,10 @@ use std::{error::Error, fmt};
 use warframe_domain::InventorySnapshot;
 use zeroize::Zeroizing;
 
+mod authorization;
+
+pub use authorization::AuthorizationScanner;
+
 /// A credential whose standard formatting surfaces never expose its contents.
 pub struct SecretString(Zeroizing<String>);
 
@@ -41,6 +45,13 @@ impl InventoryAuthorization {
         Self {
             account_id: SecretString::new(account_id),
             nonce: SecretString::new(nonce),
+        }
+    }
+
+    fn from_zeroizing(account_id: Zeroizing<String>, nonce: Zeroizing<String>) -> Self {
+        Self {
+            account_id: SecretString(account_id),
+            nonce: SecretString(nonce),
         }
     }
 
