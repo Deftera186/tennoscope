@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, params, types::Value};
 use thiserror::Error;
 use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot, ItemId,
@@ -22,6 +22,14 @@ pub enum StoreError {
     InvalidMetadata,
     #[error("database schema version {0} is not supported")]
     UnsupportedSchemaVersion(i64),
+    #[error("invalid database schema: {0}")]
+    Schema(String),
+    #[error("corrupt inventory row {item_id:?}, field {field}: {detail}")]
+    CorruptRow {
+        item_id: String,
+        field: &'static str,
+        detail: String,
+    },
     #[error("stored integer is outside the domain range: {0}")]
     IntegerOutOfRange(i64),
 }
@@ -74,12 +82,12 @@ impl SqliteStore {
         Self::from_connection(Connection::open(path)?)
     }
 
-    fn from_connection(connection: Connection) -> Result<Self, StoreError> {
+    fn from_connection(mut connection: Connection) -> Result<Self, StoreError> {
         connection.pragma_update(None, "foreign_keys", true)?;
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match version {
-            0 => connection.execute_batch(include_str!("schema.sql"))?,
-            SCHEMA_VERSION => {}
+            0 => initialize_schema(&mut connection)?,
+            SCHEMA_VERSION => validate_schema(&connection)?,
             other => return Err(StoreError::UnsupportedSchemaVersion(other)),
         }
         Ok(Self { connection })
@@ -111,8 +119,7 @@ impl SqliteStore {
                  VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
             for entry in snapshot.entries() {
-                let category = serde_json::to_string(&entry.item.category)?;
-                let category = category.trim_matches('"');
+                let category = encode_category(entry.item.category)?;
                 statement.execute(params![
                     entry.item.id.as_str(),
                     entry.item.name,
@@ -139,21 +146,40 @@ impl SqliteStore {
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, i64>(3)?,
-                row.get::<_, bool>(4)?,
+                row.get::<_, Value>(0)?,
+                row.get::<_, Value>(1)?,
+                row.get::<_, Value>(2)?,
+                row.get::<_, Value>(3)?,
+                row.get::<_, Value>(4)?,
             ))
         })?;
         let raw_entries = rows.collect::<Result<Vec<_>, _>>()?;
         let entries = raw_entries
             .into_iter()
             .map(|(id, name, category, quantity, mastered)| {
-                let category = serde_json::from_str::<Category>(&format!("\"{category}\""))?;
+                let id = expect_text(id, "<unknown>", "item_id")?;
+                let name = expect_text(name, &id, "name")?;
+                let category = expect_text(category, &id, "category")?;
+                let quantity = expect_integer(quantity, &id, "quantity")?;
+                let mastered = expect_integer(mastered, &id, "mastered")?;
+                let category = decode_category(&id, category)?;
                 let quantity =
-                    u32::try_from(quantity).map_err(|_| StoreError::IntegerOutOfRange(quantity))?;
-                let item = CatalogItem::new(ItemId::new(id)?, name, category)?;
+                    u32::try_from(quantity).map_err(|error| corrupt_row(&id, "quantity", error))?;
+                let mastered = match mastered {
+                    0 => false,
+                    1 => true,
+                    value => {
+                        return Err(corrupt_row(
+                            &id,
+                            "mastered",
+                            format!("expected 0 or 1, found {value}"),
+                        ));
+                    }
+                };
+                let item_id =
+                    ItemId::new(id.clone()).map_err(|error| corrupt_row(&id, "item_id", error))?;
+                let item = CatalogItem::new(item_id, name, category)
+                    .map_err(|error| corrupt_row(&id, "name", error))?;
                 Ok(InventoryEntry::new(item, quantity).with_mastered(mastered))
             })
             .collect::<Result<Vec<_>, StoreError>>()?;
@@ -171,9 +197,151 @@ impl SqliteStore {
     }
 }
 
+fn initialize_schema(connection: &mut Connection) -> Result<(), StoreError> {
+    let conflicting_tables: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM sqlite_master \
+         WHERE type = 'table' AND name IN ('inventory', 'snapshot_audit')",
+        [],
+        |row| row.get(0),
+    )?;
+    if conflicting_tables != 0 {
+        return Err(StoreError::Schema(
+            "version 0 database contains conflicting inventory or snapshot_audit table".to_owned(),
+        ));
+    }
+
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(include_str!("schema.sql"))?;
+    validate_schema(&transaction)?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct SchemaColumn {
+    name: String,
+    data_type: String,
+    not_null: bool,
+    primary_key_position: i64,
+}
+
+fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
+    validate_table(
+        connection,
+        "inventory",
+        &[
+            ("item_id", "TEXT", false, 1),
+            ("name", "TEXT", true, 0),
+            ("category", "TEXT", true, 0),
+            ("quantity", "INTEGER", true, 0),
+            ("mastered", "INTEGER", true, 0),
+        ],
+    )?;
+    validate_table(
+        connection,
+        "snapshot_audit",
+        &[
+            ("id", "INTEGER", false, 1),
+            ("observed_at", "TEXT", true, 0),
+            ("game_build", "TEXT", true, 0),
+            ("source", "TEXT", true, 0),
+            ("item_count", "INTEGER", true, 0),
+        ],
+    )
+}
+
+fn validate_table(
+    connection: &Connection,
+    table: &'static str,
+    expected: &[(&str, &str, bool, i64)],
+) -> Result<(), StoreError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let actual = statement
+        .query_map([], |row| {
+            Ok(SchemaColumn {
+                name: row.get(1)?,
+                data_type: row.get(2)?,
+                not_null: row.get::<_, i64>(3)? != 0,
+                primary_key_position: row.get(5)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected = expected
+        .iter()
+        .map(
+            |(name, data_type, not_null, primary_key_position)| SchemaColumn {
+                name: (*name).to_owned(),
+                data_type: (*data_type).to_owned(),
+                not_null: *not_null,
+                primary_key_position: *primary_key_position,
+            },
+        )
+        .collect::<Vec<_>>();
+    if actual != expected {
+        return Err(StoreError::Schema(format!(
+            "table {table} has incompatible columns: expected {expected:?}, found {actual:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn encode_category(category: Category) -> Result<String, StoreError> {
+    match serde_json::to_value(category)? {
+        serde_json::Value::String(wire) => Ok(wire),
+        other => Err(StoreError::Schema(format!(
+            "category serializer produced non-string value {other}"
+        ))),
+    }
+}
+
+fn decode_category(item_id: &str, wire: String) -> Result<Category, StoreError> {
+    serde_json::from_value(serde_json::Value::String(wire))
+        .map_err(|error| corrupt_row(item_id, "category", error))
+}
+
+fn expect_text(value: Value, item_id: &str, field: &'static str) -> Result<String, StoreError> {
+    match value {
+        Value::Text(value) => Ok(value),
+        other => Err(corrupt_row(
+            item_id,
+            field,
+            format!("expected TEXT, found {:?}", other.data_type()),
+        )),
+    }
+}
+
+fn expect_integer(value: Value, item_id: &str, field: &'static str) -> Result<i64, StoreError> {
+    match value {
+        Value::Integer(value) => Ok(value),
+        other => Err(corrupt_row(
+            item_id,
+            field,
+            format!("expected INTEGER, found {:?}", other.data_type()),
+        )),
+    }
+}
+
+fn corrupt_row(item_id: &str, field: &'static str, detail: impl std::fmt::Display) -> StoreError {
+    StoreError::CorruptRow {
+        item_id: item_id.to_owned(),
+        field,
+        detail: detail.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn database_with(sql: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("malformed.sqlite3");
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(sql).unwrap();
+        drop(connection);
+        (directory, path)
+    }
 
     fn snapshot(quantity: u32) -> InventorySnapshot {
         let item = CatalogItem::new(ItemId::new("lex").unwrap(), "Lex", Category::Weapon).unwrap();
@@ -245,7 +413,9 @@ mod tests {
                 [],
             )
             .unwrap();
-        assert!(store.load_collection().is_err());
+        let error = store.load_collection().unwrap_err().to_string();
+        assert!(error.contains("bad"));
+        assert!(error.contains("category"));
 
         store
             .connection
@@ -258,7 +428,9 @@ mod tests {
                 [i64::MAX],
             )
             .unwrap();
-        assert!(store.load_collection().is_err());
+        let error = store.load_collection().unwrap_err().to_string();
+        assert!(error.contains("huge"));
+        assert!(error.contains("quantity"));
     }
 
     #[test]
@@ -272,7 +444,94 @@ mod tests {
                     params![id, name],
                 )
                 .unwrap();
-            assert!(store.load_collection().is_err());
+            let error = store.load_collection().unwrap_err().to_string();
+            assert!(error.contains("item_id") || error.contains("name"));
         }
+    }
+
+    #[test]
+    fn corrupt_mastered_integer_has_row_and_field_context() {
+        for value in [2, -1] {
+            let store = SqliteStore::in_memory().unwrap();
+            store
+                .connection
+                .pragma_update(None, "ignore_check_constraints", true)
+                .unwrap();
+            store
+                .connection
+                .execute(
+                    "INSERT INTO inventory VALUES ('lex', 'Lex', 'weapon', 1, ?1)",
+                    [value],
+                )
+                .unwrap();
+
+            let error = store.load_collection().unwrap_err().to_string();
+            assert!(error.contains("lex"));
+            assert!(error.contains("mastered"));
+        }
+    }
+
+    #[test]
+    fn corrupt_sqlite_value_types_have_row_and_field_context() {
+        for (column, sql) in [
+            (
+                "quantity",
+                "INSERT INTO inventory VALUES ('lex', 'Lex', 'weapon', X'01', 0)",
+            ),
+            (
+                "name",
+                "INSERT INTO inventory VALUES ('lex', X'01', 'weapon', 1, 0)",
+            ),
+        ] {
+            let store = SqliteStore::in_memory().unwrap();
+            store.connection.execute(sql, []).unwrap();
+
+            let error = store.load_collection().unwrap_err().to_string();
+            assert!(error.contains("lex"));
+            assert!(error.contains(column));
+        }
+    }
+
+    #[test]
+    fn version_zero_database_with_conflicting_table_is_rejected() {
+        let (_directory, path) = database_with("CREATE TABLE inventory (wrong TEXT);");
+
+        let error = SqliteStore::open(&path).err().unwrap().to_string();
+        assert!(error.contains("schema"));
+        assert!(error.contains("inventory"));
+    }
+
+    #[test]
+    fn version_one_database_missing_required_table_is_rejected_at_open() {
+        let (_directory, path) = database_with(
+            "CREATE TABLE inventory (
+                item_id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
+                quantity INTEGER NOT NULL, mastered INTEGER NOT NULL
+             );
+             PRAGMA user_version = 1;",
+        );
+
+        let error = SqliteStore::open(&path).err().unwrap().to_string();
+        assert!(error.contains("schema"));
+        assert!(error.contains("snapshot_audit"));
+    }
+
+    #[test]
+    fn version_one_database_with_incompatible_column_is_rejected_at_open() {
+        let (_directory, path) = database_with(
+            "CREATE TABLE inventory (
+                item_id TEXT PRIMARY KEY, name TEXT, category TEXT NOT NULL,
+                quantity INTEGER NOT NULL, mastered INTEGER NOT NULL
+             );
+             CREATE TABLE snapshot_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, observed_at TEXT NOT NULL,
+                game_build TEXT NOT NULL, source TEXT NOT NULL, item_count INTEGER NOT NULL
+             );
+             PRAGMA user_version = 1;",
+        );
+
+        let error = SqliteStore::open(&path).err().unwrap().to_string();
+        assert!(error.contains("schema"));
+        assert!(error.contains("name"));
     }
 }
