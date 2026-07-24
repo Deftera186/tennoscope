@@ -6,10 +6,14 @@ use warframe_domain::InventorySnapshot;
 use zeroize::Zeroizing;
 
 mod authorization;
+mod inventory;
 #[cfg(target_os = "linux")]
 mod linux_proc;
 
 pub use authorization::AuthorizationScanner;
+pub use inventory::{
+    INVENTORY_ENDPOINT, InventoryHttpTransport, InventoryJsonDecoder, MAX_INVENTORY_RESPONSE_BYTES,
+};
 #[cfg(target_os = "linux")]
 pub use linux_proc::LinuxProc;
 
