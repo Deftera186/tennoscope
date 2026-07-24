@@ -3,6 +3,7 @@ members = [
   "app/src-tauri",
   "crates/app-core",
   "crates/local-store",
+  "crates/warframe-acquisition",
   "crates/warframe-domain",
 ]
 resolver = "2"

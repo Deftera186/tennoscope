@@ -3882,6 +3882,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "warframe-acquisition"
+version = "0.1.0"
+dependencies = [
+ "warframe-domain",
+]
+
+[[package]]
 name = "warframe-domain"
 version = "0.1.0"
 dependencies = [
