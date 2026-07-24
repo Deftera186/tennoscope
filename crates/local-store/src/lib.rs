@@ -52,12 +52,12 @@ impl SnapshotMeta {
         })
     }
 
-    pub fn fake(build: impl Into<String>) -> Self {
-        Self {
-            observed_at: "2000-01-01T00:00:00Z".to_owned(),
-            game_build: build.into(),
-            source: "test-fixture".to_owned(),
-        }
+    pub fn fake(build: impl Into<String>) -> Result<Self, StoreError> {
+        Self::new(
+            "2000-01-01T00:00:00Z".to_owned(),
+            build.into(),
+            "test-fixture".to_owned(),
+        )
     }
 }
 
@@ -90,8 +90,21 @@ impl SqliteStore {
         snapshot: &InventorySnapshot,
         meta: &SnapshotMeta,
     ) -> Result<(), StoreError> {
+        self.replace_collection_with_hook(snapshot, meta, || Ok(()))
+    }
+
+    fn replace_collection_with_hook<F>(
+        &mut self,
+        snapshot: &InventorySnapshot,
+        meta: &SnapshotMeta,
+        after_delete: F,
+    ) -> Result<(), StoreError>
+    where
+        F: FnOnce() -> Result<(), StoreError>,
+    {
         let transaction = self.connection.transaction()?;
         transaction.execute("DELETE FROM inventory", [])?;
+        after_delete()?;
         {
             let mut statement = transaction.prepare(
                 "INSERT INTO inventory (item_id, name, category, quantity, mastered) \
@@ -171,7 +184,7 @@ mod tests {
     fn failed_insert_rolls_back_delete_and_audit() {
         let mut store = SqliteStore::in_memory().unwrap();
         store
-            .replace_collection(&snapshot(3), &SnapshotMeta::fake("before"))
+            .replace_collection(&snapshot(3), &SnapshotMeta::fake("before").unwrap())
             .unwrap();
         store
             .connection
@@ -183,7 +196,33 @@ mod tests {
 
         assert!(
             store
-                .replace_collection(&snapshot(1), &SnapshotMeta::fake("after"))
+                .replace_collection(&snapshot(1), &SnapshotMeta::fake("after").unwrap())
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .load_collection()
+                .unwrap()
+                .quantity(&ItemId::new("lex").unwrap()),
+            3
+        );
+        assert_eq!(store.audit_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn failure_immediately_after_delete_rolls_back_snapshot_and_audit() {
+        let mut store = SqliteStore::in_memory().unwrap();
+        store
+            .replace_collection(&snapshot(3), &SnapshotMeta::fake("before").unwrap())
+            .unwrap();
+
+        assert!(
+            store
+                .replace_collection_with_hook(
+                    &snapshot(1),
+                    &SnapshotMeta::fake("after").unwrap(),
+                    || Err(StoreError::InvalidMetadata),
+                )
                 .is_err()
         );
         assert_eq!(
@@ -220,5 +259,20 @@ mod tests {
             )
             .unwrap();
         assert!(store.load_collection().is_err());
+    }
+
+    #[test]
+    fn corrupt_blank_domain_fields_return_errors() {
+        for (id, name) in [(" ", "Bad"), ("bad", "\t")] {
+            let store = SqliteStore::in_memory().unwrap();
+            store
+                .connection
+                .execute(
+                    "INSERT INTO inventory VALUES (?1, ?2, 'weapon', 1, 0)",
+                    params![id, name],
+                )
+                .unwrap();
+            assert!(store.load_collection().is_err());
+        }
     }
 }

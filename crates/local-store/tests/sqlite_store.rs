@@ -28,13 +28,13 @@ fn authoritative_replacement_removes_absent_items_and_appends_audit_rows() {
                 entry("paris", "Paris", Category::Weapon, 3, true),
                 entry("lex", "Lex", Category::Weapon, 2, false),
             ]),
-            &SnapshotMeta::fake("build-1"),
+            &SnapshotMeta::fake("build-1").unwrap(),
         )
         .unwrap();
     store
         .replace_collection(
             &snapshot(vec![entry("paris", "Paris", Category::Weapon, 1, true)]),
-            &SnapshotMeta::fake("build-2"),
+            &SnapshotMeta::fake("build-2").unwrap(),
         )
         .unwrap();
 
@@ -59,13 +59,19 @@ fn all_categories_mastery_and_zero_quantity_round_trip() {
             .into_iter()
             .enumerate()
             .map(|(index, (id, name, category))| {
-                entry(id, name, category, u32::try_from(index).unwrap(), true)
+                entry(
+                    id,
+                    name,
+                    category,
+                    u32::try_from(index).unwrap(),
+                    index != 1,
+                )
             })
             .collect(),
     );
     let mut store = SqliteStore::in_memory().unwrap();
     store
-        .replace_collection(&snapshot, &SnapshotMeta::fake("build"))
+        .replace_collection(&snapshot, &SnapshotMeta::fake("build").unwrap())
         .unwrap();
 
     let collection = store.load_collection().unwrap();
@@ -77,7 +83,7 @@ fn all_categories_mastery_and_zero_quantity_round_trip() {
             .unwrap();
         assert_eq!(loaded.item.category, category);
         assert_eq!(loaded.quantity, u32::try_from(index).unwrap());
-        assert!(loaded.mastered);
+        assert_eq!(loaded.mastered, index != 1);
     }
 }
 
@@ -90,7 +96,7 @@ fn file_backed_store_persists_across_reopen() {
         store
             .replace_collection(
                 &snapshot(vec![entry("lex", "Lex", Category::Weapon, 4, false)]),
-                &SnapshotMeta::fake("build"),
+                &SnapshotMeta::fake("build").unwrap(),
             )
             .unwrap();
     }
@@ -111,4 +117,5 @@ fn snapshot_metadata_rejects_blank_fields() {
     assert!(SnapshotMeta::new(" ".into(), "build".into(), "test".into()).is_err());
     assert!(SnapshotMeta::new("now".into(), "\t".into(), "test".into()).is_err());
     assert!(SnapshotMeta::new("now".into(), "build".into(), "\n".into()).is_err());
+    assert!(SnapshotMeta::fake("  ").is_err());
 }
