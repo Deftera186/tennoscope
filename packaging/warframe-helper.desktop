@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Warframe Helper
+Comment=Local-first Warframe inventory companion
+Exec=warframe-helper
+Icon=warframe-helper
+Terminal=false
+Categories=Utility;

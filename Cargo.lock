@@ -65,22 +65,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "app"
-version = "0.1.0"
-dependencies = [
- "app-core",
- "local-store",
- "log",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-log",
- "tempfile",
- "warframe-acquisition",
-]
-
-[[package]]
 name = "app-core"
 version = "0.1.0"
 dependencies = [
@@ -4213,6 +4197,22 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "warframe-helper"
+version = "0.1.0"
+dependencies = [
+ "app-core",
+ "local-store",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-log",
+ "tempfile",
+ "warframe-acquisition",
 ]
 
 [[package]]

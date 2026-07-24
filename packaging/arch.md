@@ -1,28 +1,23 @@
-# Arch Linux packaging guidance
+# Arch Linux package
 
-There is no official AUR package yet. Until a release URL and checksum exist, users should build the AppImage or compile from this repository rather than install a pretend package.
+[`arch/PKGBUILD`](arch/PKGBUILD) builds and installs a native package from a source archive. No AUR package or binary repository is claimed.
 
-Typical build prerequisites are:
+Install the build tools:
 
 ```bash
-sudo pacman -S --needed base-devel cargo curl file librsvg libxdo nodejs npm openssl webkit2gtk-4.1 wget
-corepack enable
+sudo pacman -S --needed base-devel cargo nodejs pnpm webkit2gtk-4.1
 ```
 
-Depending on the desktop integration enabled by a future release, `libappindicator-gtk3` may also be required.
+From a clean repository checkout, create the correctly rooted local source archive:
 
-## Future PKGBUILD shape
+```bash
+git archive --format=tar.gz --prefix=warframe-helper-0.1.0/ \
+  --output=packaging/arch/warframe-helper-0.1.0.tar.gz HEAD
+cd packaging/arch
+export WARFRAME_HELPER_SHA256="$(sha256sum warframe-helper-0.1.0.tar.gz | cut -d ' ' -f 1)"
+makepkg -si
+```
 
-A source-based `PKGBUILD` should:
+The default `source` is that adjacent archive. A release maintainer can instead set `WARFRAME_HELPER_SOURCE` to an immutable release URL or absolute archive path and set `WARFRAME_HELPER_SHA256` to its real digest before invoking `makepkg`. Add the real project homepage to `url` when a public release location exists.
 
-1. use a signed release archive or immutable commit as `source`, with a real `sha256sums` value;
-2. declare `webkit2gtk-4.1` and the generated bundle's actual shared-library requirements in `depends`;
-3. declare the Rust, Node.js, pnpm/Corepack, and Tauri build dependencies in `makedepends`;
-4. run `pnpm install --frozen-lockfile` and `pnpm build` without modifying lockfiles;
-5. build with Cargo/Tauri under the package build user, never with `sudo`;
-6. install the executable, desktop entry, icons, `LICENSE`, and `THIRD_PARTY_NOTICES.md` into normal Arch paths; and
-7. avoid setuid bits and `cap_sys_ptrace` capabilities.
-
-Arch packaging policy normally expects reproducible, non-interactive dependency acquisition. Before publishing a PKGBUILD, maintainers should decide whether to vendor Cargo/npm sources or use an approved prepare step. This repository intentionally does not ship a placeholder PKGBUILD with fake URLs or checksums.
-
-For local development, follow the root README and run `pnpm tauri dev` from `app/`.
+The recipe builds the locked Rust workspace and frontend, runs both test suites, and installs `warframe-helper`, its desktop entry, icon, GPLv3 license, and third-party notices. Dependency resolution currently needs network access. Before AUR submission, publish immutable source archives and use a literal URL and checksum rather than environment variables or `SKIP`.

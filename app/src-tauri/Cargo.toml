@@ -1,5 +1,5 @@
 [package]
-name = "app"
+name = "warframe-helper"
 version = "0.1.0"
 description = "Warframe Helper desktop application"
 edition.workspace = true

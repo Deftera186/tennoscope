@@ -1,28 +1,28 @@
-# Gentoo packaging guidance
+# Gentoo local ebuild
 
-There is no official Gentoo overlay or ebuild yet. The AppImage can be used across distributions, while Gentoo users who prefer native compilation can build from source.
+[`gentoo/warframe-helper-0.1.0.ebuild`](gentoo/warframe-helper-0.1.0.ebuild) is usable in a local overlay. It is not published in the Gentoo repository and intentionally consumes a local source archive from `DISTDIR` until this project has an immutable release URL.
 
-Likely native build/runtime requirements include:
+Enable Corepack for Node.js and install the native prerequisites:
 
-- `net-libs/webkit-gtk:4.1`
-- `gnome-base/librsvg`
-- OpenSSL, GTK 3, and the standard Tauri Linux toolchain
-- Rust 1.85 or newer
-- a Node.js version accepted by `app/package.json`
-- pnpm 10/Corepack
+```bash
+echo 'net-libs/nodejs corepack' | sudo tee -a /etc/portage/package.use/warframe-helper
+sudo emerge --ask virtual/rust net-libs/nodejs net-libs/webkit-gtk:4.1
+```
 
-Exact atoms and USE flags depend on the active Gentoo profile and should be validated with `pkgdev` before publication.
+Create the release-shaped archive from a clean checkout and copy it to the configured distfiles directory (commonly `/var/cache/distfiles`):
 
-## Future ebuild shape
+```bash
+git archive --format=tar.gz --prefix=warframe-helper-0.1.0/ \
+  --output=/tmp/warframe-helper-0.1.0.tar.gz HEAD
+sha256sum /tmp/warframe-helper-0.1.0.tar.gz
+sudo install -m644 /tmp/warframe-helper-0.1.0.tar.gz /var/cache/distfiles/
+```
 
-A release ebuild should:
+Copy `packaging/gentoo/` into an initialized local repository as `app-misc/warframe-helper/`, generate its Manifest, and install it:
 
-1. use an immutable release archive with a populated Manifest rather than a moving branch;
-2. use `cargo.eclass` with the locked crate set, and a Gentoo-compliant strategy for locked pnpm dependencies;
-3. declare WebKitGTK 4.1 and all actual linked libraries in `RDEPEND`/`DEPEND`;
-4. run frontend checks and the release build without network access in compile phases;
-5. install the binary, desktop file, icons, GPLv3 license reference, and `THIRD_PARTY_NOTICES.md`;
-6. preserve WFCD runtime-data attribution; and
-7. avoid setuid installation and file capabilities for ptrace access.
+```bash
+sudo ebuild /var/db/repos/local/app-misc/warframe-helper/warframe-helper-0.1.0.ebuild manifest
+sudo FEATURES="-network-sandbox" emerge --ask app-misc/warframe-helper
+```
 
-Because the repository does not yet publish release tarballs or a vendored pnpm dependency set, a policy-compliant ebuild would be premature. These are concrete maintainer requirements, not a claim of current Portage availability.
+The one-command `FEATURES` override is necessary because this local ebuild resolves the Cargo and pnpm lockfiles during the build; it affects only that invocation. The ebuild installs the canonical binary, desktop entry, icon, GPLv3 license, and third-party notice. Before submitting it to a public overlay, add a real `HOMEPAGE`, replace the local `src_unpack` path with an immutable `SRC_URI`, enumerate/vend all Rust and pnpm sources, and let the Manifest carry the release archive checksum.
