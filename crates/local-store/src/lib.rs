@@ -248,7 +248,123 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
             ("source", "TEXT", true, 0),
             ("item_count", "INTEGER", true, 0),
         ],
-    )
+    )?;
+    validate_constraints(connection)
+}
+
+fn validate_constraints(connection: &Connection) -> Result<(), StoreError> {
+    connection.execute_batch("SAVEPOINT validate_schema_constraints")?;
+    let validation = (|| {
+        let probe_id = unused_probe_id(connection)?;
+        require_rejected(
+            connection,
+            "inventory quantity >= 0 constraint",
+            "INSERT INTO inventory (item_id, name, category, quantity, mastered) \
+             VALUES (?1, 'Probe', 'weapon', -1, 0)",
+            [&probe_id],
+        )?;
+        require_rejected(
+            connection,
+            "inventory mastered 0/1 constraint",
+            "INSERT INTO inventory (item_id, name, category, quantity, mastered) \
+             VALUES (?1, 'Probe', 'weapon', 0, 2)",
+            [&probe_id],
+        )?;
+        for (label, observed_at, game_build, source, item_count) in [
+            (
+                "snapshot_audit observed_at nonblank constraint",
+                " ",
+                "build",
+                "probe",
+                0,
+            ),
+            (
+                "snapshot_audit game_build nonblank constraint",
+                "now",
+                " ",
+                "probe",
+                0,
+            ),
+            (
+                "snapshot_audit source nonblank constraint",
+                "now",
+                "build",
+                " ",
+                0,
+            ),
+            (
+                "snapshot_audit item_count >= 0 constraint",
+                "now",
+                "build",
+                "probe",
+                -1,
+            ),
+        ] {
+            require_rejected(
+                connection,
+                label,
+                "INSERT INTO snapshot_audit (observed_at, game_build, source, item_count) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![observed_at, game_build, source, item_count],
+            )?;
+        }
+
+        let insert_audit = "INSERT INTO snapshot_audit (observed_at, game_build, source, item_count) \
+             VALUES ('now', 'build', 'schema-probe', 0)";
+        connection.execute(insert_audit, [])?;
+        let first_id = connection.last_insert_rowid();
+        connection.execute("DELETE FROM snapshot_audit WHERE id = ?1", [first_id])?;
+        connection.execute(insert_audit, [])?;
+        let second_id = connection.last_insert_rowid();
+        if second_id <= first_id {
+            return Err(StoreError::Schema(
+                "snapshot_audit id is missing AUTOINCREMENT semantics".to_owned(),
+            ));
+        }
+        Ok(())
+    })();
+    let cleanup = connection.execute_batch(
+        "ROLLBACK TO validate_schema_constraints; RELEASE validate_schema_constraints",
+    );
+    match (validation, cleanup) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error.into()),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+fn unused_probe_id(connection: &Connection) -> Result<String, StoreError> {
+    for suffix in 0_u16..1024 {
+        let candidate = format!("__local_store_schema_probe_{suffix}__");
+        let exists: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM inventory WHERE item_id = ?1)",
+            [&candidate],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Ok(candidate);
+        }
+    }
+    Err(StoreError::Schema(
+        "could not allocate a temporary inventory ID for constraint validation".to_owned(),
+    ))
+}
+
+fn require_rejected<P>(
+    connection: &Connection,
+    label: &str,
+    sql: &str,
+    params: P,
+) -> Result<(), StoreError>
+where
+    P: rusqlite::Params,
+{
+    if connection.execute(sql, params).is_ok() {
+        return Err(StoreError::Schema(format!(
+            "required constraint is missing: {label}"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_table(
@@ -533,5 +649,47 @@ mod tests {
         let error = SqliteStore::open(&path).err().unwrap().to_string();
         assert!(error.contains("schema"));
         assert!(error.contains("name"));
+    }
+
+    #[test]
+    fn version_one_database_with_missing_checks_is_rejected_at_open() {
+        let (_directory, path) = database_with(
+            "CREATE TABLE inventory (
+                item_id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
+                quantity INTEGER NOT NULL, mastered INTEGER NOT NULL
+             );
+             CREATE TABLE snapshot_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, observed_at TEXT NOT NULL,
+                game_build TEXT NOT NULL, source TEXT NOT NULL, item_count INTEGER NOT NULL
+             );
+             PRAGMA user_version = 1;",
+        );
+
+        let error = SqliteStore::open(&path).err().unwrap().to_string();
+        assert!(error.contains("schema"));
+        assert!(error.contains("constraint"));
+    }
+
+    #[test]
+    fn version_one_database_without_audit_autoincrement_is_rejected_at_open() {
+        let (_directory, path) = database_with(
+            "CREATE TABLE inventory (
+                item_id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
+                quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                mastered INTEGER NOT NULL CHECK (mastered IN (0, 1))
+             );
+             CREATE TABLE snapshot_audit (
+                id INTEGER PRIMARY KEY,
+                observed_at TEXT NOT NULL CHECK (length(trim(observed_at)) > 0),
+                game_build TEXT NOT NULL CHECK (length(trim(game_build)) > 0),
+                source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+                item_count INTEGER NOT NULL CHECK (item_count >= 0)
+             );
+             PRAGMA user_version = 1;",
+        );
+
+        let error = SqliteStore::open(&path).err().unwrap().to_string();
+        assert!(error.contains("schema"));
+        assert!(error.contains("AUTOINCREMENT"));
     }
 }
