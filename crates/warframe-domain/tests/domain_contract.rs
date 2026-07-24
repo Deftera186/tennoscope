@@ -1,4 +1,5 @@
 use serde::{Serialize, de::DeserializeOwned};
+use serde_json::json;
 use warframe_domain::{
     CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId, RewardAdvisor,
     RewardCandidate,
@@ -9,6 +10,8 @@ fn item(id: &str, name: &str) -> CatalogItem {
 }
 
 fn assert_serializable<T: Serialize + DeserializeOwned>() {}
+
+fn assert_output_serializable<T: Serialize>() {}
 
 #[test]
 fn catalog_contract_validates_identifiers_and_names() {
@@ -74,11 +77,11 @@ fn uncertain_high_value_reward_is_excluded_from_best_value() {
 
     let view = RewardAdvisor::advise(vec![forma, lex]);
 
-    assert_eq!(view.cards[0].name, "Forma");
-    assert_eq!(view.cards[1].name, "Lex");
+    assert_eq!(view.cards()[0].name, "Forma");
+    assert_eq!(view.cards()[1].name, "Lex");
     assert_eq!(view.best_value_index(), Some(1));
     assert_eq!(view.best_value_name(), Some("Lex"));
-    assert_serializable::<warframe_domain::RewardView>();
+    assert_output_serializable::<warframe_domain::RewardView>();
 }
 
 #[test]
@@ -102,4 +105,141 @@ fn all_uncertain_rewards_have_no_best_value() {
 
     assert_eq!(view.best_value_index(), None);
     assert_eq!(view.best_value_name(), None);
+}
+
+#[test]
+fn category_wire_shape_is_stable_snake_case() {
+    let cases = [
+        (Category::Frame, "frame"),
+        (Category::Weapon, "weapon"),
+        (Category::Companion, "companion"),
+        (Category::PrimePart, "prime_part"),
+        (Category::Relic, "relic"),
+    ];
+
+    for (category, wire) in cases {
+        assert_eq!(serde_json::to_value(category).unwrap(), json!(wire));
+        assert_eq!(
+            serde_json::from_value::<Category>(json!(wire)).unwrap(),
+            category
+        );
+    }
+}
+
+#[test]
+fn valid_domain_values_round_trip_through_json() {
+    let id = ItemId::new("lex").unwrap();
+    let catalog_item = item("lex", "Lex");
+    let snapshot = InventorySnapshot::coherent(vec![
+        InventoryEntry::new(catalog_item.clone(), 2).with_mastered(true),
+    ])
+    .unwrap();
+    let reward = RewardCandidate::new("Lex Prime Receiver", 8, 25, 1, true, 0.99).unwrap();
+
+    let id_wire = serde_json::to_value(&id).unwrap();
+    let item_wire = serde_json::to_value(&catalog_item).unwrap();
+    let snapshot_wire = serde_json::to_value(&snapshot).unwrap();
+    let reward_wire = serde_json::to_value(&reward).unwrap();
+
+    assert_eq!(id_wire, json!("lex"));
+    assert_eq!(
+        item_wire,
+        json!({"id": "lex", "name": "Lex", "category": "weapon"})
+    );
+    assert_eq!(
+        snapshot_wire,
+        json!({
+            "entries": [{
+                "item": {"id": "lex", "name": "Lex", "category": "weapon"},
+                "quantity": 2,
+                "mastered": true
+            }]
+        })
+    );
+    assert_eq!(
+        reward_wire,
+        json!({
+            "name": "Lex Prime Receiver",
+            "platinum": 8,
+            "ducats": 25,
+            "owned": 1,
+            "mastery_relevant": true,
+            "confidence": 0.99_f32
+        })
+    );
+
+    let id_round_trip: ItemId = serde_json::from_value(id_wire).unwrap();
+    let item_round_trip: CatalogItem = serde_json::from_value(item_wire).unwrap();
+    let snapshot_round_trip: InventorySnapshot = serde_json::from_value(snapshot_wire).unwrap();
+    let reward_round_trip: RewardCandidate = serde_json::from_value(reward_wire).unwrap();
+
+    assert_eq!(id_round_trip, id);
+    assert_eq!(item_round_trip, catalog_item);
+    assert_eq!(snapshot_round_trip, snapshot);
+    assert_eq!(reward_round_trip, reward);
+}
+
+#[test]
+fn deserialization_rejects_invalid_catalog_values() {
+    assert!(serde_json::from_value::<ItemId>(json!("  ")).is_err());
+    assert!(
+        serde_json::from_value::<CatalogItem>(json!({
+            "id": "lex",
+            "name": "\t",
+            "category": "weapon"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn deserialization_rejects_duplicate_snapshot_entries() {
+    let entry = json!({
+        "item": {"id": "lex", "name": "Lex", "category": "weapon"},
+        "quantity": 1,
+        "mastered": false
+    });
+    assert!(
+        serde_json::from_value::<InventorySnapshot>(json!({
+            "entries": [entry.clone(), entry]
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn deserialization_rejects_invalid_reward_candidates() {
+    let candidate = |name: &str, confidence: f32| {
+        json!({
+            "name": name,
+            "platinum": 8,
+            "ducats": 25,
+            "owned": 0,
+            "mastery_relevant": true,
+            "confidence": confidence
+        })
+    };
+
+    assert!(serde_json::from_value::<RewardCandidate>(candidate(" ", 0.9)).is_err());
+    assert!(serde_json::from_value::<RewardCandidate>(candidate("Lex", -0.01)).is_err());
+    assert!(serde_json::from_value::<RewardCandidate>(candidate("Lex", 1.01)).is_err());
+}
+
+#[test]
+fn reward_view_serializes_derived_selection_without_being_mutable() {
+    let view = RewardAdvisor::advise(vec![
+        RewardCandidate::new("Forma", 20, 0, 0, false, 0.4).unwrap(),
+        RewardCandidate::new("Lex", 8, 25, 0, true, 0.99).unwrap(),
+    ]);
+
+    assert_eq!(
+        serde_json::to_value(&view).unwrap(),
+        json!({
+            "cards": [
+                {"name": "Forma", "platinum": 20, "ducats": 0, "owned": 0, "mastery_relevant": false, "confidence": 0.4_f32},
+                {"name": "Lex", "platinum": 8, "ducats": 25, "owned": 0, "mastery_relevant": true, "confidence": 0.99_f32}
+            ],
+            "best_value_index": 1
+        })
+    );
 }

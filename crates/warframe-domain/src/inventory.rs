@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use crate::{CatalogItem, DomainError, ItemId};
 
@@ -26,9 +26,24 @@ impl InventoryEntry {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct InventorySnapshot {
     entries: Vec<InventoryEntry>,
+}
+
+#[derive(Deserialize)]
+struct InventorySnapshotDto {
+    entries: Vec<InventoryEntry>,
+}
+
+impl<'de> Deserialize<'de> for InventorySnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let dto = InventorySnapshotDto::deserialize(deserializer)?;
+        Self::coherent(dto.entries).map_err(D::Error::custom)
+    }
 }
 
 impl InventorySnapshot {

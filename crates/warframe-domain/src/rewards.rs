@@ -1,10 +1,10 @@
 use std::cmp::Reverse;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use crate::DomainError;
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RewardCandidate {
     pub name: String,
     pub platinum: u32,
@@ -41,13 +41,45 @@ impl RewardCandidate {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Deserialize)]
+struct RewardCandidateDto {
+    name: String,
+    platinum: u32,
+    ducats: u32,
+    owned: u32,
+    mastery_relevant: bool,
+    confidence: f32,
+}
+
+impl<'de> Deserialize<'de> for RewardCandidate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let dto = RewardCandidateDto::deserialize(deserializer)?;
+        Self::new(
+            dto.name,
+            dto.platinum,
+            dto.ducats,
+            dto.owned,
+            dto.mastery_relevant,
+            dto.confidence,
+        )
+        .map_err(D::Error::custom)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RewardView {
-    pub cards: Vec<RewardCandidate>,
+    cards: Vec<RewardCandidate>,
     best_value_index: Option<usize>,
 }
 
 impl RewardView {
+    pub fn cards(&self) -> &[RewardCandidate] {
+        &self.cards
+    }
+
     pub fn best_value_index(&self) -> Option<usize> {
         self.best_value_index
     }

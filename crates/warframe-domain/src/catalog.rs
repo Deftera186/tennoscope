@@ -1,21 +1,10 @@
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
-#[derive(Debug, Error, PartialEq)]
-pub enum DomainError {
-    #[error("item ID must not be blank")]
-    InvalidItemId,
-    #[error("name must not be blank")]
-    InvalidName,
-    #[error("confidence must be finite and between 0.0 and 1.0")]
-    InvalidConfidence,
-    #[error("snapshot contains duplicate item ID: {0}")]
-    DuplicateItemId(ItemId),
-}
+use crate::error::DomainError;
 
-#[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(transparent)]
 pub struct ItemId(String);
 
@@ -39,6 +28,15 @@ impl fmt::Display for ItemId {
     }
 }
 
+impl<'de> Deserialize<'de> for ItemId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Self::new(String::deserialize(deserializer)?).map_err(D::Error::custom)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Category {
@@ -49,11 +47,28 @@ pub enum Category {
     Relic,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CatalogItem {
     pub id: ItemId,
     pub name: String,
     pub category: Category,
+}
+
+#[derive(Deserialize)]
+struct CatalogItemDto {
+    id: ItemId,
+    name: String,
+    category: Category,
+}
+
+impl<'de> Deserialize<'de> for CatalogItem {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let dto = CatalogItemDto::deserialize(deserializer)?;
+        Self::new(dto.id, dto.name, dto.category).map_err(D::Error::custom)
+    }
 }
 
 impl CatalogItem {
