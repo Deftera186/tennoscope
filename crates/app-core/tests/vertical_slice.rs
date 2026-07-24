@@ -89,7 +89,40 @@ fn a_second_snapshot_authoritatively_replaces_collection() {
 #[test]
 fn a_live_snapshot_replaces_fake_reader_health_metadata() {
     let mut core = AppCore::in_memory().unwrap();
-    core.load_fake_session().unwrap();
+    let fake = core.load_fake_session().unwrap();
+    assert_eq!(fake.health().game_reader().state(), HealthState::Ready);
+    assert_eq!(
+        fake.health().game_reader().message(),
+        "Deterministic fake inventory loaded"
+    );
+    assert_eq!(
+        fake.health().game_reader().last_success(),
+        Some("2000-01-01T00:00:00Z")
+    );
+    assert_eq!(fake.health().capture().state(), HealthState::Degraded);
+    assert_eq!(
+        fake.health().capture().message(),
+        "Fake session; capture not connected"
+    );
+    assert_eq!(fake.health().capture().last_success(), None);
+    assert_eq!(fake.health().catalog().state(), HealthState::Degraded);
+    assert_eq!(
+        fake.health().catalog().message(),
+        "Fake session; live catalog not connected"
+    );
+    assert_eq!(fake.health().catalog().last_success(), None);
+    assert_eq!(fake.health().market().state(), HealthState::Degraded);
+    assert_eq!(
+        fake.health().market().message(),
+        "Fake session; live market not connected"
+    );
+    assert_eq!(fake.health().market().last_success(), None);
+    assert_eq!(fake.health().database().state(), HealthState::Ready);
+    assert_eq!(
+        fake.health().database().message(),
+        "SQLite database available"
+    );
+    assert_eq!(fake.health().database().last_success(), None);
     let snapshot =
         InventorySnapshot::coherent(vec![entry("braton", "Braton", Category::Weapon, 1)]).unwrap();
     let meta = SnapshotMeta::new(
@@ -108,6 +141,30 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
     );
     assert!(view.health().game_reader().message().contains("game-log"));
     assert!(!view.health().game_reader().message().contains("fake"));
+    assert_eq!(view.health().capture().state(), HealthState::Degraded);
+    assert_eq!(
+        view.health().capture().message(),
+        "Phase 1 capture not connected"
+    );
+    assert_eq!(view.health().capture().last_success(), None);
+    assert_eq!(view.health().catalog().state(), HealthState::Degraded);
+    assert_eq!(
+        view.health().catalog().message(),
+        "Phase 1 catalog not connected"
+    );
+    assert_eq!(view.health().catalog().last_success(), None);
+    assert_eq!(view.health().market().state(), HealthState::Degraded);
+    assert_eq!(
+        view.health().market().message(),
+        "Phase 1 market not connected"
+    );
+    assert_eq!(view.health().market().last_success(), None);
+    assert_eq!(view.health().database().state(), HealthState::Ready);
+    assert_eq!(
+        view.health().database().message(),
+        "SQLite database available"
+    );
+    assert_eq!(view.health().database().last_success(), None);
 }
 
 #[test]

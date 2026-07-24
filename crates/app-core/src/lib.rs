@@ -72,6 +72,9 @@ impl AppCore {
         self.store.replace_collection(&snapshot, &meta)?;
         self.reward = RewardAdvisor::advise(Vec::new());
         self.health.game_reader = BackendHealth::inventory_sync(&meta)?;
+        if !meta.is_fake() {
+            self.health.reset_phase_one_integrations()?;
+        }
         self.current_view()
     }
 
@@ -260,6 +263,13 @@ impl HealthView {
             market: BackendHealth::degraded("Phase 1 market not connected")?,
             database: BackendHealth::ready("SQLite database available", None)?,
         })
+    }
+
+    fn reset_phase_one_integrations(&mut self) -> Result<(), AppError> {
+        self.capture = BackendHealth::degraded("Phase 1 capture not connected")?;
+        self.catalog = BackendHealth::degraded("Phase 1 catalog not connected")?;
+        self.market = BackendHealth::degraded("Phase 1 market not connected")?;
+        Ok(())
     }
 
     pub fn game_reader(&self) -> &BackendHealth {
