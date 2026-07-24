@@ -10,15 +10,13 @@ use crate::{
 const LOGIN_SEARCH_DISTANCE: usize = 2048;
 const CANDIDATE_OVERLAP: usize = LOGIN_SEARCH_DISTANCE + 128;
 const MAX_CHUNK_SIZE: usize = 1024 * 1024;
-// Avoid pathological Wine reservations and cap the maximum successful reads in
-// one startup scan. File-backed code/data mappings are not credential sources.
-const MAX_REGION_BYTES: usize = 128 * 1024 * 1024;
-const MAX_SCAN_BYTES: usize = 512 * 1024 * 1024;
-// Existing Linux scanners use repeated identical URL tuples as a confidence
-// signal. Distinct physical locations are required so chunk overlap cannot
-// manufacture confidence. A conflict observed before this threshold remains
-// an explicit ambiguity error.
+const PREFERRED_SCAN_BYTES: usize = 160 * 1024 * 1024;
+const FALLBACK_SCAN_BYTES: usize = 96 * 1024 * 1024;
+const MAX_PREFERRED_REGION_BYTES: usize = 128 * 1024 * 1024;
+const FALLBACK_SAMPLE_BYTES: usize = 4 * 1024 * 1024;
 const CONFIDENT_URL_COPIES: usize = 3;
+const MAX_DISTINCT_CANDIDATES_PER_RANK: usize = 8;
+const MAX_LOCATIONS_PER_CANDIDATE: usize = 16;
 const URL_ACCOUNT_MARKER: &[u8] = b"accountId=";
 const URL_NONCE_MARKER: &[u8] = b"&nonce=";
 const LOGIN_ID_MARKER: &[u8] = b"\"id\"";
@@ -40,58 +38,160 @@ impl AuthorizationScanner {
         memory: &dyn MemoryReader,
         process: &GameProcess,
     ) -> Result<InventoryAuthorization, AcquisitionError> {
+        self.scan_with_policy(memory, process, ScanPolicy::default())
+    }
+
+    fn scan_with_policy(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        policy: ScanPolicy,
+    ) -> Result<InventoryAuthorization, AcquisitionError> {
         let mut regions = memory.readable_regions(process)?;
         regions.sort_by_key(|region| (Reverse(region.scan_priority()), region.start()));
         let mut candidates = CandidateAccumulator::default();
         let mut read_buffer = Zeroizing::new(vec![0_u8; self.chunk_size]);
-        let mut scanned_bytes = 0_usize;
+        let mut fallback = Vec::with_capacity(regions.len());
+        let mut preferred_remaining = policy.preferred_bytes;
 
         for region in regions {
-            if region.scan_priority() == RegionScanPriority::FileBacked
-                || region.len() > MAX_REGION_BYTES
-                || scanned_bytes >= MAX_SCAN_BYTES
-            {
+            let preferred = region.scan_priority() == RegionScanPriority::WritableAnonymous
+                && region.len() <= policy.max_preferred_region_bytes;
+            if !preferred || preferred_remaining == 0 {
+                fallback.push(ScanRange::whole(region));
                 continue;
             }
-            let mut offset = 0_usize;
-            let mut overlap = Zeroizing::new(Vec::with_capacity(CANDIDATE_OVERLAP));
-
-            while offset < region.len() && scanned_bytes < MAX_SCAN_BYTES {
-                let requested = self
-                    .chunk_size
-                    .min(region.len() - offset)
-                    .min(MAX_SCAN_BYTES - scanned_bytes);
-                let address = region
-                    .start()
-                    .checked_add(offset as u64)
-                    .ok_or(AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
-                let read = memory.read_at(process, address, &mut read_buffer[..requested])?;
-                if read == 0 {
-                    break;
-                }
-
-                let mut window = Zeroizing::new(Vec::with_capacity(overlap.len() + read));
-                window.extend_from_slice(&overlap);
-                append_read_and_wipe(&mut window, &mut read_buffer, read);
-                let window_start = address
-                    .checked_sub(overlap.len() as u64)
-                    .ok_or(AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
-                collect_candidates_at(&window, window_start, &mut candidates);
-                if let Some(authorization) = candidates.take_confident_url() {
-                    return Ok(authorization);
-                }
-
-                let keep = CANDIDATE_OVERLAP.min(window.len());
-                wipe_bytes(&mut overlap);
-                overlap.clear();
-                overlap.extend_from_slice(&window[window.len() - keep..]);
-                offset += read;
-                scanned_bytes += read;
+            let scan_len = region.len().min(preferred_remaining);
+            scan_range(
+                memory,
+                process,
+                ScanRange::new(region, 0, scan_len),
+                &mut read_buffer,
+                &mut candidates,
+                self.chunk_size,
+            )?;
+            preferred_remaining -= scan_len;
+            if scan_len < region.len() {
+                fallback.push(ScanRange::new(region, scan_len, region.len() - scan_len));
             }
+        }
+
+        if let Some(authorization) = candidates.take_confident_url() {
+            return Ok(authorization);
+        }
+
+        fallback.sort_by_key(|range| {
+            (
+                Reverse(range.region.scan_priority()),
+                range.region.start(),
+                range.offset,
+            )
+        });
+        let mut fallback_remaining = policy.fallback_bytes;
+        for range in fallback {
+            if fallback_remaining == 0 {
+                break;
+            }
+            let sample_len = range
+                .len
+                .min(policy.fallback_sample_bytes)
+                .min(fallback_remaining);
+            scan_range(
+                memory,
+                process,
+                ScanRange::new(range.region, range.offset, sample_len),
+                &mut read_buffer,
+                &mut candidates,
+                self.chunk_size,
+            )?;
+            fallback_remaining -= sample_len;
         }
 
         select_candidate(candidates)
     }
+}
+
+#[derive(Clone, Copy)]
+struct ScanPolicy {
+    preferred_bytes: usize,
+    fallback_bytes: usize,
+    max_preferred_region_bytes: usize,
+    fallback_sample_bytes: usize,
+}
+
+impl Default for ScanPolicy {
+    fn default() -> Self {
+        Self {
+            preferred_bytes: PREFERRED_SCAN_BYTES,
+            fallback_bytes: FALLBACK_SCAN_BYTES,
+            max_preferred_region_bytes: MAX_PREFERRED_REGION_BYTES,
+            fallback_sample_bytes: FALLBACK_SAMPLE_BYTES,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ScanRange {
+    region: crate::ReadableRegion,
+    offset: usize,
+    len: usize,
+}
+
+impl ScanRange {
+    fn new(region: crate::ReadableRegion, offset: usize, len: usize) -> Self {
+        Self {
+            region,
+            offset,
+            len,
+        }
+    }
+
+    fn whole(region: crate::ReadableRegion) -> Self {
+        Self::new(region, 0, region.len())
+    }
+}
+
+fn scan_range(
+    memory: &dyn MemoryReader,
+    process: &GameProcess,
+    range: ScanRange,
+    read_buffer: &mut Zeroizing<Vec<u8>>,
+    candidates: &mut CandidateAccumulator,
+    chunk_size: usize,
+) -> Result<(), AcquisitionError> {
+    let mut consumed = 0_usize;
+    let mut overlap = Zeroizing::new(Vec::with_capacity(CANDIDATE_OVERLAP));
+    while consumed < range.len {
+        let requested = chunk_size.min(range.len - consumed);
+        let absolute_offset = range
+            .offset
+            .checked_add(consumed)
+            .ok_or(AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
+        let address = range
+            .region
+            .start()
+            .checked_add(absolute_offset as u64)
+            .ok_or(AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
+        let read = memory.read_at(process, address, &mut read_buffer[..requested])?;
+        if read == 0 {
+            break;
+        }
+
+        let mut window = Zeroizing::new(Vec::with_capacity(overlap.len() + read));
+        window.extend_from_slice(&overlap);
+        append_read_and_wipe(&mut window, read_buffer, read);
+        let window_start = address
+            .checked_sub(overlap.len() as u64)
+            .ok_or(AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
+        collect_candidates_at(&window, window_start, candidates);
+
+        let keep = CANDIDATE_OVERLAP.min(window.len());
+        wipe_bytes(&mut overlap);
+        overlap.clear();
+        overlap.extend_from_slice(&window[window.len() - keep..]);
+        consumed += read;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -108,73 +208,79 @@ struct Candidate {
 
 #[derive(Default)]
 struct CandidateAccumulator {
-    login: RankState,
-    url: RankState,
+    login: CandidateSet,
+    url: CandidateSet,
 }
 
 #[derive(Default)]
-enum RankState {
-    #[default]
-    None,
-    One {
-        authorization: InventoryAuthorization,
-        locations: Vec<u64>,
-    },
-    Ambiguous,
+struct CandidateSet {
+    candidates: Vec<CountedCandidate>,
+    overflowed: bool,
+}
+
+struct CountedCandidate {
+    authorization: InventoryAuthorization,
+    locations: Vec<u64>,
 }
 
 impl CandidateAccumulator {
     fn record(&mut self, candidate: Candidate) {
-        let state = match candidate.rank {
+        let set = match candidate.rank {
             CandidateRank::LoginResponse => &mut self.login,
             CandidateRank::UrlEncoded => &mut self.url,
         };
-        match state {
-            RankState::None => {
-                *state = RankState::One {
-                    authorization: candidate.authorization,
-                    locations: vec![candidate.location],
-                };
-            }
-            RankState::One {
-                authorization,
-                locations,
-            } if authorization.account_id() == candidate.authorization.account_id()
-                && authorization.nonce() == candidate.authorization.nonce() =>
+        if let Some(existing) = set.candidates.iter_mut().find(|existing| {
+            existing.authorization.account_id() == candidate.authorization.account_id()
+                && existing.authorization.nonce() == candidate.authorization.nonce()
+        }) {
+            if existing.locations.len() < MAX_LOCATIONS_PER_CANDIDATE
+                && !existing.locations.contains(&candidate.location)
             {
-                if locations.len() < CONFIDENT_URL_COPIES
-                    && !locations.contains(&candidate.location)
-                {
-                    locations.push(candidate.location);
-                }
+                existing.locations.push(candidate.location);
             }
-            RankState::One { .. } => *state = RankState::Ambiguous,
-            RankState::Ambiguous => {}
+        } else if set.candidates.len() < MAX_DISTINCT_CANDIDATES_PER_RANK {
+            set.candidates.push(CountedCandidate {
+                authorization: candidate.authorization,
+                locations: vec![candidate.location],
+            });
+        } else {
+            set.overflowed = true;
         }
     }
 
     fn take_confident_url(&mut self) -> Option<InventoryAuthorization> {
-        if !matches!(
-            self.url,
-            RankState::One {
-                ref locations,
-                ..
-            } if locations.len() >= CONFIDENT_URL_COPIES
-        ) {
+        if self.url.overflowed {
             return None;
         }
-        match std::mem::take(&mut self.url) {
-            RankState::One { authorization, .. } => Some(authorization),
-            _ => unreachable!("confidence was checked before taking the candidate"),
+        let highest = self
+            .url
+            .candidates
+            .iter()
+            .map(|candidate| candidate.locations.len())
+            .max()?;
+        if highest < CONFIDENT_URL_COPIES
+            || self
+                .url
+                .candidates
+                .iter()
+                .filter(|candidate| candidate.locations.len() == highest)
+                .count()
+                != 1
+        {
+            return None;
         }
+        let index = self
+            .url
+            .candidates
+            .iter()
+            .position(|candidate| candidate.locations.len() == highest)
+            .expect("unique maximum exists");
+        Some(self.url.candidates.swap_remove(index).authorization)
     }
 
     #[cfg(test)]
     fn retained_candidate_count(&self) -> usize {
-        [&self.login, &self.url]
-            .into_iter()
-            .filter(|state| matches!(state, RankState::One { .. }))
-            .count()
+        self.login.candidates.len() + self.url.candidates.len()
     }
 }
 
@@ -276,14 +382,19 @@ fn push_candidate(
 }
 
 fn select_candidate(
-    candidates: CandidateAccumulator,
+    mut candidates: CandidateAccumulator,
 ) -> Result<InventoryAuthorization, AcquisitionError> {
-    for state in [candidates.url, candidates.login] {
-        match state {
-            RankState::None => {}
-            RankState::One { authorization, .. } => return Ok(authorization),
-            RankState::Ambiguous => return Err(AcquisitionError::AuthorizationAmbiguous),
-        }
+    if let Some(authorization) = candidates.take_confident_url() {
+        return Ok(authorization);
+    }
+    if candidates.url.overflowed || !candidates.url.candidates.is_empty() {
+        return Err(AcquisitionError::AuthorizationAmbiguous);
+    }
+    if candidates.login.overflowed || candidates.login.candidates.len() > 1 {
+        return Err(AcquisitionError::AuthorizationAmbiguous);
+    }
+    if let Some(candidate) = candidates.login.candidates.pop() {
+        return Ok(candidate.authorization);
     }
     Err(AcquisitionError::AuthorizationNotFound)
 }
@@ -360,10 +471,13 @@ mod tests {
     use zeroize::Zeroizing;
 
     use super::{
-        Candidate, CandidateAccumulator, CandidateRank, append_read_and_wipe, collect_candidates,
-        select_candidate, wipe_bytes,
+        Candidate, CandidateAccumulator, CandidateRank, ScanPolicy, append_read_and_wipe,
+        collect_candidates, collect_candidates_at, select_candidate, wipe_bytes,
     };
-    use crate::InventoryAuthorization;
+    use crate::{
+        AcquisitionError, GameProcess, InventoryAuthorization, MemoryReader, ReadableRegion,
+        RegionScanPriority,
+    };
 
     const URL: &[u8] = include_bytes!("../tests/fixtures/authorization-url-encoded.bin");
     const LOGIN: &[u8] = include_bytes!("../tests/fixtures/authorization-login-response.bin");
@@ -371,7 +485,9 @@ mod tests {
     #[test]
     fn extracts_the_exact_synthetic_fixture_values() {
         let mut url_candidates = CandidateAccumulator::default();
-        collect_candidates(URL, &mut url_candidates);
+        for offset in 0..3_u64 {
+            collect_candidates_at(URL, offset, &mut url_candidates);
+        }
         let url = select_candidate(url_candidates).unwrap();
         assert_eq!(url.account_id(), "00112233445566778899aabb");
         assert_eq!(url.nonce(), "123456789012345678");
@@ -387,7 +503,9 @@ mod tests {
     fn selection_returns_the_highest_ranked_complete_candidate() {
         let mut candidates = CandidateAccumulator::default();
         collect_candidates(LOGIN, &mut candidates);
-        collect_candidates(URL, &mut candidates);
+        for offset in 0..3_u64 {
+            collect_candidates_at(URL, offset, &mut candidates);
+        }
 
         let selected = select_candidate(candidates).unwrap();
         assert_eq!(selected.account_id(), "00112233445566778899aabb");
@@ -427,6 +545,67 @@ mod tests {
             });
         }
 
-        assert_eq!(candidates.retained_candidate_count(), 0);
+        assert_eq!(candidates.retained_candidate_count(), 8);
+        assert!(candidates.url.overflowed);
+    }
+
+    struct BudgetMemory {
+        confident: Vec<u8>,
+    }
+
+    impl MemoryReader for BudgetMemory {
+        fn readable_regions(
+            &self,
+            _process: &GameProcess,
+        ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+            Ok(vec![
+                ReadableRegion::classified(0x1000, 64, RegionScanPriority::WritableAnonymous),
+                ReadableRegion::classified(
+                    0x2000,
+                    self.confident.len(),
+                    RegionScanPriority::WritableAnonymous,
+                ),
+            ])
+        }
+
+        fn read_at(
+            &self,
+            _process: &GameProcess,
+            address: u64,
+            buffer: &mut [u8],
+        ) -> Result<usize, AcquisitionError> {
+            buffer.fill(0);
+            if address >= 0x2000 {
+                let offset = usize::try_from(address - 0x2000).unwrap();
+                let len = self
+                    .confident
+                    .len()
+                    .saturating_sub(offset)
+                    .min(buffer.len());
+                buffer[..len].copy_from_slice(&self.confident[offset..offset + len]);
+            }
+            Ok(buffer.len())
+        }
+    }
+
+    #[test]
+    fn fallback_reaches_regions_beyond_the_preferred_budget() {
+        let memory = BudgetMemory {
+            confident: [URL, URL, URL].concat(),
+        };
+        let scanner = super::AuthorizationScanner::new(64);
+
+        let result = scanner.scan_with_policy(
+            &memory,
+            &GameProcess::new(7),
+            ScanPolicy {
+                preferred_bytes: 64,
+                fallback_bytes: 512,
+                max_preferred_region_bytes: 128,
+                fallback_sample_bytes: 512,
+            },
+        );
+
+        assert!(result.is_ok());
     }
 }

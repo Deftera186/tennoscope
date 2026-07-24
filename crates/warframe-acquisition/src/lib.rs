@@ -120,6 +120,7 @@ impl GameProcess {
 pub enum RegionScanPriority {
     FileBacked,
     Anonymous,
+    WritablePrivateFileBacked,
     WritableAnonymous,
 }
 

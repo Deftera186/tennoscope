@@ -228,9 +228,13 @@ fn parse_readable_region(line: &str) -> Option<ReadableRegion> {
     let end = u64::from_str_radix(end, 16).ok()?;
     let len = usize::try_from(end.checked_sub(start)?).ok()?;
     let file_backed = path.is_some_and(|path| !path.starts_with('['));
-    let scan_priority = if file_backed {
+    let writable_private = permissions.as_bytes().get(1) == Some(&b'w')
+        && permissions.as_bytes().get(3) == Some(&b'p');
+    let scan_priority = if file_backed && writable_private {
+        RegionScanPriority::WritablePrivateFileBacked
+    } else if file_backed {
         RegionScanPriority::FileBacked
-    } else if permissions.as_bytes().get(1) == Some(&b'w') {
+    } else if writable_private {
         RegionScanPriority::WritableAnonymous
     } else {
         RegionScanPriority::Anonymous

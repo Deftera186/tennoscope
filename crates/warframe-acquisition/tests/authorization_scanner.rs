@@ -59,7 +59,7 @@ fn scan(
 
 #[test]
 fn finds_url_authorization_split_across_bounded_partial_reads() {
-    let rendered = scan(URL_FIXTURE, 31, 7).unwrap();
+    let rendered = scan([URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat(), 31, 7).unwrap();
 
     assert_eq!(rendered.matches("[REDACTED]").count(), 2);
     assert!(!rendered.contains("00112233445566778899aabb"));
@@ -78,7 +78,7 @@ fn finds_login_response_authorization_split_across_chunks() {
 #[test]
 fn prefers_complete_url_candidate_over_lower_ranked_login_candidate() {
     let mut bytes = LOGIN_FIXTURE.to_vec();
-    bytes.extend_from_slice(URL_FIXTURE);
+    bytes.extend_from_slice(&[URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat());
 
     assert!(scan(bytes, 41, 13).is_ok());
 }
@@ -86,6 +86,7 @@ fn prefers_complete_url_candidate_over_lower_ranked_login_candidate() {
 #[test]
 fn deduplicates_repeated_identical_candidates() {
     let mut bytes = URL_FIXTURE.to_vec();
+    bytes.extend_from_slice(URL_FIXTURE);
     bytes.extend_from_slice(URL_FIXTURE);
 
     assert!(scan(bytes, 37, 17).is_ok());
@@ -97,6 +98,24 @@ fn rejects_distinct_candidates_at_the_same_rank_as_ambiguous() {
     bytes.extend_from_slice(
         b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic",
     );
+
+    assert_eq!(
+        scan(bytes, 43, 19).unwrap_err(),
+        AcquisitionError::AuthorizationAmbiguous
+    );
+}
+
+#[test]
+fn rejects_equal_high_confidence_url_candidates_as_ambiguous() {
+    let first = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
+    let second = [
+        b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic".as_slice(),
+        b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic".as_slice(),
+        b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic".as_slice(),
+    ]
+    .concat();
+    let mut bytes = first;
+    bytes.extend_from_slice(&second);
 
     assert_eq!(
         scan(bytes, 43, 19).unwrap_err(),
@@ -142,7 +161,12 @@ fn rejects_login_nonce_truncated_at_the_region_boundary() {
 
 #[test]
 fn caps_an_oversized_public_chunk_configuration() {
-    let rendered = scan(URL_FIXTURE, usize::MAX, usize::MAX).unwrap();
+    let rendered = scan(
+        [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat(),
+        usize::MAX,
+        usize::MAX,
+    )
+    .unwrap();
 
     assert_eq!(rendered.matches("[REDACTED]").count(), 2);
 }
@@ -233,9 +257,12 @@ impl MemoryReader for OrderedMemory {
             })
             .unwrap();
         let offset = usize::try_from(address - region.start()).unwrap();
-        let len = (bytes.len() - offset).min(buffer.len());
-        buffer[..len].copy_from_slice(&bytes[offset..offset + len]);
-        Ok(len)
+        buffer.fill(0);
+        if offset < bytes.len() {
+            let len = (bytes.len() - offset).min(buffer.len());
+            buffer[..len].copy_from_slice(&bytes[offset..offset + len]);
+        }
+        Ok(buffer.len())
     }
 }
 
@@ -272,7 +299,7 @@ fn scans_writable_anonymous_regions_before_file_backed_regions() {
 }
 
 #[test]
-fn repeated_high_rank_candidate_returns_before_a_later_stale_conflict() {
+fn three_current_copies_outvote_one_later_stale_conflict() {
     let confident = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
     let stale = b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic";
     let memory = OrderedMemory {
@@ -301,25 +328,26 @@ fn repeated_high_rank_candidate_returns_before_a_later_stale_conflict() {
         .scan(&memory, &GameProcess::new(7))
         .unwrap();
 
-    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x3000]);
+    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x3000, 0x4000]);
 }
 
 #[test]
-fn skips_giant_regions_before_scanning_bounded_candidates() {
+fn three_current_copies_outvote_one_earlier_stale_conflict() {
     let confident = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
+    let stale = b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic";
     let memory = OrderedMemory {
         regions: vec![
             (
                 ReadableRegion::classified(
-                    0x5000,
-                    129 * 1024 * 1024,
+                    0x3000,
+                    stale.len(),
                     RegionScanPriority::WritableAnonymous,
                 ),
-                Vec::new(),
+                stale.to_vec(),
             ),
             (
                 ReadableRegion::classified(
-                    0x6000_0000,
+                    0x4000,
                     confident.len(),
                     RegionScanPriority::WritableAnonymous,
                 ),
@@ -333,5 +361,45 @@ fn skips_giant_regions_before_scanning_bounded_candidates() {
         .scan(&memory, &GameProcess::new(7))
         .unwrap();
 
-    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x6000_0000]);
+    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x3000, 0x4000]);
+}
+
+#[test]
+fn fallback_finds_a_candidate_only_in_a_file_backed_region() {
+    let confident = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
+    let memory = OrderedMemory {
+        regions: vec![(
+            ReadableRegion::classified(0x5000, confident.len(), RegionScanPriority::FileBacked),
+            confident,
+        )],
+        reads: Mutex::new(Vec::new()),
+    };
+
+    AuthorizationScanner::new(4096)
+        .scan(&memory, &GameProcess::new(7))
+        .unwrap();
+
+    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x5000]);
+}
+
+#[test]
+fn fallback_samples_a_giant_anonymous_region() {
+    let confident = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
+    let memory = OrderedMemory {
+        regions: vec![(
+            ReadableRegion::classified(
+                0x6000,
+                129 * 1024 * 1024,
+                RegionScanPriority::WritableAnonymous,
+            ),
+            confident,
+        )],
+        reads: Mutex::new(Vec::new()),
+    };
+
+    AuthorizationScanner::new(4096)
+        .scan(&memory, &GameProcess::new(7))
+        .unwrap();
+
+    assert!(memory.reads.into_inner().unwrap().contains(&0x6000));
 }

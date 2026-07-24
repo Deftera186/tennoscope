@@ -150,6 +150,7 @@ fn parses_only_nonempty_readable_ranges_and_skips_special_kernel_mappings() {
             "1000-1800 r--p 00000000 00:00 0 /game/Warframe.x64.exe\n",
             "1800-2000 ---p 00000000 00:00 0\n",
             "2000-2800 rw-p 00000000 00:00 0 [heap]\n",
+            "3000-3800 rw-p 00000000 00:01 1 /memfd:wine-shared\n",
             "2800-3000 r-xp 00000000 00:00 0 [vdso]\n",
             "bad maps line\n",
             "4000-4000 r--p 00000000 00:00 0\n",
@@ -164,7 +165,12 @@ fn parses_only_nonempty_readable_ranges_and_skips_special_kernel_mappings() {
         regions,
         vec![
             ReadableRegion::classified(0x1000, 0x800, RegionScanPriority::FileBacked),
-            ReadableRegion::classified(0x2000, 0x800, RegionScanPriority::WritableAnonymous)
+            ReadableRegion::classified(0x2000, 0x800, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(
+                0x3000,
+                0x800,
+                RegionScanPriority::WritablePrivateFileBacked
+            )
         ]
     );
 }
