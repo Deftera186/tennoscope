@@ -92,13 +92,18 @@ fn acquisition_health_reports_structured_secret_free_stages() {
 #[test]
 fn acquisition_result_carries_only_a_validated_snapshot_and_health() {
     let snapshot = InventorySnapshot::coherent(vec![]).unwrap();
-    let health =
-        AcquisitionHealth::new(vec![StageHealth::ready(AcquisitionStage::SchemaValidation)]);
+    let health = AcquisitionHealth::successful();
     let result = AcquisitionResult::new(snapshot, health).unwrap();
 
     assert!(result.snapshot().entries().is_empty());
-    assert_eq!(result.health().stages().len(), 1);
-    assert_eq!(result.health().stages()[0].state(), StageState::Ready);
+    assert_eq!(result.health().stages().len(), 5);
+    assert!(
+        result
+            .health()
+            .stages()
+            .iter()
+            .all(|stage| stage.state() == StageState::Ready)
+    );
 }
 
 #[test]
@@ -123,6 +128,64 @@ fn successful_result_rejects_failed_health() {
 
     assert_eq!(
         AcquisitionResult::new(snapshot, health).unwrap_err(),
+        AcquisitionError::UnsuccessfulHealth
+    );
+}
+
+#[test]
+fn successful_result_rejects_degraded_health() {
+    let snapshot = InventorySnapshot::coherent(vec![]).unwrap();
+    let health = AcquisitionHealth::new(vec![
+        StageHealth::for_diagnostic(AcquisitionDiagnostic::GameNotRunning).unwrap(),
+    ]);
+
+    assert_eq!(
+        AcquisitionResult::new(snapshot, health).unwrap_err(),
+        AcquisitionError::UnsuccessfulHealth
+    );
+}
+
+#[test]
+fn successful_result_rejects_empty_or_missing_health() {
+    let empty_snapshot = InventorySnapshot::coherent(vec![]).unwrap();
+    assert_eq!(
+        AcquisitionResult::new(empty_snapshot, AcquisitionHealth::new(vec![])).unwrap_err(),
+        AcquisitionError::UnsuccessfulHealth
+    );
+
+    let missing_snapshot = InventorySnapshot::coherent(vec![]).unwrap();
+    let missing = AcquisitionHealth::new(vec![StageHealth::ready(AcquisitionStage::GameDiscovery)]);
+    assert_eq!(
+        AcquisitionResult::new(missing_snapshot, missing).unwrap_err(),
+        AcquisitionError::UnsuccessfulHealth
+    );
+}
+
+#[test]
+fn successful_result_rejects_duplicate_or_out_of_order_stages() {
+    let duplicate_snapshot = InventorySnapshot::coherent(vec![]).unwrap();
+    let duplicate = AcquisitionHealth::new(vec![
+        StageHealth::ready(AcquisitionStage::GameDiscovery),
+        StageHealth::ready(AcquisitionStage::GameDiscovery),
+        StageHealth::ready(AcquisitionStage::AuthorizationDiscovery),
+        StageHealth::ready(AcquisitionStage::EndpointFetch),
+        StageHealth::ready(AcquisitionStage::SchemaValidation),
+    ]);
+    assert_eq!(
+        AcquisitionResult::new(duplicate_snapshot, duplicate).unwrap_err(),
+        AcquisitionError::UnsuccessfulHealth
+    );
+
+    let out_of_order_snapshot = InventorySnapshot::coherent(vec![]).unwrap();
+    let out_of_order = AcquisitionHealth::new(vec![
+        StageHealth::ready(AcquisitionStage::MemoryPermission),
+        StageHealth::ready(AcquisitionStage::GameDiscovery),
+        StageHealth::ready(AcquisitionStage::AuthorizationDiscovery),
+        StageHealth::ready(AcquisitionStage::EndpointFetch),
+        StageHealth::ready(AcquisitionStage::SchemaValidation),
+    ]);
+    assert_eq!(
+        AcquisitionResult::new(out_of_order_snapshot, out_of_order).unwrap_err(),
         AcquisitionError::UnsuccessfulHealth
     );
 }

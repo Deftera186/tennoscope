@@ -299,6 +299,22 @@ impl AcquisitionHealth {
         Self { stages }
     }
 
+    pub fn successful() -> Self {
+        const REQUIRED_STAGES: [AcquisitionStage; 5] = [
+            AcquisitionStage::GameDiscovery,
+            AcquisitionStage::MemoryPermission,
+            AcquisitionStage::AuthorizationDiscovery,
+            AcquisitionStage::EndpointFetch,
+            AcquisitionStage::SchemaValidation,
+        ];
+        Self {
+            stages: REQUIRED_STAGES
+                .into_iter()
+                .map(StageHealth::ready)
+                .collect(),
+        }
+    }
+
     pub fn stages(&self) -> &[StageHealth] {
         &self.stages
     }
@@ -307,6 +323,10 @@ impl AcquisitionHealth {
         self.stages
             .iter()
             .any(|stage| stage.state == StageState::Failed)
+    }
+
+    pub fn is_successful(&self) -> bool {
+        self == &Self::successful()
     }
 }
 
@@ -321,7 +341,7 @@ impl AcquisitionResult {
         snapshot: InventorySnapshot,
         health: AcquisitionHealth,
     ) -> Result<Self, AcquisitionError> {
-        if health.has_failed_stage() {
+        if !health.is_successful() {
             return Err(AcquisitionError::UnsuccessfulHealth);
         }
         Ok(Self { snapshot, health })
