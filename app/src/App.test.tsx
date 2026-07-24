@@ -4,11 +4,15 @@ import { describe, expect, it } from 'vitest'
 import App from './App'
 
 describe('App', () => {
-  it('identifies the application as Warframe Helper', () => {
+  it('renders the minimal Warframe Helper foundation shell', () => {
     render(<App />)
 
     expect(
       screen.getByRole('heading', { name: 'Warframe Helper' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('Foundation ready')).toBeInTheDocument()
+    expect(
+      screen.getByText('A local-first companion for your Warframe sessions.'),
     ).toBeInTheDocument()
   })
 })

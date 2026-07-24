@@ -2,13 +2,17 @@
   "name": "warframe-helper",
   "private": true,
   "version": "0.0.0",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=20 <27"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "tsc --noEmit && vitest run",
+    "check": "oxlint && tsc --noEmit && vitest run",
     "tauri": "tauri",
     "lint": "oxlint",
     "preview": "vite preview"
