@@ -40,6 +40,7 @@ fn all_public_errors_and_diagnostics_are_secret_free() {
         AcquisitionError::ProcessDiscoveryFailed,
         AcquisitionError::MemoryPermissionDenied { pid: 42 },
         AcquisitionError::MemoryReadFailed { pid: 42 },
+        AcquisitionError::ProcessExited { pid: 42 },
         AcquisitionError::AuthorizationNotFound,
         AcquisitionError::AuthorizationAmbiguous,
         AcquisitionError::InventoryRequestFailed,

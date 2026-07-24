@@ -6,8 +6,12 @@ use warframe_domain::InventorySnapshot;
 use zeroize::Zeroizing;
 
 mod authorization;
+#[cfg(target_os = "linux")]
+mod linux_proc;
 
 pub use authorization::AuthorizationScanner;
+#[cfg(target_os = "linux")]
+pub use linux_proc::LinuxProc;
 
 /// A credential whose standard formatting surfaces never expose its contents.
 pub struct SecretString(Zeroizing<String>);
@@ -147,6 +151,7 @@ pub enum AcquisitionError {
     ProcessDiscoveryFailed,
     MemoryPermissionDenied { pid: u32 },
     MemoryReadFailed { pid: u32 },
+    ProcessExited { pid: u32 },
     AuthorizationNotFound,
     AuthorizationAmbiguous,
     InventoryRequestFailed,
@@ -165,11 +170,17 @@ impl fmt::Display for AcquisitionError {
             Self::MemoryPermissionDenied { pid } => {
                 write!(
                     formatter,
-                    "permission denied while reading Warframe process {pid}"
+                    "permission denied while reading Warframe process {pid}; run the helper as the same user/UID and check Yama ptrace settings and sandbox permissions"
                 )
             }
             Self::MemoryReadFailed { pid } => {
                 write!(formatter, "failed to read Warframe process {pid}")
+            }
+            Self::ProcessExited { pid } => {
+                write!(
+                    formatter,
+                    "Warframe process {pid} exited during memory acquisition"
+                )
             }
             Self::AuthorizationNotFound => {
                 formatter.write_str("inventory authorization was not found")

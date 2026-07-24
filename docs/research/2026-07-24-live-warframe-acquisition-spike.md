@@ -45,6 +45,8 @@ A read-only scan found both:
 
 An existing open implementation was then exercised against the live process as an independent behavioral check. Process discovery, authorization scanning, and inventory fetching all succeeded. The returned JSON was roughly one megabyte and contained the expected broad account sections. Only structural metadata and aggregate test diagnostics were observed; secrets were redacted and were not persisted.
 
+The native Rust `/proc` adapter was later validated against the same class of live Proton session: executable-confirmed discovery, maps parsing, and bounded memory samples succeeded while transient unreadable mappings were skipped. A naive full-address-space authorization scan exceeded ninety seconds and was stopped without exposing data. Refresh orchestration must therefore prioritize likely mappings or add another evidence-based early-exit strategy before running scans automatically; correctness does not make an unbounded startup delay acceptable.
+
 ## Architectural decision
 
 Use two separate acquisition modules:

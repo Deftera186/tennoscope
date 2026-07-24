@@ -6,8 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+libc = "0.2"
 warframe-domain = { path = "../warframe-domain" }
 zeroize.workspace = true
 
 [dev-dependencies]
 static_assertions = "1"
+tempfile = "3"
