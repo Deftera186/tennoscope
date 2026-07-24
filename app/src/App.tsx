@@ -8,6 +8,7 @@ function App() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const viewGeneration = useRef(0)
+  const foregroundInFlight = useRef(0)
 
   const requestView = useCallback(async (request: () => Promise<AppView>, failure: string) => {
     const generation = ++viewGeneration.current
@@ -20,6 +21,12 @@ function App() {
     } catch {
       if (generation === viewGeneration.current) setError(failure)
     }
+  }, [])
+
+  const runForeground = useCallback(async (operation: () => Promise<void>) => {
+    foregroundInFlight.current += 1
+    try { await operation() }
+    finally { foregroundInFlight.current -= 1 }
   }, [])
 
   useEffect(() => {
@@ -37,7 +44,7 @@ function App() {
     let timer: ReturnType<typeof setTimeout> | undefined
     const schedule = () => { if (active) timer = setTimeout(poll, 2500) }
     const poll = async () => {
-      if (document.hidden) { schedule(); return }
+      if (document.hidden || foregroundInFlight.current > 0) { schedule(); return }
       await requestView(getView, 'The live backend view could not be updated.')
       schedule()
     }
@@ -53,9 +60,11 @@ function App() {
     setBusy(true)
     setError(null)
     try {
-      await acceptRiskDisclosure()
-      setAccepted(true)
-      await requestView(getView, 'The local application backend is unavailable.')
+      await runForeground(async () => {
+        await acceptRiskDisclosure()
+        setAccepted(true)
+        await requestView(getView, 'The local application backend is unavailable.')
+      })
     } catch {
       setError('Setup could not be saved.')
     } finally {
@@ -66,7 +75,7 @@ function App() {
   async function refresh() {
     setBusy(true)
     setError(null)
-    await requestView(refreshInventory, 'Inventory refresh failed. Check acquisition health below.')
+    await runForeground(() => requestView(refreshInventory, 'Inventory refresh failed. Check acquisition health below.'))
     setBusy(false)
   }
 
