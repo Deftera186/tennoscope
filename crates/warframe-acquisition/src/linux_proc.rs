@@ -1,9 +1,11 @@
 use std::{
     cmp::Reverse,
+    collections::HashMap,
     fs::{self, File},
     io,
     os::unix::fs::FileExt,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use crate::{AcquisitionError, GameProcess, MemoryReader, ProcessDiscovery, ReadableRegion};
@@ -17,6 +19,7 @@ const WINE_PROCESS_NAME: &str = "Warframe.x64.ex";
 /// memory behavior without touching a real process.
 pub struct LinuxProc {
     root: PathBuf,
+    memory_files: Mutex<HashMap<GameProcess, Arc<File>>>,
 }
 
 impl LinuxProc {
@@ -25,11 +28,57 @@ impl LinuxProc {
     }
 
     pub fn at(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            memory_files: Mutex::new(HashMap::new()),
+        }
     }
 
     fn process_file(&self, pid: u32, name: &str) -> PathBuf {
         self.root.join(pid.to_string()).join(name)
+    }
+
+    fn start_time(&self, pid: u32) -> Result<u64, AcquisitionError> {
+        let stat = fs::read_to_string(self.process_file(pid, "stat"))
+            .map_err(|error| classify_io(pid, error))?;
+        parse_start_time(&stat).ok_or(AcquisitionError::ProcessDiscoveryFailed)
+    }
+
+    fn validate_identity(&self, process: &GameProcess) -> Result<(), AcquisitionError> {
+        let Some(expected) = process.start_time_ticks() else {
+            return Ok(());
+        };
+        match self.start_time(process.pid()) {
+            Ok(actual) if actual == expected => Ok(()),
+            Ok(_) | Err(AcquisitionError::ProcessExited { .. }) => {
+                Err(AcquisitionError::ProcessExited { pid: process.pid() })
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn memory_file(&self, process: &GameProcess) -> Result<Arc<File>, AcquisitionError> {
+        self.validate_identity(process)?;
+        if process.start_time_ticks().is_none() {
+            return File::open(self.process_file(process.pid(), "mem"))
+                .map(Arc::new)
+                .map_err(|error| classify_io(process.pid(), error));
+        }
+        let mut files = self
+            .memory_files
+            .lock()
+            .map_err(|_| AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
+        if let Some(file) = files.get(process) {
+            return Ok(Arc::clone(file));
+        }
+
+        let file = Arc::new(
+            File::open(self.process_file(process.pid(), "mem"))
+                .map_err(|error| classify_io(process.pid(), error))?,
+        );
+        self.validate_identity(process)?;
+        files.insert(*process, Arc::clone(&file));
+        Ok(file)
     }
 }
 
@@ -62,16 +111,44 @@ impl ProcessDiscovery for LinuxProc {
                 WINE_PROCESS_NAME => 1_u8,
                 _ => continue,
             };
-            let Ok(maps) = fs::read_to_string(self.process_file(pid, "maps")) else {
-                continue;
+            let start_time = match self.start_time(pid) {
+                Ok(start_time) => start_time,
+                Err(AcquisitionError::ProcessExited { .. }) => continue,
+                Err(AcquisitionError::MemoryPermissionDenied { .. }) => {
+                    return Err(AcquisitionError::MemoryPermissionDenied { pid });
+                }
+                Err(_) => return Err(AcquisitionError::ProcessDiscoveryFailed),
             };
-            if maps.lines().any(maps_game_executable) {
-                candidates.push((priority, pid));
+            let maps = match fs::read_to_string(self.process_file(pid, "maps")) {
+                Ok(maps) => maps,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                    return Err(AcquisitionError::MemoryPermissionDenied { pid });
+                }
+                Err(_) => return Err(AcquisitionError::ProcessDiscoveryFailed),
+            };
+            let confirmed_start_time = match self.start_time(pid) {
+                Ok(start_time) => start_time,
+                Err(AcquisitionError::ProcessExited { .. }) => continue,
+                Err(AcquisitionError::MemoryPermissionDenied { .. }) => {
+                    return Err(AcquisitionError::MemoryPermissionDenied { pid });
+                }
+                Err(_) => return Err(AcquisitionError::ProcessDiscoveryFailed),
+            };
+            if start_time == confirmed_start_time && maps.lines().any(maps_game_executable) {
+                candidates.push((priority, pid, start_time));
             }
         }
 
-        candidates.sort_unstable_by_key(|&(priority, pid)| (Reverse(priority), pid));
-        Ok(candidates.first().map(|&(_, pid)| GameProcess::new(pid)))
+        candidates.sort_unstable_by_key(|&(priority, pid, _)| (Reverse(priority), pid));
+        let selected = candidates
+            .first()
+            .map(|&(_, pid, start_time)| GameProcess::identified(pid, start_time));
+        self.memory_files
+            .lock()
+            .map_err(|_| AcquisitionError::ProcessDiscoveryFailed)?
+            .retain(|process, _| Some(*process) == selected);
+        Ok(selected)
     }
 }
 
@@ -80,8 +157,10 @@ impl MemoryReader for LinuxProc {
         &self,
         process: &GameProcess,
     ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        self.validate_identity(process)?;
         let path = self.process_file(process.pid(), "maps");
         let maps = fs::read_to_string(path).map_err(|error| classify_io(process.pid(), error))?;
+        self.validate_identity(process)?;
         Ok(maps.lines().filter_map(parse_readable_region).collect())
     }
 
@@ -92,25 +171,31 @@ impl MemoryReader for LinuxProc {
         buffer: &mut [u8],
     ) -> Result<usize, AcquisitionError> {
         if buffer.is_empty() {
+            self.validate_identity(process)?;
             return Ok(0);
         }
-        let path = self.process_file(process.pid(), "mem");
-        let file = File::open(path).map_err(|error| classify_io(process.pid(), error))?;
+        let file = self.memory_file(process)?;
         match file.read_at(buffer, address) {
             Ok(read) => Ok(read),
             Err(error) if error.raw_os_error() == Some(libc::EIO) => {
-                if self.root.join(process.pid().to_string()).exists() {
-                    // Linux reports EIO for readable-looking mappings that cannot
-                    // actually be read through procfs. Treat only that mapping as
-                    // unavailable so the scanner can continue with the next one.
-                    Ok(0)
-                } else {
-                    Err(AcquisitionError::ProcessExited { pid: process.pid() })
-                }
+                self.validate_identity(process)?;
+                // Linux reports EIO for readable-looking mappings that cannot
+                // actually be read through procfs. Treat only that mapping as
+                // unavailable so the scanner can continue with the next one.
+                Ok(0)
             }
             Err(error) => Err(classify_io(process.pid(), error)),
         }
     }
+}
+
+fn parse_start_time(stat: &str) -> Option<u64> {
+    stat.rsplit_once(") ")?
+        .1
+        .split_ascii_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
 }
 
 fn maps_game_executable(line: &str) -> bool {

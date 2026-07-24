@@ -80,18 +80,33 @@ impl fmt::Debug for InventoryAuthorization {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct GameProcess {
     pid: u32,
+    start_time_ticks: Option<u64>,
 }
 
 impl GameProcess {
     pub const fn new(pid: u32) -> Self {
-        Self { pid }
+        Self {
+            pid,
+            start_time_ticks: None,
+        }
     }
 
     pub const fn pid(self) -> u32 {
         self.pid
+    }
+
+    pub(crate) const fn identified(pid: u32, start_time_ticks: u64) -> Self {
+        Self {
+            pid,
+            start_time_ticks: Some(start_time_ticks),
+        }
+    }
+
+    pub(crate) const fn start_time_ticks(self) -> Option<u64> {
+        self.start_time_ticks
     }
 }
 

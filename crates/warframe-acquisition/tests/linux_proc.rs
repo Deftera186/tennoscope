@@ -14,10 +14,21 @@ fn write_file(root: &Path, relative: &str, contents: impl AsRef<[u8]>) {
 
 fn candidate(root: &Path, pid: u32, comm: &str, mapped_executable: &str) {
     write_file(root, &format!("{pid}/comm"), format!("{comm}\n"));
+    write_stat(root, pid, comm, 777);
     write_file(
         root,
         &format!("{pid}/maps"),
         format!("140000000-140001000 r--p 00000000 08:01 1 {mapped_executable}\n"),
+    );
+}
+
+fn write_stat(root: &Path, pid: u32, comm: &str, start_time: u64) {
+    let mut fields = vec!["0".to_owned(); 18];
+    fields.push(start_time.to_string());
+    write_file(
+        root,
+        &format!("{pid}/stat"),
+        format!("{pid} ({comm}) S {}\n", fields.join(" ")),
     );
 }
 
@@ -67,8 +78,45 @@ fn discovery_ignores_vanished_and_malformed_process_entries() {
     );
 
     assert_eq!(
-        LinuxProc::at(temp.path()).discover().unwrap(),
-        Some(GameProcess::new(201))
+        LinuxProc::at(temp.path())
+            .discover()
+            .unwrap()
+            .map(GameProcess::pid),
+        Some(201)
+    );
+}
+
+#[test]
+fn discovery_propagates_permission_and_non_vanishing_maps_failures() {
+    let denied = tempfile::tempdir().unwrap();
+    candidate(
+        denied.path(),
+        210,
+        "Warframe.x64.ex",
+        "/games/Warframe/Downloaded/Public/Warframe.x64.exe",
+    );
+    fs::set_permissions(
+        denied.path().join("210/maps"),
+        fs::Permissions::from_mode(0o000),
+    )
+    .unwrap();
+    assert_eq!(
+        LinuxProc::at(denied.path()).discover().unwrap_err(),
+        AcquisitionError::MemoryPermissionDenied { pid: 210 }
+    );
+
+    let malformed = tempfile::tempdir().unwrap();
+    candidate(
+        malformed.path(),
+        211,
+        "Warframe.x64.ex",
+        "/games/Warframe/Downloaded/Public/Warframe.x64.exe",
+    );
+    fs::remove_file(malformed.path().join("211/maps")).unwrap();
+    fs::create_dir(malformed.path().join("211/maps")).unwrap();
+    assert_eq!(
+        LinuxProc::at(malformed.path()).discover().unwrap_err(),
+        AcquisitionError::ProcessDiscoveryFailed
     );
 }
 
@@ -83,8 +131,11 @@ fn discovery_accepts_a_game_executable_mapping_beneath_a_path_with_spaces() {
     );
 
     assert_eq!(
-        LinuxProc::at(temp.path()).discover().unwrap(),
-        Some(GameProcess::new(202))
+        LinuxProc::at(temp.path())
+            .discover()
+            .unwrap()
+            .map(GameProcess::pid),
+        Some(202)
     );
 }
 
@@ -132,6 +183,72 @@ fn bounded_reads_return_partial_data_without_touching_the_rest_of_the_buffer() {
     assert_eq!(read, 12);
     assert_eq!(&buffer[..7], b"payload");
     assert_eq!(&buffer[7..], &[0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn repeated_reads_reuse_one_open_memory_descriptor() {
+    let temp = tempfile::tempdir().unwrap();
+    candidate(
+        temp.path(),
+        402,
+        "Warframe.x64.ex",
+        "/games/Warframe/Downloaded/Public/Warframe.x64.exe",
+    );
+    write_file(temp.path(), "402/mem", b"first-second");
+    let adapter = LinuxProc::at(temp.path());
+    let process = adapter.discover().unwrap().unwrap();
+    let mut first = [0_u8; 5];
+    assert_eq!(adapter.read_at(&process, 0, &mut first).unwrap(), 5);
+    fs::remove_file(temp.path().join("402/mem")).unwrap();
+
+    let mut second = [0_u8; 6];
+    assert_eq!(adapter.read_at(&process, 6, &mut second).unwrap(), 6);
+    assert_eq!(&first, b"first");
+    assert_eq!(&second, b"second");
+}
+
+#[test]
+fn changed_start_time_rejects_a_reused_pid_before_maps_or_memory_access() {
+    let temp = tempfile::tempdir().unwrap();
+    candidate(
+        temp.path(),
+        403,
+        "Warframe.x64.ex",
+        "/games/Warframe/Downloaded/Public/Warframe.x64.exe",
+    );
+    write_file(temp.path(), "403/mem", b"memory");
+    let adapter = LinuxProc::at(temp.path());
+    let process = adapter.discover().unwrap().unwrap();
+    write_stat(temp.path(), 403, "Warframe.x64.ex", 778);
+
+    assert_eq!(
+        adapter.readable_regions(&process).unwrap_err(),
+        AcquisitionError::ProcessExited { pid: 403 }
+    );
+    assert_eq!(
+        adapter.read_at(&process, 0, &mut [0_u8; 4]).unwrap_err(),
+        AcquisitionError::ProcessExited { pid: 403 }
+    );
+}
+
+#[test]
+fn process_identity_parsing_tolerates_parentheses_inside_the_stat_name() {
+    let temp = tempfile::tempdir().unwrap();
+    candidate(
+        temp.path(),
+        404,
+        "Warframe.x64.ex",
+        "/games/Warframe/Downloaded/Public/Warframe.x64.exe",
+    );
+    write_stat(temp.path(), 404, "War(frame).x64.ex", 777);
+
+    assert_eq!(
+        LinuxProc::at(temp.path())
+            .discover()
+            .unwrap()
+            .map(GameProcess::pid),
+        Some(404)
+    );
 }
 
 #[test]
