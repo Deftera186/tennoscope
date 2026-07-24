@@ -4163,6 +4163,7 @@ dependencies = [
  "serde_json",
  "static_assertions",
  "tempfile",
+ "thiserror 2.0.19",
  "url",
  "warframe-domain",
  "zeroize",

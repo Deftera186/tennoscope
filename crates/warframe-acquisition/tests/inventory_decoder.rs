@@ -1,4 +1,4 @@
-use warframe_acquisition::{AcquisitionError, InventoryJsonDecoder, SnapshotDecoder};
+use warframe_acquisition::{AcquisitionError, CatalogIndex, InventoryJsonDecoder, SnapshotDecoder};
 use warframe_domain::Category;
 
 fn complete_payload() -> Vec<u8> {
@@ -31,7 +31,9 @@ fn complete_payload() -> Vec<u8> {
 
 #[test]
 fn complete_payload_becomes_one_coherent_aggregated_snapshot() {
-    let snapshot = InventoryJsonDecoder.decode(&complete_payload()).unwrap();
+    let snapshot = InventoryJsonDecoder::default()
+        .decode(&complete_payload())
+        .unwrap();
     let entries = snapshot.entries();
 
     assert_eq!(entries.len(), 8);
@@ -46,7 +48,7 @@ fn complete_payload_becomes_one_coherent_aggregated_snapshot() {
     assert_eq!(excalibur.item.name, "Excalibur");
     assert_eq!(excalibur.item.category, Category::Frame);
     assert_eq!(excalibur.quantity, 1);
-    assert!(excalibur.mastered);
+    assert!(!excalibur.mastered);
 
     let braton = by_id("/Lotus/Weapons/Tenno/Rifle/Braton");
     assert_eq!(braton.quantity, 2);
@@ -66,11 +68,11 @@ fn complete_payload_becomes_one_coherent_aggregated_snapshot() {
 
     let lato = by_id("/Lotus/Weapons/Tenno/Pistol/Lato");
     assert_eq!(lato.quantity, 0);
-    assert!(lato.mastered);
+    assert!(!lato.mastered);
 
     let sentinel_weapon = by_id("/Lotus/Types/Sentinels/SentinelWeapons/BurstLaser");
     assert_eq!(sentinel_weapon.item.category, Category::Weapon);
-    assert!(sentinel_weapon.mastered);
+    assert!(!sentinel_weapon.mastered);
     assert!(
         entries
             .iter()
@@ -93,7 +95,8 @@ fn mastery_uses_category_specific_rank_thirty_thresholds() {
         {"ItemType":"/Lotus/Types/Sentinels/SentinelTypes/Carrier","XP":900000},
         {"ItemType":"/Lotus/Gear/SectionClassifiedWeapon","XP":450000}
     ]);
-    let snapshot = InventoryJsonDecoder
+    let catalog = mastery_catalog();
+    let snapshot = InventoryJsonDecoder::with_catalog(&catalog)
         .decode(&serde_json::to_vec(&payload).unwrap())
         .unwrap();
     let mastered = |suffix: &str| {
@@ -119,7 +122,8 @@ fn known_rank_forty_items_require_the_rank_forty_threshold() {
     payload["XPInfo"] = serde_json::json!([
         {"ItemType":"/Lotus/Weapons/Tenno/Melee/Paracesis","XP":799999}
     ]);
-    let below = InventoryJsonDecoder
+    let catalog = mastery_catalog();
+    let below = InventoryJsonDecoder::with_catalog(&catalog)
         .decode(&serde_json::to_vec(&payload).unwrap())
         .unwrap();
     assert!(
@@ -132,7 +136,7 @@ fn known_rank_forty_items_require_the_rank_forty_threshold() {
     );
 
     payload["XPInfo"][0]["XP"] = serde_json::json!(800000);
-    let complete = InventoryJsonDecoder
+    let complete = InventoryJsonDecoder::with_catalog(&catalog)
         .decode(&serde_json::to_vec(&payload).unwrap())
         .unwrap();
     assert!(
@@ -147,7 +151,7 @@ fn known_rank_forty_items_require_the_rank_forty_threshold() {
 
 #[test]
 fn incomplete_truncated_or_structurally_wrong_payload_is_rejected() {
-    let decoder = InventoryJsonDecoder;
+    let decoder = InventoryJsonDecoder::default();
     let truncated = &complete_payload()[..complete_payload().len() - 3];
     assert_eq!(
         decoder.decode(truncated),
@@ -192,7 +196,7 @@ fn every_authoritative_section_and_sync_marker_is_required() {
         let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
         payload.as_object_mut().unwrap().remove(field);
         assert_eq!(
-            InventoryJsonDecoder.decode(&serde_json::to_vec(&payload).unwrap()),
+            InventoryJsonDecoder::default().decode(&serde_json::to_vec(&payload).unwrap()),
             Err(AcquisitionError::SnapshotInvalid),
             "omitting {field} must reject the whole snapshot"
         );
@@ -201,7 +205,7 @@ fn every_authoritative_section_and_sync_marker_is_required() {
 
 #[test]
 fn malformed_entries_or_unsafe_counts_reject_the_whole_snapshot() {
-    let decoder = InventoryJsonDecoder;
+    let decoder = InventoryJsonDecoder::default();
     let malformed_path = String::from_utf8(complete_payload()).unwrap().replace(
         "/Lotus/Weapons/Tenno/Rifle/Braton",
         "not-a-canonical-item-path",
@@ -226,7 +230,9 @@ fn stable_ids_preserve_paths_and_labels_split_acronyms_and_digits() {
         "/Lotus/Weapons/Tenno/Rifle/Braton",
         "/Lotus/Weapons/Tenno/Rifle/SomaPrimeMK2",
     );
-    let snapshot = InventoryJsonDecoder.decode(payload.as_bytes()).unwrap();
+    let snapshot = InventoryJsonDecoder::default()
+        .decode(payload.as_bytes())
+        .unwrap();
     let entry = snapshot
         .entries()
         .iter()
@@ -237,4 +243,19 @@ fn stable_ids_preserve_paths_and_labels_split_acronyms_and_digits() {
         "/Lotus/Weapons/Tenno/Rifle/SomaPrimeMK2"
     );
     assert_eq!(entry.item.name, "Soma Prime MK 2");
+}
+
+fn mastery_catalog() -> CatalogIndex {
+    CatalogIndex::from_wfcd_json(
+        br#"[
+          {"uniqueName":"/Lotus/Weapons/Tenno/Rifle/AtThreshold","name":"At Threshold","type":"Rifle","category":"Primary","masterable":true},
+          {"uniqueName":"/Lotus/Weapons/Tenno/Rifle/BelowThreshold","name":"Below Threshold","type":"Rifle","category":"Primary","masterable":true},
+          {"uniqueName":"/Lotus/Powersuits/AtThreshold/AtThreshold","name":"At Threshold","type":"Warframe","category":"Warframes","masterable":true},
+          {"uniqueName":"/Lotus/Powersuits/BelowThreshold/BelowThreshold","name":"Below Threshold","type":"Warframe","category":"Warframes","masterable":true},
+          {"uniqueName":"/Lotus/Types/Sentinels/SentinelTypes/Carrier","name":"Carrier","type":"Sentinel","category":"Companions","masterable":true},
+          {"uniqueName":"/Lotus/Gear/SectionClassifiedWeapon","name":"Section Classified Weapon","type":"Rifle","category":"Primary","masterable":true},
+          {"uniqueName":"/Lotus/Weapons/Tenno/Melee/Paracesis","name":"Paracesis","type":"Melee","category":"Melee","masterable":true}
+        ]"#,
+    )
+    .unwrap()
 }

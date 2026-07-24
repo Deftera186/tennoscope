@@ -1,10 +1,10 @@
 #![cfg(target_os = "linux")]
 
-use std::time::Instant;
+use std::{env, fs, time::Instant};
 
 use warframe_acquisition::{
-    AuthorizationScanner, InventoryHttpTransport, InventoryJsonDecoder, InventoryTransport,
-    LinuxProc, ProcessDiscovery, SnapshotDecoder,
+    AuthorizationScanner, CatalogIndex, InventoryHttpTransport, InventoryJsonDecoder,
+    InventoryTransport, LinuxProc, ProcessDiscovery, SnapshotDecoder,
 };
 
 /// Opt-in live transaction. Output contains stage names and aggregate counts
@@ -36,9 +36,15 @@ fn live_inventory_acquisition_emits_only_safe_metadata() {
     println!("endpoint_fetch=ready");
     println!("response_bytes={}", response.len());
 
-    let snapshot = InventoryJsonDecoder
-        .decode(&response)
-        .expect("complete response should pass schema validation");
+    let catalog = env::var_os("WFCD_CATALOG_PATH").map(|path| {
+        let bytes = fs::read(path).expect("catalog file should be readable");
+        CatalogIndex::from_wfcd_json(&bytes).expect("catalog should be valid WFCD All.json")
+    });
+    let snapshot = match catalog.as_ref() {
+        Some(catalog) => InventoryJsonDecoder::with_catalog(catalog).decode(&response),
+        None => InventoryJsonDecoder::default().decode(&response),
+    }
+    .expect("complete response should pass schema validation");
     println!("schema_validation=ready");
     println!("snapshot_entries={}", snapshot.entries().len());
     println!(

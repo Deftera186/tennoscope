@@ -5,7 +5,9 @@ use serde::Deserialize;
 use url::Url;
 use warframe_domain::{CatalogItem, Category, InventoryEntry, InventorySnapshot, ItemId};
 
-use crate::{AcquisitionError, InventoryAuthorization, InventoryTransport, SnapshotDecoder};
+use crate::{
+    AcquisitionError, CatalogIndex, InventoryAuthorization, InventoryTransport, SnapshotDecoder,
+};
 
 pub const INVENTORY_ENDPOINT: &str = "https://mobile.warframe.com/api/inventory.php";
 pub const MAX_INVENTORY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
@@ -85,7 +87,18 @@ fn read_bounded(reader: impl Read, limit: usize) -> Result<Vec<u8>, AcquisitionE
     Ok(bytes)
 }
 
-pub struct InventoryJsonDecoder;
+#[derive(Default)]
+pub struct InventoryJsonDecoder<'a> {
+    catalog: Option<&'a CatalogIndex>,
+}
+
+impl<'a> InventoryJsonDecoder<'a> {
+    pub const fn with_catalog(catalog: &'a CatalogIndex) -> Self {
+        Self {
+            catalog: Some(catalog),
+        }
+    }
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -127,12 +140,15 @@ struct RawInventory {
 }
 
 struct AccumulatedEntry {
+    name: Option<String>,
     category: Category,
     quantity: i64,
     mastered: bool,
+    masterable: bool,
+    max_rank: Option<u32>,
 }
 
-impl SnapshotDecoder for InventoryJsonDecoder {
+impl SnapshotDecoder for InventoryJsonDecoder<'_> {
     fn decode(&self, response: &[u8]) -> Result<InventorySnapshot, AcquisitionError> {
         let raw: RawInventory =
             serde_json::from_slice(response).map_err(|_| AcquisitionError::SnapshotInvalid)?;
@@ -141,39 +157,81 @@ impl SnapshotDecoder for InventoryJsonDecoder {
         }
         let mut entries = BTreeMap::<String, AccumulatedEntry>::new();
 
-        add_unique_section(&mut entries, raw.suits, Category::Frame)?;
-        add_unique_section(&mut entries, raw.long_guns, Category::Weapon)?;
-        add_unique_section(&mut entries, raw.pistols, Category::Weapon)?;
-        add_unique_section(&mut entries, raw.melee, Category::Weapon)?;
-        add_unique_section(&mut entries, raw.sentinels, Category::Companion)?;
-        add_misc_section(&mut entries, raw.misc_items)?;
-        add_stackable_section(&mut entries, raw.recipes, Category::Blueprint, 1)?;
-        add_stackable_section(&mut entries, raw.pending_recipes, Category::Blueprint, -1)?;
-        add_unique_section(&mut entries, raw.space_suits, Category::Frame)?;
-        add_unique_section(&mut entries, raw.space_melee, Category::Weapon)?;
-        add_unique_section(&mut entries, raw.space_guns, Category::Weapon)?;
-        add_unique_section(&mut entries, raw.sentinel_weapons, Category::Weapon)?;
-        add_unique_section(&mut entries, raw.kubrow_pets, Category::Companion)?;
-        add_unique_section(&mut entries, raw.operator_amps, Category::Weapon)?;
-        add_unique_section(&mut entries, raw.mech_suits, Category::Frame)?;
+        add_unique_section(&mut entries, raw.suits, Category::Frame, self.catalog)?;
+        add_unique_section(&mut entries, raw.long_guns, Category::Weapon, self.catalog)?;
+        add_unique_section(&mut entries, raw.pistols, Category::Weapon, self.catalog)?;
+        add_unique_section(&mut entries, raw.melee, Category::Weapon, self.catalog)?;
+        add_unique_section(
+            &mut entries,
+            raw.sentinels,
+            Category::Companion,
+            self.catalog,
+        )?;
+        add_misc_section(&mut entries, raw.misc_items, self.catalog)?;
+        add_stackable_section(
+            &mut entries,
+            raw.recipes,
+            Category::Blueprint,
+            1,
+            self.catalog,
+        )?;
+        add_stackable_section(
+            &mut entries,
+            raw.pending_recipes,
+            Category::Blueprint,
+            -1,
+            self.catalog,
+        )?;
+        add_unique_section(&mut entries, raw.space_suits, Category::Frame, self.catalog)?;
+        add_unique_section(
+            &mut entries,
+            raw.space_melee,
+            Category::Weapon,
+            self.catalog,
+        )?;
+        add_unique_section(&mut entries, raw.space_guns, Category::Weapon, self.catalog)?;
+        add_unique_section(
+            &mut entries,
+            raw.sentinel_weapons,
+            Category::Weapon,
+            self.catalog,
+        )?;
+        add_unique_section(
+            &mut entries,
+            raw.kubrow_pets,
+            Category::Companion,
+            self.catalog,
+        )?;
+        add_unique_section(
+            &mut entries,
+            raw.operator_amps,
+            Category::Weapon,
+            self.catalog,
+        )?;
+        add_unique_section(&mut entries, raw.mech_suits, Category::Frame, self.catalog)?;
 
         for xp in raw.xp_info {
             validate_item_type(&xp.item_type)?;
-            let category = category_from_path(&xp.item_type);
             let path = xp.item_type;
-            let entry = entries.entry(path.clone()).or_insert(AccumulatedEntry {
-                category,
-                quantity: 0,
-                mastered: false,
-            });
-            entry.mastered |= xp.xp >= mastery_threshold(&path, entry.category);
+            let fallback = category_from_path(&path);
+            let entry = entries
+                .entry(path.clone())
+                .or_insert_with(|| accumulated_entry(&path, fallback, self.catalog));
+            if entry.masterable
+                && entry
+                    .max_rank
+                    .and_then(|rank| mastery_threshold(entry.category, rank))
+                    .is_some_and(|threshold| xp.xp >= threshold)
+            {
+                entry.mastered = true;
+            }
         }
 
         let domain_entries = entries
             .into_iter()
             .filter(|(_, accumulated)| accumulated.quantity >= 0)
             .map(|(path, accumulated)| {
-                let name = display_label(&path)?;
+                let name = accumulated.name.unwrap_or(display_label(&path)?);
                 let id = ItemId::new(path).map_err(|_| AcquisitionError::SnapshotInvalid)?;
                 let item = CatalogItem::new(id, name, accumulated.category)
                     .map_err(|_| AcquisitionError::SnapshotInvalid)?;
@@ -189,6 +247,7 @@ impl SnapshotDecoder for InventoryJsonDecoder {
 fn add_misc_section(
     output: &mut BTreeMap<String, AccumulatedEntry>,
     items: Vec<RawEntry>,
+    catalog: Option<&CatalogIndex>,
 ) -> Result<(), AcquisitionError> {
     for item in items {
         let category = if item.item_type.contains("/Projections/") {
@@ -196,7 +255,7 @@ fn add_misc_section(
         } else {
             Category::Resource
         };
-        add_stackable_item(output, item, category, 1)?;
+        add_stackable_item(output, item, category, 1, catalog)?;
     }
     Ok(())
 }
@@ -205,17 +264,13 @@ fn add_unique_section(
     output: &mut BTreeMap<String, AccumulatedEntry>,
     items: Vec<RawEntry>,
     category: Category,
+    catalog: Option<&CatalogIndex>,
 ) -> Result<(), AcquisitionError> {
     for item in items {
         validate_item_type(&item.item_type)?;
-        let entry = output.entry(item.item_type).or_insert(AccumulatedEntry {
-            category,
-            quantity: 0,
-            mastered: false,
-        });
-        if entry.category != category {
-            return Err(AcquisitionError::SnapshotInvalid);
-        }
+        let path = item.item_type;
+        let resolved = accumulated_entry(&path, category, catalog);
+        let entry = output.entry(path).or_insert(resolved);
         entry.quantity = entry
             .quantity
             .checked_add(1)
@@ -229,9 +284,10 @@ fn add_stackable_section(
     items: Vec<RawEntry>,
     category: Category,
     direction: i64,
+    catalog: Option<&CatalogIndex>,
 ) -> Result<(), AcquisitionError> {
     for item in items {
-        add_stackable_item(output, item, category, direction)?;
+        add_stackable_item(output, item, category, direction, catalog)?;
     }
     Ok(())
 }
@@ -241,6 +297,7 @@ fn add_stackable_item(
     item: RawEntry,
     category: Category,
     direction: i64,
+    catalog: Option<&CatalogIndex>,
 ) -> Result<(), AcquisitionError> {
     validate_item_type(&item.item_type)?;
     let quantity = item.item_count.unwrap_or(1);
@@ -250,14 +307,9 @@ fn add_stackable_item(
     if quantity == 0 {
         return Ok(());
     }
-    let entry = output.entry(item.item_type).or_insert(AccumulatedEntry {
-        category,
-        quantity: 0,
-        mastered: false,
-    });
-    if entry.category != category {
-        return Err(AcquisitionError::SnapshotInvalid);
-    }
+    let path = item.item_type;
+    let resolved = accumulated_entry(&path, category, catalog);
+    let entry = output.entry(path).or_insert(resolved);
     let delta = quantity
         .checked_mul(direction)
         .ok_or(AcquisitionError::SnapshotInvalid)?;
@@ -304,29 +356,34 @@ fn category_from_path(path: &str) -> Category {
     }
 }
 
-fn mastery_threshold(path: &str, category: Category) -> u64 {
-    let max_rank = if is_known_or_potential_rank_forty(path) {
-        40_u64
-    } else {
-        30_u64
-    };
+fn mastery_threshold(category: Category, max_rank: u32) -> Option<u64> {
+    let max_rank = u64::from(max_rank);
     let affinity_per_rank_squared = match category {
         Category::Frame | Category::Companion => 1_000_u64,
         Category::Weapon => 500_u64,
         Category::PrimePart | Category::Relic | Category::Resource | Category::Blueprint => {
-            return u64::MAX;
+            return None;
         }
     };
-    affinity_per_rank_squared * max_rank * max_rank
+    affinity_per_rank_squared
+        .checked_mul(max_rank)?
+        .checked_mul(max_rank)
 }
 
-fn is_known_or_potential_rank_forty(path: &str) -> bool {
-    let leaf = path.rsplit('/').next().unwrap_or_default();
-    leaf == "Paracesis"
-        || path.contains("/MechSuits/")
-        || leaf.contains("Kuva")
-        || leaf.contains("Tenet")
-        || leaf.contains("Coda")
+fn accumulated_entry(
+    path: &str,
+    fallback_category: Category,
+    catalog: Option<&CatalogIndex>,
+) -> AccumulatedEntry {
+    let metadata = catalog.and_then(|catalog| catalog.resolve(path));
+    AccumulatedEntry {
+        name: metadata.map(|metadata| metadata.name().to_owned()),
+        category: metadata.map_or(fallback_category, |metadata| metadata.category()),
+        quantity: 0,
+        mastered: false,
+        masterable: metadata.is_some_and(|metadata| metadata.masterable()),
+        max_rank: metadata.map(|metadata| metadata.max_rank()),
+    }
 }
 
 fn display_label(path: &str) -> Result<String, AcquisitionError> {
