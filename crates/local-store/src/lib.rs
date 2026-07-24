@@ -68,6 +68,18 @@ impl SnapshotMeta {
             "test-fixture".to_owned(),
         )
     }
+
+    pub fn observed_at(&self) -> &str {
+        &self.observed_at
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn is_fake(&self) -> bool {
+        self.source == "test-fixture"
+    }
 }
 
 pub struct SqliteStore {

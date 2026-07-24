@@ -70,6 +70,8 @@ impl AppCore {
         meta: SnapshotMeta,
     ) -> Result<AppView, AppError> {
         self.store.replace_collection(&snapshot, &meta)?;
+        self.reward = RewardAdvisor::advise(Vec::new());
+        self.health.game_reader = BackendHealth::inventory_sync(&meta)?;
         self.current_view()
     }
 
@@ -83,11 +85,11 @@ impl AppCore {
 
     pub fn load_fake_session(&mut self) -> Result<AppView, AppError> {
         let session = fake_session::build()?;
-        self.store
-            .replace_collection(&session.snapshot, &session.meta)?;
-        self.reward = RewardAdvisor::advise(session.rewards);
-        self.health = HealthView::fake_session()?;
-        self.current_view()
+        self.apply_inventory_snapshot(session.snapshot, session.meta)?;
+        self.health.capture = BackendHealth::degraded("Fake session; capture not connected")?;
+        self.health.catalog = BackendHealth::degraded("Fake session; live catalog not connected")?;
+        self.health.market = BackendHealth::degraded("Fake session; live market not connected")?;
+        self.apply_reward_candidates(session.rewards)
     }
 }
 
@@ -183,7 +185,6 @@ pub enum HealthState {
 pub struct BackendHealth {
     state: HealthState,
     message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     last_success: Option<String>,
 }
 
@@ -219,6 +220,15 @@ impl BackendHealth {
         Self::new(HealthState::Failed, message, None)
     }
 
+    fn inventory_sync(meta: &SnapshotMeta) -> Result<Self, AppError> {
+        let message = if meta.is_fake() {
+            "Deterministic fake inventory loaded".to_owned()
+        } else {
+            format!("Inventory synchronized from {}", meta.source())
+        };
+        Self::ready(message, Some(meta.observed_at().to_owned()))
+    }
+
     pub fn state(&self) -> HealthState {
         self.state
     }
@@ -248,19 +258,6 @@ impl HealthView {
             capture: BackendHealth::degraded("Phase 1 capture not connected")?,
             catalog: BackendHealth::degraded("Phase 1 catalog not connected")?,
             market: BackendHealth::degraded("Phase 1 market not connected")?,
-            database: BackendHealth::ready("SQLite database available", None)?,
-        })
-    }
-
-    fn fake_session() -> Result<Self, AppError> {
-        Ok(Self {
-            game_reader: BackendHealth::ready(
-                "Deterministic fake inventory loaded",
-                Some("2000-01-01T00:00:00Z".to_owned()),
-            )?,
-            capture: BackendHealth::degraded("Fake session; capture not connected")?,
-            catalog: BackendHealth::degraded("Fake session; live catalog not connected")?,
-            market: BackendHealth::degraded("Fake session; live market not connected")?,
             database: BackendHealth::ready("SQLite database available", None)?,
         })
     }

@@ -82,6 +82,32 @@ fn a_second_snapshot_authoritatively_replaces_collection() {
     assert_eq!(view.collection().total_entries(), 1);
     assert_eq!(view.collection().items()[0].id(), "braton");
     assert_eq!(view.collection().items()[0].quantity(), 1);
+    assert!(view.reward().cards().is_empty());
+    assert_eq!(view.reward().best_value_index(), None);
+}
+
+#[test]
+fn a_live_snapshot_replaces_fake_reader_health_metadata() {
+    let mut core = AppCore::in_memory().unwrap();
+    core.load_fake_session().unwrap();
+    let snapshot =
+        InventorySnapshot::coherent(vec![entry("braton", "Braton", Category::Weapon, 1)]).unwrap();
+    let meta = SnapshotMeta::new(
+        "2026-07-24T09:30:00Z".to_owned(),
+        "live-build".to_owned(),
+        "game-log".to_owned(),
+    )
+    .unwrap();
+
+    let view = core.apply_inventory_snapshot(snapshot, meta).unwrap();
+
+    assert_eq!(view.health().game_reader().state(), HealthState::Ready);
+    assert_eq!(
+        view.health().game_reader().last_success(),
+        Some("2026-07-24T09:30:00Z")
+    );
+    assert!(view.health().game_reader().message().contains("game-log"));
+    assert!(!view.health().game_reader().message().contains("fake"));
 }
 
 #[test]
@@ -124,12 +150,35 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
 
     let wire = serde_json::to_value(&view).unwrap();
 
-    assert_eq!(wire["health"]["game_reader"]["state"], json!("ready"));
     assert_eq!(
-        wire["collection"]["items"][1]["category"],
-        json!("prime_part")
+        wire,
+        json!({
+            "collection": {
+                "items": [
+                    {"id": "braton", "name": "Braton", "category": "weapon", "quantity": 3, "mastered": true},
+                    {"id": "lex-prime-receiver", "name": "Lex Prime Receiver", "category": "prime_part", "quantity": 1, "mastered": false},
+                    {"id": "lith-a1", "name": "Lith A1 Relic", "category": "relic", "quantity": 7, "mastered": false},
+                    {"id": "rhino", "name": "Rhino", "category": "frame", "quantity": 1, "mastered": true},
+                    {"id": "saryn-prime-chassis", "name": "Saryn Prime Chassis", "category": "prime_part", "quantity": 2, "mastered": false}
+                ],
+                "total_entries": 5
+            },
+            "reward": {
+                "cards": [
+                    {"name": "Forma Blueprint", "platinum": 12, "ducats": 25, "owned": 0, "mastery_relevant": false, "confidence": 1.0},
+                    {"name": "Lex Prime Receiver", "platinum": 8, "ducats": 15, "owned": 0, "mastery_relevant": true, "confidence": 1.0},
+                    {"name": "Rare Prime Set", "platinum": 30, "ducats": 100, "owned": 0, "mastery_relevant": false, "confidence": 0.79_f32},
+                    {"name": "Paris Prime String", "platinum": 6, "ducats": 45, "owned": 1, "mastery_relevant": false, "confidence": 1.0}
+                ],
+                "best_value_index": 0
+            },
+            "health": {
+                "game_reader": {"state": "ready", "message": "Deterministic fake inventory loaded", "last_success": "2000-01-01T00:00:00Z"},
+                "capture": {"state": "degraded", "message": "Fake session; capture not connected", "last_success": null},
+                "catalog": {"state": "degraded", "message": "Fake session; live catalog not connected", "last_success": null},
+                "market": {"state": "degraded", "message": "Fake session; live market not connected", "last_success": null},
+                "database": {"state": "ready", "message": "SQLite database available", "last_success": null}
+            }
+        })
     );
-    assert_eq!(wire["collection"]["total_entries"], json!(5));
-    assert_eq!(wire["collection"]["items"].as_array().unwrap().len(), 5);
-    assert!(wire["reward"].get("best_value_name").is_none());
 }
