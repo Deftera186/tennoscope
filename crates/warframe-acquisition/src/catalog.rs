@@ -76,7 +76,11 @@ impl CatalogIndex {
                     continue;
                 }
                 let component_name = validated_name(&component.name)?;
-                let name = format!("{} {component_name}", validated_name(&parent.name)?);
+                let name = if component_name.contains("Prime") {
+                    component_name
+                } else {
+                    format!("{} {component_name}", validated_name(&parent.name)?)
+                };
                 index.insert(
                     &component.unique_name,
                     CatalogMetadata {
@@ -153,22 +157,39 @@ fn classify_item(item: &WfcdItem) -> Option<Category> {
     let category = item.category.to_ascii_lowercase();
     let item_type = item.item_type.to_ascii_lowercase();
     let path = item.unique_name.as_str();
-    if category.contains("warframe")
+    if item_type == "k-drive component" {
+        Some(Category::Vehicle)
+    } else if category.contains("warframe")
         || matches!(item_type.as_str(), "warframe" | "archwing" | "necramech")
     {
         Some(Category::Frame)
     } else if category.contains("companion")
-        || matches!(item_type.as_str(), "sentinel" | "kubrow" | "kavat" | "moa")
+        || category == "pets"
+        || matches!(
+            item_type.as_str(),
+            "sentinel" | "kubrow" | "kavat" | "moa" | "pets"
+        )
+        || path.contains("/Types/Game/CatbrowPet/")
         || path.contains("/Types/Friendly/Catbrow")
         || path.contains("/Types/Friendly/Pets/")
     {
         Some(Category::Companion)
     } else if matches!(
         category.as_str(),
-        "primary" | "secondary" | "melee" | "archwing"
+        "primary" | "secondary" | "melee" | "archwing" | "arch-gun" | "arch-melee"
     ) || matches!(
         item_type.as_str(),
-        "rifle" | "shotgun" | "bow" | "pistol" | "melee" | "archgun" | "archmelee"
+        "rifle"
+            | "shotgun"
+            | "bow"
+            | "pistol"
+            | "melee"
+            | "archgun"
+            | "archmelee"
+            | "arch-gun"
+            | "arch-melee"
+            | "kitgun component"
+            | "zaw component"
     ) {
         Some(Category::Weapon)
     } else if category.contains("relic") || item_type == "relic" {
@@ -185,7 +206,7 @@ fn classify_item(item: &WfcdItem) -> Option<Category> {
 fn is_equipment(category: Category) -> bool {
     matches!(
         category,
-        Category::Frame | Category::Weapon | Category::Companion
+        Category::Frame | Category::Weapon | Category::Companion | Category::Vehicle
     )
 }
 

@@ -359,7 +359,7 @@ fn category_from_path(path: &str) -> Category {
 fn mastery_threshold(category: Category, max_rank: u32) -> Option<u64> {
     let max_rank = u64::from(max_rank);
     let affinity_per_rank_squared = match category {
-        Category::Frame | Category::Companion => 1_000_u64,
+        Category::Frame | Category::Companion | Category::Vehicle => 1_000_u64,
         Category::Weapon => 500_u64,
         Category::PrimePart | Category::Relic | Category::Resource | Category::Blueprint => {
             return None;

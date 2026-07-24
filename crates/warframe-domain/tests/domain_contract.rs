@@ -117,6 +117,7 @@ fn category_wire_shape_is_stable_snake_case() {
         (Category::Relic, "relic"),
         (Category::Resource, "resource"),
         (Category::Blueprint, "blueprint"),
+        (Category::Vehicle, "vehicle"),
     ];
 
     for (category, wire) in cases {

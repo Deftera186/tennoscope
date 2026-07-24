@@ -55,6 +55,7 @@ fn all_categories_mastery_and_zero_quantity_round_trip() {
         ("lith_a1", "Lith A1", Category::Relic),
         ("argon", "Argon Crystal", Category::Resource),
         ("lex_blueprint", "Lex Blueprint", Category::Blueprint),
+        ("bad_baby", "Bad Baby", Category::Vehicle),
     ];
     let snapshot = snapshot(
         fixtures

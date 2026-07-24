@@ -239,3 +239,20 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
         })
     );
 }
+
+#[test]
+fn vehicle_category_reaches_the_ui_model_with_a_stable_wire_value() {
+    let mut core = AppCore::in_memory().unwrap();
+    let snapshot =
+        InventorySnapshot::coherent(vec![entry("bad-baby", "Bad Baby", Category::Vehicle, 1)])
+            .unwrap();
+    let view = core
+        .apply_inventory_snapshot(snapshot, SnapshotMeta::fake("vehicle-build").unwrap())
+        .unwrap();
+
+    assert_eq!(view.collection().items()[0].category(), Category::Vehicle);
+    assert_eq!(
+        serde_json::to_value(&view.collection().items()[0]).unwrap()["category"],
+        json!("vehicle")
+    );
+}
