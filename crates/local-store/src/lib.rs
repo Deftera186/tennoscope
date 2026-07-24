@@ -9,6 +9,7 @@ use warframe_domain::{
 };
 
 const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -211,7 +212,7 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), StoreError> {
     }
 
     let transaction = connection.transaction()?;
-    transaction.execute_batch(include_str!("schema.sql"))?;
+    transaction.execute_batch(SCHEMA_SQL)?;
     validate_schema(&transaction)?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
@@ -249,7 +250,72 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
             ("item_count", "INTEGER", true, 0),
         ],
     )?;
+    validate_canonical_table(connection, "inventory")?;
+    validate_canonical_table(connection, "snapshot_audit")?;
     validate_constraints(connection)
+}
+
+fn validate_canonical_table(
+    connection: &Connection,
+    table: &'static str,
+) -> Result<(), StoreError> {
+    let actual: Option<String> = connection.query_row(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    let expected = canonical_table_definition(table)?;
+    if normalize_sql(actual.as_deref().unwrap_or_default()) != normalize_sql(expected) {
+        return Err(StoreError::Schema(format!(
+            "table {table} does not match the canonical schema constraint definition \
+             (including NOT NULL, PK, CHECK, and AUTOINCREMENT requirements)"
+        )));
+    }
+    Ok(())
+}
+
+fn canonical_table_definition(table: &'static str) -> Result<&'static str, StoreError> {
+    let prefix = format!("createtable{table}(");
+    SCHEMA_SQL
+        .split(';')
+        .find(|statement| normalize_sql(statement).starts_with(&prefix))
+        .ok_or_else(|| {
+            StoreError::Schema(format!(
+                "canonical schema definition for table {table} is missing"
+            ))
+        })
+}
+
+fn normalize_sql(sql: &str) -> String {
+    let mut normalized = String::with_capacity(sql.len());
+    let mut characters = sql.chars().peekable();
+    let mut in_string = false;
+    while let Some(character) = characters.next() {
+        if in_string {
+            normalized.push(character);
+            if character == '\'' {
+                if characters.peek() == Some(&'\'') {
+                    if let Some(escaped_quote) = characters.next() {
+                        normalized.push(escaped_quote);
+                    }
+                } else {
+                    in_string = false;
+                }
+            }
+            continue;
+        }
+
+        match character {
+            '\'' => {
+                in_string = true;
+                normalized.push(character);
+            }
+            '"' | '`' | '[' | ']' | ';' => {}
+            character if character.is_ascii_whitespace() => {}
+            character => normalized.push(character.to_ascii_lowercase()),
+        }
+    }
+    normalized
 }
 
 fn validate_constraints(connection: &Connection) -> Result<(), StoreError> {
@@ -691,5 +757,28 @@ mod tests {
         let error = SqliteStore::open(&path).err().unwrap().to_string();
         assert!(error.contains("schema"));
         assert!(error.contains("AUTOINCREMENT"));
+    }
+
+    #[test]
+    fn version_one_database_with_probe_shaped_weaker_checks_is_rejected() {
+        let (_directory, path) = database_with(
+            "CREATE TABLE inventory (
+                item_id TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL,
+                quantity INTEGER NOT NULL CHECK (quantity != -1),
+                mastered INTEGER NOT NULL CHECK (mastered != 2)
+             );
+             CREATE TABLE snapshot_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                observed_at TEXT NOT NULL CHECK (observed_at != ' '),
+                game_build TEXT NOT NULL CHECK (game_build != ' '),
+                source TEXT NOT NULL CHECK (source != ' '),
+                item_count INTEGER NOT NULL CHECK (item_count != -1)
+             );
+             PRAGMA user_version = 1;",
+        );
+
+        let error = SqliteStore::open(&path).err().unwrap().to_string();
+        assert!(error.contains("schema"));
+        assert!(error.contains("canonical"));
     }
 }
