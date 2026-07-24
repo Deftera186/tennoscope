@@ -1,9 +1,10 @@
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{AcquisitionError, GameProcess, InventoryAuthorization, MemoryReader};
 
 const LOGIN_SEARCH_DISTANCE: usize = 2048;
 const CANDIDATE_OVERLAP: usize = LOGIN_SEARCH_DISTANCE + 128;
+const MAX_CHUNK_SIZE: usize = 1024 * 1024;
 const URL_ACCOUNT_MARKER: &[u8] = b"accountId=";
 const URL_NONCE_MARKER: &[u8] = b"&nonce=";
 const LOGIN_ID_MARKER: &[u8] = b"\"id\"";
@@ -16,7 +17,7 @@ pub struct AuthorizationScanner {
 impl AuthorizationScanner {
     pub fn new(chunk_size: usize) -> Self {
         Self {
-            chunk_size: chunk_size.max(1),
+            chunk_size: chunk_size.clamp(1, MAX_CHUNK_SIZE),
         }
     }
 
@@ -26,7 +27,7 @@ impl AuthorizationScanner {
         process: &GameProcess,
     ) -> Result<InventoryAuthorization, AcquisitionError> {
         let regions = memory.readable_regions(process)?;
-        let mut candidates = Vec::new();
+        let mut candidates = CandidateAccumulator::default();
         let mut read_buffer = Zeroizing::new(vec![0_u8; self.chunk_size]);
 
         for region in regions {
@@ -47,15 +48,16 @@ impl AuthorizationScanner {
                 let mut window = Zeroizing::new(Vec::with_capacity(overlap.len() + read));
                 window.extend_from_slice(&overlap);
                 window.extend_from_slice(&read_buffer[..read]);
-                collect_candidates(&window, false, &mut candidates);
+                collect_candidates(&window, &mut candidates);
 
                 let keep = CANDIDATE_OVERLAP.min(window.len());
+                wipe_bytes(&mut overlap);
                 overlap.clear();
                 overlap.extend_from_slice(&window[window.len() - keep..]);
                 offset += read;
             }
 
-            collect_candidates(&overlap, true, &mut candidates);
+            collect_candidates(&overlap, &mut candidates);
         }
 
         select_candidate(candidates)
@@ -73,12 +75,51 @@ struct Candidate {
     authorization: InventoryAuthorization,
 }
 
-fn collect_candidates(bytes: &[u8], final_window: bool, output: &mut Vec<Candidate>) {
-    collect_url_candidates(bytes, final_window, output);
-    collect_login_candidates(bytes, final_window, output);
+#[derive(Default)]
+struct CandidateAccumulator {
+    login: RankState,
+    url: RankState,
 }
 
-fn collect_url_candidates(bytes: &[u8], final_window: bool, output: &mut Vec<Candidate>) {
+#[derive(Default)]
+enum RankState {
+    #[default]
+    None,
+    One(InventoryAuthorization),
+    Ambiguous,
+}
+
+impl CandidateAccumulator {
+    fn record(&mut self, candidate: Candidate) {
+        let state = match candidate.rank {
+            CandidateRank::LoginResponse => &mut self.login,
+            CandidateRank::UrlEncoded => &mut self.url,
+        };
+        match state {
+            RankState::None => *state = RankState::One(candidate.authorization),
+            RankState::One(existing)
+                if existing.account_id() == candidate.authorization.account_id()
+                    && existing.nonce() == candidate.authorization.nonce() => {}
+            RankState::One(_) => *state = RankState::Ambiguous,
+            RankState::Ambiguous => {}
+        }
+    }
+
+    #[cfg(test)]
+    fn retained_candidate_count(&self) -> usize {
+        [&self.login, &self.url]
+            .into_iter()
+            .filter(|state| matches!(state, RankState::One(_)))
+            .count()
+    }
+}
+
+fn collect_candidates(bytes: &[u8], output: &mut CandidateAccumulator) {
+    collect_url_candidates(bytes, output);
+    collect_login_candidates(bytes, output);
+}
+
+fn collect_url_candidates(bytes: &[u8], output: &mut CandidateAccumulator) {
     for marker_start in find_all(bytes, URL_ACCOUNT_MARKER) {
         let account_start = marker_start + URL_ACCOUNT_MARKER.len();
         let account_end = account_start + 24;
@@ -90,7 +131,7 @@ fn collect_url_candidates(bytes: &[u8], final_window: bool, output: &mut Vec<Can
             continue;
         }
 
-        let Some(nonce_end) = numeric_value_end(bytes, nonce_marker_end, final_window) else {
+        let Some(nonce_end) = numeric_value_end(bytes, nonce_marker_end) else {
             continue;
         };
         push_candidate(
@@ -102,7 +143,7 @@ fn collect_url_candidates(bytes: &[u8], final_window: bool, output: &mut Vec<Can
     }
 }
 
-fn collect_login_candidates(bytes: &[u8], final_window: bool, output: &mut Vec<Candidate>) {
+fn collect_login_candidates(bytes: &[u8], output: &mut CandidateAccumulator) {
     for marker_start in find_all(bytes, LOGIN_ID_MARKER) {
         let Some((account, after_account)) =
             quoted_json_value(bytes, marker_start + LOGIN_ID_MARKER.len())
@@ -124,7 +165,7 @@ fn collect_login_candidates(bytes: &[u8], final_window: bool, output: &mut Vec<C
         let Some(nonce_start) = json_number_start(bytes, nonce_marker_end) else {
             continue;
         };
-        let Some(nonce_end) = numeric_value_end(bytes, nonce_start, final_window) else {
+        let Some(nonce_end) = numeric_value_end(bytes, nonce_start) else {
             continue;
         };
         push_candidate(
@@ -136,7 +177,12 @@ fn collect_login_candidates(bytes: &[u8], final_window: bool, output: &mut Vec<C
     }
 }
 
-fn push_candidate(output: &mut Vec<Candidate>, rank: CandidateRank, account: &[u8], nonce: &[u8]) {
+fn push_candidate(
+    output: &mut CandidateAccumulator,
+    rank: CandidateRank,
+    account: &[u8],
+    nonce: &[u8],
+) {
     if !(5..=20).contains(&nonce.len()) {
         return;
     }
@@ -150,30 +196,23 @@ fn push_candidate(output: &mut Vec<Candidate>, rank: CandidateRank, account: &[u
     let account_id = Zeroizing::new(String::from_utf8(account.to_vec()).expect("validated ASCII"));
     let nonce = Zeroizing::new(String::from_utf8(nonce.to_vec()).expect("validated ASCII"));
     let authorization = InventoryAuthorization::from_zeroizing(account_id, nonce);
-    let duplicate = output.iter().any(|candidate| {
-        candidate.rank == rank
-            && candidate.authorization.account_id() == authorization.account_id()
-            && candidate.authorization.nonce() == authorization.nonce()
+    output.record(Candidate {
+        rank,
+        authorization,
     });
-    if !duplicate {
-        output.push(Candidate {
-            rank,
-            authorization,
-        });
-    }
 }
 
 fn select_candidate(
-    mut candidates: Vec<Candidate>,
+    candidates: CandidateAccumulator,
 ) -> Result<InventoryAuthorization, AcquisitionError> {
-    let Some(best_rank) = candidates.iter().map(|candidate| candidate.rank).max() else {
-        return Err(AcquisitionError::AuthorizationNotFound);
-    };
-    candidates.retain(|candidate| candidate.rank == best_rank);
-    if candidates.len() != 1 {
-        return Err(AcquisitionError::AuthorizationAmbiguous);
+    for state in [candidates.url, candidates.login] {
+        match state {
+            RankState::None => {}
+            RankState::One(authorization) => return Ok(authorization),
+            RankState::Ambiguous => return Err(AcquisitionError::AuthorizationAmbiguous),
+        }
     }
-    Ok(candidates.pop().expect("one candidate").authorization)
+    Err(AcquisitionError::AuthorizationNotFound)
 }
 
 fn find_all<'a>(bytes: &'a [u8], needle: &'a [u8]) -> impl Iterator<Item = usize> + 'a {
@@ -217,7 +256,7 @@ fn skip_ascii_whitespace(bytes: &[u8], mut cursor: usize) -> usize {
     cursor
 }
 
-fn numeric_value_end(bytes: &[u8], start: usize, final_window: bool) -> Option<usize> {
+fn numeric_value_end(bytes: &[u8], start: usize) -> Option<usize> {
     let digits = bytes[start..]
         .iter()
         .take_while(|byte| byte.is_ascii_digit())
@@ -228,7 +267,6 @@ fn numeric_value_end(bytes: &[u8], start: usize, final_window: bool) -> Option<u
     let end = start + digits;
     match bytes.get(end) {
         Some(byte) if is_value_terminator(*byte) => Some(end),
-        None if final_window => Some(end),
         _ => None,
     }
 }
@@ -237,23 +275,33 @@ fn is_value_terminator(byte: u8) -> bool {
     matches!(byte, b'&' | b'}' | b',' | b'"' | 0) || byte.is_ascii_whitespace()
 }
 
+fn wipe_bytes(bytes: &mut [u8]) {
+    bytes.zeroize();
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collect_candidates, select_candidate};
+    use zeroize::Zeroizing;
+
+    use super::{
+        Candidate, CandidateAccumulator, CandidateRank, collect_candidates, select_candidate,
+        wipe_bytes,
+    };
+    use crate::InventoryAuthorization;
 
     const URL: &[u8] = include_bytes!("../tests/fixtures/authorization-url-encoded.bin");
     const LOGIN: &[u8] = include_bytes!("../tests/fixtures/authorization-login-response.bin");
 
     #[test]
     fn extracts_the_exact_synthetic_fixture_values() {
-        let mut url_candidates = Vec::new();
-        collect_candidates(URL, true, &mut url_candidates);
+        let mut url_candidates = CandidateAccumulator::default();
+        collect_candidates(URL, &mut url_candidates);
         let url = select_candidate(url_candidates).unwrap();
         assert_eq!(url.account_id(), "00112233445566778899aabb");
         assert_eq!(url.nonce(), "123456789012345678");
 
-        let mut login_candidates = Vec::new();
-        collect_candidates(LOGIN, true, &mut login_candidates);
+        let mut login_candidates = CandidateAccumulator::default();
+        collect_candidates(LOGIN, &mut login_candidates);
         let login = select_candidate(login_candidates).unwrap();
         assert_eq!(login.account_id(), "aabbccddeeff001122334455");
         assert_eq!(login.nonce(), "987654321012345678");
@@ -261,11 +309,36 @@ mod tests {
 
     #[test]
     fn selection_returns_the_highest_ranked_complete_candidate() {
-        let mut candidates = Vec::new();
-        collect_candidates(LOGIN, true, &mut candidates);
-        collect_candidates(URL, true, &mut candidates);
+        let mut candidates = CandidateAccumulator::default();
+        collect_candidates(LOGIN, &mut candidates);
+        collect_candidates(URL, &mut candidates);
 
         let selected = select_candidate(candidates).unwrap();
         assert_eq!(selected.account_id(), "00112233445566778899aabb");
+    }
+
+    #[test]
+    fn overlap_wipe_overwrites_contents_before_the_buffer_is_reused() {
+        let mut overlap = b"synthetic-sensitive-overlap".to_vec();
+
+        wipe_bytes(&mut overlap);
+
+        assert!(overlap.iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn adversarial_candidates_leave_bounded_per_rank_state() {
+        let mut candidates = CandidateAccumulator::default();
+        for index in 0..10_000_u64 {
+            candidates.record(Candidate {
+                rank: CandidateRank::UrlEncoded,
+                authorization: InventoryAuthorization::from_zeroizing(
+                    Zeroizing::new(format!("{index:024x}")),
+                    Zeroizing::new(format!("{}", index + 100_000)),
+                ),
+            });
+        }
+
+        assert_eq!(candidates.retained_candidate_count(), 0);
     }
 }

@@ -91,7 +91,9 @@ fn deduplicates_repeated_identical_candidates() {
 #[test]
 fn rejects_distinct_candidates_at_the_same_rank_as_ambiguous() {
     let mut bytes = URL_FIXTURE.to_vec();
-    bytes.extend_from_slice(b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222");
+    bytes.extend_from_slice(
+        b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic",
+    );
 
     assert_eq!(
         scan(bytes, 43, 19).unwrap_err(),
@@ -113,6 +115,52 @@ fn rejects_malformed_or_incomplete_candidates() {
             AcquisitionError::AuthorizationNotFound
         );
     }
+}
+
+#[test]
+fn rejects_url_nonce_truncated_at_the_region_boundary() {
+    let truncated = b"?accountId=00112233445566778899aabb&nonce=123456789012345678";
+
+    assert_eq!(
+        scan(truncated, 23, 7).unwrap_err(),
+        AcquisitionError::AuthorizationNotFound
+    );
+}
+
+#[test]
+fn rejects_login_nonce_truncated_at_the_region_boundary() {
+    let truncated = b"{\"id\":\"00112233445566778899aabb\",\"Nonce\":123456789012345678";
+
+    assert_eq!(
+        scan(truncated, 23, 7).unwrap_err(),
+        AcquisitionError::AuthorizationNotFound
+    );
+}
+
+#[test]
+fn caps_an_oversized_public_chunk_configuration() {
+    let rendered = scan(URL_FIXTURE, usize::MAX, usize::MAX).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+}
+
+#[test]
+fn marker_heavy_memory_is_rejected_without_changing_the_result() {
+    let mut bytes = Vec::new();
+    for index in 0..10_000_u64 {
+        bytes.extend_from_slice(
+            format!(
+                "?accountId={index:024x}&nonce={:018}&ct=synthetic;",
+                index + 100_000
+            )
+            .as_bytes(),
+        );
+    }
+
+    assert_eq!(
+        scan(bytes, 4096, 1024).unwrap_err(),
+        AcquisitionError::AuthorizationAmbiguous
+    );
 }
 
 #[test]
