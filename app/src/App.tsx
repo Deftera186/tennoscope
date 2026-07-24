@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import './App.css'
 import { acceptRiskDisclosure, getSetupStatus, getView, refreshInventory, type AppView } from './backend'
 
@@ -7,15 +7,29 @@ function App() {
   const [view, setView] = useState<AppView | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const viewGeneration = useRef(0)
+
+  const requestView = useCallback(async (request: () => Promise<AppView>, failure: string) => {
+    const generation = ++viewGeneration.current
+    try {
+      const next = await request()
+      if (generation === viewGeneration.current) {
+        setView(next)
+        setError(null)
+      }
+    } catch {
+      if (generation === viewGeneration.current) setError(failure)
+    }
+  }, [])
 
   useEffect(() => {
     getSetupStatus()
       .then(async status => {
         setAccepted(status.risk_accepted)
-        if (status.risk_accepted) setView(await getView())
+        if (status.risk_accepted) await requestView(getView, 'The local application backend is unavailable.')
       })
       .catch(() => setError('The local application backend is unavailable.'))
-  }, [])
+  }, [requestView])
 
   useEffect(() => {
     if (!accepted) return
@@ -24,16 +38,16 @@ function App() {
     const schedule = () => { if (active) timer = setTimeout(poll, 2500) }
     const poll = async () => {
       if (document.hidden) { schedule(); return }
-      try {
-        const next = await getView()
-        if (active) setView(next)
-      } catch {
-        if (active) setError('The live backend view could not be updated.')
-      } finally { schedule() }
+      await requestView(getView, 'The live backend view could not be updated.')
+      schedule()
     }
     schedule()
-    return () => { active = false; if (timer) clearTimeout(timer) }
-  }, [accepted])
+    return () => {
+      active = false
+      viewGeneration.current += 1
+      if (timer) clearTimeout(timer)
+    }
+  }, [accepted, requestView])
 
   async function accept() {
     setBusy(true)
@@ -41,7 +55,7 @@ function App() {
     try {
       await acceptRiskDisclosure()
       setAccepted(true)
-      setView(await getView())
+      await requestView(getView, 'The local application backend is unavailable.')
     } catch {
       setError('Setup could not be saved.')
     } finally {
@@ -52,9 +66,8 @@ function App() {
   async function refresh() {
     setBusy(true)
     setError(null)
-    try { setView(await refreshInventory()) }
-    catch { setError('Inventory refresh failed. Check acquisition health below.') }
-    finally { setBusy(false) }
+    await requestView(refreshInventory, 'Inventory refresh failed. Check acquisition health below.')
+    setBusy(false)
   }
 
   if (accepted === null && !error) return <main className="app-shell"><p>Starting Warframe Helper…</p></main>

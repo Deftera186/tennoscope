@@ -121,3 +121,38 @@ fn startup_refresh_and_log_failure_are_independent_outputs() {
     assert_eq!(result.acquisition_health, None);
     assert_eq!(result.log_health, Some(LogMonitorDiagnostic::ReadFailed));
 }
+
+#[test]
+fn ready_log_monitor_degrades_when_game_disappears_or_discovery_fails() {
+    let mut absent = MonitorMachine::new(0);
+    assert_eq!(
+        absent
+            .tick(MonitorInput::running(
+                0,
+                7,
+                Some(LogObservation::new("a", 0, Vec::new()))
+            ))
+            .log_health,
+        Some(LogMonitorDiagnostic::Ready)
+    );
+    assert_eq!(
+        absent.tick(MonitorInput::absent(1)).log_health,
+        Some(LogMonitorDiagnostic::Unavailable)
+    );
+
+    let mut failed = MonitorMachine::new(0);
+    failed.tick(MonitorInput::running(
+        0,
+        7,
+        Some(LogObservation::new("a", 0, Vec::new())),
+    ));
+    assert_eq!(
+        failed
+            .tick(MonitorInput::error(
+                1,
+                AcquisitionError::ProcessDiscoveryFailed
+            ))
+            .log_health,
+        Some(LogMonitorDiagnostic::Unavailable)
+    );
+}

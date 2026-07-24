@@ -102,14 +102,14 @@ impl MonitorMachine {
                 return MonitorResult {
                     refresh: false,
                     acquisition_health: Some(AcquisitionError::GameNotRunning),
-                    log_health: None,
+                    log_health: Some(LogMonitorDiagnostic::Unavailable),
                 };
             }
             Err(error) => {
                 return MonitorResult {
                     refresh: false,
                     acquisition_health: Some(error),
-                    log_health: None,
+                    log_health: Some(LogMonitorDiagnostic::Unavailable),
                 };
             }
         };

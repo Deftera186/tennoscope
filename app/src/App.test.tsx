@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -71,6 +71,38 @@ describe('App setup flow', () => {
     rendered.unmount()
     await act(async () => { await vi.advanceTimersByTimeAsync(10_000) })
     expect(backend.getView).toHaveBeenCalledTimes(2)
+    vi.useRealTimers()
+  })
+
+  it('does not let an older poll overwrite a newer manual refresh', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    let releasePoll: ((value: typeof view) => void) | undefined
+    backend.getView.mockResolvedValueOnce(view).mockImplementationOnce(() => new Promise(resolve => { releasePoll = resolve }))
+    backend.refreshInventory.mockResolvedValue({ ...view, collection: { items: [], total_entries: 9 } })
+    render(<App />)
+    await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Refresh inventory' })) })
+    expect(screen.getByText('9 items')).toBeInTheDocument()
+    await act(async () => { releasePoll?.({ ...view, collection: { items: [], total_entries: 1 } }) })
+    expect(screen.getByText('9 items')).toBeInTheDocument()
+    vi.useRealTimers()
+  })
+
+  it('does not let delayed startup overwrite a newer poll', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    let releaseStartup: ((value: typeof view) => void) | undefined
+    backend.getView
+      .mockImplementationOnce(() => new Promise(resolve => { releaseStartup = resolve }))
+      .mockResolvedValueOnce({ ...view, collection: { items: [], total_entries: 5 } })
+    render(<App />)
+    await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    expect(screen.getByText('5 items')).toBeInTheDocument()
+    await act(async () => { releaseStartup?.({ ...view, collection: { items: [], total_entries: 1 } }) })
+    expect(screen.getByText('5 items')).toBeInTheDocument()
     vi.useRealTimers()
   })
 })
