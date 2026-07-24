@@ -7,3 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 warframe-domain = { path = "../warframe-domain" }
+zeroize.workspace = true
+
+[dev-dependencies]
+static_assertions = "1"

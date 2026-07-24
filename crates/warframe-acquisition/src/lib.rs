@@ -3,14 +3,14 @@
 use std::{error::Error, fmt};
 
 use warframe_domain::InventorySnapshot;
+use zeroize::Zeroizing;
 
 /// A credential whose standard formatting surfaces never expose its contents.
-#[derive(Clone, Eq, PartialEq)]
-pub struct SecretString(Box<str>);
+pub struct SecretString(Zeroizing<String>);
 
 impl SecretString {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(value.into().into_boxed_str())
+        Self(Zeroizing::new(value.into()))
     }
 
     #[allow(dead_code)] // Used by the scanner and transport in later adapter tasks.
@@ -31,7 +31,6 @@ impl fmt::Debug for SecretString {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
 pub struct InventoryAuthorization {
     account_id: SecretString,
     nonce: SecretString,
@@ -115,11 +114,12 @@ pub trait MemoryReader {
         process: &GameProcess,
     ) -> Result<Vec<ReadableRegion>, AcquisitionError>;
 
-    fn read(
+    fn read_at(
         &self,
         process: &GameProcess,
-        region: ReadableRegion,
-    ) -> Result<Vec<u8>, AcquisitionError>;
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError>;
 }
 
 pub trait InventoryTransport {
@@ -141,6 +141,7 @@ pub enum AcquisitionError {
     InventoryRequestFailed,
     InventoryResponseTooLarge,
     SnapshotInvalid,
+    UnsuccessfulHealth,
 }
 
 impl fmt::Display for AcquisitionError {
@@ -170,6 +171,9 @@ impl fmt::Display for AcquisitionError {
                 formatter.write_str("inventory response exceeded the size limit")
             }
             Self::SnapshotInvalid => formatter.write_str("inventory snapshot was invalid"),
+            Self::UnsuccessfulHealth => {
+                formatter.write_str("a successful acquisition cannot contain failed health")
+            }
         }
     }
 }
@@ -232,16 +236,44 @@ pub struct StageHealth {
 }
 
 impl StageHealth {
-    pub const fn new(
-        stage: AcquisitionStage,
-        state: StageState,
-        diagnostic: AcquisitionDiagnostic,
-    ) -> Self {
+    pub const fn ready(stage: AcquisitionStage) -> Self {
         Self {
+            stage,
+            state: StageState::Ready,
+            diagnostic: AcquisitionDiagnostic::Ready,
+        }
+    }
+
+    pub const fn for_diagnostic(diagnostic: AcquisitionDiagnostic) -> Option<Self> {
+        let (stage, state) = match diagnostic {
+            AcquisitionDiagnostic::Ready => return None,
+            AcquisitionDiagnostic::GameNotRunning => {
+                (AcquisitionStage::GameDiscovery, StageState::Degraded)
+            }
+            AcquisitionDiagnostic::ProcessDiscoveryFailed => {
+                (AcquisitionStage::GameDiscovery, StageState::Failed)
+            }
+            AcquisitionDiagnostic::MemoryPermissionDenied
+            | AcquisitionDiagnostic::MemoryReadFailed => {
+                (AcquisitionStage::MemoryPermission, StageState::Failed)
+            }
+            AcquisitionDiagnostic::AuthorizationNotFound
+            | AcquisitionDiagnostic::AuthorizationAmbiguous => {
+                (AcquisitionStage::AuthorizationDiscovery, StageState::Failed)
+            }
+            AcquisitionDiagnostic::InventoryRequestFailed
+            | AcquisitionDiagnostic::InventoryResponseTooLarge => {
+                (AcquisitionStage::EndpointFetch, StageState::Failed)
+            }
+            AcquisitionDiagnostic::SnapshotInvalid => {
+                (AcquisitionStage::SchemaValidation, StageState::Failed)
+            }
+        };
+        Some(Self {
             stage,
             state,
             diagnostic,
-        }
+        })
     }
 
     pub const fn stage(self) -> AcquisitionStage {
@@ -270,6 +302,12 @@ impl AcquisitionHealth {
     pub fn stages(&self) -> &[StageHealth] {
         &self.stages
     }
+
+    pub fn has_failed_stage(&self) -> bool {
+        self.stages
+            .iter()
+            .any(|stage| stage.state == StageState::Failed)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -279,8 +317,14 @@ pub struct AcquisitionResult {
 }
 
 impl AcquisitionResult {
-    pub fn new(snapshot: InventorySnapshot, health: AcquisitionHealth) -> Self {
-        Self { snapshot, health }
+    pub fn new(
+        snapshot: InventorySnapshot,
+        health: AcquisitionHealth,
+    ) -> Result<Self, AcquisitionError> {
+        if health.has_failed_stage() {
+            return Err(AcquisitionError::UnsuccessfulHealth);
+        }
+        Ok(Self { snapshot, health })
     }
 
     pub fn snapshot(&self) -> &InventorySnapshot {

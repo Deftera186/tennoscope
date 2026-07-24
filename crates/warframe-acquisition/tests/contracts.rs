@@ -1,5 +1,6 @@
 use std::fmt::Write as _;
 
+use static_assertions::assert_not_impl_any;
 use warframe_acquisition::{
     AcquisitionDiagnostic, AcquisitionError, AcquisitionHealth, AcquisitionResult,
     AcquisitionStage, GameProcess, InventoryAuthorization, InventoryTransport, MemoryReader,
@@ -9,6 +10,9 @@ use warframe_domain::InventorySnapshot;
 
 const ACCOUNT_ID: &str = "account-id-that-must-never-appear";
 const NONCE: &str = "987654321012345678";
+
+assert_not_impl_any!(SecretString: Clone, Copy);
+assert_not_impl_any!(InventoryAuthorization: Clone, Copy);
 
 #[test]
 fn secret_debug_and_display_are_fully_redacted() {
@@ -41,8 +45,10 @@ fn all_public_errors_and_diagnostics_are_secret_free() {
         AcquisitionError::InventoryRequestFailed,
         AcquisitionError::InventoryResponseTooLarge,
         AcquisitionError::SnapshotInvalid,
+        AcquisitionError::UnsuccessfulHealth,
     ];
     let diagnostics = [
+        AcquisitionDiagnostic::Ready,
         AcquisitionDiagnostic::GameNotRunning,
         AcquisitionDiagnostic::ProcessDiscoveryFailed,
         AcquisitionDiagnostic::MemoryPermissionDenied,
@@ -67,11 +73,9 @@ fn all_public_errors_and_diagnostics_are_secret_free() {
 
 #[test]
 fn acquisition_health_reports_structured_secret_free_stages() {
-    let health = AcquisitionHealth::new(vec![StageHealth::new(
-        AcquisitionStage::AuthorizationDiscovery,
-        StageState::Failed,
-        AcquisitionDiagnostic::AuthorizationNotFound,
-    )]);
+    let health = AcquisitionHealth::new(vec![
+        StageHealth::for_diagnostic(AcquisitionDiagnostic::AuthorizationNotFound).unwrap(),
+    ]);
 
     assert_eq!(health.stages().len(), 1);
     assert_eq!(
@@ -88,10 +92,74 @@ fn acquisition_health_reports_structured_secret_free_stages() {
 #[test]
 fn acquisition_result_carries_only_a_validated_snapshot_and_health() {
     let snapshot = InventorySnapshot::coherent(vec![]).unwrap();
-    let result = AcquisitionResult::new(snapshot, AcquisitionHealth::new(vec![]));
+    let health =
+        AcquisitionHealth::new(vec![StageHealth::ready(AcquisitionStage::SchemaValidation)]);
+    let result = AcquisitionResult::new(snapshot, health).unwrap();
 
     assert!(result.snapshot().entries().is_empty());
-    assert!(result.health().stages().is_empty());
+    assert_eq!(result.health().stages().len(), 1);
+    assert_eq!(result.health().stages()[0].state(), StageState::Ready);
+}
+
+#[test]
+fn diagnostic_selects_its_canonical_stage_and_state() {
+    let health =
+        StageHealth::for_diagnostic(AcquisitionDiagnostic::MemoryPermissionDenied).unwrap();
+
+    assert_eq!(health.stage(), AcquisitionStage::MemoryPermission);
+    assert_eq!(health.state(), StageState::Failed);
+    assert_eq!(
+        health.diagnostic(),
+        AcquisitionDiagnostic::MemoryPermissionDenied
+    );
+}
+
+#[test]
+fn successful_result_rejects_failed_health() {
+    let snapshot = InventorySnapshot::coherent(vec![]).unwrap();
+    let health = AcquisitionHealth::new(vec![
+        StageHealth::for_diagnostic(AcquisitionDiagnostic::SnapshotInvalid).unwrap(),
+    ]);
+
+    assert_eq!(
+        AcquisitionResult::new(snapshot, health).unwrap_err(),
+        AcquisitionError::UnsuccessfulHealth
+    );
+}
+
+#[test]
+fn memory_reader_performs_bounded_partial_reads_into_caller_buffer() {
+    struct PartialReader;
+
+    impl MemoryReader for PartialReader {
+        fn readable_regions(
+            &self,
+            _process: &GameProcess,
+        ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+            Ok(vec![ReadableRegion::new(0x1000, 128)])
+        }
+
+        fn read_at(
+            &self,
+            _process: &GameProcess,
+            address: u64,
+            buffer: &mut [u8],
+        ) -> Result<usize, AcquisitionError> {
+            assert_eq!(address, 0x1004);
+            let source = b"partial";
+            let read = source.len().min(buffer.len());
+            buffer[..read].copy_from_slice(&source[..read]);
+            Ok(read)
+        }
+    }
+
+    let mut buffer = [0_u8; 4];
+    let read = PartialReader
+        .read_at(&GameProcess::new(7), 0x1004, &mut buffer)
+        .unwrap();
+
+    assert_eq!(read, 4);
+    assert_eq!(&buffer, b"part");
 }
 
 #[allow(dead_code)]
@@ -106,7 +174,8 @@ fn contracts_are_object_safe(
 ) {
     let _ = discovery.discover();
     let _ = memory.readable_regions(process);
-    let _ = memory.read(process, region);
+    let mut buffer = [0_u8; 32];
+    let _ = memory.read_at(process, region.start(), &mut buffer);
     let _ = transport.fetch(authorization);
     let _ = decoder.decode(&[]);
 }
