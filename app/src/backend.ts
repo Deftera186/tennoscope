@@ -11,6 +11,7 @@ export interface AppView {
   reward: { cards: unknown[]; best_value_index: number | null }
   health: {
     game_reader: BackendHealth
+    log_monitor: BackendHealth
     capture: BackendHealth
     catalog: BackendHealth
     market: BackendHealth

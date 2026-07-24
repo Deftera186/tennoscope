@@ -57,7 +57,8 @@ impl MonitorInput {
 #[derive(Debug, Eq, PartialEq)]
 pub struct MonitorResult {
     pub refresh: bool,
-    pub health: Option<AcquisitionError>,
+    pub acquisition_health: Option<AcquisitionError>,
+    pub log_health: Option<LogMonitorDiagnostic>,
 }
 
 pub struct MonitorMachine {
@@ -100,13 +101,15 @@ impl MonitorMachine {
                 self.reset_process();
                 return MonitorResult {
                     refresh: false,
-                    health: Some(AcquisitionError::GameNotRunning),
+                    acquisition_health: Some(AcquisitionError::GameNotRunning),
+                    log_health: None,
                 };
             }
             Err(error) => {
                 return MonitorResult {
                     refresh: false,
-                    health: Some(error),
+                    acquisition_health: Some(error),
+                    log_health: None,
                 };
             }
         };
@@ -117,18 +120,24 @@ impl MonitorMachine {
             event = true;
         }
         match input.log {
-            Err(error) => {
-                return MonitorResult {
+            Err(_) => MonitorResult {
+                refresh: self.schedule(input.now, event),
+                acquisition_health: None,
+                log_health: Some(LogMonitorDiagnostic::ReadFailed),
+            },
+            Ok(Some(log)) => {
+                event |= self.ingest(log);
+                MonitorResult {
                     refresh: self.schedule(input.now, event),
-                    health: Some(error),
-                };
+                    acquisition_health: None,
+                    log_health: Some(LogMonitorDiagnostic::Ready),
+                }
             }
-            Ok(Some(log)) => event |= self.ingest(log),
-            Ok(None) => {}
-        }
-        MonitorResult {
-            refresh: self.schedule(input.now, event),
-            health: None,
+            Ok(None) => MonitorResult {
+                refresh: self.schedule(input.now, event),
+                acquisition_health: None,
+                log_health: Some(LogMonitorDiagnostic::Unavailable),
+            },
         }
     }
 
@@ -185,4 +194,10 @@ impl MonitorMachine {
         self.carry.clear();
         self.pending = false;
     }
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LogMonitorDiagnostic {
+    Ready,
+    Unavailable,
+    ReadFailed,
 }

@@ -1,4 +1,4 @@
-use app_lib::{LogObservation, MonitorInput, MonitorMachine};
+use app_lib::{LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine};
 use warframe_acquisition::AcquisitionError;
 
 #[test]
@@ -7,7 +7,7 @@ fn startup_detection_triggers_once_and_absence_or_errors_publish_health() {
     assert!(monitor.tick(MonitorInput::running(0, 7, None)).refresh);
     assert!(!monitor.tick(MonitorInput::running(1, 7, None)).refresh);
     assert_eq!(
-        monitor.tick(MonitorInput::absent(2)).health,
+        monitor.tick(MonitorInput::absent(2)).acquisition_health,
         Some(AcquisitionError::GameNotRunning)
     );
     assert_eq!(
@@ -16,7 +16,7 @@ fn startup_detection_triggers_once_and_absence_or_errors_publish_health() {
                 3,
                 AcquisitionError::ProcessDiscoveryFailed
             ))
-            .health,
+            .acquisition_health,
         Some(AcquisitionError::ProcessDiscoveryFailed)
     );
 }
@@ -109,8 +109,15 @@ fn log_read_errors_are_published() {
     let mut monitor = MonitorMachine::new(0);
     monitor.tick(MonitorInput::running(0, 7, None));
     let result = monitor.tick(MonitorInput::running_with_log_error(1, 7));
-    assert_eq!(
-        result.health,
-        Some(AcquisitionError::MemoryReadFailed { pid: 7 })
-    );
+    assert_eq!(result.acquisition_health, None);
+    assert_eq!(result.log_health, Some(LogMonitorDiagnostic::ReadFailed));
+}
+
+#[test]
+fn startup_refresh_and_log_failure_are_independent_outputs() {
+    let mut monitor = MonitorMachine::new(15);
+    let result = monitor.tick(MonitorInput::running_with_log_error(0, 7));
+    assert!(result.refresh);
+    assert_eq!(result.acquisition_health, None);
+    assert_eq!(result.log_health, Some(LogMonitorDiagnostic::ReadFailed));
 }

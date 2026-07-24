@@ -220,6 +220,27 @@ impl AppCore {
         self.health.catalog = BackendHealth::failed(message)?;
         self.current_view()
     }
+
+    pub fn record_log_monitor_failure(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        self.health.log_monitor = BackendHealth::failed(message)?;
+        self.current_view()
+    }
+
+    pub fn record_log_monitor_degraded(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        self.health.log_monitor = BackendHealth::degraded(message)?;
+        self.current_view()
+    }
+
+    pub fn record_log_monitor_ready(&mut self) -> Result<AppView, AppError> {
+        self.health.log_monitor = BackendHealth::ready("EE.log monitor ready", None)?;
+        self.current_view()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -374,6 +395,7 @@ impl BackendHealth {
 #[derive(Clone, Debug, Serialize)]
 pub struct HealthView {
     game_reader: BackendHealth,
+    log_monitor: BackendHealth,
     capture: BackendHealth,
     catalog: BackendHealth,
     market: BackendHealth,
@@ -385,6 +407,7 @@ impl HealthView {
     fn phase_one() -> Result<Self, AppError> {
         Ok(Self {
             game_reader: BackendHealth::degraded("Phase 1 game reader not connected")?,
+            log_monitor: BackendHealth::degraded("Waiting for Warframe EE.log")?,
             capture: BackendHealth::degraded("Phase 1 capture not connected")?,
             catalog: BackendHealth::degraded("Phase 1 catalog not connected")?,
             market: BackendHealth::degraded("Phase 1 market not connected")?,
@@ -402,6 +425,10 @@ impl HealthView {
 
     pub fn game_reader(&self) -> &BackendHealth {
         &self.game_reader
+    }
+
+    pub fn log_monitor(&self) -> &BackendHealth {
+        &self.log_monitor
     }
 
     pub fn capture(&self) -> &BackendHealth {
@@ -430,6 +457,12 @@ pub struct AcquisitionStageView {
     stage: &'static str,
     state: HealthState,
     message: String,
+}
+
+impl AcquisitionStageView {
+    pub fn state(&self) -> HealthState {
+        self.state
+    }
 }
 
 impl From<warframe_acquisition::StageHealth> for AcquisitionStageView {

@@ -17,6 +17,24 @@ function App() {
       .catch(() => setError('The local application backend is unavailable.'))
   }, [])
 
+  useEffect(() => {
+    if (!accepted) return
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const schedule = () => { if (active) timer = setTimeout(poll, 2500) }
+    const poll = async () => {
+      if (document.hidden) { schedule(); return }
+      try {
+        const next = await getView()
+        if (active) setView(next)
+      } catch {
+        if (active) setError('The live backend view could not be updated.')
+      } finally { schedule() }
+    }
+    schedule()
+    return () => { active = false; if (timer) clearTimeout(timer) }
+  }, [accepted])
+
   async function accept() {
     setBusy(true)
     setError(null)
@@ -61,8 +79,15 @@ function App() {
       {view?.collection.items.length ? <ul>{view.collection.items.map(item => <li key={item.id}>{item.name} × {item.quantity}</li>)}</ul> : <p>Your synchronized inventory will appear here when Warframe is running.</p>}
     </section>
     <section className="panel"><h2>Acquisition health</h2><div className="health-grid">
-      {view && Object.entries({ Game: view.health.game_reader, Catalog: view.health.catalog, Database: view.health.database }).map(([name, health]) => <article key={name} className={`health ${health.state}`}><strong>{name}</strong><span>{health.message}</span></article>)}
-    </div></section>
+      {view && Object.entries({ Game: view.health.game_reader, 'EE.log monitor': view.health.log_monitor, Catalog: view.health.catalog, Database: view.health.database }).map(([name, health]) => <article key={name} className={`health ${health.state}`} aria-label={`${name} health: ${health.state}`}><strong>{name}</strong><span>{health.message}</span></article>)}
+    </div>
+    {view?.health.acquisition_stages.length ? <div className="stage-list" aria-label="Acquisition stages">
+      {view.health.acquisition_stages.map(stage => {
+        const words = stage.stage.replaceAll('_', ' ')
+        const name = words[0]?.toUpperCase() + words.slice(1)
+        return <article key={stage.stage} className={`health ${stage.state}`} aria-label={`${name} health: ${stage.state}`}><strong>{name}</strong><span>{stage.message}</span></article>
+      })}
+    </div> : null}</section>
   </main>
 }
 

@@ -103,3 +103,33 @@ fn catalog_port_failure_is_published_without_replacing_collection() {
     assert_eq!(view.collection().items()[0].id(), "prior");
     assert_eq!(view.health().catalog().state(), HealthState::Failed);
 }
+
+#[test]
+fn log_monitor_failure_never_overwrites_successful_acquisition_health() {
+    let mut core = AppCore::in_memory().unwrap();
+    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let result =
+        AcquisitionResult::new(snapshot("owned"), AcquisitionHealth::successful()).unwrap();
+    core.refresh_from(&FakePort(InventoryRefreshOutcome::success(
+        result,
+        meta,
+        CatalogLoadSource::Network,
+        100,
+    )))
+    .unwrap();
+
+    let view = core
+        .record_log_monitor_failure("EE.log could not be read")
+        .unwrap();
+
+    assert_eq!(view.health().game_reader().state(), HealthState::Ready);
+    assert_eq!(view.health().acquisition_stages().len(), 5);
+    assert!(
+        view.health()
+            .acquisition_stages()
+            .iter()
+            .all(|stage| stage.state() == HealthState::Ready)
+    );
+    assert_eq!(view.health().log_monitor().state(), HealthState::Failed);
+    assert!(view.health().log_monitor().message().contains("EE.log"));
+}

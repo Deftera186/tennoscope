@@ -232,6 +232,7 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
             "health": {
                 "acquisition_stages": [],
                 "game_reader": {"state": "ready", "message": "Deterministic fake inventory loaded", "last_success": "2000-01-01T00:00:00Z"},
+                "log_monitor": {"state": "degraded", "message": "Waiting for Warframe EE.log", "last_success": null},
                 "capture": {"state": "degraded", "message": "Fake session; capture not connected", "last_success": null},
                 "catalog": {"state": "degraded", "message": "Fake session; live catalog not connected", "last_success": null},
                 "market": {"state": "degraded", "message": "Fake session; live market not connected", "last_success": null},

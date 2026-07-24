@@ -19,7 +19,9 @@ use warframe_acquisition::{
 };
 
 mod monitor;
-pub use monitor::{LogObservation, MonitorInput, MonitorMachine, MonitorResult};
+pub use monitor::{
+    LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
+};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SetupStatus {
@@ -320,13 +322,26 @@ fn monitor_game(shared: SharedRuntime) {
         if result.refresh {
             let _ = refresh_blocking(&shared);
         }
-        if let Some(error) = result.health {
+        if let Some(error) = result.acquisition_health {
             let _ = apply_outcome(
                 &shared,
                 InventoryRefreshOutcome::acquisition_failed(
                     warframe_acquisition::AcquisitionFailure::from_error(error),
                 ),
             );
+        }
+        if let Some(log_health) = result.log_health {
+            if let Ok(mut runtime) = shared.lock() {
+                let _ = match log_health {
+                    LogMonitorDiagnostic::Ready => runtime.core.record_log_monitor_ready(),
+                    LogMonitorDiagnostic::Unavailable => runtime
+                        .core
+                        .record_log_monitor_degraded("EE.log not found; retrying"),
+                    LogMonitorDiagnostic::ReadFailed => runtime
+                        .core
+                        .record_log_monitor_failure("EE.log could not be read"),
+                };
+            }
         }
         std::thread::sleep(Duration::from_secs(5));
     }
