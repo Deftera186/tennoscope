@@ -10,6 +10,7 @@
 
 * { box-sizing: border-box; }
 html { min-width: 20rem; min-height: 100%; background: #060b10; }
+html.overlay-mode, html.overlay-mode body { background: transparent; }
 body { margin: 0; min-width: 20rem; min-height: 100vh; }
 button, input, select { font: inherit; }
 button { color: inherit; }

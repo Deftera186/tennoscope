@@ -11,6 +11,8 @@ import {
   type HealthState,
   type ItemCategory,
 } from './backend'
+import { showRewardOverlay } from './overlay'
+import { RewardCards } from './RewardCards'
 
 type Page = 'collection' | 'rewards' | 'diagnostics' | 'settings'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing'
@@ -187,7 +189,8 @@ function CollectionPage({ view }: { view: AppView }) {
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
   const [sort, setSort] = useState<Sort>('name-asc')
-  const mastered = view.collection.items.filter(item => item.mastered).length
+  const masteryEligible = view.collection.items.filter(item => ['frame', 'weapon', 'companion', 'vehicle'].includes(item.category))
+  const mastered = masteryEligible.filter(item => item.mastered).length
   const owned = view.collection.items.filter(item => item.quantity > 0).length
   const missing = view.collection.items.filter(item => item.quantity === 0).length
   const filtered = useMemo(() => {
@@ -207,7 +210,7 @@ function CollectionPage({ view }: { view: AppView }) {
     <div className="page-heading"><div><p className="eyebrow">Inventory snapshot</p><h1 id="collection-title">Your collection</h1><p>Browse the canonical items synchronized from your account.</p></div><span className="snapshot-mark">Local snapshot</span></div>
     <div className="summary-grid">
       <SummaryCard label="Items tracked" value={view.collection.total_entries} detail={`${owned} currently owned`} kind="items"/>
-      <SummaryCard label="Mastered" value={mastered} detail={owned ? `${Math.round(mastered / owned * 100)}% of owned equipment` : 'No owned equipment'} kind="mastered"/>
+      <SummaryCard label="Mastered" value={mastered} detail={masteryEligible.length ? `${Math.round(mastered / masteryEligible.length * 100)}% of mastery-eligible items` : 'No mastery-eligible items'} kind="mastered"/>
       <SummaryCard label="Missing" value={missing} detail="From known collection data" kind="missing"/>
     </div>
     <section className="collection-panel">
@@ -238,29 +241,31 @@ function CollectionCard({ item }: { item: CollectionItem }) {
 
 function RewardPage({ view }: { view: AppView }) {
   return <div className="page"><div className="page-heading"><div><p className="eyebrow">Decision support</p><h1 id="reward-title">Reward advisor</h1><p>Current reward candidates only. Screen capture and OCR are not connected yet.</p></div><span className="snapshot-mark">Foundation preview</span></div>
-    <section className="reward-panel" aria-label="Reward advisor">{view.reward.cards.length ? <div className="reward-grid">{view.reward.cards.slice(0, 4).map((card, index) => <article key={`${card.name}-${index}`} className={view.reward.best_value_index === index ? 'reward-card best' : 'reward-card'} aria-label={card.name}>{view.reward.best_value_index === index && <span className="best-ribbon">Best value</span>}<span className="reward-index">Choice {index + 1}</span><h2>{card.name}</h2><div className="value-row"><strong>{card.platinum}<small> plat</small></strong><span>{card.ducats} ducats</span></div><div className="badges">{card.owned > 0 ? <span className="badge quantity">Owned ×{card.owned}</span> : <span className="badge missing">Not owned</span>}{card.mastery_relevant && <span className="badge mastered">✦ Mastery</span>}{card.confidence < 1 && <span className="badge confidence">{Math.round(card.confidence * 100)}% confidence</span>}</div></article>)}</div> : <EmptyState title="No reward choices detected" detail="The advisor will show up to four choices when a reward source is connected. No OCR is performed in this MVP."/>}</section>
+    <section className="reward-panel" aria-label="Reward advisor">{view.reward.cards.length ? <RewardCards cards={view.reward.cards} bestValueIndex={view.reward.best_value_index}/> : <EmptyState title="No reward choices detected" detail="The advisor will show up to four choices when a reward source is connected. No OCR is performed in this MVP."/>}</section>
   </div>
 }
 
-function HealthCard({ label, health }: { label: string; health: BackendHealth | { state: HealthState; message: string } }) {
-  return <article className={`diagnostic-card ${health.state}`}><span className="health-dot" aria-hidden="true"/><div><h2>{label}</h2><p>{health.message}</p></div><strong>{health.state}</strong></article>
+function HealthCard({ label, health }: { label: string; health: BackendHealth | { state: HealthState; message: string; last_success?: string | null } }) {
+  return <article className={`diagnostic-card ${health.state}`}><span className="health-dot" aria-hidden="true"/><div><h2>{label}</h2><p>{health.message}</p>{health.last_success && <small>Last success: {health.last_success}</small>}</div><strong>{health.state}</strong></article>
 }
 
 function DiagnosticsPage({ view }: { view: AppView }) {
   const systems = [
     ['Game reader', view.health.game_reader],
     ['EE.log', view.health.log_monitor],
+    ['Screen capture', view.health.capture],
     ['Catalog', view.health.catalog],
+    ['Market data', view.health.market],
     ['Database', view.health.database],
   ] as const
   return <div className="page"><div className="page-heading"><div><p className="eyebrow">Local system health</p><h1 id="diagnostics-title">Diagnostics</h1><p>Status messages are deliberately scrubbed of temporary access values.</p></div></div>
-    <section className="diagnostics-panel" aria-label="Diagnostics"><h2 className="section-title">Core services</h2><div className="diagnostic-grid">{systems.map(([label, health]) => <HealthCard key={label} label={label} health={health}/>)}</div><h2 className="section-title">Acquisition pipeline</h2>{view.health.acquisition_stages.length ? <ol className="pipeline">{view.health.acquisition_stages.map((stage, index) => { const words = stage.stage.replaceAll('_', ' '); const label = words[0].toUpperCase() + words.slice(1); return <li key={stage.stage}><span className={`stage-number ${stage.state}`}>{index + 1}</span><div><strong>{label}</strong><p>{stage.message}</p></div><span className={`stage-state ${stage.state}`}>{stage.state}</span></li> })}</ol> : <EmptyState title="No acquisition attempt yet" detail="Start Warframe or request a refresh to populate the five pipeline stages."/>}</section>
+    <section className="diagnostics-panel" aria-label="Diagnostics"><div className="section-heading"><h2 className="section-title">Core services</h2><button type="button" className="secondary-action" onClick={() => void showRewardOverlay()}>Preview reward overlay</button></div><div className="diagnostic-grid">{systems.map(([label, health]) => <HealthCard key={label} label={label} health={health}/>)}</div><h2 className="section-title">Acquisition pipeline</h2>{view.health.acquisition_stages.length ? <ol className="pipeline">{view.health.acquisition_stages.map((stage, index) => { const words = stage.stage.replaceAll('_', ' '); const label = words[0].toUpperCase() + words.slice(1); return <li key={stage.stage}><span className={`stage-number ${stage.state}`}>{index + 1}</span><div><strong>{label}</strong><p>{stage.message}</p></div><span className={`stage-state ${stage.state}`}>{stage.state}</span></li> })}</ol> : <EmptyState title="No acquisition attempt yet" detail="Start Warframe or request a refresh to populate the five pipeline stages."/>}</section>
   </div>
 }
 
 function SettingsPage() {
   return <section className="page" aria-labelledby="settings-title"><div className="page-heading"><div><p className="eyebrow">Application</p><h1 id="settings-title">Settings &amp; about</h1><p>Warframe Helper is a free, open-source, local-first companion.</p></div><span className="snapshot-mark">MVP · GPLv3</span></div>
-    <div className="settings-grid"><article className="settings-card"><span className="settings-icon">⌂</span><div><h2>Local-first storage</h2><p>Your inventory snapshot and preferences are stored on this device in the application data directory. The UI has no telemetry or cloud account.</p></div></article><article className="settings-card warning"><span className="settings-icon">!</span><div><h2>Read-only access disclosure</h2><p>Warframe Helper inspects the running game process. Third-party software and process inspection may carry account-policy or anti-cheat risk even when no game memory is modified.</p></div></article><article className="settings-card"><span className="settings-icon">↻</span><div><h2>Automatic synchronization</h2><p>The local EE.log monitor watches for inventory synchronization and refreshes automatically. Manual refresh remains available in the top bar.</p></div></article></div>
+    <div className="settings-grid"><article className="settings-card"><span className="settings-icon">⌂</span><div><h2>Local-first storage</h2><p>Your inventory snapshot and preferences are stored on this device in the application data directory. The UI has no telemetry or cloud account.</p></div></article><article className="settings-card warning"><span className="settings-icon">!</span><div><h2>Read-only access disclosure</h2><p>Warframe Helper inspects the running game process. Third-party software and process inspection may carry account-policy or anti-cheat risk even when no game memory is modified.</p></div></article><article className="settings-card"><span className="settings-icon">↻</span><div><h2>Automatic synchronization</h2><p>The local EE.log monitor watches for inventory synchronization and refreshes automatically. Manual refresh remains available in the top bar.</p></div></article><article className="settings-card"><span className="settings-icon">▱</span><div><h2>Reward overlay</h2><p>Preview the focused always-on-top reward window. It remains honest when no reward source is connected.</p><button type="button" className="secondary-action" onClick={() => void showRewardOverlay()}>Preview reward overlay</button></div></article></div>
   </section>
 }
 

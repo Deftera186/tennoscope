@@ -142,6 +142,7 @@
 .diagnostic-card div { min-width: 0; flex: 1; }
 .diagnostic-card h2 { margin: 0; color: #dce6ea; font-size: .75rem; }
 .diagnostic-card p { margin: .22rem 0 0; overflow: hidden; color: var(--subtle); font-size: .63rem; text-overflow: ellipsis; white-space: nowrap; }
+.diagnostic-card small { display: block; margin-top: .2rem; color: #718590; font-size: .56rem; }
 .diagnostic-card > strong { color: var(--muted); font-size: .56rem; letter-spacing: .08em; text-transform: uppercase; }
 .pipeline { margin: 0; padding: 0; list-style: none; }
 .pipeline li { position: relative; display: flex; align-items: center; gap: .8rem; min-height: 3.8rem; padding: .6rem 0; }
@@ -163,6 +164,22 @@
 .warning .settings-icon { color: var(--amber); border-color: #695232; }
 .settings-card h2 { margin: 0 0 .35rem; color: #e4edf1; font-size: .85rem; }
 .settings-card p { max-width: 50rem; margin: 0; color: var(--muted); font-size: .72rem; line-height: 1.6; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.secondary-action { padding: .5rem .7rem; color: #cce9ec; border: 1px solid #28515b; border-radius: .45rem; background: #10232a; font-size: .64rem; font-weight: 750; cursor: pointer; }
+.settings-card .secondary-action { margin-top: .75rem; }
+
+.overlay-shell { min-height: 100vh; padding: .55rem; overflow: hidden; border: 1px solid #375d68; border-radius: .8rem; background: rgb(6 12 17 / 94%); box-shadow: 0 1rem 3rem rgb(0 0 0 / 45%); }
+.overlay-title { display: flex; align-items: center; justify-content: space-between; height: 1.5rem; padding: 0 .35rem .35rem; color: #86a2ae; font-size: .57rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+.overlay-title button { display: grid; place-items: center; width: 1.35rem; height: 1.35rem; padding: 0; color: #aebdc4; border: 0; border-radius: 50%; background: #162630; cursor: pointer; }
+.overlay-rewards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .45rem; }
+.overlay-rewards .reward-card { min-height: 8.4rem; padding: .65rem; }
+.overlay-rewards .reward-card h2 { min-height: auto; margin: .4rem 0; font-size: .75rem; }
+.overlay-rewards .value-row { margin: .35rem 0; }
+.overlay-rewards .value-row strong { font-size: 1.15rem; }
+.overlay-rewards .best-ribbon { top: .45rem; padding: .22rem .45rem; }
+.overlay-empty { display: grid; place-items: center; height: 8.4rem; align-content: center; color: var(--muted); font-size: .68rem; text-align: center; }
+.overlay-empty strong { color: #d9e4e8; }
+.overlay-empty span { margin-top: .3rem; color: var(--subtle); }
 .empty-state, .state-card { display: grid; place-items: center; min-height: 16rem; align-content: center; padding: 2rem; color: var(--subtle); text-align: center; }
 .empty-state > span { color: #31535f; font-size: 2.4rem; }
 .empty-state h2 { margin: .7rem 0 .35rem; color: #c7d4da; font-size: 1rem; }

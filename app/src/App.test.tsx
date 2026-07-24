@@ -5,7 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const backend = vi.hoisted(() => ({
   getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(),
 }))
+const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn() }))
 vi.mock('./backend', () => backend)
+vi.mock('./overlay', () => overlay)
 
 import App from './App'
 import type { AppView } from './backend'
@@ -29,6 +31,7 @@ const view: AppView = {
       { name: 'Forma Blueprint', platinum: 12, ducats: 25, owned: 0, mastery_relevant: false, confidence: 1 },
       { name: 'Lex Prime Receiver', platinum: 8, ducats: 15, owned: 1, mastery_relevant: true, confidence: 1 },
       { name: 'Rare Prime Set', platinum: 30, ducats: 100, owned: 0, mastery_relevant: false, confidence: 0.79 },
+      { name: 'Paris Prime String', platinum: 6, ducats: 45, owned: 1, mastery_relevant: false, confidence: 1 },
     ],
     best_value_index: 0,
   },
@@ -55,6 +58,7 @@ describe('MVP desktop interface', () => {
     vi.clearAllMocks()
     backend.getView.mockResolvedValue(view)
     backend.refreshInventory.mockResolvedValue(view)
+    overlay.showRewardOverlay.mockResolvedValue(undefined)
   })
 
   it('requires an accessible one-time risk disclosure before enabling acquisition', async () => {
@@ -76,6 +80,7 @@ describe('MVP desktop interface', () => {
     expect(screen.getByRole('navigation', { name: 'Primary' })).toBeInTheDocument()
     expect(screen.getByText('8', { selector: '[data-summary="items"] *' })).toBeInTheDocument()
     expect(screen.getByText('2', { selector: '[data-summary="mastered"] *' })).toBeInTheDocument()
+    expect(screen.getByText('50% of mastery-eligible items')).toBeInTheDocument()
     expect(screen.getByRole('list', { name: 'Collection items' })).toHaveClass('collection-grid')
     expect(screen.getByRole('article', { name: 'Rhino' })).toHaveTextContent('Mastered')
   })
@@ -130,10 +135,13 @@ describe('MVP desktop interface', () => {
     await screen.findByRole('heading', { name: 'Your collection' })
     await userEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
     const panel = screen.getByRole('region', { name: 'Diagnostics' })
-    for (const label of ['Game reader', 'EE.log', 'Catalog', 'Database', 'Process discovery', 'Memory read', 'Authorization scan', 'Inventory fetch', 'Schema validation']) {
+    for (const label of ['Game reader', 'EE.log', 'Screen capture', 'Catalog', 'Market data', 'Database', 'Process discovery', 'Memory read', 'Authorization scan', 'Inventory fetch', 'Schema validation']) {
       expect(within(panel).getByText(label)).toBeInTheDocument()
     }
+    expect(within(panel).getByText('Last success: 1')).toBeInTheDocument()
     expect(panel).not.toHaveTextContent(/accountId|nonce|authorization token/i)
+    await userEvent.click(within(panel).getByRole('button', { name: 'Preview reward overlay' }))
+    expect(overlay.showRewardOverlay).toHaveBeenCalledOnce()
   })
 
   it('renders zero to four reward decisions with value, ownership, and mastery indicators', async () => {
@@ -142,11 +150,12 @@ describe('MVP desktop interface', () => {
     await screen.findByRole('heading', { name: 'Your collection' })
     await userEvent.click(screen.getByRole('button', { name: 'Rewards' }))
     const advisor = screen.getByRole('region', { name: 'Reward advisor' })
-    expect(within(advisor).getAllByRole('article')).toHaveLength(3)
+    expect(within(advisor).getAllByRole('article')).toHaveLength(4)
     expect(within(advisor).getByRole('article', { name: 'Forma Blueprint' })).toHaveTextContent('Best value')
     expect(within(advisor).getByRole('article', { name: 'Lex Prime Receiver' })).toHaveTextContent('Owned ×1')
-    expect(within(advisor).getByRole('article', { name: 'Lex Prime Receiver' })).toHaveTextContent('Mastery')
-    expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).toHaveTextContent('79% confidence')
+    expect(within(advisor).getByRole('article', { name: 'Lex Prime Receiver' })).toHaveTextContent('Mastery needed')
+    expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).toHaveTextContent('Uncertain recognition')
+    expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).not.toHaveTextContent('Best value')
   })
 
   it('keeps risk disclosure and local-first details available from settings', async () => {
@@ -157,6 +166,8 @@ describe('MVP desktop interface', () => {
     expect(screen.getByRole('heading', { name: 'Settings & about' })).toBeInTheDocument()
     expect(screen.getByText(/stored on this device/i)).toBeInTheDocument()
     expect(screen.getByText(/process inspection may carry/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Preview reward overlay' }))
+    expect(overlay.showRewardOverlay).toHaveBeenCalledOnce()
   })
 
   it('refreshes inventory and announces live state', async () => {
@@ -197,5 +208,54 @@ describe('MVP desktop interface', () => {
     await act(async () => { rejectManual?.(new Error('synthetic')) })
     await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
     expect(backend.getView).toHaveBeenCalledTimes(2)
+  })
+
+  it('stops scheduled polling after unmount', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    let release: ((value: AppView) => void) | undefined
+    backend.getView.mockResolvedValueOnce(view).mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const rendered = render(<App />)
+    await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    expect(backend.getView).toHaveBeenCalledTimes(2)
+    rendered.unmount()
+    await act(async () => { release?.(view); await vi.advanceTimersByTimeAsync(10_000) })
+    expect(backend.getView).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let delayed startup overwrite a newer poll', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    let releaseStartup: ((value: AppView) => void) | undefined
+    backend.getView
+      .mockImplementationOnce(() => new Promise(resolve => { releaseStartup = resolve }))
+      .mockResolvedValueOnce({ ...view, collection: { items: [], total_entries: 5 } })
+    render(<App />)
+    await act(async () => {})
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    expect(screen.getByText('5', { selector: '[data-summary="items"] *' })).toBeInTheDocument()
+    await act(async () => { releaseStartup?.({ ...view, collection: { items: [], total_entries: 1 } }) })
+    expect(screen.getByText('5', { selector: '[data-summary="items"] *' })).toBeInTheDocument()
+  })
+
+  it('counts mastery only across mastery-eligible categories', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.getView.mockResolvedValue({
+      ...view,
+      collection: {
+        total_entries: 6,
+        items: [
+          { id: 'frame', name: 'Frame', category: 'frame', quantity: 1, mastered: true },
+          { id: 'weapon', name: 'Weapon', category: 'weapon', quantity: 1, mastered: false },
+          { id: 'companion', name: 'Companion', category: 'companion', quantity: 1, mastered: false },
+          { id: 'vehicle', name: 'Vehicle', category: 'vehicle', quantity: 1, mastered: true },
+          { id: 'part', name: 'Part', category: 'prime_part', quantity: 1, mastered: false },
+          { id: 'resource', name: 'Resource', category: 'resource', quantity: 1, mastered: false },
+        ],
+      },
+    })
+    render(<App />)
+    expect(await screen.findByText('50% of mastery-eligible items')).toBeInTheDocument()
   })
 })

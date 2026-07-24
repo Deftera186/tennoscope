@@ -1,0 +1,63 @@
+import { cleanup, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const backend = vi.hoisted(() => ({ getView: vi.fn() }))
+const overlay = vi.hoisted(() => ({ hideRewardOverlay: vi.fn() }))
+vi.mock('./backend', () => backend)
+vi.mock('./overlay', () => overlay)
+
+import { AppRoute } from './Root'
+import { routeForPath } from './routing'
+
+const overlayView = {
+  collection: { items: [], total_entries: 0 },
+  reward: {
+    cards: [
+      { name: 'Certain', platinum: 10, ducats: 15, owned: 0, mastery_relevant: true, confidence: 1 },
+      { name: 'Uncertain', platinum: 100, ducats: 100, owned: 0, mastery_relevant: false, confidence: 0.7 },
+    ],
+    best_value_index: 1,
+  },
+  health: {
+    game_reader: { state: 'ready', message: 'ready', last_success: null },
+    log_monitor: { state: 'ready', message: 'ready', last_success: null },
+    capture: { state: 'degraded', message: 'waiting', last_success: null },
+    catalog: { state: 'ready', message: 'ready', last_success: null },
+    market: { state: 'degraded', message: 'waiting', last_success: null },
+    database: { state: 'ready', message: 'ready', last_success: null },
+    acquisition_stages: [],
+  },
+}
+
+describe('reward overlay route', () => {
+  afterEach(cleanup)
+  beforeEach(() => {
+    vi.clearAllMocks()
+    backend.getView.mockResolvedValue(overlayView)
+    overlay.hideRewardOverlay.mockResolvedValue(undefined)
+  })
+
+  it('routes only the overlay pathname to the focused overlay', () => {
+    expect(routeForPath('/overlay')).toBe('overlay')
+    expect(routeForPath('/')).toBe('main')
+    expect(routeForPath('/collection')).toBe('main')
+  })
+
+  it('renders reward decisions and can hide the overlay', async () => {
+    render(<AppRoute pathname="/overlay" />)
+    const advisor = await screen.findByRole('main', { name: 'Reward overlay' })
+    expect(within(advisor).getAllByRole('article')).toHaveLength(2)
+    expect(within(advisor).getByRole('article', { name: 'Uncertain' })).toHaveTextContent('Uncertain recognition')
+    expect(within(advisor).getByRole('article', { name: 'Uncertain' })).not.toHaveTextContent('Best value')
+    expect(within(advisor).getByRole('article', { name: 'Certain' })).toHaveTextContent('Mastery needed')
+    await userEvent.click(screen.getByRole('button', { name: 'Hide reward overlay' }))
+    expect(overlay.hideRewardOverlay).toHaveBeenCalledOnce()
+  })
+
+  it('renders an honest empty overlay', async () => {
+    backend.getView.mockResolvedValue({ ...overlayView, reward: { cards: [], best_value_index: null } })
+    render(<AppRoute pathname="/overlay" />)
+    expect(await screen.findByText('No reward choices detected')).toBeInTheDocument()
+  })
+})
