@@ -243,3 +243,66 @@ fn reward_view_serializes_derived_selection_without_being_mutable() {
         })
     );
 }
+
+#[test]
+fn collection_json_round_trips_with_deterministic_item_id_keys() {
+    let lex = item("lex", "Lex");
+    let mut collection = Collection::default();
+    collection.replace(
+        InventorySnapshot::coherent(vec![InventoryEntry::new(lex, 2).with_mastered(true)]).unwrap(),
+    );
+
+    let wire = serde_json::to_value(&collection).unwrap();
+    assert_eq!(
+        wire,
+        json!({
+            "entries": {
+                "lex": {
+                    "item": {"id": "lex", "name": "Lex", "category": "weapon"},
+                    "quantity": 2,
+                    "mastered": true
+                }
+            }
+        })
+    );
+
+    let round_trip: Collection = serde_json::from_value(wire).unwrap();
+    assert_eq!(round_trip.quantity(&ItemId::new("lex").unwrap()), 2);
+}
+
+#[test]
+fn collection_deserialization_rejects_mismatched_map_and_item_ids() {
+    assert!(
+        serde_json::from_value::<Collection>(json!({
+            "entries": {
+                "lex_prime": {
+                    "item": {"id": "lex", "name": "Lex", "category": "weapon"},
+                    "quantity": 1,
+                    "mastered": false
+                }
+            }
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn collection_deserialization_rejects_duplicate_logical_item_ids() {
+    assert!(
+        serde_json::from_value::<Collection>(json!({
+            "entries": {
+                "lex": {
+                    "item": {"id": "lex", "name": "Lex", "category": "weapon"},
+                    "quantity": 1,
+                    "mastered": false
+                },
+                "lex_alias": {
+                    "item": {"id": "lex", "name": "Lex", "category": "weapon"},
+                    "quantity": 2,
+                    "mastered": true
+                }
+            }
+        }))
+        .is_err()
+    );
+}

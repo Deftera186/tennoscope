@@ -62,9 +62,41 @@ impl InventorySnapshot {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct Collection {
     entries: BTreeMap<ItemId, InventoryEntry>,
+}
+
+#[derive(Deserialize)]
+struct CollectionDto {
+    entries: BTreeMap<ItemId, InventoryEntry>,
+}
+
+impl<'de> Deserialize<'de> for Collection {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let dto = CollectionDto::deserialize(deserializer)?;
+        let mut logical_ids = BTreeSet::new();
+        for (key, entry) in &dto.entries {
+            if key != &entry.item.id {
+                return Err(D::Error::custom(format_args!(
+                    "collection key {key} does not match item ID {}",
+                    entry.item.id
+                )));
+            }
+            if !logical_ids.insert(entry.item.id.clone()) {
+                return Err(D::Error::custom(format_args!(
+                    "collection contains duplicate item ID: {}",
+                    entry.item.id
+                )));
+            }
+        }
+        Ok(Self {
+            entries: dto.entries,
+        })
+    }
 }
 
 impl Collection {
