@@ -295,7 +295,7 @@ fn scans_writable_anonymous_regions_before_file_backed_regions() {
         .scan(&memory, &GameProcess::new(7))
         .unwrap();
 
-    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x2000]);
+    assert_eq!(memory.reads.into_inner().unwrap(), vec![0x2000, 0x1000]);
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use std::cmp::Reverse;
+use std::{cmp::Reverse, collections::VecDeque};
 
 use memchr::memmem;
 use zeroize::{Zeroize, Zeroizing};
@@ -10,8 +10,8 @@ use crate::{
 const LOGIN_SEARCH_DISTANCE: usize = 2048;
 const CANDIDATE_OVERLAP: usize = LOGIN_SEARCH_DISTANCE + 128;
 const MAX_CHUNK_SIZE: usize = 1024 * 1024;
-const PREFERRED_SCAN_BYTES: usize = 160 * 1024 * 1024;
-const FALLBACK_SCAN_BYTES: usize = 96 * 1024 * 1024;
+const PREFERRED_SCAN_BYTES: usize = 152 * 1024 * 1024;
+const FALLBACK_SCAN_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PREFERRED_REGION_BYTES: usize = 128 * 1024 * 1024;
 const FALLBACK_SAMPLE_BYTES: usize = 4 * 1024 * 1024;
 const CONFIDENT_URL_COPIES: usize = 3;
@@ -76,10 +76,6 @@ impl AuthorizationScanner {
             }
         }
 
-        if let Some(authorization) = candidates.take_confident_url() {
-            return Ok(authorization);
-        }
-
         fallback.sort_by_key(|range| {
             (
                 Reverse(range.region.scan_priority()),
@@ -87,24 +83,37 @@ impl AuthorizationScanner {
                 range.offset,
             )
         });
+        let mut fallback = fallback
+            .into_iter()
+            .map(FallbackCursor::new)
+            .collect::<VecDeque<_>>();
         let mut fallback_remaining = policy.fallback_bytes;
-        for range in fallback {
-            if fallback_remaining == 0 {
+        while fallback_remaining > 0 {
+            let Some(mut cursor) = fallback.pop_front() else {
                 break;
-            }
-            let sample_len = range
-                .len
-                .min(policy.fallback_sample_bytes)
+            };
+            let Some(sample_offset) = cursor.next_sample_offset(policy.fallback_sample_bytes)
+            else {
+                continue;
+            };
+            let sample_len = policy
+                .fallback_sample_bytes
+                .min(cursor.range.len - sample_offset)
                 .min(fallback_remaining);
             scan_range(
                 memory,
                 process,
-                ScanRange::new(range.region, range.offset, sample_len),
+                ScanRange::new(
+                    cursor.range.region,
+                    cursor.range.offset + sample_offset,
+                    sample_len,
+                ),
                 &mut read_buffer,
                 &mut candidates,
                 self.chunk_size,
             )?;
             fallback_remaining -= sample_len;
+            fallback.push_back(cursor);
         }
 
         select_candidate(candidates)
@@ -148,6 +157,48 @@ impl ScanRange {
 
     fn whole(region: crate::ReadableRegion) -> Self {
         Self::new(region, 0, region.len())
+    }
+}
+
+struct FallbackCursor {
+    range: ScanRange,
+    round: usize,
+    visited_offsets: Vec<usize>,
+}
+
+impl FallbackCursor {
+    fn new(range: ScanRange) -> Self {
+        Self {
+            range,
+            round: 0,
+            visited_offsets: Vec::new(),
+        }
+    }
+
+    fn next_sample_offset(&mut self, slice_bytes: usize) -> Option<usize> {
+        if self.range.len == 0 || slice_bytes == 0 {
+            return None;
+        }
+        let max_offset = self
+            .range
+            .len
+            .saturating_sub(slice_bytes.min(self.range.len));
+        let sequential_rounds = self.range.len.div_ceil(slice_bytes);
+        while self.round < sequential_rounds.saturating_add(3) {
+            let round = self.round;
+            self.round += 1;
+            let offset = match round {
+                0 => 0,
+                1 => max_offset / 2,
+                2 => max_offset,
+                _ => (round - 2).saturating_mul(slice_bytes).min(max_offset),
+            };
+            if !self.visited_offsets.contains(&offset) {
+                self.visited_offsets.push(offset);
+                return Some(offset);
+            }
+        }
+        None
     }
 }
 
@@ -481,6 +532,9 @@ mod tests {
 
     const URL: &[u8] = include_bytes!("../tests/fixtures/authorization-url-encoded.bin");
     const LOGIN: &[u8] = include_bytes!("../tests/fixtures/authorization-login-response.bin");
+    const CURRENT_ACCOUNT: &str = "00112233445566778899aabb";
+    const STALE_URL: &[u8] =
+        b"?accountId=ffeeddccbbaa998877665544&nonce=222222222222222222&ct=synthetic";
 
     #[test]
     fn extracts_the_exact_synthetic_fixture_values() {
@@ -607,5 +661,199 @@ mod tests {
         );
 
         assert!(result.is_ok());
+    }
+
+    struct TierMemory {
+        regions: Vec<(ReadableRegion, Vec<u8>)>,
+    }
+
+    impl MemoryReader for TierMemory {
+        fn readable_regions(
+            &self,
+            _process: &GameProcess,
+        ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+            Ok(self.regions.iter().map(|(region, _)| *region).collect())
+        }
+
+        fn read_at(
+            &self,
+            _process: &GameProcess,
+            address: u64,
+            buffer: &mut [u8],
+        ) -> Result<usize, AcquisitionError> {
+            let (region, bytes) = self
+                .regions
+                .iter()
+                .find(|(region, _)| {
+                    address >= region.start()
+                        && address < region.start() + u64::try_from(region.len()).unwrap()
+                })
+                .unwrap();
+            let offset = usize::try_from(address - region.start()).unwrap();
+            buffer.fill(0);
+            let len = bytes.len().saturating_sub(offset).min(buffer.len());
+            buffer[..len].copy_from_slice(&bytes[offset..offset + len]);
+            Ok(buffer.len())
+        }
+    }
+
+    fn tier_policy() -> ScanPolicy {
+        ScanPolicy {
+            preferred_bytes: 4096,
+            fallback_bytes: 4096,
+            max_preferred_region_bytes: 4096,
+            fallback_sample_bytes: 4096,
+        }
+    }
+
+    #[test]
+    fn four_fallback_copies_outvote_three_preferred_stale_copies() {
+        let memory = TierMemory {
+            regions: vec![
+                (
+                    ReadableRegion::classified(
+                        0x1000,
+                        STALE_URL.len() * 3,
+                        RegionScanPriority::WritableAnonymous,
+                    ),
+                    [STALE_URL, STALE_URL, STALE_URL].concat(),
+                ),
+                (
+                    ReadableRegion::classified(
+                        0x3000,
+                        URL.len() * 4,
+                        RegionScanPriority::FileBacked,
+                    ),
+                    [URL, URL, URL, URL].concat(),
+                ),
+            ],
+        };
+
+        let authorization = super::AuthorizationScanner::new(4096)
+            .scan_with_policy(&memory, &GameProcess::new(7), tier_policy())
+            .unwrap();
+
+        assert_eq!(authorization.account_id(), CURRENT_ACCOUNT);
+    }
+
+    #[test]
+    fn four_fallback_stale_copies_outvote_three_preferred_current_copies() {
+        let memory = TierMemory {
+            regions: vec![
+                (
+                    ReadableRegion::classified(
+                        0x1000,
+                        URL.len() * 3,
+                        RegionScanPriority::WritableAnonymous,
+                    ),
+                    [URL, URL, URL].concat(),
+                ),
+                (
+                    ReadableRegion::classified(
+                        0x3000,
+                        STALE_URL.len() * 4,
+                        RegionScanPriority::FileBacked,
+                    ),
+                    [STALE_URL, STALE_URL, STALE_URL, STALE_URL].concat(),
+                ),
+            ],
+        };
+
+        let authorization = super::AuthorizationScanner::new(4096)
+            .scan_with_policy(&memory, &GameProcess::new(7), tier_policy())
+            .unwrap();
+
+        assert_eq!(authorization.account_id(), "ffeeddccbbaa998877665544");
+    }
+
+    struct SparseRangeMemory {
+        len: usize,
+        candidate_offset: usize,
+        candidate: Vec<u8>,
+    }
+
+    impl MemoryReader for SparseRangeMemory {
+        fn readable_regions(
+            &self,
+            _process: &GameProcess,
+        ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+            Ok(vec![ReadableRegion::classified(
+                0x10_0000,
+                self.len,
+                RegionScanPriority::FileBacked,
+            )])
+        }
+
+        fn read_at(
+            &self,
+            _process: &GameProcess,
+            address: u64,
+            buffer: &mut [u8],
+        ) -> Result<usize, AcquisitionError> {
+            let read_start = usize::try_from(address - 0x10_0000).unwrap();
+            let read_end = read_start + buffer.len();
+            let candidate_end = self.candidate_offset + self.candidate.len();
+            buffer.fill(0);
+            let overlap_start = read_start.max(self.candidate_offset);
+            let overlap_end = read_end.min(candidate_end);
+            if overlap_start < overlap_end {
+                let source_start = overlap_start - self.candidate_offset;
+                let destination_start = overlap_start - read_start;
+                let len = overlap_end - overlap_start;
+                buffer[destination_start..destination_start + len]
+                    .copy_from_slice(&self.candidate[source_start..source_start + len]);
+            }
+            Ok(buffer.len())
+        }
+    }
+
+    fn sparse_policy(fallback_bytes: usize) -> ScanPolicy {
+        ScanPolicy {
+            preferred_bytes: 0,
+            fallback_bytes,
+            max_preferred_region_bytes: 0,
+            fallback_sample_bytes: 4 * 1024 * 1024,
+        }
+    }
+
+    #[test]
+    fn fallback_samples_beyond_the_first_four_mebibytes() {
+        let candidate = [URL, URL, URL].concat();
+        let memory = SparseRangeMemory {
+            len: 20 * 1024 * 1024,
+            candidate_offset: 5 * 1024 * 1024,
+            candidate,
+        };
+
+        assert!(
+            super::AuthorizationScanner::new(1024 * 1024)
+                .scan_with_policy(
+                    &memory,
+                    &GameProcess::new(7),
+                    sparse_policy(16 * 1024 * 1024),
+                )
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn fallback_samples_near_the_tail_of_a_large_region() {
+        let candidate = [URL, URL, URL].concat();
+        let len = 20 * 1024 * 1024;
+        let memory = SparseRangeMemory {
+            len,
+            candidate_offset: len - candidate.len() - 128,
+            candidate,
+        };
+
+        assert!(
+            super::AuthorizationScanner::new(1024 * 1024)
+                .scan_with_policy(
+                    &memory,
+                    &GameProcess::new(7),
+                    sparse_policy(12 * 1024 * 1024),
+                )
+                .is_ok()
+        );
     }
 }
