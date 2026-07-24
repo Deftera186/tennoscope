@@ -200,6 +200,7 @@ fn repeated_reads_reuse_one_open_memory_descriptor() {
     let mut first = [0_u8; 5];
     assert_eq!(adapter.read_at(&process, 0, &mut first).unwrap(), 5);
     fs::remove_file(temp.path().join("402/mem")).unwrap();
+    fs::remove_file(temp.path().join("402/stat")).unwrap();
 
     let mut second = [0_u8; 6];
     assert_eq!(adapter.read_at(&process, 6, &mut second).unwrap(), 6);

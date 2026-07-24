@@ -45,6 +45,8 @@ pub enum Category {
     Companion,
     PrimePart,
     Relic,
+    Resource,
+    Blueprint,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

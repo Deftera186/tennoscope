@@ -106,6 +106,7 @@ struct RawXpEntry {
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct RawInventory {
+    last_inventory_sync: serde_json::Value,
     suits: Vec<RawEntry>,
     long_guns: Vec<RawEntry>,
     pistols: Vec<RawEntry>,
@@ -116,19 +117,12 @@ struct RawInventory {
     pending_recipes: Vec<RawEntry>,
     #[serde(rename = "XPInfo")]
     xp_info: Vec<RawXpEntry>,
-    #[serde(default)]
     space_suits: Vec<RawEntry>,
-    #[serde(default)]
     space_melee: Vec<RawEntry>,
-    #[serde(default)]
     space_guns: Vec<RawEntry>,
-    #[serde(default)]
     sentinel_weapons: Vec<RawEntry>,
-    #[serde(default)]
     kubrow_pets: Vec<RawEntry>,
-    #[serde(default)]
     operator_amps: Vec<RawEntry>,
-    #[serde(default)]
     mech_suits: Vec<RawEntry>,
 }
 
@@ -142,6 +136,9 @@ impl SnapshotDecoder for InventoryJsonDecoder {
     fn decode(&self, response: &[u8]) -> Result<InventorySnapshot, AcquisitionError> {
         let raw: RawInventory =
             serde_json::from_slice(response).map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        if raw.last_inventory_sync.is_null() {
+            return Err(AcquisitionError::SnapshotInvalid);
+        }
         let mut entries = BTreeMap::<String, AccumulatedEntry>::new();
 
         add_unique_section(&mut entries, raw.suits, Category::Frame)?;
@@ -150,8 +147,8 @@ impl SnapshotDecoder for InventoryJsonDecoder {
         add_unique_section(&mut entries, raw.melee, Category::Weapon)?;
         add_unique_section(&mut entries, raw.sentinels, Category::Companion)?;
         add_misc_section(&mut entries, raw.misc_items)?;
-        add_stackable_section(&mut entries, raw.recipes, Category::PrimePart, 1)?;
-        add_stackable_section(&mut entries, raw.pending_recipes, Category::PrimePart, -1)?;
+        add_stackable_section(&mut entries, raw.recipes, Category::Blueprint, 1)?;
+        add_stackable_section(&mut entries, raw.pending_recipes, Category::Blueprint, -1)?;
         add_unique_section(&mut entries, raw.space_suits, Category::Frame)?;
         add_unique_section(&mut entries, raw.space_melee, Category::Weapon)?;
         add_unique_section(&mut entries, raw.space_guns, Category::Weapon)?;
@@ -163,12 +160,13 @@ impl SnapshotDecoder for InventoryJsonDecoder {
         for xp in raw.xp_info {
             validate_item_type(&xp.item_type)?;
             let category = category_from_path(&xp.item_type);
-            let entry = entries.entry(xp.item_type).or_insert(AccumulatedEntry {
+            let path = xp.item_type;
+            let entry = entries.entry(path.clone()).or_insert(AccumulatedEntry {
                 category,
                 quantity: 0,
                 mastered: false,
             });
-            entry.mastered |= xp.xp >= 900_000;
+            entry.mastered |= xp.xp >= mastery_threshold(&path, entry.category);
         }
 
         let domain_entries = entries
@@ -193,7 +191,11 @@ fn add_misc_section(
     items: Vec<RawEntry>,
 ) -> Result<(), AcquisitionError> {
     for item in items {
-        let category = category_from_path(&item.item_type);
+        let category = if item.item_type.contains("/Projections/") {
+            Category::Relic
+        } else {
+            Category::Resource
+        };
         add_stackable_item(output, item, category, 1)?;
     }
     Ok(())
@@ -295,9 +297,36 @@ fn category_from_path(path: &str) -> Category {
         Category::Weapon
     } else if path.contains("/Sentinel") || path.contains("/Kubrow") || path.contains("/Pets/") {
         Category::Companion
+    } else if path.contains("/Recipes/") {
+        Category::Blueprint
     } else {
-        Category::PrimePart
+        Category::Resource
     }
+}
+
+fn mastery_threshold(path: &str, category: Category) -> u64 {
+    let max_rank = if is_known_or_potential_rank_forty(path) {
+        40_u64
+    } else {
+        30_u64
+    };
+    let affinity_per_rank_squared = match category {
+        Category::Frame | Category::Companion => 1_000_u64,
+        Category::Weapon => 500_u64,
+        Category::PrimePart | Category::Relic | Category::Resource | Category::Blueprint => {
+            return u64::MAX;
+        }
+    };
+    affinity_per_rank_squared * max_rank * max_rank
+}
+
+fn is_known_or_potential_rank_forty(path: &str) -> bool {
+    let leaf = path.rsplit('/').next().unwrap_or_default();
+    leaf == "Paracesis"
+        || path.contains("/MechSuits/")
+        || leaf.contains("Kuva")
+        || leaf.contains("Tenet")
+        || leaf.contains("Coda")
 }
 
 fn display_label(path: &str) -> Result<String, AcquisitionError> {

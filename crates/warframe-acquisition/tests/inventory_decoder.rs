@@ -3,6 +3,7 @@ use warframe_domain::Category;
 
 fn complete_payload() -> Vec<u8> {
     br#"{
+      "LastInventorySync":{"$date":{"$numberLong":"1753392000000"}},
       "Suits":[{"ItemType":"/Lotus/Powersuits/Excalibur/Excalibur"}],
       "LongGuns":[
         {"ItemType":"/Lotus/Weapons/Tenno/Rifle/Braton"},
@@ -18,10 +19,12 @@ fn complete_payload() -> Vec<u8> {
       "Recipes":[{"ItemType":"/Lotus/Types/Recipes/Weapons/LexPrimeBlueprint","ItemCount":2}],
       "PendingRecipes":[{"ItemType":"/Lotus/Types/Recipes/Weapons/LexPrimeBlueprint","ItemCount":1}],
       "SentinelWeapons":[{"ItemType":"/Lotus/Types/Sentinels/SentinelWeapons/BurstLaser"}],
+      "SpaceSuits":[],"SpaceMelee":[],"SpaceGuns":[],
+      "KubrowPets":[],"OperatorAmps":[],"MechSuits":[],
       "XPInfo":[
         {"ItemType":"/Lotus/Powersuits/Excalibur/Excalibur","XP":900000},
-        {"ItemType":"/Lotus/Types/Sentinels/SentinelWeapons/BurstLaser","XP":900000},
-        {"ItemType":"/Lotus/Weapons/Tenno/Pistol/Lato","XP":900000}
+        {"ItemType":"/Lotus/Types/Sentinels/SentinelWeapons/BurstLaser","XP":450000},
+        {"ItemType":"/Lotus/Weapons/Tenno/Pistol/Lato","XP":450000}
       ]
     }"#.to_vec()
 }
@@ -53,6 +56,10 @@ fn complete_payload_becomes_one_coherent_aggregated_snapshot() {
     let recipe = by_id("/Lotus/Types/Recipes/Weapons/LexPrimeBlueprint");
     assert_eq!(recipe.quantity, 1);
     assert_eq!(recipe.item.name, "Lex Prime Blueprint");
+    assert_eq!(recipe.item.category, Category::Blueprint);
+
+    let resource = by_id("/Lotus/Types/Items/MiscItems/ArgonCrystal");
+    assert_eq!(resource.item.category, Category::Resource);
 
     let relic = by_id("/Lotus/Types/Projections/LithA1Bronze");
     assert_eq!(relic.item.category, Category::Relic);
@@ -68,6 +75,73 @@ fn complete_payload_becomes_one_coherent_aggregated_snapshot() {
         entries
             .iter()
             .all(|entry| !entry.item.id.as_str().ends_with("ZeroMarker"))
+    );
+}
+
+#[test]
+fn mastery_uses_category_specific_rank_thirty_thresholds() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["LongGuns"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"ItemType":"/Lotus/Gear/SectionClassifiedWeapon"}));
+    payload["XPInfo"] = serde_json::json!([
+        {"ItemType":"/Lotus/Weapons/Tenno/Rifle/AtThreshold","XP":450000},
+        {"ItemType":"/Lotus/Weapons/Tenno/Rifle/BelowThreshold","XP":449999},
+        {"ItemType":"/Lotus/Powersuits/AtThreshold/AtThreshold","XP":900000},
+        {"ItemType":"/Lotus/Powersuits/BelowThreshold/BelowThreshold","XP":899999},
+        {"ItemType":"/Lotus/Types/Sentinels/SentinelTypes/Carrier","XP":900000},
+        {"ItemType":"/Lotus/Gear/SectionClassifiedWeapon","XP":450000}
+    ]);
+    let snapshot = InventoryJsonDecoder
+        .decode(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+    let mastered = |suffix: &str| {
+        snapshot
+            .entries()
+            .iter()
+            .find(|entry| entry.item.id.as_str().ends_with(suffix))
+            .unwrap()
+            .mastered
+    };
+
+    assert!(mastered("Rifle/AtThreshold"));
+    assert!(!mastered("Rifle/BelowThreshold"));
+    assert!(mastered("AtThreshold/AtThreshold"));
+    assert!(!mastered("BelowThreshold/BelowThreshold"));
+    assert!(mastered("SentinelTypes/Carrier"));
+    assert!(mastered("Gear/SectionClassifiedWeapon"));
+}
+
+#[test]
+fn known_rank_forty_items_require_the_rank_forty_threshold() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["XPInfo"] = serde_json::json!([
+        {"ItemType":"/Lotus/Weapons/Tenno/Melee/Paracesis","XP":799999}
+    ]);
+    let below = InventoryJsonDecoder
+        .decode(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+    assert!(
+        !below
+            .entries()
+            .iter()
+            .find(|entry| entry.item.id.as_str().ends_with("Paracesis"))
+            .unwrap()
+            .mastered
+    );
+
+    payload["XPInfo"][0]["XP"] = serde_json::json!(800000);
+    let complete = InventoryJsonDecoder
+        .decode(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+    assert!(
+        complete
+            .entries()
+            .iter()
+            .find(|entry| entry.item.id.as_str().ends_with("Paracesis"))
+            .unwrap()
+            .mastered
     );
 }
 
@@ -91,6 +165,38 @@ fn incomplete_truncated_or_structurally_wrong_payload_is_rejected() {
         decoder.decode(wrong_shape),
         Err(AcquisitionError::SnapshotInvalid)
     );
+}
+
+#[test]
+fn every_authoritative_section_and_sync_marker_is_required() {
+    let required = [
+        "LastInventorySync",
+        "Suits",
+        "LongGuns",
+        "Pistols",
+        "Melee",
+        "Sentinels",
+        "MiscItems",
+        "Recipes",
+        "PendingRecipes",
+        "XPInfo",
+        "SpaceSuits",
+        "SpaceMelee",
+        "SpaceGuns",
+        "SentinelWeapons",
+        "KubrowPets",
+        "OperatorAmps",
+        "MechSuits",
+    ];
+    for field in required {
+        let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+        payload.as_object_mut().unwrap().remove(field);
+        assert_eq!(
+            InventoryJsonDecoder.decode(&serde_json::to_vec(&payload).unwrap()),
+            Err(AcquisitionError::SnapshotInvalid),
+            "omitting {field} must reject the whole snapshot"
+        );
+    }
 }
 
 #[test]

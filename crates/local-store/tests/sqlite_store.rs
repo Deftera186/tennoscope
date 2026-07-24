@@ -53,6 +53,8 @@ fn all_categories_mastery_and_zero_quantity_round_trip() {
         ("carrier", "Carrier", Category::Companion),
         ("lex_prime_barrel", "Lex Prime Barrel", Category::PrimePart),
         ("lith_a1", "Lith A1", Category::Relic),
+        ("argon", "Argon Crystal", Category::Resource),
+        ("lex_blueprint", "Lex Blueprint", Category::Blueprint),
     ];
     let snapshot = snapshot(
         fixtures

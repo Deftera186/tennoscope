@@ -58,8 +58,8 @@ impl LinuxProc {
     }
 
     fn memory_file(&self, process: &GameProcess) -> Result<Arc<File>, AcquisitionError> {
-        self.validate_identity(process)?;
         if process.start_time_ticks().is_none() {
+            self.validate_identity(process)?;
             return File::open(self.process_file(process.pid(), "mem"))
                 .map(Arc::new)
                 .map_err(|error| classify_io(process.pid(), error));
@@ -72,6 +72,7 @@ impl LinuxProc {
             return Ok(Arc::clone(file));
         }
 
+        self.validate_identity(process)?;
         let file = Arc::new(
             File::open(self.process_file(process.pid(), "mem"))
                 .map_err(|error| classify_io(process.pid(), error))?,
