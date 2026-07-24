@@ -21,3 +21,9 @@ serde.workspace = true
 log = "0.4"
 tauri = { version = "2.11.3" }
 tauri-plugin-log = "2"
+app-core = { path = "../../crates/app-core" }
+local-store = { path = "../../crates/local-store" }
+warframe-acquisition = { path = "../../crates/warframe-acquisition" }
+
+[dev-dependencies]
+tempfile = "3"

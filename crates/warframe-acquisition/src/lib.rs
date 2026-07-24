@@ -7,17 +7,24 @@ use zeroize::Zeroizing;
 
 mod authorization;
 mod catalog;
+mod catalog_cache;
 mod inventory;
 #[cfg(target_os = "linux")]
 mod linux_proc;
+mod orchestrator;
 
 pub use authorization::AuthorizationScanner;
 pub use catalog::{CatalogError, CatalogIndex, CatalogMetadata};
+pub use catalog_cache::{
+    CatalogCache, CatalogCacheError, CatalogFetch, CatalogLoad, CatalogLoadSource, CatalogSource,
+    WFCD_ALL_JSON_URL, WfcdCatalogHttp,
+};
 pub use inventory::{
     INVENTORY_ENDPOINT, InventoryHttpTransport, InventoryJsonDecoder, MAX_INVENTORY_RESPONSE_BYTES,
 };
 #[cfg(target_os = "linux")]
 pub use linux_proc::LinuxProc;
+pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 
 /// A credential whose standard formatting surfaces never expose its contents.
 pub struct SecretString(Zeroizing<String>);
@@ -164,6 +171,11 @@ impl ReadableRegion {
 pub trait ProcessDiscovery {
     fn discover(&self) -> Result<Option<GameProcess>, AcquisitionError>;
 }
+impl<T: ProcessDiscovery + ?Sized> ProcessDiscovery for &T {
+    fn discover(&self) -> Result<Option<GameProcess>, AcquisitionError> {
+        (**self).discover()
+    }
+}
 
 pub trait MemoryReader {
     fn readable_regions(
@@ -177,6 +189,22 @@ pub trait MemoryReader {
         address: u64,
         buffer: &mut [u8],
     ) -> Result<usize, AcquisitionError>;
+}
+impl<T: MemoryReader + ?Sized> MemoryReader for &T {
+    fn readable_regions(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        (**self).readable_regions(process)
+    }
+    fn read_at(
+        &self,
+        process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        (**self).read_at(process, address, buffer)
+    }
 }
 
 pub trait InventoryTransport {

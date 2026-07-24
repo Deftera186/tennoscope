@@ -230,6 +230,7 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
                 "best_value_index": 0
             },
             "health": {
+                "acquisition_stages": [],
                 "game_reader": {"state": "ready", "message": "Deterministic fake inventory loaded", "last_success": "2000-01-01T00:00:00Z"},
                 "capture": {"state": "degraded", "message": "Fake session; capture not connected", "last_success": null},
                 "catalog": {"state": "degraded", "message": "Fake session; live catalog not connected", "last_success": null},

@@ -7,6 +7,9 @@ use std::path::Path;
 use local_store::{SnapshotMeta, SqliteStore, StoreError};
 use serde::Serialize;
 use thiserror::Error;
+use warframe_acquisition::{
+    AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogLoadSource, StageState,
+};
 use warframe_domain::{
     Category, DomainError, InventorySnapshot, RewardAdvisor, RewardCandidate, RewardView,
 };
@@ -93,6 +96,62 @@ impl AppCore {
         self.health.catalog = BackendHealth::degraded("Fake session; live catalog not connected")?;
         self.health.market = BackendHealth::degraded("Fake session; live market not connected")?;
         self.apply_reward_candidates(session.rewards)
+    }
+
+    pub fn finish_inventory_refresh(
+        &mut self,
+        attempt: Result<(AcquisitionResult, SnapshotMeta), AcquisitionFailure>,
+        catalog: Option<(CatalogLoadSource, u64)>,
+    ) -> Result<AppView, AppError> {
+        match attempt {
+            Ok((result, meta)) => {
+                self.store.replace_collection(result.snapshot(), &meta)?;
+                self.reward = RewardAdvisor::advise(Vec::new());
+                self.health.game_reader = BackendHealth::inventory_sync(&meta)?;
+                self.health.acquisition_stages = result
+                    .health()
+                    .stages()
+                    .iter()
+                    .copied()
+                    .map(AcquisitionStageView::from)
+                    .collect();
+                self.health.catalog = match catalog {
+                    Some((CatalogLoadSource::Network, fetched)) => BackendHealth::ready(
+                        "Current WFCD catalog loaded",
+                        Some(fetched.to_string()),
+                    )?,
+                    Some((CatalogLoadSource::StaleCache, fetched)) => BackendHealth::new(
+                        HealthState::Degraded,
+                        "Using cached WFCD catalog",
+                        Some(fetched.to_string()),
+                    )?,
+                    None => BackendHealth::degraded("Catalog status unavailable")?,
+                };
+            }
+            Err(failure) => {
+                self.health.acquisition_stages = failure
+                    .health()
+                    .stages()
+                    .iter()
+                    .copied()
+                    .map(AcquisitionStageView::from)
+                    .collect();
+                self.health.game_reader =
+                    match failure.health().stages().first().map(|stage| stage.state()) {
+                        Some(StageState::Degraded) => BackendHealth::degraded(failure.to_string())?,
+                        _ => BackendHealth::failed(failure.to_string())?,
+                    };
+            }
+        }
+        self.current_view()
+    }
+
+    pub fn record_catalog_failure(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        self.health.catalog = BackendHealth::failed(message)?;
+        self.current_view()
     }
 }
 
@@ -252,6 +311,7 @@ pub struct HealthView {
     catalog: BackendHealth,
     market: BackendHealth,
     database: BackendHealth,
+    acquisition_stages: Vec<AcquisitionStageView>,
 }
 
 impl HealthView {
@@ -262,6 +322,7 @@ impl HealthView {
             catalog: BackendHealth::degraded("Phase 1 catalog not connected")?,
             market: BackendHealth::degraded("Phase 1 market not connected")?,
             database: BackendHealth::ready("SQLite database available", None)?,
+            acquisition_stages: Vec::new(),
         })
     }
 
@@ -290,5 +351,38 @@ impl HealthView {
 
     pub fn database(&self) -> &BackendHealth {
         &self.database
+    }
+
+    pub fn acquisition_stages(&self) -> &[AcquisitionStageView] {
+        &self.acquisition_stages
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct AcquisitionStageView {
+    stage: &'static str,
+    state: HealthState,
+    message: String,
+}
+
+impl From<warframe_acquisition::StageHealth> for AcquisitionStageView {
+    fn from(value: warframe_acquisition::StageHealth) -> Self {
+        let stage = match value.stage() {
+            AcquisitionStage::GameDiscovery => "game_discovery",
+            AcquisitionStage::MemoryPermission => "memory_permission",
+            AcquisitionStage::AuthorizationDiscovery => "authorization_discovery",
+            AcquisitionStage::EndpointFetch => "endpoint_fetch",
+            AcquisitionStage::SchemaValidation => "schema_validation",
+        };
+        let state = match value.state() {
+            StageState::Ready => HealthState::Ready,
+            StageState::Degraded => HealthState::Degraded,
+            StageState::Failed => HealthState::Failed,
+        };
+        Self {
+            stage,
+            state,
+            message: value.diagnostic().to_string(),
+        }
     }
 }

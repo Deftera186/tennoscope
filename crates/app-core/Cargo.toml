@@ -10,6 +10,7 @@ serde.workspace = true
 thiserror.workspace = true
 local-store = { path = "../local-store" }
 warframe-domain = { path = "../warframe-domain" }
+warframe-acquisition = { path = "../warframe-acquisition" }
 
 [dev-dependencies]
 serde_json = "1"
