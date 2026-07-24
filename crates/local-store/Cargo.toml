@@ -7,4 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 rusqlite = { version = "0.37", features = ["bundled"] }
+serde_json = "1"
+thiserror.workspace = true
 warframe-domain = { path = "../warframe-domain" }
+
+[dev-dependencies]
+tempfile = "3"
