@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "Warframe Helper",
-        "width": 800,
-        "height": 600,
+        "title": "Warframe Helper — Local-first Companion",
+        "width": 1180,
+        "height": 760,
+        "minWidth": 360,
+        "minHeight": 520,
         "resizable": true,
         "fullscreen": false
       }

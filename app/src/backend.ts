@@ -3,12 +3,15 @@ import { invoke } from '@tauri-apps/api/core'
 export type HealthState = 'ready' | 'degraded' | 'failed'
 export interface BackendHealth { state: HealthState; message: string; last_success: string | null }
 export interface AcquisitionStageHealth { stage: string; state: HealthState; message: string }
+export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 'relic' | 'resource' | 'blueprint' | 'vehicle'
+export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean }
+export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }
 export interface AppView {
   collection: {
-    items: Array<{ id: string; name: string; category: string; quantity: number; mastered: boolean }>
+    items: CollectionItem[]
     total_entries: number
   }
-  reward: { cards: unknown[]; best_value_index: number | null }
+  reward: { cards: RewardCard[]; best_value_index: number | null }
   health: {
     game_reader: BackendHealth
     log_monitor: BackendHealth
