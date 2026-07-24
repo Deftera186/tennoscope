@@ -1,0 +1,12 @@
+[package]
+name = "app-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+local-store = { path = "../local-store" }
+warframe-domain = { path = "../warframe-domain" }

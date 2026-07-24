@@ -1,0 +1,17 @@
+[workspace]
+members = [
+  "app/src-tauri",
+  "crates/app-core",
+  "crates/local-store",
+  "crates/warframe-domain",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "GPL-3.0-only"
+rust-version = "1.85"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
