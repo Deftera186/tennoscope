@@ -112,10 +112,64 @@ fn scans_writable_anonymous_regions_before_file_backed_regions() {
 }
 
 fn online_candidates() -> Vec<RewardNeedle> {
-    ["Perigale", "Burston", "Trumna", "Forma"]
+    ["Perigale", "Burston", "Trumna", "Forma", "Lex"]
         .into_iter()
         .map(|name| RewardNeedle::new(name, [name]).unwrap())
         .collect()
+}
+
+#[test]
+fn current_resolution_selects_a_tight_choice_cluster_among_stale_region_strings() {
+    let mut current_bytes = vec![b'.'; 2048];
+    current_bytes[40..43].copy_from_slice(b"Lex");
+    current_bytes[1200..1207].copy_from_slice(b"Burston");
+    current_bytes[1240..1245].copy_from_slice(b"Forma");
+    current_bytes[1280..1288].copy_from_slice(b"Perigale");
+    current_bytes[1320..1326].copy_from_slice(b"Trumna");
+    let current = fingerprint(
+        current_bytes,
+        vec![ReadableRegion::classified(
+            0x1000,
+            2048,
+            RegionScanPriority::WritableAnonymous,
+        )],
+    );
+
+    assert_eq!(
+        resolve_current_reward_choices(&current, 4, 256),
+        RewardResolution::Confirmed {
+            choices: vec![
+                "Burston".into(),
+                "Forma".into(),
+                "Perigale".into(),
+                "Trumna".into(),
+            ],
+            region_start: 0x1000,
+        }
+    );
+}
+
+#[test]
+fn current_resolution_rejects_near_equal_four_of_five_interpretations() {
+    let mut current_bytes = vec![b'.'; 2048];
+    current_bytes[1000..1003].copy_from_slice(b"Lex");
+    current_bytes[1040..1047].copy_from_slice(b"Burston");
+    current_bytes[1080..1085].copy_from_slice(b"Forma");
+    current_bytes[1120..1128].copy_from_slice(b"Perigale");
+    current_bytes[1170..1176].copy_from_slice(b"Trumna");
+    let current = fingerprint(
+        current_bytes,
+        vec![ReadableRegion::classified(
+            0x1000,
+            2048,
+            RegionScanPriority::WritableAnonymous,
+        )],
+    );
+
+    assert_eq!(
+        resolve_current_reward_choices(&current, 4, 256),
+        RewardResolution::Ambiguous
+    );
 }
 
 fn fingerprint(

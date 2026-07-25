@@ -1,4 +1,4 @@
-use std::{env, time::Duration};
+use std::{collections::BTreeMap, env, time::Duration};
 
 use warframe_acquisition::{
     LinuxProc, ProcessDiscovery, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
@@ -46,17 +46,59 @@ fn main() {
         fingerprint.elapsed().as_millis(),
         fingerprint.hits().len()
     );
+    let mut clusters = BTreeMap::<u64, Vec<&str>>::new();
+    for hit in fingerprint.hits() {
+        let names = clusters.entry(hit.region_start()).or_default();
+        if !names.contains(&hit.choice_name()) {
+            names.push(hit.choice_name());
+        }
+    }
+    for (ordinal, names) in clusters
+        .values()
+        .filter(|names| names.len() >= 2)
+        .enumerate()
+    {
+        println!(
+            "cluster={ordinal} distinct_candidates={} names={names:?}",
+            names.len()
+        );
+    }
+    let clustered_regions = clusters
+        .iter()
+        .filter(|(_, names)| names.len() >= 4)
+        .map(|(start, _)| *start)
+        .collect::<Vec<_>>();
+    for hit in fingerprint
+        .hits()
+        .iter()
+        .filter(|hit| clustered_regions.contains(&hit.region_start()))
+    {
+        println!(
+            "hit region={} offset={} priority={:?} representation={:?} name={:?}",
+            clustered_regions
+                .iter()
+                .position(|start| *start == hit.region_start())
+                .unwrap_or(usize::MAX),
+            hit.address() - hit.region_start(),
+            hit.priority(),
+            hit.representation(),
+            hit.choice_name()
+        );
+    }
     if let Some(expected) = env::var("TENN_OSCOPE_EXPECTED_CHOICES")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
     {
-        let (status, count) =
+        let (status, choices) =
             match resolve_current_reward_choices(&fingerprint, expected, 2 * 1024 * 1024) {
-                RewardResolution::Confirmed { choices, .. } => ("confirmed", choices.len()),
-                RewardResolution::Incomplete => ("incomplete", 0),
-                RewardResolution::Ambiguous => ("ambiguous", 0),
-                RewardResolution::TimedOut => ("timed_out", 0),
+                RewardResolution::Confirmed { choices, .. } => ("confirmed", choices),
+                RewardResolution::Incomplete => ("incomplete", Vec::new()),
+                RewardResolution::Ambiguous => ("ambiguous", Vec::new()),
+                RewardResolution::TimedOut => ("timed_out", Vec::new()),
             };
-        println!("resolution={status} choice_count={count}");
+        println!(
+            "resolution={status} choice_count={} choices={choices:?}",
+            choices.len()
+        );
     }
 }

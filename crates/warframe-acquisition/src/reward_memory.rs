@@ -138,43 +138,55 @@ pub fn resolve_reward_choices(
     }
     let mut complete = Vec::new();
     for (region_start, hits) in regions {
-        let mut earliest = BTreeMap::<&str, &RewardHit>::new();
-        for hit in hits {
-            earliest
-                .entry(hit.choice_name())
-                .and_modify(|existing| {
-                    if hit.address < existing.address {
-                        *existing = hit;
-                    }
-                })
-                .or_insert(hit);
+        let mut ordered_hits = hits;
+        ordered_hits.sort_by_key(|hit| hit.address);
+        let mut region_clusters = BTreeMap::<Vec<String>, u64>::new();
+        for left in 0..ordered_hits.len() {
+            let mut earliest = BTreeMap::<&str, &RewardHit>::new();
+            for hit in &ordered_hits[left..] {
+                if hit.address - ordered_hits[left].address > maximum_span {
+                    break;
+                }
+                earliest.entry(hit.choice_name()).or_insert(hit);
+                if earliest.len() > expected_choices {
+                    break;
+                }
+                if earliest.len() == expected_choices {
+                    let mut choices = earliest.values().copied().collect::<Vec<_>>();
+                    choices.sort_by_key(|choice| choice.address);
+                    let span = choices.last().expect("non-empty choice cluster").address
+                        - choices.first().expect("non-empty choice cluster").address;
+                    let names = choices
+                        .into_iter()
+                        .map(|choice| choice.choice_name.clone())
+                        .collect::<Vec<_>>();
+                    region_clusters
+                        .entry(names)
+                        .and_modify(|existing| *existing = (*existing).min(span))
+                        .or_insert(span);
+                }
+            }
         }
-        if earliest.len() != expected_choices {
-            continue;
-        }
-        let mut ordered = earliest.into_values().collect::<Vec<_>>();
-        ordered.sort_by_key(|hit| hit.address);
-        let span = ordered
-            .last()
-            .zip(ordered.first())
-            .map_or(0, |(last, first)| last.address - first.address);
-        if span <= maximum_span {
-            complete.push((
-                region_start,
-                ordered
-                    .into_iter()
-                    .map(|hit| hit.choice_name.clone())
-                    .collect::<Vec<_>>(),
-            ));
+        for (choices, span) in region_clusters {
+            complete.push((span, region_start, choices));
         }
     }
-    match complete.as_slice() {
-        [(region_start, choices)] => RewardResolution::Confirmed {
+    complete.sort_by_key(|(span, _, _)| *span);
+    let Some((best_span, _, _)) = complete.first() else {
+        return RewardResolution::Incomplete;
+    };
+    if complete
+        .get(1)
+        .is_some_and(|(span, _, _)| *span <= best_span.saturating_mul(2))
+    {
+        return RewardResolution::Ambiguous;
+    }
+    match complete.first() {
+        Some((_, region_start, choices)) => RewardResolution::Confirmed {
             choices: choices.clone(),
             region_start: *region_start,
         },
-        [] => RewardResolution::Incomplete,
-        _ => RewardResolution::Ambiguous,
+        None => RewardResolution::Incomplete,
     }
 }
 
