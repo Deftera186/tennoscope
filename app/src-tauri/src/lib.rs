@@ -551,6 +551,7 @@ fn handle_reward_event(
             let generation = Arc::clone(reward_generation);
             let expected_generation = generation.load(Ordering::Acquire);
             std::thread::spawn(move || {
+                let started = Instant::now();
                 let procfs = LinuxProc::new();
                 let scanner = RewardMemoryScanner::new(
                     256 * 1024,
@@ -575,6 +576,8 @@ fn handle_reward_event(
                             .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
                     },
                 );
+                #[cfg(debug_assertions)]
+                trace_responder_reward_scan(&identity, started.elapsed(), &resolution);
                 store_player_record_if_current(
                     expected_generation,
                     &generation,
@@ -889,6 +892,29 @@ fn trace_squad_reward_scan(
     let _ = writeln!(
         output,
         "[DEBUG-squad] direction={direction} elapsed_ms={} resolution={resolution:?}",
+        elapsed.as_millis(),
+    );
+}
+
+#[cfg(debug_assertions)]
+fn trace_responder_reward_scan(
+    identity: &str,
+    elapsed: Duration,
+    resolution: &warframe_acquisition::RewardResolution,
+) {
+    let Ok(mut output) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/tennoscope-reward-debug.log")
+    else {
+        return;
+    };
+    let suffix = identity
+        .get(identity.len().saturating_sub(6)..)
+        .unwrap_or(identity);
+    let _ = writeln!(
+        output,
+        "[DEBUG-responder] identity=…{suffix} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
     );
 }

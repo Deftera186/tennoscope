@@ -3,6 +3,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(debug_assertions)]
+use std::{fs::OpenOptions, io::Write};
+
 use aho_corasick::AhoCorasick;
 use zeroize::Zeroize;
 
@@ -609,6 +612,16 @@ impl RewardMemoryScanner {
         }
         buffer.zeroize();
 
+        #[cfg(debug_assertions)]
+        trace_player_record_evidence(
+            responders.len(),
+            regions.len(),
+            bytes_read,
+            player_hits.len(),
+            reward_hits.len(),
+            structured_rewards.len(),
+        );
+
         let reward_for = |identity: &str| {
             if let Some(names) = structured_rewards.get(identity)
                 && names.len() == 1
@@ -822,6 +835,28 @@ impl RewardMemoryScanner {
             elapsed: started.elapsed(),
         })
     }
+}
+
+#[cfg(debug_assertions)]
+fn trace_player_record_evidence(
+    responders: usize,
+    regions: usize,
+    bytes_read: u64,
+    player_hits: usize,
+    reward_hits: usize,
+    structured_records: usize,
+) {
+    let Ok(mut output) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/tennoscope-reward-debug.log")
+    else {
+        return;
+    };
+    let _ = writeln!(
+        output,
+        "[DEBUG-evidence] responders={responders} regions={regions} bytes={bytes_read} player_hits={player_hits} reward_hits={reward_hits} structured_records={structured_records}"
+    );
 }
 
 fn confirmed_structured_choices(
