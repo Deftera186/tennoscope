@@ -531,74 +531,7 @@ fn handle_reward_event(
     now: u64,
 ) {
     match event {
-        RewardLogEvent::ResponderReceived { identity, is_local } => {
-            if is_local || *early_reward_resolved {
-                return;
-            }
-            let Some(process) = process else {
-                return;
-            };
-            let candidates = memory_state.candidates().to_vec();
-            if candidates.is_empty() {
-                return;
-            }
-            let records = Arc::clone(incremental_reward_records);
-            let generation = Arc::clone(reward_generation);
-            let expected_generation = generation.load(Ordering::Acquire);
-            std::thread::spawn(move || {
-                let started = Instant::now();
-                let procfs = LinuxProc::new();
-                let scanner = RewardMemoryScanner::new(
-                    256 * 1024,
-                    768 * 1024 * 1024,
-                    Duration::from_millis(1_500),
-                );
-                let responders = [identity.as_str()];
-                let mut attempt = 0_u32;
-                let resolution = scan_player_record_until_ready(
-                    expected_generation,
-                    &generation,
-                    Duration::from_secs(3),
-                    || {
-                        let result = if attempt % 2 == 0 {
-                            scanner.resolve_player_records(
-                                &procfs,
-                                &process,
-                                &candidates,
-                                &responders,
-                                None,
-                                None,
-                            )
-                        } else {
-                            scanner.resolve_player_records_from_low_heaps(
-                                &procfs,
-                                &process,
-                                &candidates,
-                                &responders,
-                                None,
-                                None,
-                            )
-                        };
-                        attempt = attempt.saturating_add(1);
-                        result.unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
-                    },
-                );
-                #[cfg(debug_assertions)]
-                trace_incremental_reward_scan(
-                    &identity,
-                    expected_generation,
-                    started.elapsed(),
-                    &resolution,
-                );
-                store_player_record_if_current(
-                    expected_generation,
-                    &generation,
-                    &identity,
-                    resolution,
-                    &records,
-                );
-            });
-        }
+        RewardLogEvent::ResponderReceived { .. } => {}
         RewardLogEvent::ResponsesComplete {
             responders,
             screen_order,
@@ -617,19 +550,14 @@ fn handle_reward_event(
                 .map(str::to_owned);
             let screen_order_refs = screen_order.iter().map(String::as_str).collect::<Vec<_>>();
 
-            let choices = wait_for_player_record_choices(
-                &screen_order_refs,
-                local_identity.as_deref(),
-                local_choice.as_deref(),
-                incremental_reward_records,
-                Duration::from_millis(1_400),
-            );
-            #[cfg(debug_assertions)]
-            trace_incremental_reward_assembly(
-                screen_order_refs.len(),
-                incremental_reward_records,
-                choices.is_some(),
-            );
+            let choices = incremental_reward_records.lock().ok().and_then(|records| {
+                assemble_player_record_choices(
+                    &screen_order_refs,
+                    local_identity.as_deref(),
+                    local_choice.as_deref(),
+                    &records,
+                )
+            });
             if let Some(choices) = choices {
                 publish_reward_result(
                     RewardSourceResult {
@@ -650,16 +578,54 @@ fn handle_reward_event(
                 return;
             }
             let mut memory = memory_state.bind(procfs, process);
-            let Some(result) = coordinator.player_record_choices(
+            let result = coordinator.player_record_choices(
                 &mut memory,
                 &screen_order_refs,
                 local_identity.as_deref(),
                 local_choice.as_deref(),
-            ) else {
+            );
+            if let Some(result) = result {
+                publish_reward_result(result, observer, shared, app, reward_catalog, now);
+                *early_reward_resolved = true;
                 return;
-            };
-            publish_reward_result(result, observer, shared, app, reward_catalog, now);
-            *early_reward_resolved = true;
+            }
+
+            let started = Instant::now();
+            let scanner = RewardMemoryScanner::new(
+                256 * 1024,
+                768 * 1024 * 1024,
+                Duration::from_millis(1_500),
+            );
+            let resolution = scanner
+                .resolve_player_records_from_low_heaps(
+                    procfs,
+                    &process,
+                    memory_state.candidates(),
+                    &screen_order_refs,
+                    local_identity.as_deref(),
+                    local_choice.as_deref(),
+                )
+                .unwrap_or(warframe_acquisition::RewardResolution::Incomplete);
+            #[cfg(debug_assertions)]
+            trace_squad_reward_scan("low", started.elapsed(), &resolution);
+            if let warframe_acquisition::RewardResolution::Confirmed { choices, .. } = resolution {
+                publish_reward_result(
+                    RewardSourceResult {
+                        choices: RewardChoiceSet {
+                            names: choices,
+                            source: RewardChoiceSource::Memory,
+                            elapsed: started.elapsed(),
+                        },
+                        diagnostic: RewardSourceDiagnostic::Ready,
+                    },
+                    observer,
+                    shared,
+                    app,
+                    reward_catalog,
+                    now,
+                );
+                *early_reward_resolved = true;
+            }
         }
         RewardLogEvent::BaselineRequested { relic_paths } => {
             *early_reward_resolved = false;
@@ -834,32 +800,9 @@ pub fn scan_player_record_until_ready(
     warframe_acquisition::RewardResolution::Incomplete
 }
 
-fn wait_for_player_record_choices(
-    responders: &[&str],
-    local_identity: Option<&str>,
-    local_choice: Option<&str>,
-    records: &Mutex<BTreeMap<String, String>>,
-    timeout: Duration,
-) -> Option<Vec<String>> {
-    let started = Instant::now();
-    loop {
-        if let Ok(records) = records.lock()
-            && let Some(choices) =
-                assemble_player_record_choices(responders, local_identity, local_choice, &records)
-        {
-            return Some(choices);
-        }
-        if started.elapsed() >= timeout {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
 #[cfg(debug_assertions)]
-fn trace_incremental_reward_scan(
-    identity: &str,
-    generation: u64,
+fn trace_squad_reward_scan(
+    direction: &str,
     elapsed: Duration,
     resolution: &warframe_acquisition::RewardResolution,
 ) {
@@ -870,33 +813,10 @@ fn trace_incremental_reward_scan(
     else {
         return;
     };
-    let identity_suffix = identity
-        .get(identity.len().saturating_sub(6)..)
-        .unwrap_or(identity);
     let _ = writeln!(
         output,
-        "[DEBUG-incremental] generation={generation} responder=…{identity_suffix} elapsed_ms={} resolution={resolution:?}",
+        "[DEBUG-squad] direction={direction} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
-    );
-}
-
-#[cfg(debug_assertions)]
-fn trace_incremental_reward_assembly(
-    expected: usize,
-    records: &Mutex<BTreeMap<String, String>>,
-    complete: bool,
-) {
-    let record_count = records.lock().map_or(0, |records| records.len());
-    let Ok(mut output) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/tennoscope-reward-debug.log")
-    else {
-        return;
-    };
-    let _ = writeln!(
-        output,
-        "[DEBUG-incremental] assembly expected={expected} remote_records={record_count} complete={complete}"
     );
 }
 
