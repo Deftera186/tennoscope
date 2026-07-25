@@ -273,6 +273,7 @@ fn ordered_containers(
         for stride in (MIN_SLOT_STRIDE..=MAX_SLOT_STRIDE).step_by(8) {
             let mut fields = Vec::with_capacity(expected);
             let mut choices = Vec::with_capacity(expected);
+            let mut card_objects = BTreeSet::new();
             for slot in 0..expected {
                 let location =
                     ordered[start].location + (u64::try_from(slot).unwrap_or(0) * stride);
@@ -284,7 +285,7 @@ fn ordered_containers(
                 let Some(names) = targets.get(&hit.target) else {
                     break;
                 };
-                if names.len() != 1 {
+                if names.len() != 1 || !card_objects.insert(hit.target) {
                     break;
                 }
                 let name = names.iter().next().expect("one container choice");

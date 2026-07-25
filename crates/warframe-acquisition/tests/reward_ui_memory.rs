@@ -224,3 +224,39 @@ fn rejects_competing_ordered_containers() {
         RewardResolution::Ambiguous
     );
 }
+
+#[test]
+fn rejects_a_repeated_pointer_to_one_reward_object_as_four_cards() {
+    let name = "Vadarya Prime Receiver";
+    let base = 0x1000_u64;
+    let mut bytes = vec![0_u8; 0x7000];
+    let text_address = 0x1800_u64;
+    let text_offset = usize::try_from(text_address - base).unwrap();
+    bytes[text_offset..text_offset + name.len()].copy_from_slice(name.as_bytes());
+
+    let child = 0x3000_u64;
+    let child_field = usize::try_from(child + 16 - base).unwrap();
+    bytes[child_field..child_field + 8].copy_from_slice(&(text_address - 24).to_le_bytes());
+
+    let container = 0x5000_u64;
+    for slot in 0..4_u64 {
+        let field = usize::try_from(container + 64 + slot * 8 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&child.to_le_bytes());
+    }
+
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            base,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(base, bytes)]),
+    };
+
+    assert_eq!(
+        PersistentRewardResolver::new(512, 128 * 1024, Duration::from_secs(1))
+            .resolve(&memory, &GameProcess::new(7), &[needle(name)], 4)
+            .unwrap(),
+        RewardResolution::Incomplete
+    );
+}
