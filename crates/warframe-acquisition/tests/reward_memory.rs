@@ -148,6 +148,34 @@ fn scans_live_ui_heap_before_unrelated_higher_mappings() {
     );
 }
 
+#[test]
+fn clips_a_live_ui_mapping_at_the_priority_band_boundary() {
+    let oversized_start = 0x2700_0000;
+    let oversized_len = 32 * 1024 * 1024;
+    let lower_start = 0x1900_0000;
+    let memory = FixtureMemory {
+        regions: vec![
+            ReadableRegion::classified(
+                oversized_start,
+                oversized_len,
+                RegionScanPriority::WritableAnonymous,
+            ),
+            ReadableRegion::classified(lower_start, 32, RegionScanPriority::WritableAnonymous),
+        ],
+        bytes: BTreeMap::from([
+            (oversized_start, vec![0; oversized_len]),
+            (lower_start, vec![0; 32]),
+        ]),
+        reads: Mutex::new(Vec::new()),
+    };
+    let scanner = RewardMemoryScanner::new(1024 * 1024, 17 * 1024 * 1024, Duration::from_secs(1));
+    scanner
+        .fingerprint(&memory, &GameProcess::new(7), &[candidate()])
+        .unwrap();
+
+    assert!(memory.reads.lock().unwrap().contains(&lower_start));
+}
+
 fn online_candidates() -> Vec<RewardNeedle> {
     ["Perigale", "Burston", "Trumna", "Forma", "Lex"]
         .into_iter()

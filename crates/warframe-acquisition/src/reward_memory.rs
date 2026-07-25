@@ -320,15 +320,22 @@ impl RewardMemoryScanner {
         let mut bytes_read = 0_u64;
 
         'regions: for region in regions {
+            let region_len = if is_live_ui_region(region.start()) {
+                region.len().min(
+                    usize::try_from(LIVE_UI_ADDRESS_MAX - region.start()).unwrap_or(usize::MAX),
+                )
+            } else {
+                region.len()
+            };
             let mut offset = 0_usize;
             let mut retained = 0_usize;
-            while offset < region.len() {
+            while offset < region_len {
                 if started.elapsed() >= self.timeout || bytes_read >= self.byte_budget {
                     break 'regions;
                 }
                 let remaining_budget =
                     usize::try_from(self.byte_budget - bytes_read).unwrap_or(usize::MAX);
-                let request = (region.len() - offset)
+                let request = (region_len - offset)
                     .min(self.chunk_size)
                     .min(remaining_budget);
                 if request == 0 {
