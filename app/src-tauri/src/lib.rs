@@ -376,6 +376,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut reward_log = RewardLogMachine::default();
     let mut announced_process = None;
     let mut early_reward_resolved = false;
+    let mut pending_reward_squad = None::<PendingRewardSquad>;
     let incremental_reward_records = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
     let active_reward_scans = Arc::new(Mutex::new(BTreeSet::<String>::new()));
     let reward_generation = Arc::new(AtomicU64::new(0));
@@ -460,6 +461,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &coordinator,
                 &mut reward_state,
                 &mut early_reward_resolved,
+                &mut pending_reward_squad,
                 &incremental_reward_records,
                 &active_reward_scans,
                 &reward_generation,
@@ -531,6 +533,7 @@ fn handle_reward_event(
     coordinator: &RewardSourceCoordinator,
     observer: &mut RewardObserverState,
     early_reward_resolved: &mut bool,
+    pending_reward_squad: &mut Option<PendingRewardSquad>,
     incremental_reward_records: &Arc<Mutex<BTreeMap<String, String>>>,
     active_reward_scans: &Arc<Mutex<BTreeSet<String>>>,
     reward_generation: &Arc<AtomicU64>,
@@ -576,9 +579,37 @@ fn handle_reward_event(
                 reward_generation,
             );
         }
-        RewardLogEvent::ResponsesComplete { .. } => {}
+        RewardLogEvent::ResponsesComplete {
+            screen_order,
+            local_reward_path,
+            local_identity,
+            ..
+        } => {
+            *pending_reward_squad = Some(PendingRewardSquad {
+                screen_order,
+                local_reward_path,
+                local_identity,
+            });
+            if let (Some(process), Some(squad)) = (process, pending_reward_squad.as_ref())
+                && try_publish_player_records(
+                    squad,
+                    process,
+                    procfs,
+                    memory_state,
+                    coordinator,
+                    observer,
+                    shared,
+                    app,
+                    reward_catalog,
+                    now,
+                )
+            {
+                *early_reward_resolved = true;
+            }
+        }
         RewardLogEvent::BaselineRequested { relic_paths } => {
             *early_reward_resolved = false;
+            *pending_reward_squad = None;
             reward_generation.fetch_add(1, Ordering::AcqRel);
             if let Ok(mut records) = incremental_reward_records.lock() {
                 records.clear();
@@ -599,8 +630,7 @@ fn handle_reward_event(
             memory_state.prepare_candidates(&candidates);
         }
         RewardLogEvent::ChoicesReady {
-            expected_choices,
-            local_reward_path,
+            expected_choices, ..
         } => {
             if *early_reward_resolved {
                 return;
@@ -608,44 +638,39 @@ fn handle_reward_event(
             let Some(process) = process else {
                 return;
             };
-            let candidate_catalog =
-                reward_entries_for_needles(memory_state.candidates(), reward_catalog);
-            let visual_catalog = if candidate_catalog.is_empty() {
-                reward_catalog
-            } else {
-                &candidate_catalog
-            };
-            let mut memory = memory_state.bind(procfs, process);
-            let mut visual = LiveVisualRewardSource;
-            let Some(mut result) =
-                coordinator.choices(&mut memory, &mut visual, expected_choices, visual_catalog)
+            let Some(squad) = pending_reward_squad
+                .as_ref()
+                .filter(|squad| squad.screen_order.len() == expected_choices)
             else {
                 if let Ok(mut runtime) = shared.lock() {
-                    let _ = runtime.core.record_capture_degraded(
-                        "Memory recognition was incomplete; OCR did not resolve every reward",
-                    );
+                    let _ = runtime
+                        .core
+                        .record_capture_degraded("Structured reward records were incomplete");
                 }
                 return;
             };
-            if let Some(local_path) = local_reward_path.as_deref()
-                && let Some(local_name) = memory_state
-                    .candidates()
-                    .iter()
-                    .find(|needle| {
-                        needle
-                            .internal_paths()
-                            .iter()
-                            .any(|path| path.as_slice() == local_path.as_bytes())
-                    })
-                    .map(warframe_acquisition::RewardNeedle::choice_name)
-            {
-                rotate_choices_to_local(&mut result.choices.names, local_name);
+            if try_publish_player_records(
+                squad,
+                process,
+                procfs,
+                memory_state,
+                coordinator,
+                observer,
+                shared,
+                app,
+                reward_catalog,
+                now,
+            ) {
+                *early_reward_resolved = true;
+            } else if let Ok(mut runtime) = shared.lock() {
+                let _ = runtime
+                    .core
+                    .record_capture_degraded("Structured reward records were incomplete");
             }
-            publish_reward_result(result, observer, shared, app, reward_catalog, now);
-            *early_reward_resolved = true;
         }
         RewardLogEvent::Closed => {
             *early_reward_resolved = false;
+            *pending_reward_squad = None;
             reward_generation.fetch_add(1, Ordering::AcqRel);
             if let Ok(mut records) = incremental_reward_records.lock() {
                 records.clear();
@@ -661,6 +686,55 @@ fn handle_reward_event(
             }
         }
     }
+}
+
+#[derive(Clone, Debug)]
+struct PendingRewardSquad {
+    screen_order: Vec<String>,
+    local_reward_path: Option<String>,
+    local_identity: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn try_publish_player_records(
+    squad: &PendingRewardSquad,
+    process: GameProcess,
+    procfs: &LinuxProc,
+    memory_state: &mut LiveMemoryRewardState,
+    coordinator: &RewardSourceCoordinator,
+    observer: &mut RewardObserverState,
+    shared: &SharedRuntime,
+    app: &AppHandle,
+    reward_catalog: &[RewardCatalogEntry],
+    now: u64,
+) -> bool {
+    let local_choice = squad.local_reward_path.as_deref().and_then(|path| {
+        memory_state
+            .candidates()
+            .iter()
+            .find(|needle| {
+                needle.internal_paths().iter().any(|candidate| {
+                    reward_path_matches(path, std::str::from_utf8(candidate).unwrap_or(""))
+                })
+            })
+            .map(|needle| needle.choice_name().to_owned())
+    });
+    let responders = squad
+        .screen_order
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut memory = memory_state.bind(procfs, process);
+    let Some(result) = coordinator.player_record_choices(
+        &mut memory,
+        &responders,
+        squad.local_identity.as_deref(),
+        local_choice.as_deref(),
+    ) else {
+        return false;
+    };
+    publish_reward_result(result, observer, shared, app, reward_catalog, now);
+    true
 }
 
 fn spawn_player_record_scan(
@@ -684,6 +758,7 @@ fn spawn_player_record_scan(
 
     let candidates = candidates.to_vec();
     let records = Arc::clone(records);
+    let active_scans = Arc::clone(active_scans);
     let generation = Arc::clone(generation);
     let expected_generation = generation.load(Ordering::Acquire);
     std::thread::spawn(move || {
@@ -710,7 +785,14 @@ fn spawn_player_record_scan(
             resolution,
             &records,
         );
+        release_player_record_scan(&identity, &active_scans);
     });
+}
+
+pub fn release_player_record_scan(identity: &str, active_scans: &Mutex<BTreeSet<String>>) {
+    if let Ok(mut active) = active_scans.lock() {
+        active.remove(identity);
+    }
 }
 
 pub fn rotate_choices_to_local(choices: &mut [String], local_name: &str) {
@@ -849,38 +931,6 @@ fn publish_reward_result(
                 .core
                 .record_capture_degraded("memory and OCR reward recognition disagreed");
         }
-    }
-}
-
-fn reward_entries_for_needles(
-    needles: &[warframe_acquisition::RewardNeedle],
-    catalog: &[RewardCatalogEntry],
-) -> Vec<RewardCatalogEntry> {
-    needles
-        .iter()
-        .map(|needle| {
-            catalog
-                .iter()
-                .find(|entry| entry.name == needle.choice_name())
-                .cloned()
-                .unwrap_or_else(|| RewardCatalogEntry {
-                    name: needle.choice_name().to_owned(),
-                    ducats: 0,
-                })
-        })
-        .collect()
-}
-
-struct LiveVisualRewardSource;
-
-impl VisualRewardSource for LiveVisualRewardSource {
-    fn choices(&mut self, candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
-        reward_observer::observe_live_rewards(candidates).map(|observations| {
-            observations
-                .into_iter()
-                .map(|observation| observation.name)
-                .collect()
-        })
     }
 }
 

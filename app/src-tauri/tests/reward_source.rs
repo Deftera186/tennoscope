@@ -430,3 +430,14 @@ fn accumulated_player_records_are_assembled_with_local_reward_first() {
         ])
     );
 }
+
+#[test]
+fn a_finished_early_scan_releases_the_identity_for_the_real_response() {
+    let active = std::sync::Mutex::new(std::collections::BTreeSet::from([
+        "remote-player".to_owned()
+    ]));
+
+    app_lib::release_player_record_scan("remote-player", &active);
+
+    assert!(active.lock().unwrap().insert("remote-player".to_owned()));
+}

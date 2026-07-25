@@ -69,7 +69,10 @@ impl PersistentRewardResolver {
         eprintln!(
             "[DEBUG-ui-graph] regions={} bytes={} read_ms={}",
             regions.len(),
-            regions.iter().map(|region| region.bytes.len()).sum::<usize>(),
+            regions
+                .iter()
+                .map(|region| region.bytes.len())
+                .sum::<usize>(),
             started.elapsed().as_millis()
         );
         let mut targets = seed_targets(&regions, candidates);
