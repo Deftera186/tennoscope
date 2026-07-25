@@ -528,9 +528,23 @@ fn handle_reward_event(
                     Duration::from_millis(1_500),
                 );
                 let responders = [identity.as_str()];
-                let resolution = scanner
-                    .resolve_player_records(&procfs, &process, &candidates, &responders, None, None)
-                    .unwrap_or(warframe_acquisition::RewardResolution::Incomplete);
+                let resolution = scan_player_record_until_ready(
+                    expected_generation,
+                    &generation,
+                    Duration::from_secs(3),
+                    || {
+                        scanner
+                            .resolve_player_records(
+                                &procfs,
+                                &process,
+                                &candidates,
+                                &responders,
+                                None,
+                                None,
+                            )
+                            .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
+                    },
+                );
                 #[cfg(debug_assertions)]
                 trace_incremental_reward_scan(
                     &identity,
@@ -756,6 +770,30 @@ pub fn store_player_record_if_current(
     {
         records.insert(identity.to_owned(), choice.clone());
     }
+}
+
+pub fn scan_player_record_until_ready(
+    expected_generation: u64,
+    generation: &AtomicU64,
+    timeout: Duration,
+    mut scan: impl FnMut() -> warframe_acquisition::RewardResolution,
+) -> warframe_acquisition::RewardResolution {
+    let started = Instant::now();
+    while generation.load(Ordering::Acquire) == expected_generation {
+        let resolution = scan();
+        if matches!(
+            &resolution,
+            warframe_acquisition::RewardResolution::Confirmed { choices, .. }
+                if choices.len() == 1
+        ) {
+            return resolution;
+        }
+        if started.elapsed() >= timeout {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    warframe_acquisition::RewardResolution::Incomplete
 }
 
 fn wait_for_player_record_choices(

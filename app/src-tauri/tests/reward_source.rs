@@ -7,7 +7,7 @@ use std::{
 use app_lib::{
     LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSource, RewardSourceCoordinator,
     RewardSourceDiagnostic, VisualRewardSource, reward_path_matches, rotate_choices_to_local,
-    store_player_record_if_current,
+    scan_player_record_until_ready, store_player_record_if_current,
 };
 
 #[test]
@@ -210,6 +210,47 @@ fn ambiguous_background_player_record_is_discarded() {
     );
 
     assert!(records.lock().unwrap().is_empty());
+}
+
+#[test]
+fn early_player_record_scan_retries_until_warframe_materializes_the_reward() {
+    let generation = AtomicU64::new(7);
+    let mut attempts = 0;
+
+    let resolution = scan_player_record_until_ready(7, &generation, Duration::from_secs(1), || {
+        attempts += 1;
+        if attempts < 3 {
+            RewardResolution::Incomplete
+        } else {
+            RewardResolution::Confirmed {
+                choices: vec!["Vasto Prime Blueprint".into()],
+                region_start: 1,
+            }
+        }
+    });
+
+    assert_eq!(attempts, 3);
+    assert_eq!(
+        resolution,
+        RewardResolution::Confirmed {
+            choices: vec!["Vasto Prime Blueprint".into()],
+            region_start: 1,
+        }
+    );
+}
+
+#[test]
+fn player_record_retry_stops_when_the_mission_generation_changes() {
+    let generation = AtomicU64::new(8);
+    let mut attempts = 0;
+
+    let resolution = scan_player_record_until_ready(7, &generation, Duration::from_secs(1), || {
+        attempts += 1;
+        RewardResolution::Incomplete
+    });
+
+    assert_eq!(attempts, 0);
+    assert_eq!(resolution, RewardResolution::Incomplete);
 }
 
 #[test]
