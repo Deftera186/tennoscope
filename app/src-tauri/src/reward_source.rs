@@ -1,8 +1,11 @@
 use std::time::{Duration, Instant};
 
+#[cfg(debug_assertions)]
+use std::{fs::OpenOptions, io::Write};
+
 use warframe_acquisition::{
     GameProcess, MemoryReader, RewardCatalogEntry, RewardFingerprint, RewardMemoryScanner,
-    RewardNeedle, RewardResolution, resolve_current_reward_choices, resolve_reward_choices,
+    RewardNeedle, RewardResolution, resolve_reward_choices,
 };
 
 const MAXIMUM_REWARD_CLUSTER_SPAN: u64 = 2 * 1024 * 1024;
@@ -98,6 +101,8 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
             .scanner
             .fingerprint(self.memory, &self.process, candidates)
             .ok();
+        #[cfg(debug_assertions)]
+        trace_fingerprint("baseline", self.state.baseline.as_ref(), None);
     }
 
     fn choices(&mut self, expected: usize) -> RewardResolution {
@@ -113,12 +118,9 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
         };
         let temporal =
             resolve_reward_choices(baseline, &current, expected, MAXIMUM_REWARD_CLUSTER_SPAN);
-        let resolution = match temporal {
-            RewardResolution::Incomplete => {
-                resolve_current_reward_choices(&current, expected, MAXIMUM_REWARD_CLUSTER_SPAN)
-            }
-            other => other,
-        };
+        #[cfg(debug_assertions)]
+        trace_fingerprint("current", Some(&current), Some(&temporal));
+        let resolution = temporal;
         let RewardResolution::Confirmed { region_start, .. } = resolution else {
             return resolution;
         };
@@ -144,6 +146,43 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
                 MAXIMUM_REWARD_CLUSTER_SPAN,
             )
             .unwrap_or(RewardResolution::Incomplete)
+    }
+}
+
+#[cfg(debug_assertions)]
+fn trace_fingerprint(
+    phase: &str,
+    fingerprint: Option<&RewardFingerprint>,
+    resolution: Option<&RewardResolution>,
+) {
+    let Ok(mut output) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/tennoscope-reward-debug.log")
+    else {
+        return;
+    };
+    let Some(fingerprint) = fingerprint else {
+        let _ = writeln!(output, "[DEBUG-reward] phase={phase} scan=failed");
+        return;
+    };
+    let _ = writeln!(
+        output,
+        "[DEBUG-reward] phase={phase} bytes={} elapsed_ms={} hits={} resolution={resolution:?}",
+        fingerprint.bytes_read(),
+        fingerprint.elapsed().as_millis(),
+        fingerprint.hits().len(),
+    );
+    for hit in fingerprint.hits() {
+        let _ = writeln!(
+            output,
+            "[DEBUG-reward] hit phase={phase} region={} offset={} priority={:?} representation={:?} name={:?}",
+            hit.region_start(),
+            hit.address() - hit.region_start(),
+            hit.priority(),
+            hit.representation(),
+            hit.choice_name(),
+        );
     }
 }
 

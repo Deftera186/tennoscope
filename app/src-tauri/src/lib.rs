@@ -500,7 +500,10 @@ fn handle_reward_event(
             let mut baseline_coordinator = RewardSourceCoordinator::new(cfg!(debug_assertions));
             baseline_coordinator.baseline(&mut memory, &candidates);
         }
-        RewardLogEvent::ChoicesReady { expected_choices } => {
+        RewardLogEvent::ChoicesReady {
+            expected_choices,
+            local_reward_path,
+        } => {
             let Some(process) = process else {
                 return;
             };
@@ -513,7 +516,7 @@ fn handle_reward_event(
             };
             let mut memory = memory_state.bind(procfs, process);
             let mut visual = LiveVisualRewardSource;
-            let Some(result) =
+            let Some(mut result) =
                 coordinator.choices(&mut memory, &mut visual, expected_choices, visual_catalog)
             else {
                 if let Ok(mut runtime) = shared.lock() {
@@ -523,6 +526,26 @@ fn handle_reward_event(
                 }
                 return;
             };
+            if let Some(local_path) = local_reward_path.as_deref()
+                && let Some(local_name) = memory_state
+                    .candidates()
+                    .iter()
+                    .find(|needle| {
+                        needle
+                            .internal_paths()
+                            .iter()
+                            .any(|path| path.as_slice() == local_path.as_bytes())
+                    })
+                    .map(warframe_acquisition::RewardNeedle::choice_name)
+                && let Some(index) = result
+                    .choices
+                    .names
+                    .iter()
+                    .position(|name| name == local_name)
+            {
+                let local = result.choices.names.remove(index);
+                result.choices.names.insert(0, local);
+            }
             let observations = result
                 .choices
                 .names

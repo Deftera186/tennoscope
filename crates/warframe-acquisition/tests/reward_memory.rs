@@ -111,6 +111,23 @@ fn scans_writable_anonymous_regions_before_file_backed_regions() {
     assert_eq!(memory.reads.lock().unwrap().first().copied(), Some(0x3000));
 }
 
+#[test]
+fn scans_newer_high_address_writable_regions_first() {
+    let memory = FixtureMemory {
+        regions: vec![
+            ReadableRegion::classified(0x3000, 32, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(0x9000, 32, RegionScanPriority::WritableAnonymous),
+        ],
+        bytes: BTreeMap::from([(0x3000, vec![0; 32]), (0x9000, vec![0; 32])]),
+        reads: Mutex::new(Vec::new()),
+    };
+    RewardMemoryScanner::new(64, 4096, Duration::from_secs(1))
+        .fingerprint(&memory, &GameProcess::new(7), &[candidate()])
+        .unwrap();
+
+    assert_eq!(memory.reads.lock().unwrap().first().copied(), Some(0x9000));
+}
+
 fn online_candidates() -> Vec<RewardNeedle> {
     ["Perigale", "Burston", "Trumna", "Forma", "Lex"]
         .into_iter()

@@ -283,7 +283,12 @@ impl RewardMemoryScanner {
                 );
             }
         }
-        regions.sort_by_key(|region| priority_rank(region.scan_priority()));
+        regions.sort_by_key(|region| {
+            (
+                priority_rank(region.scan_priority()),
+                std::cmp::Reverse(region.start()),
+            )
+        });
         let longest = candidates
             .iter()
             .flat_map(|candidate| {

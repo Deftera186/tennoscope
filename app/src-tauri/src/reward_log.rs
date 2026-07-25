@@ -10,11 +10,17 @@ const GOT_REWARDS: &str = "ProjectionRewardChoice.lua: Got rewards";
 const RENDERED_REWARD: &str = "ProjectionRewardChoice.lua: Missing icon data!";
 const REWARD_TIMER: &str = "ProjectionsCountdown.lua: Initialize timer";
 const CLOSED: &str = "ProjectionRewardChoice.lua: Relic reward screen shut down";
+const GETS_REWARD: &str = " gets reward ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RewardLogEvent {
-    BaselineRequested { relic_paths: Vec<String> },
-    ChoicesReady { expected_choices: usize },
+    BaselineRequested {
+        relic_paths: Vec<String>,
+    },
+    ChoicesReady {
+        expected_choices: usize,
+        local_reward_path: Option<String>,
+    },
     Closed,
 }
 
@@ -26,6 +32,7 @@ pub struct RewardLogMachine {
     choices_emitted: bool,
     rewards_received: bool,
     rendered_cards: usize,
+    local_reward_path: Option<String>,
     carry: Vec<u8>,
 }
 
@@ -67,9 +74,16 @@ impl RewardLogMachine {
             self.choices_emitted = false;
             self.rewards_received = false;
             self.rendered_cards = 0;
+            self.local_reward_path = None;
             return Vec::new();
         }
         if self.reward_window_open {
+            if let Some((_, path)) = line.split_once(GETS_REWARD) {
+                let path = path.trim();
+                if path.starts_with("/Lotus/") {
+                    self.local_reward_path = Some(path.to_owned());
+                }
+            }
             if let Some(identity) = [CLIENT_REWARD, HOST_REWARD]
                 .into_iter()
                 .find_map(|marker| line.split_once(marker).map(|(_, value)| value.trim()))
@@ -97,7 +111,10 @@ impl RewardLogMachine {
                     return Vec::new();
                 }
                 self.choices_emitted = true;
-                return vec![RewardLogEvent::ChoicesReady { expected_choices }];
+                return vec![RewardLogEvent::ChoicesReady {
+                    expected_choices,
+                    local_reward_path: self.local_reward_path.clone(),
+                }];
             }
         }
         if line.contains(CLOSED) && self.reward_window_open {
@@ -106,6 +123,7 @@ impl RewardLogMachine {
             self.responders.clear();
             self.rewards_received = false;
             self.rendered_cards = 0;
+            self.local_reward_path = None;
             self.loaded_relics.clear();
             return vec![RewardLogEvent::Closed];
         }

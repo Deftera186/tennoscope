@@ -36,6 +36,7 @@ fn online_sequence_requests_one_baseline_and_emits_the_observed_choice_count() {
             },
             RewardLogEvent::ChoicesReady {
                 expected_choices: 4,
+                local_reward_path: None,
             },
         ]
     );
@@ -90,6 +91,7 @@ fn rendered_card_count_overrides_the_number_of_network_responders() {
         events,
         vec![RewardLogEvent::ChoicesReady {
             expected_choices: 3,
+            local_reward_path: None,
         }]
     );
 }
@@ -119,6 +121,33 @@ fn host_sequence_emits_the_rendered_choice_count() {
         events,
         vec![RewardLogEvent::ChoicesReady {
             expected_choices: 4,
+            local_reward_path: None,
+        }]
+    );
+}
+
+#[test]
+fn choices_include_the_explicitly_logged_local_reward_path() {
+    let mut machine = RewardLogMachine::default();
+    let events = [
+        "VoidProjections: OpenVoidProjectionRewardScreenRMI",
+        "VoidProjections: player gets reward /Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+        "VoidProjections: Client got reward info from player-a",
+        "VoidProjections: Client got reward info from player-b",
+        "VoidProjections: Client has reward info for all players now",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionsCountdown.lua: Initialize timer nil 15",
+    ]
+    .into_iter()
+    .flat_map(|line| machine.observe_line(line))
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        events,
+        vec![RewardLogEvent::ChoicesReady {
+            expected_choices: 2,
+            local_reward_path: Some("/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint".into()),
         }]
     );
 }
