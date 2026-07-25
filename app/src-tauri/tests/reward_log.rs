@@ -326,6 +326,28 @@ fn waiting_list_ring_rotates_to_the_local_players_screen_order() {
     );
 }
 
+#[test]
+fn waiting_responder_is_exposed_before_its_reward_arrives() {
+    let mut machine = RewardLogMachine::default();
+    machine.observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI");
+
+    assert_eq!(
+        machine.observe_line(
+            "VoidProjections: Still waiting on response from de1e7ed00000000000000003"
+        ),
+        vec![RewardLogEvent::ResponderExpected {
+            identity: "de1e7ed00000000000000003".into(),
+        }]
+    );
+    assert!(
+        machine
+            .observe_line(
+                "VoidProjections: Still waiting on response from de1e7ed00000000000000003"
+            )
+            .is_empty()
+    );
+}
+
 fn is_render_lifecycle_event(event: &RewardLogEvent) -> bool {
     matches!(
         event,

@@ -349,6 +349,52 @@ impl RewardMemoryScanner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn resolve_strict_player_records(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        candidates: &[RewardNeedle],
+        responders: &[&str],
+        local_identity: Option<&str>,
+        local_choice: Option<&str>,
+    ) -> Result<RewardResolution, AcquisitionError> {
+        self.resolve_player_records_ordered(
+            memory,
+            process,
+            candidates,
+            responders,
+            local_identity,
+            local_choice,
+            false,
+            true,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_strict_player_records_from_low_heaps(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        candidates: &[RewardNeedle],
+        responders: &[&str],
+        local_identity: Option<&str>,
+        local_choice: Option<&str>,
+    ) -> Result<RewardResolution, AcquisitionError> {
+        self.resolve_player_records_ordered(
+            memory,
+            process,
+            candidates,
+            responders,
+            local_identity,
+            local_choice,
+            true,
+            true,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn resolve_player_records_from_low_heaps(
         &self,
         memory: &dyn MemoryReader,

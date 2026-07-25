@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{Read, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
@@ -377,6 +377,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut announced_process = None;
     let mut early_reward_resolved = false;
     let incremental_reward_records = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
+    let active_reward_scans = Arc::new(Mutex::new(BTreeSet::<String>::new()));
     let reward_generation = Arc::new(AtomicU64::new(0));
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
@@ -460,6 +461,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &mut reward_state,
                 &mut early_reward_resolved,
                 &incremental_reward_records,
+                &active_reward_scans,
                 &reward_generation,
                 &shared,
                 &app,
@@ -530,6 +532,7 @@ fn handle_reward_event(
     observer: &mut RewardObserverState,
     early_reward_resolved: &mut bool,
     incremental_reward_records: &Arc<Mutex<BTreeMap<String, String>>>,
+    active_reward_scans: &Arc<Mutex<BTreeSet<String>>>,
     reward_generation: &Arc<AtomicU64>,
     shared: &SharedRuntime,
     app: &AppHandle,
@@ -541,6 +544,22 @@ fn handle_reward_event(
                 let _ = procfs.reset_recent_writes(&process);
             }
         }
+        RewardLogEvent::ResponderExpected { identity } => {
+            if *early_reward_resolved {
+                return;
+            }
+            let Some(process) = process else {
+                return;
+            };
+            spawn_player_record_scan(
+                identity,
+                process,
+                memory_state.candidates(),
+                incremental_reward_records,
+                active_reward_scans,
+                reward_generation,
+            );
+        }
         RewardLogEvent::ResponderReceived { identity, is_local } => {
             if is_local || *early_reward_resolved {
                 return;
@@ -548,47 +567,14 @@ fn handle_reward_event(
             let Some(process) = process else {
                 return;
             };
-            let candidates = memory_state.candidates().to_vec();
-            if candidates.is_empty() {
-                return;
-            }
-            let records = Arc::clone(incremental_reward_records);
-            let generation = Arc::clone(reward_generation);
-            let expected_generation = generation.load(Ordering::Acquire);
-            std::thread::spawn(move || {
-                let started = Instant::now();
-                let procfs = LinuxProc::new();
-                let scanner = RewardMemoryScanner::new(
-                    256 * 1024,
-                    768 * 1024 * 1024,
-                    Duration::from_millis(1_500),
-                );
-                let responders = [identity.as_str()];
-                let resolution = scan_player_record_until_ready(
-                    expected_generation,
-                    &generation,
-                    Duration::from_millis(750),
-                    || {
-                        scanner
-                            .resolve_live_player_record(
-                                &procfs,
-                                &process,
-                                &candidates,
-                                responders[0],
-                            )
-                            .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
-                    },
-                );
-                #[cfg(debug_assertions)]
-                trace_responder_reward_scan(&identity, started.elapsed(), &resolution);
-                store_player_record_if_current(
-                    expected_generation,
-                    &generation,
-                    &identity,
-                    resolution,
-                    &records,
-                );
-            });
+            spawn_player_record_scan(
+                identity,
+                process,
+                memory_state.candidates(),
+                incremental_reward_records,
+                active_reward_scans,
+                reward_generation,
+            );
         }
         RewardLogEvent::ResponsesComplete {
             responders,
@@ -654,7 +640,7 @@ fn handle_reward_event(
                 Duration::from_millis(1_500),
             );
             let resolution = scanner
-                .resolve_player_records_from_low_heaps(
+                .resolve_strict_player_records_from_low_heaps(
                     procfs,
                     &process,
                     memory_state.candidates(),
@@ -689,6 +675,9 @@ fn handle_reward_event(
             reward_generation.fetch_add(1, Ordering::AcqRel);
             if let Ok(mut records) = incremental_reward_records.lock() {
                 records.clear();
+            }
+            if let Ok(mut scans) = active_reward_scans.lock() {
+                scans.clear();
             }
             let candidates = catalog
                 .zip(relic_catalog)
@@ -754,6 +743,9 @@ fn handle_reward_event(
             if let Ok(mut records) = incremental_reward_records.lock() {
                 records.clear();
             }
+            if let Ok(mut scans) = active_reward_scans.lock() {
+                scans.clear();
+            }
             memory_state.clear();
             observer.miss();
             overlay_window::hide_reward_overlay(app);
@@ -762,6 +754,56 @@ fn handle_reward_event(
             }
         }
     }
+}
+
+fn spawn_player_record_scan(
+    identity: String,
+    process: GameProcess,
+    candidates: &[warframe_acquisition::RewardNeedle],
+    records: &Arc<Mutex<BTreeMap<String, String>>>,
+    active_scans: &Arc<Mutex<BTreeSet<String>>>,
+    generation: &Arc<AtomicU64>,
+) {
+    if candidates.is_empty() {
+        return;
+    }
+    let Ok(mut active) = active_scans.lock() else {
+        return;
+    };
+    if !active.insert(identity.clone()) {
+        return;
+    }
+    drop(active);
+
+    let candidates = candidates.to_vec();
+    let records = Arc::clone(records);
+    let generation = Arc::clone(generation);
+    let expected_generation = generation.load(Ordering::Acquire);
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let procfs = LinuxProc::new();
+        let scanner =
+            RewardMemoryScanner::new(256 * 1024, 768 * 1024 * 1024, Duration::from_millis(1_500));
+        let resolution = scan_player_record_until_ready(
+            expected_generation,
+            &generation,
+            Duration::from_millis(750),
+            || {
+                scanner
+                    .resolve_live_player_record(&procfs, &process, &candidates, &identity)
+                    .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
+            },
+        );
+        #[cfg(debug_assertions)]
+        trace_responder_reward_scan(&identity, started.elapsed(), &resolution);
+        store_player_record_if_current(
+            expected_generation,
+            &generation,
+            &identity,
+            resolution,
+            &records,
+        );
+    });
 }
 
 pub fn rotate_choices_to_local(choices: &mut [String], local_name: &str) {

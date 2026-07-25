@@ -25,6 +25,9 @@ pub enum RewardLogEvent {
         identity: String,
         is_local: bool,
     },
+    ResponderExpected {
+        identity: String,
+    },
     ResponsesComplete {
         responders: Vec<String>,
         screen_order: Vec<String>,
@@ -140,6 +143,9 @@ impl RewardLogMachine {
                 let identity = identity.trim();
                 if !identity.is_empty() && !self.squad_ring.iter().any(|known| known == identity) {
                     self.squad_ring.push(identity.to_owned());
+                    return vec![RewardLogEvent::ResponderExpected {
+                        identity: identity.to_owned(),
+                    }];
                 }
             }
             if line.contains(CLIENT_ALL_REWARDS)

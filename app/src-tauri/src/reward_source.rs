@@ -172,7 +172,7 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
         let resolution = self
             .state
             .scanner
-            .resolve_player_records(
+            .resolve_strict_player_records(
                 self.memory,
                 &self.process,
                 &self.state.candidates,

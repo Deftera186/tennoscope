@@ -473,6 +473,43 @@ fn live_player_record_scan_rejects_an_unstructured_nearby_reward() {
 }
 
 #[test]
+fn strict_squad_scan_rejects_proximity_only_player_rewards() {
+    let responders = ["de1e7ed00000000000000006", "de1e7ed00000000000000003"];
+    let base = 0x41bf_0000_u64;
+    let mut bytes = vec![0_u8; 4096];
+    bytes[128..152].copy_from_slice(responders[1].as_bytes());
+    bytes[252..272].copy_from_slice(b"TipedoPrimeBlueprint");
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            base,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(base, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+    let candidate = RewardNeedle::from_paths(
+        "Tipedo Prime Blueprint",
+        vec!["/Lotus/Types/Recipes/Weapons/TipedoPrimeBlueprint".into()],
+    )
+    .unwrap();
+
+    assert_eq!(
+        RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
+            .resolve_strict_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &responders,
+                Some(responders[0]),
+                Some("Braton Prime Blueprint"),
+            )
+            .unwrap(),
+        RewardResolution::Incomplete
+    );
+}
+
+#[test]
 fn live_player_record_scan_prioritizes_captured_proton_response_band() {
     let identity = "de1e7ed00000000000000006";
     let response_base = 0x41bf_0000_u64;
