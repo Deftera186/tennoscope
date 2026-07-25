@@ -19,6 +19,13 @@ impl RewardNeedle {
         choice_name: impl Into<String>,
         paths: [&str; N],
     ) -> Result<Self, AcquisitionError> {
+        Self::from_paths(choice_name, paths.into_iter().map(str::to_owned).collect())
+    }
+
+    pub fn from_paths(
+        choice_name: impl Into<String>,
+        paths: Vec<String>,
+    ) -> Result<Self, AcquisitionError> {
         let choice_name = choice_name.into();
         if choice_name.trim().is_empty() || paths.iter().any(|path| path.trim().is_empty()) {
             return Err(AcquisitionError::SnapshotInvalid);
@@ -26,11 +33,16 @@ impl RewardNeedle {
         Ok(Self {
             display_name: choice_name.as_bytes().to_vec(),
             choice_name,
-            internal_paths: paths
-                .into_iter()
-                .map(|path| path.as_bytes().to_vec())
-                .collect(),
+            internal_paths: paths.into_iter().map(String::into_bytes).collect(),
         })
+    }
+
+    pub fn choice_name(&self) -> &str {
+        &self.choice_name
+    }
+
+    pub fn internal_paths(&self) -> &[Vec<u8>] {
+        &self.internal_paths
     }
 }
 

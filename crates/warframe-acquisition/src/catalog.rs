@@ -136,6 +136,14 @@ impl CatalogIndex {
             .collect()
     }
 
+    pub fn paths_for_name(&self, name: &str) -> Vec<String> {
+        self.items
+            .iter()
+            .filter(|(_, metadata)| metadata.name == name)
+            .map(|(path, _)| path.clone())
+            .collect()
+    }
+
     fn insert(
         &mut self,
         unique_name: &str,

@@ -12,13 +12,15 @@ mod inventory;
 #[cfg(target_os = "linux")]
 mod linux_proc;
 mod orchestrator;
+mod relic_catalog;
 mod reward_memory;
 
 pub use authorization::AuthorizationScanner;
 pub use catalog::{CatalogError, CatalogIndex, CatalogMetadata, RewardCatalogEntry};
 pub use catalog_cache::{
     CatalogCache, CatalogCacheError, CatalogFetch, CatalogLoad, CatalogLoadSource, CatalogSource,
-    WFCD_ALL_JSON_URL, WfcdCatalogHttp,
+    RelicCatalogCache, RelicCatalogLoad, RelicCatalogSource, WFCD_ALL_JSON_URL,
+    WFCD_RELICS_JSON_URL, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 pub use inventory::{
     INVENTORY_ENDPOINT, InventoryHttpTransport, InventoryJsonDecoder, MAX_INVENTORY_RESPONSE_BYTES,
@@ -26,6 +28,7 @@ pub use inventory::{
 #[cfg(target_os = "linux")]
 pub use linux_proc::LinuxProc;
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
+pub use relic_catalog::RelicRewardIndex;
 pub use reward_memory::{
     RewardFingerprint, RewardHit, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
     RewardResolution, resolve_reward_choices,

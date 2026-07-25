@@ -1,8 +1,12 @@
 use std::{cell::Cell, fs};
 use tempfile::tempdir;
-use warframe_acquisition::{CatalogCache, CatalogFetch, CatalogLoadSource, CatalogSource};
+use warframe_acquisition::{
+    CatalogCache, CatalogFetch, CatalogLoadSource, CatalogSource, RelicCatalogCache,
+    RelicCatalogSource,
+};
 
 const VALID: &[u8] = br#"[{"uniqueName":"/Lotus/Powersuits/Test/Test","name":"Test Frame","type":"Warframe","category":"Warframes","masterable":true}]"#;
+const VALID_RELICS: &[u8] = br#"[{"uniqueName":"/Lotus/Types/Game/Projections/TestABronze","rewards":[{"item":{"name":"Forma Blueprint"}}]}]"#;
 
 struct Source {
     result: Result<Vec<u8>, CatalogFetch>,
@@ -13,6 +17,43 @@ impl CatalogSource for Source {
         self.calls.set(self.calls.get() + 1);
         self.result.clone()
     }
+}
+
+impl RelicCatalogSource for Source {
+    fn fetch(&self) -> Result<Vec<u8>, CatalogFetch> {
+        CatalogSource::fetch(self)
+    }
+}
+
+#[test]
+fn relic_catalog_has_an_independent_atomic_cache_generation() {
+    let dir = tempdir().unwrap();
+    let cache = RelicCatalogCache::new(dir.path().join("catalog"));
+    let loaded = cache
+        .load(
+            &Source {
+                result: Ok(VALID_RELICS.to_vec()),
+                calls: Cell::new(0),
+            },
+            100,
+        )
+        .unwrap();
+
+    assert_eq!(loaded.source(), CatalogLoadSource::Network);
+    assert_eq!(loaded.fetched_unix(), 100);
+    assert!(dir.path().join("catalog/relic-generation.json").is_file());
+
+    let stale = cache
+        .load(
+            &Source {
+                result: Err(CatalogFetch::Unavailable),
+                calls: Cell::new(0),
+            },
+            200,
+        )
+        .unwrap();
+    assert_eq!(stale.source(), CatalogLoadSource::StaleCache);
+    assert_eq!(stale.fetched_unix(), 100);
 }
 
 #[test]
