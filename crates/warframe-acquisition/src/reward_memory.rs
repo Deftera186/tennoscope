@@ -416,10 +416,15 @@ impl RewardMemoryScanner {
         }
         let mut cursors = regions
             .iter()
-            .map(|_| RegionCursor {
+            .map(|region| RegionCursor {
                 offset: 0,
                 retained: 0,
-                buffer: vec![0_u8; self.chunk_size + player_overlap],
+                buffer: vec![
+                    0_u8;
+                    self.chunk_size
+                        .min(region.len())
+                        .saturating_add(player_overlap)
+                ],
             })
             .collect::<Vec<_>>();
         let mut player_hits = Vec::<(&str, u64, u64)>::new();
