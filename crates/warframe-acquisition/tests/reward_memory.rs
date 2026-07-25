@@ -1578,3 +1578,53 @@ fn captured_caliban_athodai_vadarya_sevagoth_screen_replays_in_ltr_order() {
         }
     );
 }
+
+/// The bytes in `fixtures/void-response-record.bin` were captured verbatim from a live Warframe
+/// process (pid 350643, address 0x47b42500). They pin the response-record wire format:
+///
+///   18 <24-byte account id> <len> <display name> 00 <len> <session key> .. <len> 00 <reward path>
+#[test]
+fn structured_response_reads_a_record_captured_from_the_live_game() {
+    let record = include_bytes!("fixtures/void-response-record.bin");
+    let identity = "de1e7ed00000000000000006";
+    assert_eq!(record[0], identity.len() as u8);
+    assert_eq!(&record[1..1 + identity.len()], identity.as_bytes());
+
+    let candidates = [
+        (
+            "Forma Blueprint",
+            "/Lotus/StoreItems/Types/Recipes/Components/FormaBlueprint",
+        ),
+        (
+            "Lex Prime Barrel",
+            "/Lotus/Types/Recipes/Weapons/WeaponParts/LexPrimeBarrel",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, path)| RewardNeedle::from_paths(name, vec![path.into()]).unwrap())
+    .collect::<Vec<_>>();
+
+    // The scan finds the identity, then reads the record starting one byte earlier, so the record
+    // must sit one byte into the region for the captured offsets to line up.
+    let mut bytes = vec![0_u8; 8192];
+    bytes[1..1 + record.len()].copy_from_slice(record);
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x3eda_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x3eda_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(4096, 65536, Duration::from_secs(1))
+            .resolve_live_player_record(&memory, &GameProcess::new(9), &candidates, identity)
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Forma Blueprint".into()],
+            region_start: 0,
+        }
+    );
+}

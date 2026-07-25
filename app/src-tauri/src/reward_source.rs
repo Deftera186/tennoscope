@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 #[cfg(debug_assertions)]
-use std::{fs::OpenOptions, io::Write};
+use warframe_acquisition::append_debug_line;
 
 use warframe_acquisition::{
     GameProcess, MemoryReader, PersistentRewardResolver, RewardCatalogEntry, RewardFingerprint,
@@ -159,67 +159,42 @@ fn trace_fingerprint(
     fingerprint: Option<&RewardFingerprint>,
     resolution: Option<&RewardResolution>,
 ) {
-    let Ok(mut output) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/tennoscope-reward-debug.log")
-    else {
-        return;
-    };
     let Some(fingerprint) = fingerprint else {
-        let _ = writeln!(output, "[DEBUG-reward] phase={phase} scan=failed");
+        append_debug_line(&format!("[DEBUG-reward] phase={phase} scan=failed"));
         return;
     };
-    let _ = writeln!(
-        output,
+    append_debug_line(&format!(
         "[DEBUG-reward] phase={phase} bytes={} elapsed_ms={} hits={} resolution={resolution:?}",
         fingerprint.bytes_read(),
         fingerprint.elapsed().as_millis(),
         fingerprint.hits().len(),
-    );
+    ));
     for hit in fingerprint.hits() {
-        let _ = writeln!(
-            output,
+        append_debug_line(&format!(
             "[DEBUG-reward] hit phase={phase} region={} offset={} priority={:?} representation={:?} name={:?}",
             hit.region_start(),
             hit.address() - hit.region_start(),
             hit.priority(),
             hit.representation(),
             hit.choice_name(),
-        );
+        ));
     }
 }
 
 #[cfg(debug_assertions)]
 fn trace_player_records(responder_count: usize, elapsed: Duration, resolution: &RewardResolution) {
-    let Ok(mut output) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/tennoscope-reward-debug.log")
-    else {
-        return;
-    };
-    let _ = writeln!(
-        output,
+    append_debug_line(&format!(
         "[DEBUG-player-record] responders={responder_count} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
-    );
+    ));
 }
 
 #[cfg(debug_assertions)]
 fn trace_persistent_choices(expected: usize, elapsed: Duration, resolution: &RewardResolution) {
-    let Ok(mut output) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/tennoscope-reward-debug.log")
-    else {
-        return;
-    };
-    let _ = writeln!(
-        output,
+    append_debug_line(&format!(
         "[DEBUG-persistent-ui] expected={expected} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
-    );
+    ));
 }
 
 impl RewardSourceCoordinator {

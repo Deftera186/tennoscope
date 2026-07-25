@@ -529,6 +529,7 @@ impl RewardMemoryScanner {
         let mut player_hits = Vec::<(&str, u64, u64)>::new();
         let mut structured_rewards = BTreeMap::<&str, BTreeSet<String>>::new();
         let mut bytes_read = 0_u64;
+        let mut record_headers = 0_usize;
         let mut rejected_records_captured = 0_usize;
 
         'rounds: loop {
@@ -584,6 +585,16 @@ impl RewardMemoryScanner {
                         });
                         let record_read =
                             memory.read_at(process, record_start, &mut record[..request])?;
+                        // A genuine response record opens with the identity's length prefix. Every
+                        // other identity hit is EE.log text or a UI string table, and capturing
+                        // those exhausts the reject budget before a real record is ever seen.
+                        let is_record_header = record
+                            .first()
+                            .copied()
+                            .is_some_and(|prefix| usize::from(prefix) == identity.len());
+                        if is_record_header {
+                            record_headers += 1;
+                        }
                         if let Some(choice) =
                             structured_response_reward(&record[..record_read], identity, candidates)
                         {
@@ -606,7 +617,10 @@ impl RewardMemoryScanner {
                                     region_start: 0,
                                 });
                             }
-                        } else if !allow_proximity_fallback && rejected_records_captured < 16 {
+                        } else if is_record_header
+                            && !allow_proximity_fallback
+                            && rejected_records_captured < 16
+                        {
                             #[cfg(debug_assertions)]
                             trace_rejected_response_record(
                                 process.pid(),
@@ -711,6 +725,7 @@ impl RewardMemoryScanner {
             regions.len(),
             bytes_read,
             player_hits.len(),
+            record_headers,
             reward_hits.len(),
             structured_rewards.len(),
         );
@@ -939,9 +954,21 @@ fn trace_player_record_evidence(
     regions: usize,
     bytes_read: u64,
     player_hits: usize,
+    record_headers: usize,
     reward_hits: usize,
     structured_records: usize,
 ) {
+    append_debug_line(&format!(
+        "[DEBUG-evidence] responders={responders} regions={regions} bytes={bytes_read} player_hits={player_hits} record_headers={record_headers} reward_hits={reward_hits} structured_records={structured_records}"
+    ));
+}
+
+/// Append one line to the shared reward debug log.
+///
+/// The line is written with a single `write_all` so that concurrent scans appending to the same
+/// O_APPEND file cannot interleave halves of a line and destroy the evidence.
+#[cfg(debug_assertions)]
+pub fn append_debug_line(line: &str) {
     let Ok(mut output) = OpenOptions::new()
         .create(true)
         .append(true)
@@ -949,10 +976,7 @@ fn trace_player_record_evidence(
     else {
         return;
     };
-    let _ = writeln!(
-        output,
-        "[DEBUG-evidence] responders={responders} regions={regions} bytes={bytes_read} player_hits={player_hits} reward_hits={reward_hits} structured_records={structured_records}"
-    );
+    let _ = output.write_all(format!("{line}\n").as_bytes());
 }
 
 #[cfg(debug_assertions)]

@@ -13,9 +13,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(debug_assertions)]
-use std::{fs::OpenOptions, io::Write};
-
 use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome};
 use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
@@ -879,21 +876,13 @@ fn trace_responder_reward_scan(
     elapsed: Duration,
     resolution: &warframe_acquisition::RewardResolution,
 ) {
-    let Ok(mut output) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/tennoscope-reward-debug.log")
-    else {
-        return;
-    };
     let suffix = identity
         .get(identity.len().saturating_sub(6)..)
         .unwrap_or(identity);
-    let _ = writeln!(
-        output,
+    warframe_acquisition::append_debug_line(&format!(
         "[DEBUG-responder] identity=…{suffix} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
-    );
+    ));
 }
 
 fn publish_reward_result(
