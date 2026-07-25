@@ -40,6 +40,12 @@ pub struct RewardSourceResult {
 pub trait MemoryRewardSource {
     fn baseline(&mut self, candidates: &[RewardNeedle]);
     fn choices(&mut self, expected: usize) -> RewardResolution;
+    fn player_records(
+        &mut self,
+        responders: &[&str],
+        local_identity: Option<&str>,
+        local_choice: Option<&str>,
+    ) -> RewardResolution;
 }
 
 pub trait VisualRewardSource {
@@ -150,6 +156,30 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
             )
             .unwrap_or(RewardResolution::Incomplete)
     }
+
+    fn player_records(
+        &mut self,
+        responders: &[&str],
+        local_identity: Option<&str>,
+        local_choice: Option<&str>,
+    ) -> RewardResolution {
+        let started = Instant::now();
+        let resolution = self
+            .state
+            .scanner
+            .resolve_player_records(
+                self.memory,
+                &self.process,
+                &self.state.candidates,
+                responders,
+                local_identity,
+                local_choice,
+            )
+            .unwrap_or(RewardResolution::Incomplete);
+        #[cfg(debug_assertions)]
+        trace_player_records(responders.len(), started.elapsed(), &resolution);
+        resolution
+    }
 }
 
 #[cfg(debug_assertions)]
@@ -189,6 +219,22 @@ fn trace_fingerprint(
     }
 }
 
+#[cfg(debug_assertions)]
+fn trace_player_records(responder_count: usize, elapsed: Duration, resolution: &RewardResolution) {
+    let Ok(mut output) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/tennoscope-reward-debug.log")
+    else {
+        return;
+    };
+    let _ = writeln!(
+        output,
+        "[DEBUG-player-record] responders={responder_count} elapsed_ms={} resolution={resolution:?}",
+        elapsed.as_millis(),
+    );
+}
+
 impl RewardSourceCoordinator {
     pub const fn new(validation_mode: bool) -> Self {
         Self { validation_mode }
@@ -198,6 +244,29 @@ impl RewardSourceCoordinator {
         if !candidates.is_empty() {
             memory.baseline(candidates);
         }
+    }
+
+    pub fn player_record_choices(
+        &self,
+        memory: &mut dyn MemoryRewardSource,
+        responders: &[&str],
+        local_identity: Option<&str>,
+        local_choice: Option<&str>,
+    ) -> Option<RewardSourceResult> {
+        let started = Instant::now();
+        let RewardResolution::Confirmed { choices, .. } =
+            memory.player_records(responders, local_identity, local_choice)
+        else {
+            return None;
+        };
+        Some(RewardSourceResult {
+            choices: RewardChoiceSet {
+                names: choices,
+                source: RewardChoiceSource::Memory,
+                elapsed: started.elapsed(),
+            },
+            diagnostic: RewardSourceDiagnostic::Ready,
+        })
     }
 
     pub fn choices(

@@ -25,6 +25,7 @@ pub enum RewardLogEvent {
     ResponsesComplete {
         responders: Vec<String>,
         local_reward_path: Option<String>,
+        local_identity: Option<String>,
     },
     Closed,
 }
@@ -39,6 +40,7 @@ pub struct RewardLogMachine {
     responses_complete_emitted: bool,
     rendered_cards: usize,
     local_reward_path: Option<String>,
+    local_identity: Option<String>,
     carry: Vec<u8>,
 }
 
@@ -82,13 +84,22 @@ impl RewardLogMachine {
             self.responses_complete_emitted = false;
             self.rendered_cards = 0;
             self.local_reward_path = None;
+            self.local_identity = None;
             return Vec::new();
         }
         if self.reward_window_open {
-            if let Some((_, path)) = line.split_once(GETS_REWARD) {
+            if let Some((prefix, path)) = line.split_once(GETS_REWARD) {
                 let path = path.trim();
                 if path.starts_with("/Lotus/") {
                     self.local_reward_path = Some(path.to_owned());
+                    self.local_identity = prefix
+                        .split_whitespace()
+                        .next_back()
+                        .filter(|identity| {
+                            identity.len() == 24
+                                && identity.bytes().all(|byte| byte.is_ascii_hexdigit())
+                        })
+                        .map(str::to_owned);
                 }
             }
             if let Some(identity) = [CLIENT_REWARD, HOST_REWARD]
@@ -114,6 +125,7 @@ impl RewardLogMachine {
                     return vec![RewardLogEvent::ResponsesComplete {
                         responders: self.responders.clone(),
                         local_reward_path: self.local_reward_path.clone(),
+                        local_identity: self.local_identity.clone(),
                     }];
                 }
             }
@@ -144,6 +156,7 @@ impl RewardLogMachine {
             self.responses_complete_emitted = false;
             self.rendered_cards = 0;
             self.local_reward_path = None;
+            self.local_identity = None;
             self.loaded_relics.clear();
             return vec![RewardLogEvent::Closed];
         }

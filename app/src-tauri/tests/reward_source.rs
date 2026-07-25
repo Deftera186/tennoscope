@@ -2,14 +2,16 @@ use std::time::Duration;
 
 use app_lib::{
     MemoryRewardSource, RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic,
-    VisualRewardSource,
+    VisualRewardSource, reward_path_matches,
 };
 use warframe_acquisition::{RewardCatalogEntry, RewardNeedle, RewardResolution};
 
 struct Memory {
     resolution: RewardResolution,
+    record_resolution: RewardResolution,
     baselines: usize,
     choices: usize,
+    record_choices: usize,
 }
 
 impl MemoryRewardSource for Memory {
@@ -20,6 +22,16 @@ impl MemoryRewardSource for Memory {
     fn choices(&mut self, _expected: usize) -> RewardResolution {
         self.choices += 1;
         self.resolution.clone()
+    }
+
+    fn player_records(
+        &mut self,
+        _responders: &[&str],
+        _local_identity: Option<&str>,
+        _local_choice: Option<&str>,
+    ) -> RewardResolution {
+        self.record_choices += 1;
+        self.record_resolution.clone()
     }
 }
 
@@ -56,8 +68,10 @@ fn confirmed_memory_wins_without_invoking_ocr() {
             choices: vec!["A".into(), "B".into(), "C".into(), "D".into()],
             region_start: 10,
         },
+        record_resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        record_choices: 0,
     };
     let mut visual = Visual {
         names: Ok(vec![]),
@@ -82,8 +96,10 @@ fn confirmed_memory_wins_without_invoking_ocr() {
 fn incomplete_memory_falls_back_to_ocr() {
     let mut memory = Memory {
         resolution: RewardResolution::Incomplete,
+        record_resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        record_choices: 0,
     };
     let mut visual = Visual {
         names: Ok(vec!["A".into(), "B".into(), "C".into(), "D".into()]),
@@ -103,8 +119,10 @@ fn incomplete_memory_falls_back_to_ocr() {
 fn ocr_accepts_the_rendered_three_choice_count() {
     let mut memory = Memory {
         resolution: RewardResolution::Incomplete,
+        record_resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        record_choices: 0,
     };
     let mut visual = Visual {
         names: Ok(vec!["A".into(), "B".into(), "C".into()]),
@@ -123,8 +141,10 @@ fn ocr_accepts_the_rendered_three_choice_count() {
 fn incomplete_ocr_is_not_published_as_a_reward_set() {
     let mut memory = Memory {
         resolution: RewardResolution::Incomplete,
+        record_resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        record_choices: 0,
     };
     let mut visual = Visual {
         names: Ok(vec!["A".into()]),
@@ -145,8 +165,10 @@ fn validation_mode_reports_memory_and_ocr_disagreement() {
             choices: vec!["A".into(), "B".into(), "C".into(), "D".into()],
             region_start: 10,
         },
+        record_resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        record_choices: 0,
     };
     let mut visual = Visual {
         names: Ok(vec!["D".into(), "C".into(), "B".into(), "A".into()]),
@@ -166,8 +188,10 @@ fn validation_mode_reports_memory_and_ocr_disagreement() {
 fn solo_choice_events_invoke_neither_source() {
     let mut memory = Memory {
         resolution: RewardResolution::Incomplete,
+        record_resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        record_choices: 0,
     };
     let mut visual = Visual {
         names: Ok(vec![]),
@@ -180,4 +204,41 @@ fn solo_choice_events_invoke_neither_source() {
     assert!(result.is_none());
     assert_eq!(memory.choices, 0);
     assert_eq!(visual.calls, 0);
+}
+
+#[test]
+fn confirmed_player_records_publish_immediately_without_ocr() {
+    let mut memory = Memory {
+        resolution: RewardResolution::Incomplete,
+        record_resolution: RewardResolution::Confirmed {
+            choices: vec!["A".into(), "B".into(), "C".into(), "D".into()],
+            region_start: 0,
+        },
+        baselines: 0,
+        choices: 0,
+        record_choices: 0,
+    };
+
+    let result = RewardSourceCoordinator::new(true)
+        .player_record_choices(
+            &mut memory,
+            &["remote-a", "remote-b", "remote-c", "local"],
+            Some("local"),
+            Some("A"),
+        )
+        .unwrap();
+
+    assert_eq!(result.choices.names, vec!["A", "B", "C", "D"]);
+    assert_eq!(result.choices.source, RewardChoiceSource::Memory);
+    assert_eq!(result.diagnostic, RewardSourceDiagnostic::Ready);
+    assert_eq!(memory.record_choices, 1);
+    assert_eq!(memory.choices, 0);
+}
+
+#[test]
+fn store_items_log_paths_match_catalog_type_paths() {
+    assert!(reward_path_matches(
+        "/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb",
+        "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb",
+    ));
 }

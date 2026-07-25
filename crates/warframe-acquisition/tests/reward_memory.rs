@@ -459,3 +459,80 @@ fn confirmation_rereads_only_the_selected_region_and_preserves_order() {
             .all(|address| *address >= 0x3000)
     );
 }
+
+#[test]
+fn player_records_ignore_a_tighter_stale_reward_cluster_and_preserve_screen_order() {
+    let responders = [
+        "de1e7ed00000000000000005",
+        "de1e7ed0000000000000000a",
+        "de1e7ed00000000000000004",
+        "de1e7ed00000000000000006",
+    ];
+    let candidates = [
+        "Daikyu Prime Upper Limb",
+        "Akbronco Prime Link",
+        "Forma Blueprint",
+        "Trumna Prime Stock",
+        "Vadarya Prime Receiver",
+        "Alternox Prime Receiver",
+    ]
+    .into_iter()
+    .map(|name| RewardNeedle::from_paths(name, vec![name.replace(' ', "")]).unwrap())
+    .collect::<Vec<_>>();
+    let mut bytes = vec![0_u8; 8192];
+
+    // This reproduces the false-positive shape from the live run: four stale
+    // reward identities form a tighter block but have no player record.
+    for (offset, name) in [
+        (256, "DaikyuPrimeUpperLimb"),
+        (384, "VadaryaPrimeReceiver"),
+        (512, "AlternoxPrimeReceiver"),
+        (640, "AkbroncoPrimeLink"),
+    ] {
+        bytes[offset..offset + name.len()].copy_from_slice(name.as_bytes());
+    }
+
+    for (offset, identity, reward) in [
+        (2048, responders[0], "AkbroncoPrimeLink"),
+        (3072, responders[1], "FormaBlueprint"),
+        (4096, responders[2], "TrumnaPrimeStock"),
+        (5120, responders[3], "DaikyuPrimeUpperLimb"),
+    ] {
+        bytes[offset..offset + identity.len()].copy_from_slice(identity.as_bytes());
+        let reward_offset = offset + 123;
+        bytes[reward_offset..reward_offset + reward.len()].copy_from_slice(reward.as_bytes());
+    }
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x1900_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x1900_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    let resolution = RewardMemoryScanner::new(256, 16 * 1024, Duration::from_secs(1))
+        .resolve_player_records(
+            &memory,
+            &GameProcess::new(9),
+            &candidates,
+            &responders,
+            Some(responders[3]),
+            Some("Daikyu Prime Upper Limb"),
+        )
+        .unwrap();
+
+    assert_eq!(
+        resolution,
+        RewardResolution::Confirmed {
+            choices: vec![
+                "Daikyu Prime Upper Limb".into(),
+                "Akbronco Prime Link".into(),
+                "Forma Blueprint".into(),
+                "Trumna Prime Stock".into(),
+            ],
+            region_start: 0,
+        }
+    );
+}

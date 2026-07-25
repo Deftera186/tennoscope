@@ -243,6 +243,7 @@ fn live_response_sequence_emits_ordered_responders_and_completes_before_renderin
                     "/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb"
                         .into(),
                 ),
+                local_identity: Some("de1e7ed00000000000000006".into()),
             },
         ]
     );

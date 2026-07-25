@@ -359,6 +359,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut machine = MonitorMachine::new(15);
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
+    let mut early_reward_resolved = false;
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
         384 * 1024 * 1024,
@@ -428,6 +429,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &mut reward_memory,
                 &coordinator,
                 &mut reward_state,
+                &mut early_reward_resolved,
                 &shared,
                 &app,
                 now,
@@ -480,13 +482,43 @@ fn handle_reward_event(
     memory_state: &mut LiveMemoryRewardState,
     coordinator: &RewardSourceCoordinator,
     observer: &mut RewardObserverState,
+    early_reward_resolved: &mut bool,
     shared: &SharedRuntime,
     app: &AppHandle,
     now: u64,
 ) {
     match event {
-        RewardLogEvent::ResponderReceived { .. } | RewardLogEvent::ResponsesComplete { .. } => {}
+        RewardLogEvent::ResponderReceived { .. } => {}
+        RewardLogEvent::ResponsesComplete {
+            responders,
+            local_reward_path,
+            local_identity,
+        } => {
+            if *early_reward_resolved || responders.len() <= 1 {
+                return;
+            }
+            let Some(process) = process else {
+                return;
+            };
+            let local_choice = local_reward_path
+                .as_deref()
+                .and_then(|path| choice_name_for_path(memory_state.candidates(), path))
+                .map(str::to_owned);
+            let responder_refs = responders.iter().map(String::as_str).collect::<Vec<_>>();
+            let mut memory = memory_state.bind(procfs, process);
+            let Some(result) = coordinator.player_record_choices(
+                &mut memory,
+                &responder_refs,
+                local_identity.as_deref(),
+                local_choice.as_deref(),
+            ) else {
+                return;
+            };
+            publish_reward_result(result, observer, shared, app, reward_catalog, now);
+            *early_reward_resolved = true;
+        }
         RewardLogEvent::BaselineRequested { relic_paths } => {
+            *early_reward_resolved = false;
             let candidates = catalog
                 .zip(relic_catalog)
                 .map(|(catalog, relics)| {
@@ -505,6 +537,9 @@ fn handle_reward_event(
             expected_choices,
             local_reward_path,
         } => {
+            if *early_reward_resolved {
+                return;
+            }
             let Some(process) = process else {
                 return;
             };
@@ -547,41 +582,76 @@ fn handle_reward_event(
                 let local = result.choices.names.remove(index);
                 result.choices.names.insert(0, local);
             }
-            let observations = result
-                .choices
-                .names
-                .into_iter()
-                .map(RewardObservation::certain)
-                .collect::<Vec<_>>();
-            let transition = observer.observe(observations);
-            if transition.publish {
-                apply_reward_observations(shared, reward_catalog, &transition.choices);
-                overlay_window::show_reward_overlay(app);
-            }
-            if let Ok(mut runtime) = shared.lock() {
-                let source = match result.choices.source {
-                    RewardChoiceSource::Memory => "memory",
-                    RewardChoiceSource::Ocr => "ocr",
-                };
-                let _ = runtime.core.record_capture_source_ready(
-                    source,
-                    result.choices.elapsed.as_millis(),
-                    now.to_string(),
-                );
-                if result.diagnostic == RewardSourceDiagnostic::Disagreement {
-                    let _ = runtime
-                        .core
-                        .record_capture_degraded("memory and OCR reward recognition disagreed");
-                }
-            }
+            publish_reward_result(result, observer, shared, app, reward_catalog, now);
+            *early_reward_resolved = true;
         }
         RewardLogEvent::Closed => {
+            *early_reward_resolved = false;
             memory_state.clear();
             observer.miss();
             overlay_window::hide_reward_overlay(app);
             if let Ok(mut runtime) = shared.lock() {
                 let _ = runtime.core.apply_reward_candidates(Vec::new());
             }
+        }
+    }
+}
+
+fn choice_name_for_path<'a>(
+    candidates: &'a [warframe_acquisition::RewardNeedle],
+    path: &str,
+) -> Option<&'a str> {
+    candidates
+        .iter()
+        .find(|needle| {
+            needle.internal_paths().iter().any(|candidate_path| {
+                std::str::from_utf8(candidate_path)
+                    .is_ok_and(|candidate_path| reward_path_matches(path, candidate_path))
+            })
+        })
+        .map(warframe_acquisition::RewardNeedle::choice_name)
+}
+
+pub fn reward_path_matches(log_path: &str, catalog_path: &str) -> bool {
+    log_path == catalog_path
+        || log_path
+            .strip_prefix("/Lotus/StoreItems")
+            .is_some_and(|suffix| catalog_path == format!("/Lotus{suffix}"))
+}
+
+fn publish_reward_result(
+    result: RewardSourceResult,
+    observer: &mut RewardObserverState,
+    shared: &SharedRuntime,
+    app: &AppHandle,
+    reward_catalog: &[RewardCatalogEntry],
+    now: u64,
+) {
+    let observations = result
+        .choices
+        .names
+        .into_iter()
+        .map(RewardObservation::certain)
+        .collect::<Vec<_>>();
+    let transition = observer.observe(observations);
+    if transition.publish {
+        apply_reward_observations(shared, reward_catalog, &transition.choices);
+        overlay_window::show_reward_overlay(app);
+    }
+    if let Ok(mut runtime) = shared.lock() {
+        let source = match result.choices.source {
+            RewardChoiceSource::Memory => "memory",
+            RewardChoiceSource::Ocr => "ocr",
+        };
+        let _ = runtime.core.record_capture_source_ready(
+            source,
+            result.choices.elapsed.as_millis(),
+            now.to_string(),
+        );
+        if result.diagnostic == RewardSourceDiagnostic::Disagreement {
+            let _ = runtime
+                .core
+                .record_capture_degraded("memory and OCR reward recognition disagreed");
         }
     }
 }

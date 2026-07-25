@@ -18,7 +18,7 @@ The local reward path logged by Warframe anchors the first card. Remote cards fo
 
 - Never publish a result derived only from clustered reward strings.
 - Require exactly one candidate reward for every expected responder.
-- Reject duplicate rewards, missing responders, and multiple nearby candidates.
+- Allow different responders to roll the same reward, but reject missing responders and multiple nearby candidates for one record.
 - Keep the scan read-only, bounded to writable anonymous memory, and capped below one second.
 - Keep OCR as fallback only when memory cannot prove a complete set.
 

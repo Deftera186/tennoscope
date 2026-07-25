@@ -238,6 +238,166 @@ impl RewardMemoryScanner {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub fn resolve_player_records(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        candidates: &[RewardNeedle],
+        responders: &[&str],
+        local_identity: Option<&str>,
+        local_choice: Option<&str>,
+    ) -> Result<RewardResolution, AcquisitionError> {
+        if responders.len() <= 1 || responders.iter().any(|identity| identity.len() != 24) {
+            return Ok(RewardResolution::Incomplete);
+        }
+        let started = Instant::now();
+        let mut regions = memory.readable_regions(process)?;
+        regions.retain(|region| region.scan_priority() == RegionScanPriority::WritableAnonymous);
+        regions.sort_by_key(|region| {
+            (
+                !is_live_ui_region(region.start()),
+                std::cmp::Reverse(region.start()),
+            )
+        });
+
+        enum RecordPattern<'a> {
+            Player(&'a str),
+            Reward(&'a str),
+        }
+        let mut reward_patterns = BTreeSet::<(&str, Vec<u8>)>::new();
+        for candidate in candidates {
+            reward_patterns.insert((
+                candidate.choice_name(),
+                candidate
+                    .choice_name()
+                    .chars()
+                    .filter(|character| character.is_ascii_alphanumeric())
+                    .collect::<String>()
+                    .into_bytes(),
+            ));
+            for path in candidate.internal_paths() {
+                if let Some(basename) = path.rsplit(|byte| *byte == b'/').next()
+                    && !basename.is_empty()
+                {
+                    reward_patterns.insert((candidate.choice_name(), basename.to_vec()));
+                }
+            }
+        }
+        let reward_patterns = reward_patterns.into_iter().collect::<Vec<_>>();
+        let mut patterns = Vec::<&[u8]>::new();
+        let mut metadata = Vec::<RecordPattern<'_>>::new();
+        for identity in responders {
+            patterns.push(identity.as_bytes());
+            metadata.push(RecordPattern::Player(identity));
+        }
+        for (choice_name, pattern) in &reward_patterns {
+            patterns.push(pattern);
+            metadata.push(RecordPattern::Reward(choice_name));
+        }
+        let matcher = AhoCorasick::new(patterns).map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        let overlap = reward_patterns
+            .iter()
+            .map(|(_, pattern)| pattern.len())
+            .chain(responders.iter().map(|identity| identity.len()))
+            .max()
+            .unwrap_or(1)
+            .saturating_sub(1);
+        let mut buffer = vec![0_u8; self.chunk_size + overlap];
+        let mut player_hits = Vec::<(&str, u64, u64)>::new();
+        let mut reward_hits = Vec::<(&str, u64, u64)>::new();
+        let mut bytes_read = 0_u64;
+
+        'regions: for region in regions {
+            let mut offset = 0_usize;
+            let mut retained = 0_usize;
+            while offset < region.len() {
+                if started.elapsed() >= self.timeout || bytes_read >= self.byte_budget {
+                    break 'regions;
+                }
+                let remaining_budget =
+                    usize::try_from(self.byte_budget - bytes_read).unwrap_or(usize::MAX);
+                let request = (region.len() - offset)
+                    .min(self.chunk_size)
+                    .min(remaining_budget);
+                if request == 0 {
+                    break 'regions;
+                }
+                let address = region.start() + u64::try_from(offset).unwrap_or(u64::MAX);
+                let read =
+                    memory.read_at(process, address, &mut buffer[retained..retained + request])?;
+                if read == 0 {
+                    break;
+                }
+                bytes_read += u64::try_from(read).unwrap_or(0);
+                let available = retained + read;
+                let base = address.saturating_sub(u64::try_from(retained).unwrap_or(0));
+                for found in matcher.find_overlapping_iter(&buffer[..available]) {
+                    let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
+                    match metadata[found.pattern().as_usize()] {
+                        RecordPattern::Player(identity) => {
+                            player_hits.push((identity, hit_address, region.start()));
+                        }
+                        RecordPattern::Reward(choice_name) => {
+                            reward_hits.push((choice_name, hit_address, region.start()));
+                        }
+                    }
+                }
+                retained = overlap.min(available);
+                buffer.copy_within(available - retained..available, 0);
+                offset += read;
+            }
+        }
+        buffer.zeroize();
+
+        let reward_for = |identity: &str| {
+            let mut names = BTreeSet::new();
+            for (_, player_address, region_start) in player_hits
+                .iter()
+                .filter(|(found, _, _)| *found == identity)
+            {
+                for (name, reward_address, reward_region) in &reward_hits {
+                    let distance = reward_address.saturating_sub(*player_address);
+                    if reward_region == region_start && (64..=256).contains(&distance) {
+                        names.insert((*name).to_owned());
+                    }
+                }
+            }
+            (names.len() == 1)
+                .then(|| names.into_iter().next())
+                .flatten()
+        };
+
+        let inferred_local = local_identity.or_else(|| {
+            let local_choice = local_choice?;
+            responders
+                .iter()
+                .copied()
+                .find(|identity| reward_for(identity).as_deref() == Some(local_choice))
+        });
+        let (Some(local_identity), Some(local_choice)) = (inferred_local, local_choice) else {
+            return Ok(RewardResolution::Incomplete);
+        };
+        let mut choices = vec![local_choice.to_owned()];
+        for identity in responders
+            .iter()
+            .copied()
+            .filter(|identity| *identity != local_identity)
+        {
+            let Some(choice) = reward_for(identity) else {
+                return Ok(RewardResolution::Incomplete);
+            };
+            choices.push(choice);
+        }
+        if choices.len() != responders.len() {
+            return Ok(RewardResolution::Incomplete);
+        }
+        Ok(RewardResolution::Confirmed {
+            choices,
+            region_start: 0,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn confirm_region(
         &self,
         memory: &dyn MemoryReader,
