@@ -16,6 +16,7 @@ const LIVE_UI_ADDRESS_MAX: u64 = 0x2800_0000;
 
 struct SnapshotMemoryReader<'a> {
     live: &'a dyn MemoryReader,
+    live_regions: Vec<ReadableRegion>,
     snapshots: Vec<MemorySnapshotRegion>,
 }
 
@@ -59,6 +60,17 @@ impl MemoryReader for SnapshotMemoryReader<'_> {
             return Ok(buffer.len());
         }
         self.live.read_at(process, address, buffer)
+    }
+
+    fn readable_region_containing(
+        &self,
+        _process: &GameProcess,
+        address: u64,
+    ) -> Result<Option<ReadableRegion>, AcquisitionError> {
+        Ok(self.live_regions.iter().copied().find(|region| {
+            address >= region.start()
+                && address < region.start().saturating_add(region.len() as u64)
+        }))
     }
 }
 
@@ -344,6 +356,7 @@ impl RewardMemoryScanner {
         if let Some(snapshots) = memory.recently_written_snapshot(process)? {
             let snapshot_memory = SnapshotMemoryReader {
                 live: memory,
+                live_regions: memory.readable_regions(process)?,
                 snapshots,
             };
             return self.resolve_player_records_ordered(
@@ -470,17 +483,20 @@ impl RewardMemoryScanner {
                     for found in player_matcher.find_overlapping_iter(&cursor.buffer[..available]) {
                         let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
                         let identity = responders[found.pattern().as_usize()];
-                        let record_start = hit_address.saturating_sub(1).max(region.start());
-                        let region_end = region.start() + u64::try_from(region.len()).unwrap_or(0);
+                        let containing = memory.readable_region_containing(process, hit_address)?;
+                        let record_start = containing.map_or_else(
+                            || hit_address.saturating_sub(1),
+                            |region| hit_address.saturating_sub(1).max(region.start()),
+                        );
                         let mut record = [0_u8; 768];
-                        let request = usize::try_from(region_end.saturating_sub(record_start))
-                            .unwrap_or(0)
-                            .min(record.len());
-                        let record_read = if request == 0 {
-                            0
-                        } else {
-                            memory.read_at(process, record_start, &mut record[..request])?
-                        };
+                        let request = containing.map_or(record.len(), |region| {
+                            let end = region.start().saturating_add(region.len() as u64);
+                            usize::try_from(end.saturating_sub(record_start))
+                                .unwrap_or(0)
+                                .min(record.len())
+                        });
+                        let record_read =
+                            memory.read_at(process, record_start, &mut record[..request])?;
                         if let Some(choice) =
                             structured_response_reward(&record[..record_read], identity, candidates)
                         {
@@ -535,20 +551,18 @@ impl RewardMemoryScanner {
             .max()
             .unwrap_or(1)
             .saturating_sub(1);
-        let mut windows = player_hits
-            .iter()
-            .filter_map(|(_, address, region_start)| {
-                let region = regions
-                    .iter()
-                    .find(|region| region.start() == *region_start)?;
-                let region_end = region.start() + u64::try_from(region.len()).ok()?;
-                Some((
-                    address.saturating_sub(32 * 1024).max(region.start()),
-                    address.saturating_add(32 * 1024).min(region_end),
-                    *region_start,
-                ))
-            })
-            .collect::<Vec<_>>();
+        let mut windows = Vec::with_capacity(player_hits.len());
+        for (_, address, region_start) in &player_hits {
+            let Some(region) = memory.readable_region_containing(process, *address)? else {
+                continue;
+            };
+            let region_end = region.start().saturating_add(region.len() as u64);
+            windows.push((
+                address.saturating_sub(32 * 1024).max(region.start()),
+                address.saturating_add(32 * 1024).min(region_end),
+                *region_start,
+            ));
+        }
         windows.sort_unstable();
         let mut merged_windows = Vec::<(u64, u64, u64)>::new();
         for (start, end, region_start) in windows {

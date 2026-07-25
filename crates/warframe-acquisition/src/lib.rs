@@ -242,6 +242,17 @@ pub trait MemoryReader {
     ) -> Result<Option<Vec<MemorySnapshotRegion>>, AcquisitionError> {
         Ok(None)
     }
+
+    fn readable_region_containing(
+        &self,
+        process: &GameProcess,
+        address: u64,
+    ) -> Result<Option<ReadableRegion>, AcquisitionError> {
+        Ok(self.readable_regions(process)?.into_iter().find(|region| {
+            address >= region.start()
+                && address < region.start().saturating_add(region.len() as u64)
+        }))
+    }
 }
 impl<T: MemoryReader + ?Sized> MemoryReader for &T {
     fn readable_regions(
@@ -272,6 +283,13 @@ impl<T: MemoryReader + ?Sized> MemoryReader for &T {
         process: &GameProcess,
     ) -> Result<Option<Vec<MemorySnapshotRegion>>, AcquisitionError> {
         (**self).recently_written_snapshot(process)
+    }
+    fn readable_region_containing(
+        &self,
+        process: &GameProcess,
+        address: u64,
+    ) -> Result<Option<ReadableRegion>, AcquisitionError> {
+        (**self).readable_region_containing(process, address)
     }
 }
 

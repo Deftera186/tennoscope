@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 
 use warframe_acquisition::{
-    AcquisitionError, GameProcess, MemoryReader, ReadableRegion, RegionScanPriority,
-    RewardMemoryScanner, RewardNeedle, RewardRepresentation, RewardResolution,
+    AcquisitionError, GameProcess, MemoryReader, MemorySnapshotRegion, ReadableRegion,
+    RegionScanPriority, RewardMemoryScanner, RewardNeedle, RewardRepresentation, RewardResolution,
     resolve_current_reward_choices, resolve_reward_choices,
 };
 
@@ -16,6 +16,7 @@ struct RecentFixtureMemory {
     readable: Vec<ReadableRegion>,
     recent: Vec<ReadableRegion>,
     bytes: BTreeMap<u64, Vec<u8>>,
+    snapshot: Option<Vec<MemorySnapshotRegion>>,
 }
 
 impl MemoryReader for RecentFixtureMemory {
@@ -31,6 +32,13 @@ impl MemoryReader for RecentFixtureMemory {
         _process: &GameProcess,
     ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
         Ok(self.recent.clone())
+    }
+
+    fn recently_written_snapshot(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Option<Vec<MemorySnapshotRegion>>, AcquisitionError> {
+        Ok(self.snapshot.clone())
     }
 
     fn read_at(
@@ -292,17 +300,21 @@ fn player_record_scan_uses_recently_written_pages_when_available() {
     response[0..24].copy_from_slice(identity.as_bytes());
     response[127..143].copy_from_slice(b"BratonPrimeStock");
     let memory = RecentFixtureMemory {
-        readable: vec![ReadableRegion::classified(
-            0x5bf1_0000,
-            512,
-            RegionScanPriority::WritableAnonymous,
-        )],
+        readable: vec![
+            ReadableRegion::classified(0x5bf1_0000, 512, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(
+                0x3eda_0000,
+                response.len(),
+                RegionScanPriority::WritableAnonymous,
+            ),
+        ],
         recent: vec![ReadableRegion::classified(
             0x3eda_0000,
             response.len(),
             RegionScanPriority::WritableAnonymous,
         )],
         bytes: BTreeMap::from([(0x5bf1_0000, vec![0; 512]), (0x3eda_0000, response)]),
+        snapshot: None,
     };
     let candidate = RewardNeedle::from_paths(
         "Braton Prime Stock",
@@ -312,6 +324,57 @@ fn player_record_scan_uses_recently_written_pages_when_available() {
 
     assert_eq!(
         RewardMemoryScanner::new(128, 512, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Braton Prime Stock".into()],
+            region_start: 0,
+        }
+    );
+}
+
+#[test]
+fn snapshot_player_hit_can_resolve_a_reward_from_the_adjacent_live_page() {
+    let identity = "de1e7ed00000000000000006";
+    let base = 0x3eda_0000_u64;
+    let mut live = vec![0_u8; 16 * 1024];
+    live[128..152].copy_from_slice(identity.as_bytes());
+    live[5_128..5_144].copy_from_slice(b"BratonPrimeStock");
+    let mut dirty_page = vec![0_u8; 4096];
+    dirty_page.copy_from_slice(&live[..4096]);
+    let memory = RecentFixtureMemory {
+        readable: vec![ReadableRegion::classified(
+            base,
+            live.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        recent: vec![ReadableRegion::classified(
+            base,
+            dirty_page.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(base, live)]),
+        snapshot: Some(vec![MemorySnapshotRegion::new(
+            base,
+            dirty_page,
+            RegionScanPriority::WritableAnonymous,
+        )]),
+    };
+    let candidate = RewardNeedle::from_paths(
+        "Braton Prime Stock",
+        vec!["/Lotus/Types/Recipes/Weapons/WeaponParts/BratonPrimeStock".into()],
+    )
+    .unwrap();
+
+    assert_eq!(
+        RewardMemoryScanner::new(4096, 64 * 1024, Duration::from_secs(1))
             .resolve_player_records(
                 &memory,
                 &GameProcess::new(9),
