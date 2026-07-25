@@ -565,13 +565,11 @@ fn handle_reward_event(
                     Duration::from_millis(750),
                     || {
                         scanner
-                            .resolve_player_records(
+                            .resolve_live_player_record(
                                 &procfs,
                                 &process,
                                 &candidates,
-                                &responders,
-                                None,
-                                None,
+                                responders[0],
                             )
                             .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
                     },

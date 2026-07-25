@@ -321,6 +321,28 @@ impl RewardMemoryScanner {
             local_identity,
             local_choice,
             false,
+            true,
+            true,
+        )
+    }
+
+    pub fn resolve_live_player_record(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        candidates: &[RewardNeedle],
+        responder: &str,
+    ) -> Result<RewardResolution, AcquisitionError> {
+        self.resolve_player_records_ordered(
+            memory,
+            process,
+            candidates,
+            &[responder],
+            None,
+            None,
+            false,
+            false,
+            false,
         )
     }
 
@@ -342,6 +364,8 @@ impl RewardMemoryScanner {
             local_identity,
             local_choice,
             true,
+            true,
+            true,
         )
     }
 
@@ -355,8 +379,10 @@ impl RewardMemoryScanner {
         local_identity: Option<&str>,
         local_choice: Option<&str>,
         low_heaps_first: bool,
+        use_snapshot: bool,
+        allow_proximity_fallback: bool,
     ) -> Result<RewardResolution, AcquisitionError> {
-        if let Some(snapshots) = memory.recently_written_snapshot(process)? {
+        if use_snapshot && let Some(snapshots) = memory.recently_written_snapshot(process)? {
             let snapshot_memory = SnapshotMemoryReader {
                 live: memory,
                 live_regions: memory.readable_regions(process)?,
@@ -370,6 +396,8 @@ impl RewardMemoryScanner {
                 local_identity,
                 local_choice,
                 low_heaps_first,
+                false,
+                allow_proximity_fallback,
             );
         }
         if responders.is_empty() || responders.iter().any(|identity| identity.len() != 24) {
@@ -627,6 +655,9 @@ impl RewardMemoryScanner {
                 && names.len() == 1
             {
                 return names.iter().next().cloned();
+            }
+            if !allow_proximity_fallback {
+                return None;
             }
             let mut inline_names = BTreeSet::new();
             let mut retained_names = BTreeSet::new();
