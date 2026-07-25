@@ -2,7 +2,7 @@ use std::{
     cmp::Reverse,
     collections::HashMap,
     fs::{self, File},
-    io,
+    io::{self, Write},
     os::unix::fs::FileExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -15,6 +15,9 @@ use crate::{
 
 const FULL_PROCESS_NAME: &str = "Warframe.x64.exe";
 const WINE_PROCESS_NAME: &str = "Warframe.x64.ex";
+const PAGE_SIZE: u64 = 4096;
+const PAGEMAP_PRESENT: u64 = 1 << 63;
+const PAGEMAP_SOFT_DIRTY: u64 = 1 << 55;
 
 /// Linux and Proton process access backed by procfs.
 ///
@@ -190,6 +193,82 @@ impl MemoryReader for LinuxProc {
             }
             Err(error) => Err(classify_io(process.pid(), error)),
         }
+    }
+
+    fn reset_recent_writes(&self, process: &GameProcess) -> Result<(), AcquisitionError> {
+        self.validate_identity(process)?;
+        let mut clear_refs = fs::OpenOptions::new()
+            .write(true)
+            .open(self.process_file(process.pid(), "clear_refs"))
+            .map_err(|error| classify_io(process.pid(), error))?;
+        clear_refs
+            .write_all(b"4")
+            .map_err(|error| classify_io(process.pid(), error))?;
+        self.validate_identity(process)
+    }
+
+    fn recently_written_regions(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        self.validate_identity(process)?;
+        let regions = self.readable_regions(process)?;
+        let pagemap = File::open(self.process_file(process.pid(), "pagemap"))
+            .map_err(|error| classify_io(process.pid(), error))?;
+        let mut dirty = Vec::new();
+
+        for region in regions
+            .into_iter()
+            .filter(|region| region.scan_priority() == RegionScanPriority::WritableAnonymous)
+        {
+            let first_page = region.start() / PAGE_SIZE;
+            let page_count = region.len().div_ceil(PAGE_SIZE as usize);
+            let mut entries = vec![0_u8; page_count.saturating_mul(8)];
+            let read = pagemap
+                .read_at(&mut entries, first_page.saturating_mul(8))
+                .map_err(|error| classify_io(process.pid(), error))?;
+            entries.truncate(read - (read % 8));
+
+            let mut run_start = None::<usize>;
+            for (page_index, bytes) in entries.chunks_exact(8).enumerate() {
+                let entry = u64::from_le_bytes(bytes.try_into().unwrap_or([0; 8]));
+                let is_dirty = entry & (PAGEMAP_PRESENT | PAGEMAP_SOFT_DIRTY)
+                    == (PAGEMAP_PRESENT | PAGEMAP_SOFT_DIRTY);
+                match (run_start, is_dirty) {
+                    (None, true) => run_start = Some(page_index),
+                    (Some(start), false) => {
+                        push_dirty_run(&mut dirty, region, start, page_index);
+                        run_start = None;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(start) = run_start {
+                push_dirty_run(&mut dirty, region, start, entries.len() / 8);
+            }
+        }
+        self.validate_identity(process)?;
+        Ok(dirty)
+    }
+}
+
+fn push_dirty_run(
+    output: &mut Vec<ReadableRegion>,
+    source: ReadableRegion,
+    start_page: usize,
+    end_page: usize,
+) {
+    let byte_offset = start_page.saturating_mul(PAGE_SIZE as usize);
+    let len = end_page
+        .saturating_sub(start_page)
+        .saturating_mul(PAGE_SIZE as usize)
+        .min(source.len().saturating_sub(byte_offset));
+    if len != 0 {
+        output.push(ReadableRegion::classified(
+            source.start() + u64::try_from(byte_offset).unwrap_or(u64::MAX),
+            len,
+            source.scan_priority(),
+        ));
     }
 }
 

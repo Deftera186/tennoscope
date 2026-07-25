@@ -61,10 +61,9 @@ fn multi_player_relic_paths_request_a_baseline_before_the_reward_window() {
             ],
         }]
     );
-    assert!(
-        machine
-            .observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI")
-            .is_empty()
+    assert_eq!(
+        machine.observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI"),
+        vec![RewardLogEvent::RewardWindowOpened]
     );
 }
 
@@ -180,10 +179,9 @@ fn shutdown_closes_and_resets_the_reward_window() {
         machine.observe_line("ProjectionRewardChoice.lua: Relic reward screen shut down"),
         vec![RewardLogEvent::Closed]
     );
-    assert!(
-        machine
-            .observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI")
-            .is_empty()
+    assert_eq!(
+        machine.observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI"),
+        vec![RewardLogEvent::RewardWindowOpened]
     );
 }
 
@@ -198,7 +196,7 @@ fn byte_stream_preserves_lines_split_across_monitor_reads() {
     );
     let events = machine.observe_bytes(b"ScreenRMI\n");
 
-    assert!(events.is_empty());
+    assert_eq!(events, vec![RewardLogEvent::RewardWindowOpened]);
 }
 
 #[test]
@@ -220,6 +218,7 @@ fn live_response_sequence_emits_ordered_responders_and_completes_before_renderin
     assert_eq!(
         events,
         vec![
+            RewardLogEvent::RewardWindowOpened,
             RewardLogEvent::ResponderReceived {
                 identity: "de1e7ed00000000000000005".into(),
                 is_local: false,
@@ -272,9 +271,12 @@ fn opening_reward_screen_initializes_candidates_for_one_unique_relic() {
 
     assert_eq!(
         machine.observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI"),
-        vec![RewardLogEvent::BaselineRequested {
-            relic_paths: vec![relic.into()],
-        }]
+        vec![
+            RewardLogEvent::RewardWindowOpened,
+            RewardLogEvent::BaselineRequested {
+                relic_paths: vec![relic.into()],
+            },
+        ]
     );
 }
 

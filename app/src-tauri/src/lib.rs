@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CatalogIndex, GameProcess, InventoryAcquirer, InventoryHttpTransport, LinuxProc,
-    ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry, RewardMemoryScanner,
-    WfcdCatalogHttp, WfcdRelicCatalogHttp,
+    MemoryReader, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry,
+    RewardMemoryScanner, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
 
@@ -531,6 +531,11 @@ fn handle_reward_event(
     now: u64,
 ) {
     match event {
+        RewardLogEvent::RewardWindowOpened => {
+            if let Some(process) = process {
+                let _ = procfs.reset_recent_writes(&process);
+            }
+        }
         RewardLogEvent::ResponderReceived { .. } => {}
         RewardLogEvent::ResponsesComplete {
             responders,

@@ -12,6 +12,48 @@ struct FixtureMemory {
     reads: Mutex<Vec<u64>>,
 }
 
+struct RecentFixtureMemory {
+    readable: Vec<ReadableRegion>,
+    recent: Vec<ReadableRegion>,
+    bytes: BTreeMap<u64, Vec<u8>>,
+}
+
+impl MemoryReader for RecentFixtureMemory {
+    fn readable_regions(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        Ok(self.readable.clone())
+    }
+
+    fn recently_written_regions(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        Ok(self.recent.clone())
+    }
+
+    fn read_at(
+        &self,
+        _process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        let Some((start, bytes)) = self
+            .bytes
+            .range(..=address)
+            .next_back()
+            .filter(|(start, bytes)| address < **start + bytes.len() as u64)
+        else {
+            return Ok(0);
+        };
+        let offset = usize::try_from(address - *start).unwrap();
+        let len = (bytes.len() - offset).min(buffer.len());
+        buffer[..len].copy_from_slice(&bytes[offset..offset + len]);
+        Ok(len)
+    }
+}
+
 impl MemoryReader for FixtureMemory {
     fn readable_regions(
         &self,
@@ -227,6 +269,49 @@ fn player_record_scan_samples_each_response_heap_before_exhausting_one_heap() {
 
     assert_eq!(
         RewardMemoryScanner::new(128, 6 * 1024, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Braton Prime Stock".into()],
+            region_start: 0,
+        }
+    );
+}
+
+#[test]
+fn player_record_scan_uses_recently_written_pages_when_available() {
+    let identity = "de1e7ed00000000000000006";
+    let mut response = vec![0_u8; 512];
+    response[0..24].copy_from_slice(identity.as_bytes());
+    response[127..143].copy_from_slice(b"BratonPrimeStock");
+    let memory = RecentFixtureMemory {
+        readable: vec![ReadableRegion::classified(
+            0x5bf1_0000,
+            512,
+            RegionScanPriority::WritableAnonymous,
+        )],
+        recent: vec![ReadableRegion::classified(
+            0x3eda_0000,
+            response.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x5bf1_0000, vec![0; 512]), (0x3eda_0000, response)]),
+    };
+    let candidate = RewardNeedle::from_paths(
+        "Braton Prime Stock",
+        vec!["/Lotus/Types/Recipes/Weapons/WeaponParts/BratonPrimeStock".into()],
+    )
+    .unwrap();
+
+    assert_eq!(
+        RewardMemoryScanner::new(128, 512, Duration::from_secs(1))
             .resolve_player_records(
                 &memory,
                 &GameProcess::new(9),

@@ -294,7 +294,9 @@ impl RewardMemoryScanner {
             return Ok(RewardResolution::Incomplete);
         }
         let started = Instant::now();
-        let mut regions = memory.readable_regions(process)?;
+        let mut regions = memory
+            .recently_written_regions(process)
+            .or_else(|_| memory.readable_regions(process))?;
         regions.retain(|region| region.scan_priority() == RegionScanPriority::WritableAnonymous);
         if low_heaps_first {
             regions.sort_by_key(|region| (region.start() >= 0x8000_0000, region.start()));

@@ -13,6 +13,7 @@ const GETS_REWARD: &str = " gets reward ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RewardLogEvent {
+    RewardWindowOpened,
     BaselineRequested {
         relic_paths: Vec<String>,
     },
@@ -92,13 +93,14 @@ impl RewardLogMachine {
             self.rendered_cards = 0;
             self.local_reward_path = None;
             self.local_identity = None;
+            let mut events = vec![RewardLogEvent::RewardWindowOpened];
             if !self.loaded_relics.is_empty() && !self.baseline_requested {
                 self.baseline_requested = true;
-                return vec![RewardLogEvent::BaselineRequested {
+                events.push(RewardLogEvent::BaselineRequested {
                     relic_paths: self.loaded_relics.clone(),
-                }];
+                });
             }
-            return Vec::new();
+            return events;
         }
         if self.reward_window_open {
             if let Some((prefix, path)) = line.split_once(GETS_REWARD) {

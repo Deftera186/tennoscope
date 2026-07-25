@@ -197,6 +197,17 @@ pub trait MemoryReader {
         address: u64,
         buffer: &mut [u8],
     ) -> Result<usize, AcquisitionError>;
+
+    fn reset_recent_writes(&self, _process: &GameProcess) -> Result<(), AcquisitionError> {
+        Ok(())
+    }
+
+    fn recently_written_regions(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        self.readable_regions(process)
+    }
 }
 impl<T: MemoryReader + ?Sized> MemoryReader for &T {
     fn readable_regions(
@@ -212,6 +223,15 @@ impl<T: MemoryReader + ?Sized> MemoryReader for &T {
         buffer: &mut [u8],
     ) -> Result<usize, AcquisitionError> {
         (**self).read_at(process, address, buffer)
+    }
+    fn reset_recent_writes(&self, process: &GameProcess) -> Result<(), AcquisitionError> {
+        (**self).reset_recent_writes(process)
+    }
+    fn recently_written_regions(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        (**self).recently_written_regions(process)
     }
 }
 

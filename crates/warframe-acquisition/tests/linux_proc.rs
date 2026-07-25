@@ -310,3 +310,46 @@ fn denied_memory_reports_actionable_permission_guidance_without_paths() {
     assert!(rendered.contains("sandbox"));
     assert!(!rendered.contains(temp.path().to_str().unwrap()));
 }
+
+#[test]
+fn resetting_recent_write_tracking_writes_the_soft_dirty_command() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(temp.path(), "700/clear_refs", b"");
+
+    LinuxProc::at(temp.path())
+        .reset_recent_writes(&GameProcess::new(700))
+        .unwrap();
+
+    assert_eq!(fs::read(temp.path().join("700/clear_refs")).unwrap(), b"4");
+}
+
+#[test]
+fn recently_written_regions_coalesce_only_present_soft_dirty_pages() {
+    let temp = tempfile::tempdir().unwrap();
+    write_file(
+        temp.path(),
+        "701/maps",
+        concat!(
+            "1000-5000 rw-p 00000000 00:00 0\n",
+            "9000-a000 r--p 00000000 00:00 0\n",
+        ),
+    );
+    let mut pagemap = vec![0_u8; 10 * 8];
+    for page in [1_usize, 2, 4] {
+        let entry = (1_u64 << 63) | (1_u64 << 55);
+        pagemap[page * 8..page * 8 + 8].copy_from_slice(&entry.to_le_bytes());
+    }
+    write_file(temp.path(), "701/pagemap", pagemap);
+
+    let regions = LinuxProc::at(temp.path())
+        .recently_written_regions(&GameProcess::new(701))
+        .unwrap();
+
+    assert_eq!(
+        regions,
+        vec![
+            ReadableRegion::classified(0x1000, 0x2000, RegionScanPriority::WritableAnonymous,),
+            ReadableRegion::classified(0x4000, 0x1000, RegionScanPriority::WritableAnonymous,),
+        ]
+    );
+}
