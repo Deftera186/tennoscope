@@ -355,18 +355,16 @@ fn record_hits(
     if needle.is_empty() || needle.len() > haystack.len() {
         return;
     }
-    for (index, window) in haystack.windows(needle.len()).enumerate() {
-        if window == needle {
-            let address = base + u64::try_from(index).unwrap_or(0);
-            if seen.insert((address, representation)) {
-                hits.push(RewardHit {
-                    choice_name: candidate.choice_name.clone(),
-                    address,
-                    region_start,
-                    priority,
-                    representation,
-                });
-            }
+    for index in memchr::memmem::find_iter(haystack, needle) {
+        let address = base + u64::try_from(index).unwrap_or(0);
+        if seen.insert((address, representation)) {
+            hits.push(RewardHit {
+                choice_name: candidate.choice_name.clone(),
+                address,
+                region_start,
+                priority,
+                representation,
+            });
         }
     }
 }

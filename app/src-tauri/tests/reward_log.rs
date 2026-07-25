@@ -67,3 +67,22 @@ fn shutdown_closes_and_resets_the_reward_window() {
         }]
     );
 }
+
+#[test]
+fn byte_stream_preserves_lines_split_across_monitor_reads() {
+    let mut machine = RewardLogMachine::default();
+
+    assert!(
+        machine
+            .observe_bytes(b"OpenVoidProjectionReward")
+            .is_empty()
+    );
+    let events = machine.observe_bytes(b"ScreenRMI\n");
+
+    assert_eq!(
+        events,
+        vec![RewardLogEvent::BaselineRequested {
+            relic_paths: Vec::new(),
+        }]
+    );
+}

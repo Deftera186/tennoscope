@@ -20,9 +20,30 @@ pub struct RewardLogMachine {
     responders: BTreeSet<String>,
     reward_window_open: bool,
     choices_emitted: bool,
+    carry: Vec<u8>,
 }
 
 impl RewardLogMachine {
+    pub fn observe_bytes(&mut self, bytes: &[u8]) -> Vec<RewardLogEvent> {
+        self.carry.extend_from_slice(bytes);
+        let complete = self
+            .carry
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        if complete == 0 {
+            if self.carry.len() > 64 * 1024 {
+                self.carry.clear();
+            }
+            return Vec::new();
+        }
+        let lines = self.carry.drain(..complete).collect::<Vec<_>>();
+        String::from_utf8_lossy(&lines)
+            .lines()
+            .flat_map(|line| self.observe_line(line))
+            .collect()
+    }
+
     pub fn observe_line(&mut self, line: &str) -> Vec<RewardLogEvent> {
         if let Some(path) = projection_path(line) {
             if !self.loaded_relics.iter().any(|loaded| loaded == path) {

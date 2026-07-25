@@ -14,8 +14,9 @@ use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use warframe_acquisition::{
-    CatalogCache, CatalogIndex, InventoryAcquirer, InventoryHttpTransport, LinuxProc,
-    ProcessDiscovery, RewardCatalogEntry, WfcdCatalogHttp,
+    CatalogCache, CatalogIndex, GameProcess, InventoryAcquirer, InventoryHttpTransport, LinuxProc,
+    ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry, RewardMemoryScanner,
+    WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
 
@@ -23,6 +24,7 @@ mod monitor;
 mod overlay_window;
 mod reward_log;
 mod reward_observer;
+mod reward_source;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
@@ -32,6 +34,11 @@ pub use overlay_window::{
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
+};
+pub use reward_source::{
+    BoundMemoryRewardSource, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSet,
+    RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic, RewardSourceResult,
+    VisualRewardSource,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -350,7 +357,14 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
 fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let procfs = LinuxProc::new();
     let mut machine = MonitorMachine::new(15);
-    let mut reward_state = RewardObserverState::new(2, 2);
+    let mut reward_state = RewardObserverState::new(1, 1);
+    let mut reward_log = RewardLogMachine::default();
+    let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
+        256 * 1024,
+        384 * 1024 * 1024,
+        Duration::from_millis(450),
+    ));
+    let coordinator = RewardSourceCoordinator::new(cfg!(debug_assertions));
     let catalog = shared
         .lock()
         .ok()
@@ -362,14 +376,20 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         .as_ref()
         .map(CatalogIndex::reward_entries)
         .unwrap_or_default();
+    let relic_catalog = shared
+        .lock()
+        .ok()
+        .and_then(|runtime| load_relic_catalog(&runtime.app_data));
     loop {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let input = match procfs.discover() {
-            Ok(None) => MonitorInput::absent(now),
-            Err(error) => MonitorInput::error(now, error),
+        let discovered = procfs.discover();
+        let process = discovered.as_ref().ok().and_then(|process| *process);
+        let (input, log_bytes) = match discovered {
+            Ok(None) => (MonitorInput::absent(now), Vec::new()),
+            Err(error) => (MonitorInput::error(now, error), Vec::new()),
             Ok(Some(process)) => build_monitor_input(&machine, now, process.pid()),
         };
         let result = machine.tick(input);
@@ -397,15 +417,29 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 };
             }
         }
-        observe_rewards(
-            &shared,
-            &app,
-            now,
-            machine.process_pid().is_some(),
-            &reward_catalog,
-            &mut reward_state,
-        );
-        std::thread::sleep(Duration::from_secs(5));
+        for event in reward_log.observe_bytes(&log_bytes) {
+            handle_reward_event(
+                event,
+                process,
+                &procfs,
+                catalog.as_ref(),
+                relic_catalog.as_ref(),
+                &reward_catalog,
+                &mut reward_memory,
+                &coordinator,
+                &mut reward_state,
+                &shared,
+                &app,
+                now,
+            );
+        }
+        if process.is_none() {
+            reward_memory.clear();
+            if reward_state.miss().hide {
+                overlay_window::hide_reward_overlay(&app);
+            }
+        }
+        std::thread::sleep(Duration::from_millis(250));
     }
 }
 
@@ -422,67 +456,128 @@ fn load_catalog(app_data: &Path) -> Option<CatalogIndex> {
         .map(|catalog| catalog.index().clone())
 }
 
-fn observe_rewards(
+fn load_relic_catalog(app_data: &Path) -> Option<RelicRewardIndex> {
+    let cache = RelicCatalogCache::new(app_data.join("catalog"));
+    if let Ok(catalog) = cache.load_cached() {
+        return Some(catalog.index().clone());
+    }
+    let source = WfcdRelicCatalogHttp::new().ok()?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    cache
+        .load(&source, now)
+        .ok()
+        .map(|catalog| catalog.index().clone())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_reward_event(
+    event: RewardLogEvent,
+    process: Option<GameProcess>,
+    procfs: &LinuxProc,
+    catalog: Option<&CatalogIndex>,
+    relic_catalog: Option<&RelicRewardIndex>,
+    reward_catalog: &[RewardCatalogEntry],
+    memory_state: &mut LiveMemoryRewardState,
+    coordinator: &RewardSourceCoordinator,
+    observer: &mut RewardObserverState,
     shared: &SharedRuntime,
     app: &AppHandle,
     now: u64,
-    game_running: bool,
-    catalog: &[RewardCatalogEntry],
-    state: &mut RewardObserverState,
 ) {
-    let preview_active = shared
-        .lock()
-        .ok()
-        .and_then(|runtime| runtime.overlay_preview_until)
-        .is_some_and(|deadline| deadline > Instant::now());
-    if !game_running || catalog.is_empty() {
-        if preview_active {
-            return;
+    match event {
+        RewardLogEvent::BaselineRequested { relic_paths } => {
+            let candidates = catalog
+                .zip(relic_catalog)
+                .map(|(catalog, relics)| {
+                    relics.candidates_for_projection_paths(&relic_paths, catalog)
+                })
+                .unwrap_or_default();
+            let Some(process) = process else {
+                memory_state.clear();
+                return;
+            };
+            let mut memory = memory_state.bind(procfs, process);
+            let mut baseline_coordinator = RewardSourceCoordinator::new(cfg!(debug_assertions));
+            baseline_coordinator.baseline(&mut memory, &candidates);
         }
-        let transition = state.miss();
-        if transition.hide {
-            overlay_window::hide_reward_overlay(app);
-        }
-        return;
-    }
-    match reward_observer::observe_live_rewards(catalog) {
-        Ok(choices) if choices.len() == 4 => {
-            let transition = state.observe(choices);
+        RewardLogEvent::ChoicesReady { expected_choices } => {
+            let Some(process) = process else {
+                return;
+            };
+            let candidate_catalog =
+                reward_entries_for_needles(memory_state.candidates(), reward_catalog);
+            let visual_catalog = if candidate_catalog.is_empty() {
+                reward_catalog
+            } else {
+                &candidate_catalog
+            };
+            let mut memory = memory_state.bind(procfs, process);
+            let mut visual = LiveVisualRewardSource;
+            let Some(result) =
+                coordinator.choices(&mut memory, &mut visual, expected_choices, visual_catalog)
+            else {
+                return;
+            };
+            let observations = result
+                .choices
+                .names
+                .into_iter()
+                .map(RewardObservation::certain)
+                .collect::<Vec<_>>();
+            let transition = observer.observe(observations);
             if transition.show {
-                apply_reward_observations(shared, catalog, &transition.choices);
+                apply_reward_observations(shared, reward_catalog, &transition.choices);
                 overlay_window::show_reward_overlay(app);
             }
             if let Ok(mut runtime) = shared.lock() {
                 let _ = runtime.core.record_capture_ready(now.to_string());
-            }
-        }
-        Ok(_) => {
-            if let Ok(mut runtime) = shared.lock() {
-                let _ = runtime.core.record_capture_ready(now.to_string());
-            }
-            if preview_active {
-                return;
-            }
-            let transition = state.miss();
-            if transition.hide {
-                overlay_window::hide_reward_overlay(app);
-                if let Ok(mut runtime) = shared.lock() {
-                    let _ = runtime.core.apply_reward_candidates(Vec::new());
+                if result.diagnostic == RewardSourceDiagnostic::Disagreement {
+                    let _ = runtime
+                        .core
+                        .record_capture_degraded("memory and OCR reward recognition disagreed");
                 }
             }
         }
-        Err(message) => {
-            if preview_active {
-                return;
-            }
-            let transition = state.miss();
-            if transition.hide {
-                overlay_window::hide_reward_overlay(app);
-            }
+        RewardLogEvent::Closed => {
+            memory_state.clear();
+            observer.miss();
+            overlay_window::hide_reward_overlay(app);
             if let Ok(mut runtime) = shared.lock() {
-                let _ = runtime.core.record_capture_degraded(message);
+                let _ = runtime.core.apply_reward_candidates(Vec::new());
             }
         }
+    }
+}
+
+fn reward_entries_for_needles(
+    needles: &[warframe_acquisition::RewardNeedle],
+    catalog: &[RewardCatalogEntry],
+) -> Vec<RewardCatalogEntry> {
+    needles
+        .iter()
+        .map(|needle| {
+            catalog
+                .iter()
+                .find(|entry| entry.name == needle.choice_name())
+                .cloned()
+                .unwrap_or_else(|| RewardCatalogEntry {
+                    name: needle.choice_name().to_owned(),
+                    ducats: 0,
+                })
+        })
+        .collect()
+}
+
+struct LiveVisualRewardSource;
+
+impl VisualRewardSource for LiveVisualRewardSource {
+    fn choices(&mut self, candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
+        reward_observer::observe_live_rewards(candidates).map(|observations| {
+            observations
+                .into_iter()
+                .map(|observation| observation.name)
+                .collect()
+        })
     }
 }
 
@@ -524,20 +619,23 @@ fn apply_reward_observations(
     let _ = runtime.core.apply_reward_candidates(candidates);
 }
 
-fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> MonitorInput {
+fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (MonitorInput, Vec<u8>) {
     let Some(path) = inventory_log_path(pid) else {
-        return MonitorInput::running(now, pid, None);
+        return (MonitorInput::running(now, pid, None), Vec::new());
     };
     let metadata = match fs::metadata(&path) {
         Ok(metadata) => metadata,
-        Err(_) => return MonitorInput::running_with_log_error(now, pid),
+        Err(_) => return (MonitorInput::running_with_log_error(now, pid), Vec::new()),
     };
     let identity = format!("{}:{}", metadata.dev(), metadata.ino());
     if machine.process_pid() != Some(pid) {
-        return MonitorInput::running(
-            now,
-            pid,
-            Some(LogObservation::new(identity, metadata.len(), Vec::new())),
+        return (
+            MonitorInput::running(
+                now,
+                pid,
+                Some(LogObservation::new(identity, metadata.len(), Vec::new())),
+            ),
+            Vec::new(),
         );
     }
     let offset = if machine.log_identity() == Some(identity.as_str())
@@ -548,32 +646,39 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> MonitorI
         0
     };
     if metadata.len() == offset {
-        return MonitorInput::running(
-            now,
-            pid,
-            Some(LogObservation::new(identity, offset, Vec::new())),
+        return (
+            MonitorInput::running(
+                now,
+                pid,
+                Some(LogObservation::new(identity, offset, Vec::new())),
+            ),
+            Vec::new(),
         );
     }
     let mut file = match fs::File::open(path) {
         Ok(file) => file,
-        Err(_) => return MonitorInput::running_with_log_error(now, pid),
+        Err(_) => return (MonitorInput::running_with_log_error(now, pid), Vec::new()),
     };
     if file.seek(SeekFrom::Start(offset)).is_err() {
-        return MonitorInput::running_with_log_error(now, pid);
+        return (MonitorInput::running_with_log_error(now, pid), Vec::new());
     }
     let requested = (metadata.len() - offset).min(1024 * 1024);
     let mut bytes = Vec::with_capacity(requested as usize);
     if file.take(requested).read_to_end(&mut bytes).is_err() {
-        return MonitorInput::running_with_log_error(now, pid);
+        return (MonitorInput::running_with_log_error(now, pid), Vec::new());
     }
-    MonitorInput::running(
-        now,
-        pid,
-        Some(LogObservation::new(
-            identity,
-            offset + bytes.len() as u64,
-            bytes,
-        )),
+    let log_bytes = bytes.clone();
+    (
+        MonitorInput::running(
+            now,
+            pid,
+            Some(LogObservation::new(
+                identity,
+                offset + bytes.len() as u64,
+                bytes,
+            )),
+        ),
+        log_bytes,
     )
 }
 
