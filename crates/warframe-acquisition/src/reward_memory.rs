@@ -255,10 +255,6 @@ impl RewardMemoryScanner {
         regions.retain(|region| region.scan_priority() == RegionScanPriority::WritableAnonymous);
         regions.sort_by_key(|region| std::cmp::Reverse(region.start()));
 
-        enum RecordPattern<'a> {
-            Player(&'a str),
-            Reward(&'a str),
-        }
         let mut reward_patterns = BTreeSet::<(&str, Vec<u8>)>::new();
         for candidate in candidates {
             reward_patterns.insert((
@@ -279,30 +275,24 @@ impl RewardMemoryScanner {
             }
         }
         let reward_patterns = reward_patterns.into_iter().collect::<Vec<_>>();
-        let mut patterns = Vec::<&[u8]>::new();
-        let mut metadata = Vec::<RecordPattern<'_>>::new();
-        for identity in responders {
-            patterns.push(identity.as_bytes());
-            metadata.push(RecordPattern::Player(identity));
-        }
-        for (choice_name, pattern) in &reward_patterns {
-            patterns.push(pattern);
-            metadata.push(RecordPattern::Reward(choice_name));
-        }
-        let matcher = AhoCorasick::new(patterns).map_err(|_| AcquisitionError::SnapshotInvalid)?;
-        let overlap = reward_patterns
+        let player_matcher = AhoCorasick::new(
+            responders
+                .iter()
+                .map(|identity| identity.as_bytes())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        let player_overlap = responders
             .iter()
-            .map(|(_, pattern)| pattern.len())
-            .chain(responders.iter().map(|identity| identity.len()))
+            .map(|identity| identity.len())
             .max()
             .unwrap_or(1)
             .saturating_sub(1);
-        let mut buffer = vec![0_u8; self.chunk_size + overlap];
+        let mut buffer = vec![0_u8; self.chunk_size + player_overlap];
         let mut player_hits = Vec::<(&str, u64, u64)>::new();
-        let mut reward_hits = Vec::<(&str, u64, u64)>::new();
         let mut bytes_read = 0_u64;
 
-        'regions: for region in regions {
+        'regions: for region in &regions {
             let mut offset = 0_usize;
             let mut retained = 0_usize;
             while offset < region.len() {
@@ -326,20 +316,90 @@ impl RewardMemoryScanner {
                 bytes_read += u64::try_from(read).unwrap_or(0);
                 let available = retained + read;
                 let base = address.saturating_sub(u64::try_from(retained).unwrap_or(0));
-                for found in matcher.find_overlapping_iter(&buffer[..available]) {
+                for found in player_matcher.find_overlapping_iter(&buffer[..available]) {
                     let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
-                    match metadata[found.pattern().as_usize()] {
-                        RecordPattern::Player(identity) => {
-                            player_hits.push((identity, hit_address, region.start()));
-                        }
-                        RecordPattern::Reward(choice_name) => {
-                            reward_hits.push((choice_name, hit_address, region.start()));
-                        }
-                    }
+                    player_hits.push((
+                        responders[found.pattern().as_usize()],
+                        hit_address,
+                        region.start(),
+                    ));
                 }
-                retained = overlap.min(available);
+                retained = player_overlap.min(available);
                 buffer.copy_within(available - retained..available, 0);
                 offset += read;
+            }
+        }
+        buffer.zeroize();
+
+        let reward_matcher = AhoCorasick::new(
+            reward_patterns
+                .iter()
+                .map(|(_, pattern)| pattern.as_slice())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        let reward_overlap = reward_patterns
+            .iter()
+            .map(|(_, pattern)| pattern.len())
+            .max()
+            .unwrap_or(1)
+            .saturating_sub(1);
+        let mut windows = player_hits
+            .iter()
+            .filter_map(|(_, address, region_start)| {
+                let region = regions
+                    .iter()
+                    .find(|region| region.start() == *region_start)?;
+                let region_end = region.start() + u64::try_from(region.len()).ok()?;
+                Some((
+                    address.saturating_sub(32 * 1024).max(region.start()),
+                    address.saturating_add(32 * 1024).min(region_end),
+                    *region_start,
+                ))
+            })
+            .collect::<Vec<_>>();
+        windows.sort_unstable();
+        let mut merged_windows = Vec::<(u64, u64, u64)>::new();
+        for (start, end, region_start) in windows {
+            if let Some((_, previous_end, previous_region)) = merged_windows.last_mut()
+                && *previous_region == region_start
+                && start <= *previous_end
+            {
+                *previous_end = (*previous_end).max(end);
+            } else {
+                merged_windows.push((start, end, region_start));
+            }
+        }
+
+        let mut reward_hits = Vec::<(&str, u64, u64)>::new();
+        let mut buffer = vec![0_u8; self.chunk_size + reward_overlap];
+        'windows: for (window_start, window_end, region_start) in merged_windows {
+            let mut address = window_start;
+            let mut retained = 0_usize;
+            while address < window_end {
+                if started.elapsed() >= self.timeout {
+                    break 'windows;
+                }
+                let request = usize::try_from(window_end - address)
+                    .unwrap_or(usize::MAX)
+                    .min(self.chunk_size);
+                let read =
+                    memory.read_at(process, address, &mut buffer[retained..retained + request])?;
+                if read == 0 {
+                    break;
+                }
+                let available = retained + read;
+                let base = address.saturating_sub(u64::try_from(retained).unwrap_or(0));
+                for found in reward_matcher.find_overlapping_iter(&buffer[..available]) {
+                    reward_hits.push((
+                        reward_patterns[found.pattern().as_usize()].0,
+                        base + u64::try_from(found.start()).unwrap_or(0),
+                        region_start,
+                    ));
+                }
+                retained = reward_overlap.min(available);
+                buffer.copy_within(available - retained..available, 0);
+                address += u64::try_from(read).unwrap_or(0);
             }
         }
         buffer.zeroize();
