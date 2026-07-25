@@ -73,6 +73,40 @@ impl MemoryReader for SnapshotTrapMemory {
     }
 }
 
+struct StaleShallowContainerMemory {
+    fixture: FixtureMemory,
+    stale_fields: Vec<u64>,
+}
+
+impl MemoryReader for StaleShallowContainerMemory {
+    fn readable_regions(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        self.fixture.readable_regions(process)
+    }
+
+    fn recently_written_regions(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        self.fixture.readable_regions(process)
+    }
+
+    fn read_at(
+        &self,
+        process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        if buffer.len() == 8 && self.stale_fields.contains(&address) {
+            buffer.fill(0);
+            return Ok(buffer.len());
+        }
+        self.fixture.read_at(process, address, buffer)
+    }
+}
+
 fn needle(name: &str) -> RewardNeedle {
     RewardNeedle::from_paths(
         name,
@@ -258,5 +292,71 @@ fn rejects_a_repeated_pointer_to_one_reward_object_as_four_cards() {
             .resolve(&memory, &GameProcess::new(7), &[needle(name)], 4)
             .unwrap(),
         RewardResolution::Incomplete
+    );
+}
+
+#[test]
+fn continues_to_a_deeper_container_when_a_shallow_candidate_is_stale() {
+    let names = [
+        "Forma Blueprint",
+        "Xaku Prime Neuroptics Blueprint",
+        "Orthos Prime Blade",
+        "Lex Prime Barrel",
+    ];
+    let candidates = names.iter().map(|name| needle(name)).collect::<Vec<_>>();
+    let base = 0x1000_u64;
+    let mut bytes = vec![0_u8; 0xa000];
+    let text_addresses = [0x1800_u64, 0x1a00, 0x1c00, 0x1e00];
+    for (address, name) in text_addresses.iter().zip(names) {
+        let offset = usize::try_from(*address - base).unwrap();
+        bytes[offset..offset + name.len()].copy_from_slice(name.as_bytes());
+    }
+
+    let children = [0x3000_u64, 0x3400, 0x3800, 0x3c00];
+    for (child, text) in children.iter().zip(text_addresses) {
+        let field = usize::try_from(*child + 16 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&(text - 24).to_le_bytes());
+    }
+
+    let stale_container = 0x4800_u64;
+    let mut stale_fields = Vec::new();
+    for (slot, child) in children.iter().enumerate() {
+        let address = stale_container + 64 + slot as u64 * 8;
+        let field = usize::try_from(address - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&child.to_le_bytes());
+        stale_fields.push(address);
+    }
+
+    let intermediates = [0x6000_u64, 0x6400, 0x6800, 0x6c00];
+    for (intermediate, child) in intermediates.iter().zip(children) {
+        let field = usize::try_from(*intermediate + 24 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&child.to_le_bytes());
+    }
+    let live_container = 0x8000_u64;
+    for (slot, intermediate) in intermediates.iter().enumerate() {
+        let field = usize::try_from(live_container + 64 + slot as u64 * 8 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&intermediate.to_le_bytes());
+    }
+
+    let memory = StaleShallowContainerMemory {
+        fixture: FixtureMemory {
+            regions: vec![ReadableRegion::classified(
+                base,
+                bytes.len(),
+                RegionScanPriority::WritableAnonymous,
+            )],
+            bytes: BTreeMap::from([(base, bytes)]),
+        },
+        stale_fields,
+    };
+
+    assert_eq!(
+        PersistentRewardResolver::new(512, 256 * 1024, Duration::from_secs(1))
+            .resolve(&memory, &GameProcess::new(7), &candidates, 4)
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: names.iter().map(|name| (*name).to_owned()).collect(),
+            region_start: base,
+        }
     );
 }

@@ -109,7 +109,6 @@ impl PersistentRewardResolver {
                                 region_start: container.region_start,
                             });
                         }
-                        return Ok(RewardResolution::Incomplete);
                     }
                     Some(Err(())) => return Ok(RewardResolution::Ambiguous),
                     None => {}
