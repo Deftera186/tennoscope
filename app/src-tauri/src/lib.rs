@@ -114,6 +114,7 @@ struct Runtime {
     setup_path: PathBuf,
     setup: SetupStatus,
     last_refresh_started: Option<Instant>,
+    refresh_in_flight: bool,
     overlay_preview_until: Option<Instant>,
     monitor_started: bool,
 }
@@ -204,21 +205,27 @@ fn refresh_blocking(shared: &SharedRuntime) -> Result<AppView, String> {
                 "accept the read-only process-memory risk disclosure during setup first".to_owned(),
             );
         }
-        if runtime
-            .last_refresh_started
-            .is_some_and(|started| started.elapsed() < Duration::from_secs(15))
+        if runtime.refresh_in_flight
+            || runtime
+                .last_refresh_started
+                .is_some_and(|started| started.elapsed() < Duration::from_secs(15))
         {
             return runtime
                 .core
                 .current_view()
                 .map_err(|_| "application view is unavailable".to_owned());
         }
+        runtime.refresh_in_flight = true;
         runtime.last_refresh_started = Some(Instant::now());
         runtime.app_data.clone()
     };
     let port = ProductionAcquisition { app_data };
     let outcome = port.refresh();
-    apply_outcome(shared, outcome)
+    let result = apply_outcome(shared, outcome);
+    if let Ok(mut runtime) = shared.lock() {
+        runtime.refresh_in_flight = false;
+    }
+    result
 }
 
 struct ProductionAcquisition {
@@ -300,6 +307,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         setup_path: paths.setup,
         setup,
         last_refresh_started: None,
+        refresh_in_flight: false,
         overlay_preview_until: None,
         monitor_started: false,
     })))
@@ -404,7 +412,10 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         };
         let result = machine.tick(input);
         if result.refresh {
-            let _ = refresh_blocking(&shared);
+            let refresh = Arc::clone(&shared);
+            spawn_monitor_refresh_task(move || {
+                let _ = refresh_blocking(&refresh);
+            });
         }
         if let Some(error) = result.acquisition_health {
             let _ = apply_outcome(
@@ -458,6 +469,12 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+pub fn spawn_monitor_refresh_task(
+    task: impl FnOnce() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(task)
 }
 
 fn load_catalog(app_data: &Path) -> Option<CatalogIndex> {

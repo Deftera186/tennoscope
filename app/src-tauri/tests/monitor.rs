@@ -1,4 +1,11 @@
-use app_lib::{LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine};
+use std::{
+    sync::mpsc,
+    time::{Duration, Instant},
+};
+
+use app_lib::{
+    LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, spawn_monitor_refresh_task,
+};
 use warframe_acquisition::AcquisitionError;
 
 #[test]
@@ -155,4 +162,18 @@ fn ready_log_monitor_degrades_when_game_disappears_or_discovery_fails() {
             .log_health,
         Some(LogMonitorDiagnostic::Unavailable)
     );
+}
+
+#[test]
+fn inventory_refresh_work_never_blocks_the_log_monitor_thread() {
+    let (release, wait) = mpsc::channel::<()>();
+    let started = Instant::now();
+
+    let worker = spawn_monitor_refresh_task(move || {
+        wait.recv().unwrap();
+    });
+
+    assert!(started.elapsed() < Duration::from_millis(100));
+    release.send(()).unwrap();
+    worker.join().unwrap();
 }
