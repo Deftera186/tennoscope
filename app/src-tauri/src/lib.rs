@@ -514,8 +514,20 @@ fn handle_reward_event(
             } else {
                 &candidate_catalog
             };
-            let local_name = local_reward_path.as_deref().and_then(|local_path| {
-                memory_state
+            let mut memory = memory_state.bind(procfs, process);
+            let mut visual = LiveVisualRewardSource;
+            let Some(mut result) =
+                coordinator.choices(&mut memory, &mut visual, expected_choices, visual_catalog)
+            else {
+                if let Ok(mut runtime) = shared.lock() {
+                    let _ = runtime.core.record_capture_degraded(
+                        "Memory recognition was incomplete; OCR did not resolve every reward",
+                    );
+                }
+                return;
+            };
+            if let Some(local_path) = local_reward_path.as_deref()
+                && let Some(local_name) = memory_state
                     .candidates()
                     .iter()
                     .find(|needle| {
@@ -524,31 +536,16 @@ fn handle_reward_event(
                             .iter()
                             .any(|path| path.as_slice() == local_path.as_bytes())
                     })
-                    .map(|needle| needle.choice_name().to_owned())
-            });
-            let mut memory = memory_state.bind(procfs, process);
-            let mut visual = LiveVisualRewardSource;
-            let Some(result) = coordinator.choices(
-                &mut memory,
-                &mut visual,
-                expected_choices,
-                local_name.as_deref(),
-                visual_catalog,
-            ) else {
-                if let Ok(mut runtime) = shared.lock() {
-                    let _ = runtime.core.record_capture_degraded(
-                        "Memory recognition was incomplete; OCR did not resolve every reward",
-                    );
-                }
-                return;
-            };
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[DEBUG-reward-source] source={:?} elapsed_ms={} choices={:?}",
-                result.choices.source,
-                result.choices.elapsed.as_millis(),
-                result.choices.names,
-            );
+                    .map(warframe_acquisition::RewardNeedle::choice_name)
+                && let Some(index) = result
+                    .choices
+                    .names
+                    .iter()
+                    .position(|name| name == local_name)
+            {
+                let local = result.choices.names.remove(index);
+                result.choices.names.insert(0, local);
+            }
             let observations = result
                 .choices
                 .names

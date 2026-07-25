@@ -32,7 +32,6 @@ pub use relic_catalog::RelicRewardIndex;
 pub use reward_memory::{
     RewardFingerprint, RewardHit, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
     RewardResolution, resolve_current_reward_choices, resolve_reward_choices,
-    resolve_reward_choices_with_anchor,
 };
 
 /// A credential whose standard formatting surfaces never expose its contents.

@@ -5,7 +5,7 @@ use std::{fs::OpenOptions, io::Write};
 
 use warframe_acquisition::{
     GameProcess, MemoryReader, RewardCatalogEntry, RewardFingerprint, RewardMemoryScanner,
-    RewardNeedle, RewardResolution, resolve_reward_choices_with_anchor,
+    RewardNeedle, RewardResolution, resolve_reward_choices,
 };
 
 const MAXIMUM_REWARD_CLUSTER_SPAN: u64 = 2 * 1024 * 1024;
@@ -39,7 +39,7 @@ pub struct RewardSourceResult {
 
 pub trait MemoryRewardSource {
     fn baseline(&mut self, candidates: &[RewardNeedle]);
-    fn choices(&mut self, expected: usize, local_choice: Option<&str>) -> RewardResolution;
+    fn choices(&mut self, expected: usize) -> RewardResolution;
 }
 
 pub trait VisualRewardSource {
@@ -105,7 +105,7 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
         trace_fingerprint("baseline", self.state.baseline.as_ref(), None);
     }
 
-    fn choices(&mut self, expected: usize, local_choice: Option<&str>) -> RewardResolution {
+    fn choices(&mut self, expected: usize) -> RewardResolution {
         let Some(baseline) = self.state.baseline.as_ref() else {
             return RewardResolution::Incomplete;
         };
@@ -116,13 +116,8 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
         else {
             return RewardResolution::Incomplete;
         };
-        let temporal = resolve_reward_choices_with_anchor(
-            baseline,
-            &current,
-            expected,
-            MAXIMUM_REWARD_CLUSTER_SPAN,
-            local_choice,
-        );
+        let temporal =
+            resolve_reward_choices(baseline, &current, expected, MAXIMUM_REWARD_CLUSTER_SPAN);
         #[cfg(debug_assertions)]
         trace_fingerprint("current", Some(&current), Some(&temporal));
         let resolution = temporal;
@@ -210,14 +205,13 @@ impl RewardSourceCoordinator {
         memory: &mut dyn MemoryRewardSource,
         visual: &mut dyn VisualRewardSource,
         expected: usize,
-        local_choice: Option<&str>,
         candidates: &[RewardCatalogEntry],
     ) -> Option<RewardSourceResult> {
         if expected <= 1 {
             return None;
         }
         let started = Instant::now();
-        match memory.choices(expected, local_choice) {
+        match memory.choices(expected) {
             RewardResolution::Confirmed { choices, .. } => {
                 let diagnostic = if self.validation_mode {
                     match visual.choices(candidates) {

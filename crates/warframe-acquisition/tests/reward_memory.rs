@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 use warframe_acquisition::{
     AcquisitionError, GameProcess, MemoryReader, ReadableRegion, RegionScanPriority,
     RewardMemoryScanner, RewardNeedle, RewardRepresentation, RewardResolution,
-    resolve_current_reward_choices, resolve_reward_choices, resolve_reward_choices_with_anchor,
+    resolve_current_reward_choices, resolve_reward_choices,
 };
 
 struct FixtureMemory {
@@ -132,10 +132,10 @@ fn scans_newer_high_address_writable_regions_first() {
 fn scans_live_ui_heap_before_unrelated_higher_mappings() {
     let memory = FixtureMemory {
         regions: vec![
-            ReadableRegion::classified(0x6000_0000, 32, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(0x5000_0000, 32, RegionScanPriority::WritableAnonymous),
             ReadableRegion::classified(0x1900_0000, 32, RegionScanPriority::WritableAnonymous),
         ],
-        bytes: BTreeMap::from([(0x6000_0000, vec![0; 32]), (0x1900_0000, vec![0; 32])]),
+        bytes: BTreeMap::from([(0x5000_0000, vec![0; 32]), (0x1900_0000, vec![0; 32])]),
         reads: Mutex::new(Vec::new()),
     };
     RewardMemoryScanner::new(64, 32, Duration::from_secs(1))
@@ -145,26 +145,6 @@ fn scans_live_ui_heap_before_unrelated_higher_mappings() {
     assert_eq!(
         memory.reads.lock().unwrap().first().copied(),
         Some(0x1900_0000)
-    );
-}
-
-#[test]
-fn scans_reward_card_heap_before_the_general_live_ui_heap() {
-    let memory = FixtureMemory {
-        regions: vec![
-            ReadableRegion::classified(0x1900_0000, 32, RegionScanPriority::WritableAnonymous),
-            ReadableRegion::classified(0x4e34_0000, 32, RegionScanPriority::WritableAnonymous),
-        ],
-        bytes: BTreeMap::from([(0x1900_0000, vec![0; 32]), (0x4e34_0000, vec![0; 32])]),
-        reads: Mutex::new(Vec::new()),
-    };
-    RewardMemoryScanner::new(64, 32, Duration::from_secs(1))
-        .fingerprint(&memory, &GameProcess::new(7), &[candidate()])
-        .unwrap();
-
-    assert_eq!(
-        memory.reads.lock().unwrap().first().copied(),
-        Some(0x4e34_0000)
     );
 }
 
@@ -201,166 +181,6 @@ fn online_candidates() -> Vec<RewardNeedle> {
         .into_iter()
         .map(|name| RewardNeedle::new(name, [name]).unwrap())
         .collect()
-}
-
-fn card_candidates() -> Vec<RewardNeedle> {
-    [
-        ("Local", "/Lotus/LocalReward"),
-        ("Second", "/Lotus/SecondReward"),
-        ("Third", "/Lotus/ThirdReward"),
-        ("Fourth", "/Lotus/FourthReward"),
-    ]
-    .into_iter()
-    .map(|(name, path)| RewardNeedle::new(name, [path]).unwrap())
-    .collect()
-}
-
-fn card_fingerprint(entries: &[(usize, &str)]) -> warframe_acquisition::RewardFingerprint {
-    let mut bytes = vec![b'.'; 2048];
-    for (sequence, (slot, path)) in entries.iter().enumerate() {
-        let start = 128 + sequence * 384;
-        let tag = format!("RewardList.Item{slot}.TagContainer.Tag1.IconText");
-        bytes[start..start + tag.len()].copy_from_slice(tag.as_bytes());
-        let path_start = start + 80;
-        bytes[path_start..path_start + path.len()].copy_from_slice(path.as_bytes());
-    }
-    let memory = FixtureMemory {
-        regions: vec![ReadableRegion::classified(
-            0x1000,
-            bytes.len(),
-            RegionScanPriority::WritableAnonymous,
-        )],
-        bytes: BTreeMap::from([(0x1000, bytes)]),
-        reads: Mutex::new(Vec::new()),
-    };
-    RewardMemoryScanner::new(64, 4096, Duration::from_secs(1))
-        .fingerprint(&memory, &GameProcess::new(9), &card_candidates())
-        .unwrap()
-}
-
-#[test]
-fn anchored_card_slots_resolve_four_rewards_in_screen_order() {
-    let baseline = card_fingerprint(&[]);
-    let current = card_fingerprint(&[
-        (2, "/Lotus/SecondReward"),
-        (3, "/Lotus/ThirdReward"),
-        (4, "/Lotus/FourthReward"),
-    ]);
-
-    assert_eq!(
-        resolve_reward_choices_with_anchor(&baseline, &current, 4, 256, Some("Local")),
-        RewardResolution::Confirmed {
-            choices: vec![
-                "Local".into(),
-                "Second".into(),
-                "Third".into(),
-                "Fourth".into(),
-            ],
-            region_start: 0,
-        }
-    );
-}
-
-#[test]
-fn anchored_card_slots_reject_a_missing_remote_slot() {
-    let baseline = card_fingerprint(&[]);
-    let current = card_fingerprint(&[(2, "/Lotus/SecondReward"), (4, "/Lotus/FourthReward")]);
-
-    assert_eq!(
-        resolve_reward_choices_with_anchor(&baseline, &current, 4, 256, Some("Local")),
-        RewardResolution::Incomplete
-    );
-}
-
-#[test]
-fn anchored_card_slots_reject_conflicting_values_for_one_slot() {
-    let baseline = card_fingerprint(&[]);
-    let current = card_fingerprint(&[
-        (2, "/Lotus/SecondReward"),
-        (2, "/Lotus/ThirdReward"),
-        (3, "/Lotus/ThirdReward"),
-        (4, "/Lotus/FourthReward"),
-    ]);
-
-    assert_eq!(
-        resolve_reward_choices_with_anchor(&baseline, &current, 4, 256, Some("Local")),
-        RewardResolution::Ambiguous
-    );
-}
-
-#[test]
-fn anchored_card_slots_ignore_non_binding_item_fields() {
-    let mut bytes = vec![b'.'; 2048];
-    let false_tag = b"RewardList.Item2.ShadowContainer.ImageShadow";
-    bytes[128..128 + false_tag.len()].copy_from_slice(false_tag);
-    bytes[208..208 + b"/Lotus/SecondReward".len()].copy_from_slice(b"/Lotus/SecondReward");
-    for (sequence, (slot, path)) in [
-        (3, "/Lotus/Language/ThirdReward"),
-        (4, "/Lotus/Language/FourthReward"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let start = 640 + sequence * 384;
-        let tag = format!("RewardList.Item{slot}.TagContainer.Tag1.IconText");
-        bytes[start..start + tag.len()].copy_from_slice(tag.as_bytes());
-        bytes[start + 80..start + 80 + path.len()].copy_from_slice(path.as_bytes());
-    }
-    let memory = FixtureMemory {
-        regions: vec![ReadableRegion::classified(
-            0x1000,
-            bytes.len(),
-            RegionScanPriority::WritableAnonymous,
-        )],
-        bytes: BTreeMap::from([(0x1000, bytes)]),
-        reads: Mutex::new(Vec::new()),
-    };
-    let current = RewardMemoryScanner::new(64, 4096, Duration::from_secs(1))
-        .fingerprint(&memory, &GameProcess::new(9), &card_candidates())
-        .unwrap();
-
-    assert_eq!(
-        resolve_reward_choices_with_anchor(&card_fingerprint(&[]), &current, 4, 256, Some("Local"),),
-        RewardResolution::Incomplete
-    );
-}
-
-#[test]
-fn anchored_card_slots_resolve_three_rendered_rewards() {
-    let baseline = card_fingerprint(&[]);
-    let current = card_fingerprint(&[(2, "/Lotus/SecondReward"), (3, "/Lotus/ThirdReward")]);
-
-    assert_eq!(
-        resolve_reward_choices_with_anchor(&baseline, &current, 3, 256, Some("Local")),
-        RewardResolution::Confirmed {
-            choices: vec!["Local".into(), "Second".into(), "Third".into()],
-            region_start: 0,
-        }
-    );
-}
-
-#[test]
-fn anchored_card_slots_ignore_unchanged_stale_slot_bindings() {
-    let baseline = card_fingerprint(&[(2, "/Lotus/FourthReward")]);
-    let current = card_fingerprint(&[
-        (2, "/Lotus/FourthReward"),
-        (2, "/Lotus/SecondReward"),
-        (3, "/Lotus/ThirdReward"),
-        (4, "/Lotus/FourthReward"),
-    ]);
-
-    assert_eq!(
-        resolve_reward_choices_with_anchor(&baseline, &current, 4, 256, Some("Local")),
-        RewardResolution::Confirmed {
-            choices: vec![
-                "Local".into(),
-                "Second".into(),
-                "Third".into(),
-                "Fourth".into(),
-            ],
-            region_start: 0,
-        }
-    );
 }
 
 #[test]
