@@ -68,9 +68,12 @@ def readable_regions(pid: int) -> list[tuple[int, int, str]]:
     return regions
 
 
-REWARD_NAMESPACE = "/Lotus/StoreItems/Types/Recipes/"
-# Offsets before a path's first byte at which a pointer to its string object plausibly aims: the
-# path itself, its length prefix, and a few header slots.
+# A reward can be resident under the canonical item path, the StoreItems alias, or both. The
+# 2026-07-26 client run had Paris Prime Upper Limb only as /Lotus/Types/Recipes/..., so filtering
+# on the StoreItems alias alone silently dropped a quarter of the squad.
+REWARD_NAMESPACES = ("/Lotus/Types/Recipes/", "/Lotus/StoreItems/Types/Recipes/")
+# Where a pointer to a path's string object aims. Observed: 24 bytes ahead of the path bytes, which
+# is the object header; the rest are kept as cheap insurance against a different string layout.
 POINTER_OFFSETS = (0, -1, -2, -8, -16, -24, -32)
 
 
@@ -87,7 +90,7 @@ def pointer_sites(
 
     wanted: dict[int, str] = {}
     for path, addresses in paths.items():
-        if REWARD_NAMESPACE not in path:
+        if not any(namespace in path for namespace in REWARD_NAMESPACES):
             continue
         for address in addresses:
             for offset in POINTER_OFFSETS:
