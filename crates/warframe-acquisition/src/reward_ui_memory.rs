@@ -35,6 +35,8 @@ struct PointerHit {
     target: u64,
 }
 
+#[derive(Clone)]
+#[cfg_attr(debug_assertions, derive(serde::Serialize))]
 struct ContainerCandidate {
     fields: Vec<(u64, u64)>,
     choices: Vec<String>,
@@ -82,6 +84,8 @@ impl PersistentRewardResolver {
         }
         let mut deepest_confirmed = None::<ContainerCandidate>;
         let mut saw_ambiguity = false;
+        #[cfg(debug_assertions)]
+        let mut diagnostic_candidates = Vec::<(usize, ContainerCandidate)>::new();
 
         for depth in 0..MAX_GRAPH_DEPTH {
             if started.elapsed() >= self.timeout {
@@ -102,6 +106,20 @@ impl PersistentRewardResolver {
                     "[DEBUG-ui-graph] depth={depth} containers={} elapsed_ms={}",
                     containers.len(),
                     started.elapsed().as_millis()
+                );
+                #[cfg(debug_assertions)]
+                for (index, container) in containers.iter().take(16).enumerate() {
+                    eprintln!(
+                        "[DEBUG-ui-candidate] depth={depth} index={index} stride={} choices={:?}",
+                        container.stride, container.choices
+                    );
+                }
+                #[cfg(debug_assertions)]
+                diagnostic_candidates.extend(
+                    containers
+                        .iter()
+                        .cloned()
+                        .map(|container| (depth, container)),
                 );
                 match select_container(containers) {
                     Some(Ok(container)) => {
@@ -124,6 +142,8 @@ impl PersistentRewardResolver {
                 region_start: container.region_start,
             })
         } else if saw_ambiguity {
+            #[cfg(debug_assertions)]
+            capture_ambiguous_graph(process, &diagnostic_candidates);
             Ok(RewardResolution::Ambiguous)
         } else {
             Ok(RewardResolution::Incomplete)
@@ -176,6 +196,23 @@ impl PersistentRewardResolver {
             }
         }
         Ok(output)
+    }
+}
+
+#[cfg(debug_assertions)]
+fn capture_ambiguous_graph(process: &GameProcess, candidates: &[(usize, ContainerCandidate)]) {
+    use std::{fs, time::SystemTime};
+
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let path = format!(
+        "/tmp/tennoscope-ui-ambiguity-{}-{timestamp}.json",
+        process.pid()
+    );
+    if let Ok(bytes) = serde_json::to_vec(candidates) {
+        let _ = fs::write(path, bytes);
     }
 }
 
