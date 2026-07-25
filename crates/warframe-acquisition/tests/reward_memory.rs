@@ -538,40 +538,70 @@ fn player_records_ignore_a_tighter_stale_reward_cluster_and_preserve_screen_orde
 }
 
 #[test]
-fn one_archived_player_record_can_be_resolved_as_soon_as_its_response_arrives() {
-    let identity = "de1e7ed00000000000000009";
-    let candidate = RewardNeedle::from_paths(
-        "Perigale Prime Stock",
-        vec!["/Lotus/Types/Recipes/Weapons/WeaponParts/PerigalePrimeStock".into()],
-    )
-    .unwrap();
-    let mut bytes = vec![0_u8; 1024];
-    bytes[256..280].copy_from_slice(identity.as_bytes());
-    bytes[382..400].copy_from_slice(b"PerigalePrimeStock");
-    let memory = FixtureMemory {
-        regions: vec![ReadableRegion::classified(
-            0x3bb9_0000,
-            bytes.len(),
-            RegionScanPriority::WritableAnonymous,
-        )],
-        bytes: BTreeMap::from([(0x3bb9_0000, bytes)]),
-        reads: Mutex::new(Vec::new()),
-    };
+fn archived_player_record_layouts_resolve_as_each_response_arrives() {
+    for (identity, name, internal_name, distance) in [
+        (
+            "de1e7ed00000000000000006",
+            "Lavos Prime Chassis Blueprint",
+            "LavosPrimeChassisBlueprint",
+            123,
+        ),
+        (
+            "de1e7ed00000000000000009",
+            "Perigale Prime Stock",
+            "PerigalePrimeStock",
+            126,
+        ),
+        (
+            "de1e7ed00000000000000006",
+            "Afentis Prime Handle",
+            "AfentisPrimeHandle",
+            127,
+        ),
+        (
+            "de1e7ed00000000000000008",
+            "Bronco Prime Barrel",
+            "BroncoPrimeBarrel",
+            131,
+        ),
+    ] {
+        let candidate = RewardNeedle::from_paths(
+            name,
+            vec![format!(
+                "/Lotus/Types/Recipes/Weapons/WeaponParts/{internal_name}"
+            )],
+        )
+        .unwrap();
+        let mut bytes = vec![0_u8; 1024];
+        bytes[256..280].copy_from_slice(identity.as_bytes());
+        let reward_offset = 256 + distance;
+        bytes[reward_offset..reward_offset + internal_name.len()]
+            .copy_from_slice(internal_name.as_bytes());
+        let memory = FixtureMemory {
+            regions: vec![ReadableRegion::classified(
+                0x3bb9_0000,
+                bytes.len(),
+                RegionScanPriority::WritableAnonymous,
+            )],
+            bytes: BTreeMap::from([(0x3bb9_0000, bytes)]),
+            reads: Mutex::new(Vec::new()),
+        };
 
-    assert_eq!(
-        RewardMemoryScanner::new(128, 4096, Duration::from_secs(1))
-            .resolve_player_records(
-                &memory,
-                &GameProcess::new(9),
-                &[candidate],
-                &[identity],
-                None,
-                None,
-            )
-            .unwrap(),
-        RewardResolution::Confirmed {
-            choices: vec!["Perigale Prime Stock".into()],
-            region_start: 0,
-        }
-    );
+        assert_eq!(
+            RewardMemoryScanner::new(128, 4096, Duration::from_secs(1))
+                .resolve_player_records(
+                    &memory,
+                    &GameProcess::new(9),
+                    &[candidate],
+                    &[identity],
+                    None,
+                    None,
+                )
+                .unwrap(),
+            RewardResolution::Confirmed {
+                choices: vec![name.into()],
+                region_start: 0,
+            }
+        );
+    }
 }
