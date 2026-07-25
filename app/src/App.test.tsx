@@ -258,4 +258,32 @@ describe('MVP desktop interface', () => {
     render(<App />)
     expect(await screen.findByText('50% of mastery-eligible items')).toBeInTheDocument()
   })
+
+  it('renders canonical artwork, sync freshness, and only one 48-item page', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.getView.mockResolvedValue({
+      ...view,
+      collection: {
+        total_entries: 60,
+        snapshot: { observed_at: '2026-07-25T11:56:00Z', game_build: 'build-42', source: 'warframe-memory' },
+        items: Array.from({ length: 60 }, (_, index) => ({
+          id: `item-${index.toString().padStart(2, '0')}`,
+          name: `Item ${index.toString().padStart(2, '0')}`,
+          category: 'weapon' as const,
+          quantity: 1,
+          mastered: false,
+          image_url: index === 0 ? 'https://cdn.warframestat.us/img/Braton.png' : undefined,
+        })),
+      },
+    })
+    render(<App />)
+
+    expect(await screen.findByText(/Synced/)).toHaveAttribute('title', expect.stringContaining('warframe-memory'))
+    expect(screen.getByRole('img', { name: 'Item 00' })).toHaveAttribute('src', 'https://cdn.warframestat.us/img/Braton.png')
+    expect(screen.getAllByRole('article').filter(node => node.closest('[aria-label="Collection items"]'))).toHaveLength(48)
+    expect(screen.getByText('1–48 of 60')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Go to page 2' }))
+    expect(screen.getByRole('article', { name: 'Item 59' })).toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'Item 00' })).not.toBeInTheDocument()
+  })
 })

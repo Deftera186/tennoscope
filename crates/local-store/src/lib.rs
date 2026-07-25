@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use rusqlite::{Connection, params, types::Value};
+use serde::Serialize;
 use thiserror::Error;
 use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot, ItemId,
@@ -35,7 +36,7 @@ pub enum StoreError {
     IntegerOutOfRange(i64),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SnapshotMeta {
     observed_at: String,
     game_build: String,
@@ -75,6 +76,10 @@ impl SnapshotMeta {
 
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    pub fn game_build(&self) -> &str {
+        &self.game_build
     }
 
     pub fn is_fake(&self) -> bool {
@@ -217,6 +222,21 @@ impl SqliteStore {
             self.connection
                 .query_row("SELECT COUNT(*) FROM snapshot_audit", [], |row| row.get(0))?;
         u64::try_from(count).map_err(|_| StoreError::IntegerOutOfRange(count))
+    }
+
+    pub fn latest_snapshot_meta(&self) -> Result<Option<SnapshotMeta>, StoreError> {
+        let mut statement = self.connection.prepare(
+            "SELECT observed_at, game_build, source FROM snapshot_audit ORDER BY id DESC LIMIT 1",
+        )?;
+        let mut rows = statement.query([])?;
+        let Some(row) = rows.next()? else {
+            return Ok(None);
+        };
+        Ok(Some(SnapshotMeta::new(
+            row.get(0)?,
+            row.get(1)?,
+            row.get(2)?,
+        )?))
     }
 }
 

@@ -93,12 +93,14 @@ impl AppCore {
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));
         let total_entries = items.len();
+        let snapshot = self.store.latest_snapshot_meta()?;
         let mut health = self.health.clone();
         health.database = BackendHealth::ready("SQLite database available", None)?;
         Ok(AppView {
             collection: CollectionView {
                 items,
                 total_entries,
+                snapshot,
             },
             reward: self.reward.clone(),
             health,
@@ -268,6 +270,7 @@ impl AppView {
 pub struct CollectionView {
     items: Vec<CollectionItemView>,
     total_entries: usize,
+    snapshot: Option<SnapshotMeta>,
 }
 
 impl CollectionView {
@@ -277,6 +280,11 @@ impl CollectionView {
 
     pub fn total_entries(&self) -> usize {
         self.total_entries
+    }
+
+
+    pub fn snapshot(&self) -> Option<&SnapshotMeta> {
+        self.snapshot.as_ref()
     }
 }
 

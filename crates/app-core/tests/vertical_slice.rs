@@ -52,6 +52,29 @@ fn canonical_artwork_reaches_the_serialized_collection_view() {
 }
 
 #[test]
+fn snapshot_freshness_reaches_the_serialized_collection_view() {
+    let mut core = AppCore::in_memory().unwrap();
+    let meta = SnapshotMeta::new(
+        "2026-07-25T08:09:10Z".into(),
+        "build-42".into(),
+        "warframe-memory".into(),
+    )
+    .unwrap();
+    let view = core
+        .apply_inventory_snapshot(InventorySnapshot::coherent(vec![]).unwrap(), meta)
+        .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&view).unwrap()["collection"]["snapshot"],
+        json!({
+            "observed_at": "2026-07-25T08:09:10Z",
+            "game_build": "build-42",
+            "source": "warframe-memory"
+        })
+    );
+}
+
+#[test]
 fn in_memory_starts_empty_and_reports_honest_health() {
     let core = AppCore::in_memory().unwrap();
 
@@ -256,7 +279,12 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
                     {"id": "rhino", "name": "Rhino", "category": "frame", "quantity": 1, "mastered": true},
                     {"id": "saryn-prime-chassis", "name": "Saryn Prime Chassis", "category": "prime_part", "quantity": 2, "mastered": false}
                 ],
-                "total_entries": 5
+                "total_entries": 5,
+                "snapshot": {
+                    "observed_at": "2000-01-01T00:00:00Z",
+                    "game_build": "fake-build",
+                    "source": "test-fixture"
+                }
             },
             "reward": {
                 "cards": [

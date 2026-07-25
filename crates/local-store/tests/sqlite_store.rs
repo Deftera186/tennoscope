@@ -122,3 +122,20 @@ fn snapshot_metadata_rejects_blank_fields() {
     assert!(SnapshotMeta::new("now".into(), "build".into(), "\n".into()).is_err());
     assert!(SnapshotMeta::fake("  ").is_err());
 }
+
+#[test]
+fn latest_snapshot_metadata_round_trips_and_empty_store_has_none() {
+    let mut store = SqliteStore::in_memory().unwrap();
+    assert_eq!(store.latest_snapshot_meta().unwrap(), None);
+    let meta = SnapshotMeta::new(
+        "2026-07-25T08:09:10Z".into(),
+        "build-42".into(),
+        "warframe-memory".into(),
+    )
+    .unwrap();
+    store
+        .replace_collection(&snapshot(vec![]), &meta)
+        .unwrap();
+
+    assert_eq!(store.latest_snapshot_meta().unwrap(), Some(meta));
+}

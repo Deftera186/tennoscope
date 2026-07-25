@@ -13,6 +13,8 @@ import {
 } from './backend'
 import { showRewardOverlay } from './overlay'
 import { RewardCards } from './RewardCards'
+import { clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers } from './collection'
+import { snapshotFreshness } from './freshness'
 
 type Page = 'collection' | 'rewards' | 'diagnostics' | 'settings'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing'
@@ -49,6 +51,7 @@ function App() {
   const [page, setPage] = useState<Page>('collection')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [clock, setClock] = useState(() => new Date())
   const viewGeneration = useRef(0)
   const foregroundInFlight = useRef(0)
 
@@ -98,6 +101,11 @@ function App() {
     }
   }, [accepted, requestView])
 
+  useEffect(() => {
+    const timer = setInterval(() => setClock(new Date()), 30_000)
+    return () => clearInterval(timer)
+  }, [])
+
   async function accept() {
     setBusy(true)
     setError(null)
@@ -125,6 +133,7 @@ function App() {
   if (!accepted) return <SetupScreen busy={busy} error={error} onAccept={accept}/>
 
   const liveState = view?.health.game_reader.state ?? 'degraded'
+  const freshness = snapshotFreshness(view?.collection.snapshot, clock)
   return <div className="app-frame">
     <aside className="sidebar">
       <div className="brand" aria-label="TennoScope">
@@ -146,7 +155,7 @@ function App() {
 
     <main className="workspace">
       <header className="topbar">
-        <div className={`live-state ${liveState}`} role="status"><span/><div><strong>{liveState === 'ready' ? 'Watching Warframe' : 'Attention needed'}</strong><small>{view?.health.game_reader.message ?? 'Connecting to local backend'}</small></div></div>
+        <div className="topbar-status"><div className={`live-state ${liveState}`} role="status"><span/><div><strong>{liveState === 'ready' ? 'Watching Warframe' : 'Attention needed'}</strong><small>{view?.health.game_reader.message ?? 'Connecting to local backend'}</small></div></div>{view && <span className="sync-freshness" title={freshness.detail} tabIndex={0}>{freshness.label}</span>}</div>
         <button type="button" className="refresh-button" onClick={refresh} disabled={busy}><Icon name="refresh"/>{busy ? 'Refreshing…' : 'Refresh inventory'}</button>
       </header>
       {error && <p className="error-banner" role="alert">{error}</p>}
@@ -189,6 +198,7 @@ function CollectionPage({ view }: { view: AppView }) {
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
   const [sort, setSort] = useState<Sort>('name-asc')
+  const [page, setPage] = useState(1)
   const masteryEligible = view.collection.items.filter(item => ['frame', 'weapon', 'companion', 'vehicle'].includes(item.category))
   const mastered = masteryEligible.filter(item => item.mastered).length
   const owned = view.collection.items.filter(item => item.quantity > 0).length
@@ -205,9 +215,16 @@ function CollectionPage({ view }: { view: AppView }) {
           ? left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
           : left.name.localeCompare(right.name))
   }, [view.collection.items, search, category, ownership, sort])
+  const totalPages = pageCount(filtered.length)
+  const currentPage = clampPage(page, filtered.length)
+  const visibleItems = pageItems(filtered, currentPage)
+  const firstResult = filtered.length ? (currentPage - 1) * COLLECTION_PAGE_SIZE + 1 : 0
+  const lastResult = Math.min(currentPage * COLLECTION_PAGE_SIZE, filtered.length)
+  useEffect(() => setPage(1), [search, category, ownership, sort])
+  useEffect(() => setPage(value => clampPage(value, filtered.length)), [filtered.length])
 
   return <section className="page" aria-labelledby="collection-title">
-    <div className="page-heading"><div><p className="eyebrow">Inventory snapshot</p><h1 id="collection-title">Your collection</h1><p>Browse the canonical items synchronized from your account.</p></div><span className="snapshot-mark">Local snapshot</span></div>
+    <div className="page-heading"><div><p className="eyebrow">Account index</p><h1 id="collection-title">Your collection</h1><p>Canonical equipment, parts and relics observed on this account.</p></div><span className="snapshot-mark">Local · read only</span></div>
     <div className="summary-grid">
       <SummaryCard label="Items tracked" value={view.collection.total_entries} detail={`${owned} currently owned`} kind="items"/>
       <SummaryCard label="Mastered" value={mastered} detail={masteryEligible.length ? `${Math.round(mastered / masteryEligible.length * 100)}% of mastery-eligible items` : 'No mastery-eligible items'} kind="mastered"/>
@@ -219,9 +236,9 @@ function CollectionPage({ view }: { view: AppView }) {
         <label className="sort-field"><span>Sort</span><select aria-label="Sort collection" value={sort} onChange={event => setSort(event.target.value as Sort)}><option value="name-asc">Name A–Z</option><option value="quantity-desc">Quantity</option><option value="category-asc">Category</option></select></label>
       </div>
       <div className="category-strip" aria-label="Item categories">{categories.map(item => <button type="button" key={item.value} className={category === item.value ? 'chip selected' : 'chip'} aria-label={item.label} aria-pressed={category === item.value} onClick={() => setCategory(item.value)}><span aria-hidden="true">{item.glyph}</span>{item.label}</button>)}</div>
-      <div className="result-bar"><div className="segmented" aria-label="Ownership filters">{(['all', 'owned', 'mastered', 'missing'] as const).map(filter => <button type="button" key={filter} aria-pressed={ownership === filter} onClick={() => setOwnership(filter)}>{filter[0].toUpperCase() + filter.slice(1)}</button>)}</div><span>{filtered.length} result{filtered.length === 1 ? '' : 's'}</span></div>
+      <div className="result-bar"><div className="segmented" aria-label="Ownership filters">{(['all', 'owned', 'mastered', 'missing'] as const).map(filter => <button type="button" key={filter} aria-pressed={ownership === filter} onClick={() => setOwnership(filter)}>{filter[0].toUpperCase() + filter.slice(1)}</button>)}</div><span>{firstResult}–{lastResult} of {filtered.length}</span></div>
       {filtered.length
-        ? <ul className="collection-grid" aria-label="Collection items">{filtered.map(item => <li key={item.id}><CollectionCard item={item}/></li>)}</ul>
+        ? <><ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionCard item={item}/></li>)}</ul><Pagination current={currentPage} total={totalPages} onChange={setPage}/></>
         : <EmptyState title={view.collection.items.length ? 'No matching items' : 'No inventory items yet'} detail={view.collection.items.length ? 'Try another search or clear a filter.' : 'Start Warframe and refresh to create your first local snapshot.'}/>}
     </section>
   </section>
@@ -233,10 +250,21 @@ function SummaryCard({ label, value, detail, kind }: { label: string; value: num
 
 function CollectionCard({ item }: { item: CollectionItem }) {
   const missing = item.quantity === 0
+  const [artFailed, setArtFailed] = useState(false)
   return <article className={`item-card category-${item.category}`} aria-label={item.name}>
-    <div className="item-art" aria-hidden="true"><span>{categoryName[item.category].slice(0, 2).toUpperCase()}</span><i/></div>
+    <div className="item-art">{item.image_url && !artFailed ? <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" onError={() => setArtFailed(true)}/> : <span className="art-fallback" aria-hidden="true">{categoryName[item.category].slice(0, 2).toUpperCase()}</span>}</div>
     <div className="item-body"><span className="category-label">{categoryName[item.category]}</span><h2>{item.name}</h2><div className="badges">{missing ? <span className="badge missing">Missing</span> : <span className="badge quantity">Owned ×{item.quantity}</span>}{item.mastered && <span className="badge mastered">✦ Mastered</span>}</div></div>
   </article>
+}
+
+function Pagination({ current, total, onChange }: { current: number; total: number; onChange: (page: number) => void }) {
+  if (total <= 1) return null
+  const pages = pageNumbers(current, total)
+  return <nav className="pagination" aria-label="Collection pages">
+    <button type="button" disabled={current === 1} aria-label="Previous page" onClick={() => onChange(current - 1)}>←</button>
+    {pages.map((page, index) => <span key={page} className="page-slot">{index > 0 && page - pages[index - 1] > 1 ? <i aria-hidden="true">…</i> : null}<button type="button" className={page === current ? 'current' : ''} aria-current={page === current ? 'page' : undefined} aria-label={`Go to page ${page}`} onClick={() => onChange(page)}>{page}</button></span>)}
+    <button type="button" disabled={current === total} aria-label="Next page" onClick={() => onChange(current + 1)}>→</button>
+  </nav>
 }
 
 function RewardPage({ view }: { view: AppView }) {

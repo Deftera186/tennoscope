@@ -10,6 +10,7 @@ export interface AppView {
   collection: {
     items: CollectionItem[]
     total_entries: number
+    snapshot?: { observed_at: string; game_build: string; source: string } | null
   }
   reward: { cards: RewardCard[]; best_value_index: number | null }
   health: {
