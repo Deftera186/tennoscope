@@ -5,6 +5,8 @@ const OPEN_REWARD_SCREEN: &str = "OpenVoidProjectionRewardScreenRMI";
 const CLIENT_REWARD: &str = "Client got reward info from ";
 const ALL_REWARDS: &str = "Client has reward info for all players now";
 const GOT_REWARDS: &str = "ProjectionRewardChoice.lua: Got rewards";
+const RENDERED_REWARD: &str = "ProjectionRewardChoice.lua: Missing icon data!";
+const REWARD_TIMER: &str = "ProjectionsCountdown.lua: Initialize timer";
 const CLOSED: &str = "ProjectionRewardChoice.lua: Relic reward screen shut down";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -20,6 +22,8 @@ pub struct RewardLogMachine {
     responders: BTreeSet<String>,
     reward_window_open: bool,
     choices_emitted: bool,
+    rewards_received: bool,
+    rendered_cards: usize,
     carry: Vec<u8>,
 }
 
@@ -54,6 +58,8 @@ impl RewardLogMachine {
             self.reward_window_open = true;
             self.responders.clear();
             self.choices_emitted = false;
+            self.rewards_received = false;
+            self.rendered_cards = 0;
             return vec![RewardLogEvent::BaselineRequested {
                 relic_paths: self.loaded_relics.clone(),
             }];
@@ -67,20 +73,31 @@ impl RewardLogMachine {
                     self.responders.insert(identity.to_owned());
                 }
             }
-            if (line.contains(ALL_REWARDS) || line.contains(GOT_REWARDS))
-                && !self.choices_emitted
-                && self.responders.len() > 1
-            {
+            if line.contains(ALL_REWARDS) || line.contains(GOT_REWARDS) {
+                self.rewards_received = true;
+            }
+            if line.contains(RENDERED_REWARD) {
+                self.rendered_cards = self.rendered_cards.saturating_add(1);
+            }
+            if line.contains(REWARD_TIMER) && self.rewards_received && !self.choices_emitted {
+                let expected_choices = if self.rendered_cards > 0 {
+                    self.rendered_cards
+                } else {
+                    self.responders.len()
+                };
+                if expected_choices <= 1 {
+                    return Vec::new();
+                }
                 self.choices_emitted = true;
-                return vec![RewardLogEvent::ChoicesReady {
-                    expected_choices: self.responders.len(),
-                }];
+                return vec![RewardLogEvent::ChoicesReady { expected_choices }];
             }
         }
         if line.contains(CLOSED) && self.reward_window_open {
             self.reward_window_open = false;
             self.choices_emitted = false;
             self.responders.clear();
+            self.rewards_received = false;
+            self.rendered_cards = 0;
             self.loaded_relics.clear();
             return vec![RewardLogEvent::Closed];
         }

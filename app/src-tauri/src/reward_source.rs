@@ -189,7 +189,7 @@ impl RewardSourceCoordinator {
             | RewardResolution::TimedOut => visual
                 .choices(candidates)
                 .ok()
-                .filter(|names| (2..=expected).contains(&names.len()))
+                .filter(|names| names.len() == expected)
                 .map(|names| RewardSourceResult {
                     choices: RewardChoiceSet {
                         names,

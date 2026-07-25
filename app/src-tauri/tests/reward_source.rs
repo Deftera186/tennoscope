@@ -100,7 +100,7 @@ fn incomplete_memory_falls_back_to_ocr() {
 }
 
 #[test]
-fn ocr_may_return_fewer_choices_than_network_responders() {
+fn ocr_accepts_the_rendered_three_choice_count() {
     let mut memory = Memory {
         resolution: RewardResolution::Incomplete,
         baselines: 0,
@@ -112,7 +112,7 @@ fn ocr_may_return_fewer_choices_than_network_responders() {
     };
 
     let result = RewardSourceCoordinator::new(false)
-        .choices(&mut memory, &mut visual, 4, &catalog())
+        .choices(&mut memory, &mut visual, 3, &catalog())
         .unwrap();
 
     assert_eq!(result.choices.names.len(), 3);

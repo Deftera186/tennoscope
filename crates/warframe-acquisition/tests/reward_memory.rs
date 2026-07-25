@@ -173,7 +173,7 @@ fn temporal_resolution_ignores_catalog_strings_and_orders_the_new_cluster() {
 }
 
 #[test]
-fn temporal_resolution_treats_player_count_as_a_choice_upper_bound() {
+fn temporal_resolution_confirms_the_rendered_three_choice_count() {
     let baseline_bytes = vec![b'.'; 1024];
     let mut current_bytes = baseline_bytes.clone();
     current_bytes[500..507].copy_from_slice(b"Burston");
@@ -189,7 +189,7 @@ fn temporal_resolution_treats_player_count_as_a_choice_upper_bound() {
         resolve_reward_choices(
             &fingerprint(baseline_bytes, regions.clone()),
             &fingerprint(current_bytes, regions),
-            4,
+            3,
             256,
         ),
         RewardResolution::Confirmed {

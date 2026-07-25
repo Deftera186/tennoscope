@@ -122,7 +122,7 @@ pub fn resolve_reward_choices(
     expected_choices: usize,
     maximum_span: u64,
 ) -> RewardResolution {
-    if expected_choices < 2 {
+    if expected_choices == 0 {
         return RewardResolution::Incomplete;
     }
     let old = baseline
@@ -149,7 +149,7 @@ pub fn resolve_reward_choices(
                 })
                 .or_insert(hit);
         }
-        if !(2..=expected_choices).contains(&earliest.len()) {
+        if earliest.len() != expected_choices {
             continue;
         }
         let mut ordered = earliest.into_values().collect::<Vec<_>>();
@@ -168,16 +168,7 @@ pub fn resolve_reward_choices(
             ));
         }
     }
-    let largest = complete
-        .iter()
-        .map(|(_, choices)| choices.len())
-        .max()
-        .unwrap_or(0);
-    let strongest = complete
-        .iter()
-        .filter(|(_, choices)| choices.len() == largest)
-        .collect::<Vec<_>>();
-    match strongest.as_slice() {
+    match complete.as_slice() {
         [(region_start, choices)] => RewardResolution::Confirmed {
             choices: choices.clone(),
             region_start: *region_start,

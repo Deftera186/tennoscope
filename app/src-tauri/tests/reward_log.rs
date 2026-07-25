@@ -14,6 +14,11 @@ fn online_sequence_requests_one_baseline_and_emits_the_observed_choice_count() {
         "VoidProjections: Client got reward info from player-d",
         "VoidProjections: Client has reward info for all players now",
         "ProjectionRewardChoice.lua: Got rewards",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionsCountdown.lua: Initialize timer nil 15",
     ];
     let events = lines
         .into_iter()
@@ -31,6 +36,39 @@ fn online_sequence_requests_one_baseline_and_emits_the_observed_choice_count() {
             },
             RewardLogEvent::ChoicesReady {
                 expected_choices: 4,
+            },
+        ]
+    );
+}
+
+#[test]
+fn rendered_card_count_overrides_the_number_of_network_responders() {
+    let mut machine = RewardLogMachine::default();
+    let events = [
+        "VoidProjections: OpenVoidProjectionRewardScreenRMI",
+        "VoidProjections: Client got reward info from player-a",
+        "VoidProjections: Client got reward info from player-b",
+        "VoidProjections: Client got reward info from player-c",
+        "VoidProjections: Client got reward info from player-d",
+        "VoidProjections: Client has reward info for all players now",
+        "ProjectionRewardChoice.lua: Got rewards",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionsCountdown.lua: Initialize timer nil 15",
+    ]
+    .into_iter()
+    .flat_map(|line| machine.observe_line(line))
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        events,
+        vec![
+            RewardLogEvent::BaselineRequested {
+                relic_paths: Vec::new(),
+            },
+            RewardLogEvent::ChoicesReady {
+                expected_choices: 3,
             },
         ]
     );

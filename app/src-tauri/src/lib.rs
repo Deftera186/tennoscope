@@ -362,7 +362,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
         384 * 1024 * 1024,
-        Duration::from_millis(450),
+        Duration::from_millis(800),
     ));
     let coordinator = RewardSourceCoordinator::new(cfg!(debug_assertions));
     let catalog = shared
