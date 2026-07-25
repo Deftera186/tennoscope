@@ -1,6 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "TennoScope",
+  "mainBinaryName": "TennoScope",
   "version": "0.1.0",
   "identifier": "org.warframehelper.app",
   "build": {

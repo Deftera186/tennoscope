@@ -26,3 +26,5 @@ The AppImage does not bypass `/proc` or Yama restrictions, does not contain Warf
 Tauri may download its AppImage packaging tools during the build. This is a build-time operation; release builders should archive checksums and build logs when publishing artifacts.
 
 The repository helper sets `NO_STRIP=true` for AppImage assembly. The `linuxdeploy` binary currently used by Tauri contains an older `strip` that cannot read the newer ELF RELR sections found on some rolling-release systems, including current Gentoo installations. Skipping this optional packaging-time strip step produces a larger artifact but preserves the already optimized Rust executable and allows the bundle to complete.
+
+The helper also repairs the GTK plugin's generated launcher before the final AppImage is assembled. Upstream currently forces `GDK_BACKEND=x11`; TennoScope changes that generated value to `wayland,x11` so GTK layer-shell can provide the reward overlay on Wayland while collection-only X11 sessions retain a fallback. Build AppImages through the helper rather than invoking `pnpm tauri build --bundles appimage` directly.
