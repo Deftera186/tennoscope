@@ -95,6 +95,35 @@ fn rendered_card_count_overrides_the_number_of_network_responders() {
 }
 
 #[test]
+fn host_sequence_emits_the_rendered_choice_count() {
+    let mut machine = RewardLogMachine::default();
+    let events = [
+        "VoidProjections: OpenVoidProjectionRewardScreen - PostMigration: 0",
+        "VoidProjections: Host got reward info from player-a",
+        "VoidProjections: Host got reward info from player-b",
+        "VoidProjections: Host got reward info from player-c",
+        "VoidProjections: Host got reward info from player-d",
+        "VoidProjections: Host has reward info for all players now!",
+        "ProjectionRewardChoice.lua: Got rewards",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionRewardChoice.lua: Missing icon data!",
+        "ProjectionsCountdown.lua: Initialize timer nil 15",
+    ]
+    .into_iter()
+    .flat_map(|line| machine.observe_line(line))
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        events,
+        vec![RewardLogEvent::ChoicesReady {
+            expected_choices: 4,
+        }]
+    );
+}
+
+#[test]
 fn solo_reward_without_a_choice_screen_never_requests_memory_scanning() {
     let mut machine = RewardLogMachine::default();
     let events = [

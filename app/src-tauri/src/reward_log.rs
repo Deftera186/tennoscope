@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
 
 const PROJECTION_PREFIX: &str = "/Lotus/Types/Game/Projections/";
-const OPEN_REWARD_SCREEN: &str = "OpenVoidProjectionRewardScreenRMI";
+const OPEN_REWARD_SCREEN: &str = "OpenVoidProjectionRewardScreen";
 const CLIENT_REWARD: &str = "Client got reward info from ";
-const ALL_REWARDS: &str = "Client has reward info for all players now";
+const HOST_REWARD: &str = "Host got reward info from ";
+const CLIENT_ALL_REWARDS: &str = "Client has reward info for all players now";
+const HOST_ALL_REWARDS: &str = "Host has reward info for all players now";
 const GOT_REWARDS: &str = "ProjectionRewardChoice.lua: Got rewards";
 const RENDERED_REWARD: &str = "ProjectionRewardChoice.lua: Missing icon data!";
 const REWARD_TIMER: &str = "ProjectionsCountdown.lua: Initialize timer";
@@ -68,15 +70,18 @@ impl RewardLogMachine {
             return Vec::new();
         }
         if self.reward_window_open {
-            if let Some(identity) = line
-                .split_once(CLIENT_REWARD)
-                .map(|(_, value)| value.trim())
+            if let Some(identity) = [CLIENT_REWARD, HOST_REWARD]
+                .into_iter()
+                .find_map(|marker| line.split_once(marker).map(|(_, value)| value.trim()))
             {
                 if !identity.is_empty() {
                     self.responders.insert(identity.to_owned());
                 }
             }
-            if line.contains(ALL_REWARDS) || line.contains(GOT_REWARDS) {
+            if line.contains(CLIENT_ALL_REWARDS)
+                || line.contains(HOST_ALL_REWARDS)
+                || line.contains(GOT_REWARDS)
+            {
                 self.rewards_received = true;
             }
             if line.contains(RENDERED_REWARD) {
