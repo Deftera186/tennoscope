@@ -10,7 +10,10 @@ SLOT="0"
 KEYWORDS="~amd64"
 
 RDEPEND="
+	app-text/tesseract
 	dev-libs/glib:2
+	gui-apps/grim
+	gui-libs/gtk-layer-shell
 	net-libs/libsoup:3.0
 	net-libs/webkit-gtk:4.1
 	x11-libs/gtk+:3
@@ -57,7 +60,7 @@ src_test() {
 
 src_install() {
 	dobin "${WORKDIR}/target/release/tennoscope"
-	domenu packaging/warframe-helper.desktop
+	domenu packaging/tennoscope.desktop
 	newicon -s 128 app/src-tauri/icons/128x128.png tennoscope.png
 	dodoc LICENSE THIRD_PARTY_NOTICES.md
 }

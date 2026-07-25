@@ -4,7 +4,7 @@ pkgrel=1
 pkgdesc='Local-first Linux Warframe collection and relic companion'
 arch=('x86_64')
 license=('GPL-3.0-only')
-depends=('glib2' 'gtk3' 'libsoup3' 'webkit2gtk-4.1')
+depends=('glib2' 'gtk3' 'gtk-layer-shell' 'libsoup3' 'webkit2gtk-4.1' 'grim' 'tesseract' 'tesseract-data-eng')
 makedepends=('cargo' 'nodejs' 'pnpm')
 source=("${WARFRAME_HELPER_SOURCE:-${pkgname}-${pkgver}.tar.gz}")
 sha256sums=("${WARFRAME_HELPER_SHA256:-SKIP}")
@@ -31,7 +31,7 @@ check() {
 package() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   install -Dm755 "${srcdir}/target/release/tennoscope" "${pkgdir}/usr/bin/tennoscope"
-  install -Dm644 packaging/warframe-helper.desktop "${pkgdir}/usr/share/applications/tennoscope.desktop"
+  install -Dm644 packaging/tennoscope.desktop "${pkgdir}/usr/share/applications/tennoscope.desktop"
   install -Dm644 app/src-tauri/icons/128x128.png "${pkgdir}/usr/share/icons/hicolor/128x128/apps/tennoscope.png"
   install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dm644 THIRD_PARTY_NOTICES.md "${pkgdir}/usr/share/doc/${pkgname}/THIRD_PARTY_NOTICES.md"

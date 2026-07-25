@@ -1,8 +1,8 @@
-# Warframe Helper
+# TennoScope
 
-Warframe Helper is an early, Linux-first, GPLv3 desktop companion for Warframe. It runs without Overwolf, treats Wine/Proton as a supported environment, and keeps player collection data on the local machine.
+TennoScope is a Linux-first, GPLv3 desktop companion for Warframe. It runs without Overwolf, treats Wine/Proton as a supported environment, and keeps player collection data on the local machine.
 
-The current MVP can discover a running Warframe process on Linux, read its memory without modifying it, obtain an ephemeral inventory authorization value, request and validate a complete inventory snapshot, enrich it with a pinned WFCD item catalog, and store the resulting collection in SQLite. A Tauri/React interface provides collection search and filtering, diagnostics, manual refresh, automatic refresh, and a preview reward overlay.
+The current MVP discovers a running Warframe process, reads its memory without modifying it, obtains an ephemeral inventory authorization value, validates a complete inventory snapshot, enriches it with WFCD catalog data and artwork, and stores the collection in SQLite. The TennoScope interface provides a paginated visual collection index, explicit sync freshness, diagnostics, automatic refresh, and an automatic click-through relic reward overlay on the supported capture path.
 
 This project is unofficial and is not affiliated with or endorsed by Digital Extremes. Process inspection and undocumented game interfaces may carry account-policy or anti-cheat risk even when access is read-only. The application explains this on first run and does nothing until the user accepts the disclosure.
 
@@ -14,14 +14,16 @@ This project is unofficial and is not affiliated with or endorsed by Digital Ext
 - Local SQLite inventory snapshots with authoritative replacement semantics.
 - A cached, integrity-checked WFCD item catalog with offline fallback to the last complete generation.
 - Automatic refresh when Warframe starts and when `EE.log` reports a completed inventory sync, plus a manual refresh button.
-- Collection search, category/ownership filters, mastery state, and pipeline diagnostics.
-- A separate always-on-top reward-advisor window that can currently be opened as a preview.
+- Canonical item artwork, collection search, category/ownership filters, 48-item pagination, mastery state, and pipeline diagnostics.
+- Persisted exact snapshot metadata with a human-readable freshness indicator.
+- English reward-name OCR on wlroots through `grim` and Tesseract, with consecutive-frame debounce.
+- A non-focusable GTK layer-shell reward strip aligned below the in-game reward row and hidden automatically when recognition ends.
 - No account, telemetry service, or cloud synchronization.
 
 ## Current limitations
 
-- Reward-screen capture and OCR are **not implemented**. The overlay is a UI preview and does not detect in-game relic choices.
 - Live Warframe Market prices are **not implemented**. The MVP does not present live platinum values or make market recommendations.
+- Automatic reward capture currently supports wlroots compositors such as sway and Hyprland. PipeWire portal capture for GNOME/KDE Wayland and an X11 adapter remain required for the full desktop matrix; collection synchronization and browsing are unaffected there.
 - Inventory acquisition currently targets Linux `/proc` and a Warframe session running through Wine/Proton. Native Windows and macOS acquisition adapters are not included.
 - The memory/API technique depends on undocumented game behavior and may need maintenance after a Warframe update.
 - The application is English-only, and release repositories/packages are not published yet.
@@ -32,6 +34,7 @@ This project is unofficial and is not affiliated with or endorsed by Digital Ext
 - Warframe running through Wine or Proton and logged in before inventory acquisition can succeed.
 - Permission for the same desktop user to inspect the Warframe process. See [process permissions](#process-permissions-and-yama).
 - Network access for the Warframe inventory request and the initial WFCD catalog download. A validated catalog generation is cached for later offline use.
+- For the current automatic reward overlay: `grim`, Tesseract with English data, and GTK layer-shell on a wlroots Wayland session.
 
 Build requirements are Rust 1.85 or newer, Node.js 20.19+ (or a compatible version listed in [`app/package.json`](app/package.json)), pnpm 10, and the Tauri 2 Linux system libraries. Distribution-specific prerequisite commands are documented in [packaging/README.md](packaging/README.md).
 
@@ -65,29 +68,29 @@ The ignored live acquisition tests require a logged-in Warframe session and expl
 
 ## First run and automatic refresh
 
-On first launch, Warframe Helper shows a one-time disclosure describing its read-only process inspection, privacy behavior, and account-policy uncertainty. Acceptance is saved locally. After acceptance, acquisition is enabled by default.
+On first launch, TennoScope shows a one-time disclosure describing its read-only process inspection, privacy behavior, and account-policy uncertainty. Acceptance is saved locally. After acceptance, acquisition is enabled by default.
 
-Start and log into Warframe normally. Warframe Helper detects the Proton/Wine process and performs an initial refresh. It also locates the active prefix's `EE.log` and watches for a complete `Inventory sync done` line. That signal schedules another inventory refresh with a cooldown. The log is only a trigger; inventory contents are not scraped from it.
+Start and log into Warframe normally. TennoScope detects the Proton/Wine process and performs an initial refresh. It also locates the active prefix's `EE.log` and watches for a complete `Inventory sync done` line. That signal schedules another inventory refresh with a cooldown. The log is only a trigger; inventory contents are not scraped from it.
 
 If automatic refresh cannot find the process or log, use the Diagnostics page and try **Refresh inventory** after Warframe has finished logging in.
 
 ## Process permissions and Yama
 
-Warframe Helper must be able to read the same user's `/proc/<pid>/maps` and `/proc/<pid>/mem`. Check the active Yama policy with:
+TennoScope must be able to read the same user's `/proc/<pid>/maps` and `/proc/<pid>/mem`. Check the active Yama policy with:
 
 ```bash
 cat /proc/sys/kernel/yama/ptrace_scope
 ```
 
-`0` normally permits same-user inspection. With `1` or higher, the kernel may reject access because Warframe Helper is not Warframe's parent process. For a temporary, system-wide test until reboot:
+`0` normally permits same-user inspection. With `1` or higher, the kernel may reject access because TennoScope is not Warframe's parent process. For a temporary, system-wide test until reboot:
 
 ```bash
 sudo sysctl kernel.yama.ptrace_scope=0
 ```
 
-This weakens ptrace isolation for all same-user processes while enabled. Do not run Warframe Helper as root, do not make the AppImage setuid, and do not grant broad capabilities merely to bypass the policy. If the temporary setting resolves acquisition, decide whether a persistent sysctl change matches your machine's threat model and distribution policy.
+This weakens ptrace isolation for all same-user processes while enabled. Do not run TennoScope as root, do not make the AppImage setuid, and do not grant broad capabilities merely to bypass the policy. If the temporary setting resolves acquisition, decide whether a persistent sysctl change matches your machine's threat model and distribution policy.
 
-Also verify that Warframe and Warframe Helper run as the same Unix user. Sandboxed launchers can impose additional `/proc` restrictions that a Yama change will not solve.
+Also verify that Warframe and TennoScope run as the same Unix user. Sandboxed launchers can impose additional `/proc` restrictions that a Yama change will not solve.
 
 ## Privacy and network access
 
@@ -112,4 +115,4 @@ No package repository, AUR package, Gentoo overlay, Debian repository, or Fedora
 
 ## License
 
-Warframe Helper source code is licensed under [GNU GPLv3 only](LICENSE). Warframe and its data remain the property of their respective rights holders. Runtime catalog data has its own upstream licensing; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+TennoScope source code is licensed under [GNU GPLv3 only](LICENSE). Warframe and its data remain the property of their respective rights holders. Runtime catalog data has its own upstream licensing; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

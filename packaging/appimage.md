@@ -11,14 +11,14 @@ Build it from the repository root with:
 The artifact is written under `target/release/bundle/appimage/`. Run it as the same Unix user that runs Warframe:
 
 ```bash
-chmod +x "Warframe Helper_0.1.0_amd64.AppImage"
-./"Warframe Helper_0.1.0_amd64.AppImage"
+chmod +x "TennoScope_0.1.0_amd64.AppImage"
+./"TennoScope_0.1.0_amd64.AppImage"
 ```
 
 Some distributions no longer install FUSE 2 compatibility by default. Prefer installing the distribution's FUSE 2 compatibility package. For a one-off fallback, AppImage supports extraction-and-run mode:
 
 ```bash
-APPIMAGE_EXTRACT_AND_RUN=1 ./"Warframe Helper_0.1.0_amd64.AppImage"
+APPIMAGE_EXTRACT_AND_RUN=1 ./"TennoScope_0.1.0_amd64.AppImage"
 ```
 
 The AppImage does not bypass `/proc` or Yama restrictions, does not contain Warframe, and should never be run as root or made setuid. The first catalog download still requires network access.
