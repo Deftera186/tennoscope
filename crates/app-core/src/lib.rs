@@ -273,6 +273,16 @@ impl AppCore {
         self.current_view()
     }
 
+    pub fn record_game_process_ready(&mut self) -> Result<AppView, AppError> {
+        let last_success = self.health.game_reader.last_success.clone();
+        self.health.game_reader = BackendHealth::new(
+            HealthState::Ready,
+            "Warframe process connected",
+            last_success,
+        )?;
+        self.current_view()
+    }
+
     pub fn record_capture_ready(
         &mut self,
         observed_at: impl Into<String>,

@@ -374,6 +374,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut machine = MonitorMachine::new(15);
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
+    let mut announced_process = None;
     let mut early_reward_resolved = false;
     let incremental_reward_records = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
     let reward_generation = Arc::new(AtomicU64::new(0));
@@ -405,6 +406,14 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             .as_secs();
         let discovered = procfs.discover();
         let process = discovered.as_ref().ok().and_then(|process| *process);
+        if process != announced_process {
+            if process.is_some()
+                && let Ok(mut runtime) = shared.lock()
+            {
+                let _ = runtime.core.record_game_process_ready();
+            }
+            announced_process = process;
+        }
         let (input, log_bytes) = match discovered {
             Ok(None) => (MonitorInput::absent(now), Vec::new()),
             Err(error) => (MonitorInput::error(now, error), Vec::new()),

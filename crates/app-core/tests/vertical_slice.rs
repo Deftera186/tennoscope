@@ -130,6 +130,19 @@ fn in_memory_starts_empty_and_reports_honest_health() {
 }
 
 #[test]
+fn discovered_game_process_is_reported_before_inventory_refresh_finishes() {
+    let mut core = AppCore::in_memory().unwrap();
+
+    let view = core.record_game_process_ready().unwrap();
+
+    assert_eq!(view.health().game_reader().state(), HealthState::Ready);
+    assert_eq!(
+        view.health().game_reader().message(),
+        "Warframe process connected"
+    );
+}
+
+#[test]
 fn fake_session_is_deterministic_and_uses_domain_ranking() {
     let mut core = AppCore::in_memory().unwrap();
 
