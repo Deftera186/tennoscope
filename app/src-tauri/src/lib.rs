@@ -553,7 +553,7 @@ fn handle_reward_event(
                 .map(RewardObservation::certain)
                 .collect::<Vec<_>>();
             let transition = observer.observe(observations);
-            if transition.show {
+            if transition.publish {
                 apply_reward_observations(shared, reward_catalog, &transition.choices);
                 overlay_window::show_reward_overlay(app);
             }

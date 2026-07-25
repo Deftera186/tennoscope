@@ -22,6 +22,7 @@ impl RewardObservation {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ObserverTransition {
+    pub publish: bool,
     pub show: bool,
     pub hide: bool,
     pub choices: Vec<RewardObservation>,
@@ -64,6 +65,7 @@ impl RewardObserverState {
             self.visible = true;
         }
         ObserverTransition {
+            publish: self.hits >= self.hits_required,
             show,
             hide: false,
             choices,
@@ -79,6 +81,7 @@ impl RewardObserverState {
             self.visible = false;
         }
         ObserverTransition {
+            publish: false,
             show: false,
             hide,
             choices: Vec::new(),

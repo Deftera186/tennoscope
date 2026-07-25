@@ -349,7 +349,7 @@ fn temporal_resolution_rejects_equally_complete_competing_clusters() {
 }
 
 #[test]
-fn temporal_resolution_combines_an_exact_choice_set_across_regions() {
+fn temporal_resolution_rejects_an_exact_choice_count_scattered_across_regions() {
     let baseline = fingerprint(
         vec![b'.'; 1024],
         vec![
@@ -375,15 +375,7 @@ fn temporal_resolution_combines_an_exact_choice_set_across_regions() {
 
     assert_eq!(
         resolve_reward_choices(&baseline, &current, 4, 128),
-        RewardResolution::Confirmed {
-            choices: vec![
-                "Burston".into(),
-                "Forma".into(),
-                "Perigale".into(),
-                "Trumna".into(),
-            ],
-            region_start: 0,
-        }
+        RewardResolution::Incomplete
     );
 }
 
