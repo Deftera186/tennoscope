@@ -536,7 +536,54 @@ fn handle_reward_event(
                 let _ = procfs.reset_recent_writes(&process);
             }
         }
-        RewardLogEvent::ResponderReceived { .. } => {}
+        RewardLogEvent::ResponderReceived { identity, is_local } => {
+            if is_local || *early_reward_resolved {
+                return;
+            }
+            let Some(process) = process else {
+                return;
+            };
+            let candidates = memory_state.candidates().to_vec();
+            if candidates.is_empty() {
+                return;
+            }
+            let records = Arc::clone(incremental_reward_records);
+            let generation = Arc::clone(reward_generation);
+            let expected_generation = generation.load(Ordering::Acquire);
+            std::thread::spawn(move || {
+                let procfs = LinuxProc::new();
+                let scanner = RewardMemoryScanner::new(
+                    256 * 1024,
+                    768 * 1024 * 1024,
+                    Duration::from_millis(1_500),
+                );
+                let responders = [identity.as_str()];
+                let resolution = scan_player_record_until_ready(
+                    expected_generation,
+                    &generation,
+                    Duration::from_millis(750),
+                    || {
+                        scanner
+                            .resolve_player_records(
+                                &procfs,
+                                &process,
+                                &candidates,
+                                &responders,
+                                None,
+                                None,
+                            )
+                            .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
+                    },
+                );
+                store_player_record_if_current(
+                    expected_generation,
+                    &generation,
+                    &identity,
+                    resolution,
+                    &records,
+                );
+            });
+        }
         RewardLogEvent::ResponsesComplete {
             responders,
             screen_order,
@@ -555,14 +602,13 @@ fn handle_reward_event(
                 .map(str::to_owned);
             let screen_order_refs = screen_order.iter().map(String::as_str).collect::<Vec<_>>();
 
-            let choices = incremental_reward_records.lock().ok().and_then(|records| {
-                assemble_player_record_choices(
-                    &screen_order_refs,
-                    local_identity.as_deref(),
-                    local_choice.as_deref(),
-                    &records,
-                )
-            });
+            let choices = wait_for_player_record_choices(
+                &screen_order_refs,
+                local_identity.as_deref(),
+                local_choice.as_deref(),
+                incremental_reward_records,
+                Duration::from_millis(400),
+            );
             if let Some(choices) = choices {
                 publish_reward_result(
                     RewardSourceResult {
@@ -803,6 +849,28 @@ pub fn scan_player_record_until_ready(
         std::thread::sleep(Duration::from_millis(25));
     }
     warframe_acquisition::RewardResolution::Incomplete
+}
+
+fn wait_for_player_record_choices(
+    responders: &[&str],
+    local_identity: Option<&str>,
+    local_choice: Option<&str>,
+    records: &Mutex<BTreeMap<String, String>>,
+    timeout: Duration,
+) -> Option<Vec<String>> {
+    let started = Instant::now();
+    loop {
+        if let Ok(records) = records.lock()
+            && let Some(choices) =
+                assemble_player_record_choices(responders, local_identity, local_choice, &records)
+        {
+            return Some(choices);
+        }
+        if started.elapsed() >= timeout {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[cfg(debug_assertions)]
