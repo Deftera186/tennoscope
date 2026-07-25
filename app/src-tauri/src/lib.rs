@@ -476,7 +476,12 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 overlay_window::hide_reward_overlay(&app);
             }
         }
-        std::thread::sleep(Duration::from_millis(100));
+        let poll_interval = if reward_log.reward_window_open() {
+            Duration::from_millis(10)
+        } else {
+            Duration::from_millis(100)
+        };
+        std::thread::sleep(poll_interval);
     }
 }
 

@@ -473,6 +473,52 @@ fn live_player_record_scan_rejects_an_unstructured_nearby_reward() {
 }
 
 #[test]
+fn live_player_record_scan_prioritizes_captured_proton_response_band() {
+    let identity = "de1e7ed00000000000000006";
+    let response_base = 0x41bf_0000_u64;
+    let unrelated_base = 0x7000_0000_u64;
+    let path = b"/Lotus/StoreItems/Types/Recipes/Weapons/QuassusPrimeBlueprint";
+    let mut response = vec![0_u8; 4096];
+    response[127] = identity.len() as u8;
+    response[128..152].copy_from_slice(identity.as_bytes());
+    let path_offset = 204;
+    response[path_offset - 2] = path.len() as u8;
+    response[path_offset..path_offset + path.len()].copy_from_slice(path);
+    let memory = FixtureMemory {
+        regions: vec![
+            ReadableRegion::classified(unrelated_base, 4096, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(
+                response_base,
+                response.len(),
+                RegionScanPriority::WritableAnonymous,
+            ),
+        ],
+        bytes: BTreeMap::from([(response_base, response), (unrelated_base, vec![0; 4096])]),
+        reads: Mutex::new(Vec::new()),
+    };
+    let candidate = RewardNeedle::from_paths(
+        "Quassus Prime Blueprint",
+        vec!["/Lotus/Types/Recipes/Weapons/QuassusPrimeBlueprint".into()],
+    )
+    .unwrap();
+
+    assert!(matches!(
+        RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
+            .resolve_live_player_record(&memory, &GameProcess::new(9), &[candidate], identity)
+            .unwrap(),
+        RewardResolution::Confirmed { .. }
+    ));
+    assert!(
+        memory
+            .reads
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|address| *address < unrelated_base)
+    );
+}
+
+#[test]
 fn low_heap_player_record_scan_reaches_captured_response_heaps_before_high_mappings() {
     let identity = "de1e7ed00000000000000006";
     let mut response_heap = vec![0_u8; 512];

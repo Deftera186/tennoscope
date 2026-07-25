@@ -16,6 +16,8 @@ use crate::{
 
 const LIVE_UI_ADDRESS_MIN: u64 = 0x1300_0000;
 const LIVE_UI_ADDRESS_MAX: u64 = 0x2800_0000;
+const PROTON_RESPONSE_ADDRESS_MIN: u64 = 0x1d00_0000;
+const PROTON_RESPONSE_ADDRESS_MAX: u64 = 0x6000_0000;
 
 struct SnapshotMemoryReader<'a> {
     live: &'a dyn MemoryReader,
@@ -409,10 +411,17 @@ impl RewardMemoryScanner {
             .or_else(|_| memory.readable_regions(process))?;
         regions.retain(|region| region.scan_priority() == RegionScanPriority::WritableAnonymous);
         if low_heaps_first {
-            regions.sort_by_key(|region| (region.start() >= 0x8000_0000, region.start()));
+            regions.sort_by_key(|region| {
+                (
+                    !is_proton_response_region(region.start()),
+                    region.start() >= 0x8000_0000,
+                    region.start(),
+                )
+            });
         } else {
             regions.sort_by_key(|region| {
                 (
+                    !is_proton_response_region(region.start()),
                     region.start() >= 0x8000_0000,
                     std::cmp::Reverse(region.start()),
                 )
@@ -474,6 +483,7 @@ impl RewardMemoryScanner {
         let mut player_hits = Vec::<(&str, u64, u64)>::new();
         let mut structured_rewards = BTreeMap::<&str, BTreeSet<String>>::new();
         let mut bytes_read = 0_u64;
+        let mut rejected_records_captured = 0_usize;
 
         'rounds: loop {
             let mut made_progress = false;
@@ -550,6 +560,15 @@ impl RewardMemoryScanner {
                                     region_start: 0,
                                 });
                             }
+                        } else if !allow_proximity_fallback && rejected_records_captured < 16 {
+                            #[cfg(debug_assertions)]
+                            trace_rejected_response_record(
+                                process.pid(),
+                                identity,
+                                hit_address,
+                                &record[..record_read],
+                            );
+                            rejected_records_captured += 1;
                         }
                         record.zeroize();
                         player_hits.push((identity, hit_address, region.start()));
@@ -890,6 +909,23 @@ fn trace_player_record_evidence(
     );
 }
 
+#[cfg(debug_assertions)]
+fn trace_rejected_response_record(pid: u32, identity: &str, address: u64, bytes: &[u8]) {
+    let suffix = identity
+        .get(identity.len().saturating_sub(6)..)
+        .unwrap_or(identity);
+    let path = format!("/tmp/tennoscope-rejected-{pid}-{suffix}.bin");
+    let Ok(mut output) = OpenOptions::new().create(true).append(true).open(path) else {
+        return;
+    };
+    let Ok(len) = u32::try_from(bytes.len()) else {
+        return;
+    };
+    let _ = output.write_all(&address.to_le_bytes());
+    let _ = output.write_all(&len.to_le_bytes());
+    let _ = output.write_all(bytes);
+}
+
 fn confirmed_structured_choices(
     responders: &[&str],
     local_identity: Option<&str>,
@@ -976,4 +1012,8 @@ fn priority_rank(priority: RegionScanPriority) -> u8 {
 
 const fn is_live_ui_region(start: u64) -> bool {
     start >= LIVE_UI_ADDRESS_MIN && start < LIVE_UI_ADDRESS_MAX
+}
+
+const fn is_proton_response_region(start: u64) -> bool {
+    start >= PROTON_RESPONSE_ADDRESS_MIN && start < PROTON_RESPONSE_ADDRESS_MAX
 }

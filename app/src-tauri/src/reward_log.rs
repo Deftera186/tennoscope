@@ -51,6 +51,10 @@ pub struct RewardLogMachine {
 }
 
 impl RewardLogMachine {
+    pub const fn reward_window_open(&self) -> bool {
+        self.reward_window_open
+    }
+
     pub fn observe_bytes(&mut self, bytes: &[u8]) -> Vec<RewardLogEvent> {
         self.carry.extend_from_slice(bytes);
         let complete = self

@@ -1,6 +1,18 @@
 use app_lib::{RewardLogEvent, RewardLogMachine};
 
 #[test]
+fn reward_window_activity_tracks_open_and_close() {
+    let mut machine = RewardLogMachine::default();
+    assert!(!machine.reward_window_open());
+
+    machine.observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI");
+    assert!(machine.reward_window_open());
+
+    machine.observe_line("ProjectionRewardChoice.lua: Relic reward screen shut down");
+    assert!(!machine.reward_window_open());
+}
+
+#[test]
 fn online_sequence_requests_one_baseline_and_emits_the_observed_choice_count() {
     let mut machine = RewardLogMachine::default();
     let lines = [
