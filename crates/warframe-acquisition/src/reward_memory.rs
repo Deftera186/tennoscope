@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
@@ -92,6 +92,88 @@ pub struct RewardMemoryScanner {
     timeout: Duration,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RewardResolution {
+    Confirmed {
+        choices: Vec<String>,
+        region_start: u64,
+    },
+    Incomplete,
+    Ambiguous,
+    TimedOut,
+}
+
+pub fn resolve_reward_choices(
+    baseline: &RewardFingerprint,
+    current: &RewardFingerprint,
+    expected_choices: usize,
+    maximum_span: u64,
+) -> RewardResolution {
+    if expected_choices == 0 {
+        return RewardResolution::Incomplete;
+    }
+    let old = baseline
+        .hits
+        .iter()
+        .map(hit_identity)
+        .collect::<BTreeSet<_>>();
+    let mut regions = BTreeMap::<u64, Vec<&RewardHit>>::new();
+    for hit in &current.hits {
+        if !old.contains(&hit_identity(hit)) {
+            regions.entry(hit.region_start).or_default().push(hit);
+        }
+    }
+    let mut complete = Vec::new();
+    for (region_start, hits) in regions {
+        let mut earliest = BTreeMap::<&str, &RewardHit>::new();
+        for hit in hits {
+            earliest
+                .entry(hit.choice_name())
+                .and_modify(|existing| {
+                    if hit.address < existing.address {
+                        *existing = hit;
+                    }
+                })
+                .or_insert(hit);
+        }
+        if earliest.len() != expected_choices {
+            continue;
+        }
+        let mut ordered = earliest.into_values().collect::<Vec<_>>();
+        ordered.sort_by_key(|hit| hit.address);
+        let span = ordered
+            .last()
+            .zip(ordered.first())
+            .map_or(0, |(last, first)| last.address - first.address);
+        if span <= maximum_span {
+            complete.push((
+                region_start,
+                ordered
+                    .into_iter()
+                    .map(|hit| hit.choice_name.clone())
+                    .collect::<Vec<_>>(),
+            ));
+        }
+    }
+    match complete.as_slice() {
+        [(region_start, choices)] => RewardResolution::Confirmed {
+            choices: choices.clone(),
+            region_start: *region_start,
+        },
+        [] => RewardResolution::Incomplete,
+        _ => RewardResolution::Ambiguous,
+    }
+}
+
+fn hit_identity(hit: &RewardHit) -> (&str, RewardRepresentation, RegionScanPriority, u64) {
+    (
+        hit.choice_name(),
+        hit.representation,
+        hit.priority,
+        hit.address - hit.region_start,
+    )
+}
+
 impl RewardMemoryScanner {
     pub fn new(chunk_size: usize, byte_budget: u64, timeout: Duration) -> Self {
         Self {
@@ -107,8 +189,57 @@ impl RewardMemoryScanner {
         process: &GameProcess,
         candidates: &[RewardNeedle],
     ) -> Result<RewardFingerprint, AcquisitionError> {
+        self.fingerprint_regions(memory, process, candidates, None)
+    }
+
+    pub fn confirm_region(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        candidates: &[RewardNeedle],
+        region_start: u64,
+        region_len: usize,
+        expected_choices: usize,
+        maximum_span: u64,
+    ) -> Result<RewardResolution, AcquisitionError> {
+        let current = self.fingerprint_regions(
+            memory,
+            process,
+            candidates,
+            Some((region_start, region_len)),
+        )?;
+        let baseline = RewardFingerprint {
+            hits: Vec::new(),
+            bytes_read: 0,
+            elapsed: Duration::ZERO,
+        };
+        Ok(resolve_reward_choices(
+            &baseline,
+            &current,
+            expected_choices,
+            maximum_span,
+        ))
+    }
+
+    fn fingerprint_regions(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        candidates: &[RewardNeedle],
+        selected_region: Option<(u64, usize)>,
+    ) -> Result<RewardFingerprint, AcquisitionError> {
         let started = Instant::now();
         let mut regions = memory.readable_regions(process)?;
+        if let Some((start, len)) = selected_region {
+            regions.retain(|region| region.start() == start);
+            for region in &mut regions {
+                *region = crate::ReadableRegion::classified(
+                    region.start(),
+                    region.len().min(len),
+                    region.scan_priority(),
+                );
+            }
+        }
         regions.sort_by_key(|region| priority_rank(region.scan_priority()));
         let longest = candidates
             .iter()

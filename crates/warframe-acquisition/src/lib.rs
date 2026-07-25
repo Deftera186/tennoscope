@@ -28,6 +28,7 @@ pub use linux_proc::LinuxProc;
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 pub use reward_memory::{
     RewardFingerprint, RewardHit, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
+    RewardResolution, resolve_reward_choices,
 };
 
 /// A credential whose standard formatting surfaces never expose its contents.
