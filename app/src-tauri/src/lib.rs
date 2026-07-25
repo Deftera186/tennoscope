@@ -6,7 +6,10 @@ use std::{
     io::{Read, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -361,7 +364,8 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
     let mut early_reward_resolved = false;
-    let mut incremental_reward_records = BTreeMap::<String, String>::new();
+    let incremental_reward_records = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
+    let reward_generation = Arc::new(AtomicU64::new(0));
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
         768 * 1024 * 1024,
@@ -432,7 +436,8 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &coordinator,
                 &mut reward_state,
                 &mut early_reward_resolved,
-                &mut incremental_reward_records,
+                &incremental_reward_records,
+                &reward_generation,
                 &shared,
                 &app,
                 now,
@@ -440,7 +445,10 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         }
         if process.is_none() {
             reward_memory.clear();
-            incremental_reward_records.clear();
+            reward_generation.fetch_add(1, Ordering::AcqRel);
+            if let Ok(mut records) = incremental_reward_records.lock() {
+                records.clear();
+            }
             if reward_state.miss().hide {
                 overlay_window::hide_reward_overlay(&app);
             }
@@ -487,13 +495,47 @@ fn handle_reward_event(
     coordinator: &RewardSourceCoordinator,
     observer: &mut RewardObserverState,
     early_reward_resolved: &mut bool,
-    incremental_reward_records: &mut BTreeMap<String, String>,
+    incremental_reward_records: &Arc<Mutex<BTreeMap<String, String>>>,
+    reward_generation: &Arc<AtomicU64>,
     shared: &SharedRuntime,
     app: &AppHandle,
     now: u64,
 ) {
     match event {
-        RewardLogEvent::ResponderReceived { .. } => {}
+        RewardLogEvent::ResponderReceived { identity, is_local } => {
+            if is_local || *early_reward_resolved {
+                return;
+            }
+            let Some(process) = process else {
+                return;
+            };
+            let candidates = memory_state.candidates().to_vec();
+            if candidates.is_empty() {
+                return;
+            }
+            let records = Arc::clone(incremental_reward_records);
+            let generation = Arc::clone(reward_generation);
+            let expected_generation = generation.load(Ordering::Acquire);
+            std::thread::spawn(move || {
+                let procfs = LinuxProc::new();
+                let scanner = RewardMemoryScanner::new(
+                    256 * 1024,
+                    768 * 1024 * 1024,
+                    Duration::from_millis(1_500),
+                );
+                let responders = [identity.as_str()];
+                let resolution = scanner
+                    .resolve_player_records(&procfs, &process, &candidates, &responders, None, None)
+                    .unwrap_or(warframe_acquisition::RewardResolution::Incomplete);
+                store_player_record_if_current(
+                    expected_generation,
+                    &generation,
+                    &identity,
+                    resolution,
+                    &records,
+                );
+            });
+        }
         RewardLogEvent::ResponsesComplete {
             responders,
             screen_order,
@@ -512,12 +554,14 @@ fn handle_reward_event(
                 .map(str::to_owned);
             let screen_order_refs = screen_order.iter().map(String::as_str).collect::<Vec<_>>();
 
-            if let Some(choices) = assemble_player_record_choices(
+            let choices = wait_for_player_record_choices(
                 &screen_order_refs,
                 local_identity.as_deref(),
                 local_choice.as_deref(),
                 incremental_reward_records,
-            ) {
+                Duration::from_millis(1_400),
+            );
+            if let Some(choices) = choices {
                 publish_reward_result(
                     RewardSourceResult {
                         choices: RewardChoiceSet {
@@ -550,20 +594,21 @@ fn handle_reward_event(
         }
         RewardLogEvent::BaselineRequested { relic_paths } => {
             *early_reward_resolved = false;
-            incremental_reward_records.clear();
+            reward_generation.fetch_add(1, Ordering::AcqRel);
+            if let Ok(mut records) = incremental_reward_records.lock() {
+                records.clear();
+            }
             let candidates = catalog
                 .zip(relic_catalog)
                 .map(|(catalog, relics)| {
                     relics.candidates_for_projection_paths(&relic_paths, catalog)
                 })
                 .unwrap_or_default();
-            let Some(process) = process else {
+            let Some(_process) = process else {
                 memory_state.clear();
                 return;
             };
-            let mut memory = memory_state.bind(procfs, process);
-            let mut baseline_coordinator = RewardSourceCoordinator::new(cfg!(debug_assertions));
-            baseline_coordinator.baseline(&mut memory, &candidates);
+            memory_state.prepare_candidates(&candidates);
         }
         RewardLogEvent::ChoicesReady {
             expected_choices,
@@ -613,7 +658,10 @@ fn handle_reward_event(
         }
         RewardLogEvent::Closed => {
             *early_reward_resolved = false;
-            incremental_reward_records.clear();
+            reward_generation.fetch_add(1, Ordering::AcqRel);
+            if let Ok(mut records) = incremental_reward_records.lock() {
+                records.clear();
+            }
             memory_state.clear();
             observer.miss();
             overlay_window::hide_reward_overlay(app);
@@ -668,6 +716,51 @@ pub fn assemble_player_record_choices(
         choices.push(records.get(identity)?.clone());
     }
     (choices.len() == responders.len()).then_some(choices)
+}
+
+pub fn store_player_record_if_current(
+    expected_generation: u64,
+    generation: &AtomicU64,
+    identity: &str,
+    resolution: warframe_acquisition::RewardResolution,
+    records: &Mutex<BTreeMap<String, String>>,
+) {
+    if generation.load(Ordering::Acquire) != expected_generation {
+        return;
+    }
+    let warframe_acquisition::RewardResolution::Confirmed { choices, .. } = resolution else {
+        return;
+    };
+    let [choice] = choices.as_slice() else {
+        return;
+    };
+    if let Ok(mut records) = records.lock()
+        && generation.load(Ordering::Acquire) == expected_generation
+    {
+        records.insert(identity.to_owned(), choice.clone());
+    }
+}
+
+fn wait_for_player_record_choices(
+    responders: &[&str],
+    local_identity: Option<&str>,
+    local_choice: Option<&str>,
+    records: &Mutex<BTreeMap<String, String>>,
+    timeout: Duration,
+) -> Option<Vec<String>> {
+    let started = Instant::now();
+    loop {
+        if let Ok(records) = records.lock()
+            && let Some(choices) =
+                assemble_player_record_choices(responders, local_identity, local_choice, &records)
+        {
+            return Some(choices);
+        }
+        if started.elapsed() >= timeout {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn publish_reward_result(

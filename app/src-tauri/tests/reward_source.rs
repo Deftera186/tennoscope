@@ -1,8 +1,13 @@
-use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, atomic::AtomicU64},
+    time::Duration,
+};
 
 use app_lib::{
-    MemoryRewardSource, RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic,
-    VisualRewardSource, reward_path_matches, rotate_choices_to_local,
+    LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSource, RewardSourceCoordinator,
+    RewardSourceDiagnostic, VisualRewardSource, reward_path_matches, rotate_choices_to_local,
+    store_player_record_if_current,
 };
 
 #[test]
@@ -26,7 +31,9 @@ fn memory_reward_ring_rotates_without_scrambling_screen_order() {
         ]
     );
 }
-use warframe_acquisition::{RewardCatalogEntry, RewardNeedle, RewardResolution};
+use warframe_acquisition::{
+    RewardCatalogEntry, RewardMemoryScanner, RewardNeedle, RewardResolution,
+};
 
 struct Memory {
     resolution: RewardResolution,
@@ -128,6 +135,81 @@ fn empty_candidate_baseline_clears_the_previous_reward_run() {
     coordinator.baseline(&mut memory, &[]);
 
     assert_eq!(memory.baselines, 1);
+}
+
+#[test]
+fn preparing_structured_candidates_replaces_the_previous_run_without_a_fingerprint() {
+    let mut state =
+        LiveMemoryRewardState::new(RewardMemoryScanner::new(256, 4096, Duration::from_secs(1)));
+
+    state.prepare_candidates(&candidates());
+    assert_eq!(state.candidates()[0].choice_name(), "A");
+
+    let next = vec![RewardNeedle::new("B", ["/Lotus/B"]).unwrap()];
+    state.prepare_candidates(&next);
+
+    assert_eq!(state.candidates().len(), 1);
+    assert_eq!(state.candidates()[0].choice_name(), "B");
+}
+
+#[test]
+fn current_background_player_record_is_stored() {
+    let generation = AtomicU64::new(7);
+    let records = Arc::new(Mutex::new(BTreeMap::new()));
+
+    store_player_record_if_current(
+        7,
+        &generation,
+        "remote-a",
+        RewardResolution::Confirmed {
+            choices: vec!["Forma Blueprint".into()],
+            region_start: 1,
+        },
+        &records,
+    );
+
+    assert_eq!(
+        records.lock().unwrap().get("remote-a").map(String::as_str),
+        Some("Forma Blueprint")
+    );
+}
+
+#[test]
+fn stale_background_player_record_is_discarded() {
+    let generation = AtomicU64::new(8);
+    let records = Arc::new(Mutex::new(BTreeMap::new()));
+
+    store_player_record_if_current(
+        7,
+        &generation,
+        "remote-a",
+        RewardResolution::Confirmed {
+            choices: vec!["Forma Blueprint".into()],
+            region_start: 1,
+        },
+        &records,
+    );
+
+    assert!(records.lock().unwrap().is_empty());
+}
+
+#[test]
+fn ambiguous_background_player_record_is_discarded() {
+    let generation = AtomicU64::new(7);
+    let records = Arc::new(Mutex::new(BTreeMap::new()));
+
+    store_player_record_if_current(
+        7,
+        &generation,
+        "remote-a",
+        RewardResolution::Confirmed {
+            choices: vec!["Forma Blueprint".into(), "Tiberon Prime Receiver".into()],
+            region_start: 1,
+        },
+        &records,
+    );
+
+    assert!(records.lock().unwrap().is_empty());
 }
 
 #[test]

@@ -75,6 +75,11 @@ impl LiveMemoryRewardState {
         &self.candidates
     }
 
+    pub fn prepare_candidates(&mut self, candidates: &[RewardNeedle]) {
+        self.candidates = candidates.to_vec();
+        self.baseline = None;
+    }
+
     pub fn clear(&mut self) {
         self.candidates.clear();
         self.baseline = None;
