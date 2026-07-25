@@ -4,11 +4,9 @@ use std::time::{Duration, Instant};
 use std::{fs::OpenOptions, io::Write};
 
 use warframe_acquisition::{
-    GameProcess, MemoryReader, RewardCatalogEntry, RewardFingerprint, RewardMemoryScanner,
-    RewardNeedle, RewardResolution, resolve_reward_choices,
+    GameProcess, MemoryReader, PersistentRewardResolver, RewardCatalogEntry, RewardFingerprint,
+    RewardMemoryScanner, RewardNeedle, RewardResolution,
 };
-
-const MAXIMUM_REWARD_CLUSTER_SPAN: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RewardChoiceSource {
@@ -117,49 +115,17 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
     }
 
     fn choices(&mut self, expected: usize) -> RewardResolution {
-        let Some(baseline) = self.state.baseline.as_ref() else {
-            return RewardResolution::Incomplete;
-        };
-        let Ok(current) =
-            self.state
-                .scanner
-                .fingerprint(self.memory, &self.process, &self.state.candidates)
-        else {
-            return RewardResolution::Incomplete;
-        };
-        let temporal =
-            resolve_reward_choices(baseline, &current, expected, MAXIMUM_REWARD_CLUSTER_SPAN);
+        let started = Instant::now();
+        let resolution = PersistentRewardResolver::new(
+            256 * 1024,
+            512 * 1024 * 1024,
+            Duration::from_millis(2_500),
+        )
+        .resolve(self.memory, &self.process, &self.state.candidates, expected)
+        .unwrap_or(RewardResolution::Incomplete);
         #[cfg(debug_assertions)]
-        trace_fingerprint("current", Some(&current), Some(&temporal));
-        let resolution = temporal;
-        let RewardResolution::Confirmed { region_start, .. } = resolution else {
-            return resolution;
-        };
-        if region_start == 0 {
-            return resolution;
-        }
-        let Ok(regions) = self.memory.readable_regions(&self.process) else {
-            return RewardResolution::Incomplete;
-        };
-        let Some(region_len) = regions
-            .iter()
-            .find(|region| region.start() == region_start)
-            .map(|region| region.len())
-        else {
-            return RewardResolution::Incomplete;
-        };
-        self.state
-            .scanner
-            .confirm_region(
-                self.memory,
-                &self.process,
-                &self.state.candidates,
-                region_start,
-                region_len,
-                expected,
-                MAXIMUM_REWARD_CLUSTER_SPAN,
-            )
-            .unwrap_or(RewardResolution::Incomplete)
+        trace_persistent_choices(expected, started.elapsed(), &resolution);
+        resolution
     }
 
     fn player_records(
@@ -236,6 +202,22 @@ fn trace_player_records(responder_count: usize, elapsed: Duration, resolution: &
     let _ = writeln!(
         output,
         "[DEBUG-player-record] responders={responder_count} elapsed_ms={} resolution={resolution:?}",
+        elapsed.as_millis(),
+    );
+}
+
+#[cfg(debug_assertions)]
+fn trace_persistent_choices(expected: usize, elapsed: Duration, resolution: &RewardResolution) {
+    let Ok(mut output) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/tennoscope-reward-debug.log")
+    else {
+        return;
+    };
+    let _ = writeln!(
+        output,
+        "[DEBUG-persistent-ui] expected={expected} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
     );
 }

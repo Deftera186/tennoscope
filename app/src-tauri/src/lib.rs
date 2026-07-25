@@ -576,100 +576,7 @@ fn handle_reward_event(
                 reward_generation,
             );
         }
-        RewardLogEvent::ResponsesComplete {
-            responders,
-            screen_order,
-            local_reward_path,
-            local_identity,
-        } => {
-            if *early_reward_resolved || responders.len() <= 1 {
-                return;
-            }
-            let Some(process) = process else {
-                return;
-            };
-            let local_choice = local_reward_path
-                .as_deref()
-                .and_then(|path| choice_name_for_path(memory_state.candidates(), path))
-                .map(str::to_owned);
-            let screen_order_refs = screen_order.iter().map(String::as_str).collect::<Vec<_>>();
-
-            let choices = wait_for_player_record_choices(
-                &screen_order_refs,
-                local_identity.as_deref(),
-                local_choice.as_deref(),
-                incremental_reward_records,
-                Duration::from_millis(400),
-            );
-            if let Some(choices) = choices {
-                publish_reward_result(
-                    RewardSourceResult {
-                        choices: RewardChoiceSet {
-                            names: choices,
-                            source: RewardChoiceSource::Memory,
-                            elapsed: Duration::ZERO,
-                        },
-                        diagnostic: RewardSourceDiagnostic::Ready,
-                    },
-                    observer,
-                    shared,
-                    app,
-                    reward_catalog,
-                    now,
-                );
-                *early_reward_resolved = true;
-                return;
-            }
-            let mut memory = memory_state.bind(procfs, process);
-            let result = coordinator.player_record_choices(
-                &mut memory,
-                &screen_order_refs,
-                local_identity.as_deref(),
-                local_choice.as_deref(),
-            );
-            if let Some(result) = result {
-                publish_reward_result(result, observer, shared, app, reward_catalog, now);
-                *early_reward_resolved = true;
-                return;
-            }
-
-            let started = Instant::now();
-            let scanner = RewardMemoryScanner::new(
-                256 * 1024,
-                768 * 1024 * 1024,
-                Duration::from_millis(1_500),
-            );
-            let resolution = scanner
-                .resolve_strict_player_records_from_low_heaps(
-                    procfs,
-                    &process,
-                    memory_state.candidates(),
-                    &screen_order_refs,
-                    local_identity.as_deref(),
-                    local_choice.as_deref(),
-                )
-                .unwrap_or(warframe_acquisition::RewardResolution::Incomplete);
-            #[cfg(debug_assertions)]
-            trace_squad_reward_scan("low", started.elapsed(), &resolution);
-            if let warframe_acquisition::RewardResolution::Confirmed { choices, .. } = resolution {
-                publish_reward_result(
-                    RewardSourceResult {
-                        choices: RewardChoiceSet {
-                            names: choices,
-                            source: RewardChoiceSource::Memory,
-                            elapsed: started.elapsed(),
-                        },
-                        diagnostic: RewardSourceDiagnostic::Ready,
-                    },
-                    observer,
-                    shared,
-                    app,
-                    reward_catalog,
-                    now,
-                );
-                *early_reward_resolved = true;
-            }
-        }
+        RewardLogEvent::ResponsesComplete { .. } => {}
         RewardLogEvent::BaselineRequested { relic_paths } => {
             *early_reward_resolved = false;
             reward_generation.fetch_add(1, Ordering::AcqRel);
@@ -812,21 +719,6 @@ pub fn rotate_choices_to_local(choices: &mut [String], local_name: &str) {
     }
 }
 
-fn choice_name_for_path<'a>(
-    candidates: &'a [warframe_acquisition::RewardNeedle],
-    path: &str,
-) -> Option<&'a str> {
-    candidates
-        .iter()
-        .find(|needle| {
-            needle.internal_paths().iter().any(|candidate_path| {
-                std::str::from_utf8(candidate_path)
-                    .is_ok_and(|candidate_path| reward_path_matches(path, candidate_path))
-            })
-        })
-        .map(warframe_acquisition::RewardNeedle::choice_name)
-}
-
 pub fn reward_path_matches(log_path: &str, catalog_path: &str) -> bool {
     log_path == catalog_path
         || log_path
@@ -897,48 +789,6 @@ pub fn scan_player_record_until_ready(
         std::thread::sleep(Duration::from_millis(25));
     }
     warframe_acquisition::RewardResolution::Incomplete
-}
-
-fn wait_for_player_record_choices(
-    responders: &[&str],
-    local_identity: Option<&str>,
-    local_choice: Option<&str>,
-    records: &Mutex<BTreeMap<String, String>>,
-    timeout: Duration,
-) -> Option<Vec<String>> {
-    let started = Instant::now();
-    loop {
-        if let Ok(records) = records.lock()
-            && let Some(choices) =
-                assemble_player_record_choices(responders, local_identity, local_choice, &records)
-        {
-            return Some(choices);
-        }
-        if started.elapsed() >= timeout {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(5));
-    }
-}
-
-#[cfg(debug_assertions)]
-fn trace_squad_reward_scan(
-    direction: &str,
-    elapsed: Duration,
-    resolution: &warframe_acquisition::RewardResolution,
-) {
-    let Ok(mut output) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/tennoscope-reward-debug.log")
-    else {
-        return;
-    };
-    let _ = writeln!(
-        output,
-        "[DEBUG-squad] direction={direction} elapsed_ms={} resolution={resolution:?}",
-        elapsed.as_millis(),
-    );
 }
 
 #[cfg(debug_assertions)]

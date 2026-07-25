@@ -14,6 +14,7 @@ mod linux_proc;
 mod orchestrator;
 mod relic_catalog;
 mod reward_memory;
+mod reward_ui_memory;
 
 pub use authorization::AuthorizationScanner;
 pub use catalog::{CatalogError, CatalogIndex, CatalogMetadata, RewardCatalogEntry};
@@ -33,6 +34,7 @@ pub use reward_memory::{
     RewardFingerprint, RewardHit, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
     RewardResolution, resolve_current_reward_choices, resolve_reward_choices,
 };
+pub use reward_ui_memory::PersistentRewardResolver;
 
 /// A credential whose standard formatting surfaces never expose its contents.
 pub struct SecretString(Zeroizing<String>);

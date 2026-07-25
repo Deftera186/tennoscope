@@ -30,3 +30,11 @@ The implementation is running in experimental comparison mode. Default memory-on
 - No memory/OCR disagreement across the accepted online captures.
 
 These are runtime validation requirements, not missing implementation pieces.
+
+## Persistent UI model correction
+
+Transient network-response records were found to be unsuitable as a publication source: they can disappear before a post-log scan reaches them, and proximity matching can associate stale reward strings with unrelated player-ID copies. That publication path is now disabled.
+
+Archived reward-screen captures were re-evaluated using complete aligned 64-bit pointers instead of four-byte pointer fragments. Four captures contain 27 genuine reward-object references after full-width validation. This supports reverse-pointer graph discovery from persistent reward strings to an ordered UI container while eliminating the majority of prior false references.
+
+The current experimental resolver contains no absolute addresses, Warframe build identifiers, player IDs, or fixed pointer chains. It requires an exact card count, a contiguous ordered native-pointer container, a unique order, and a successful live reread before publishing. Candidate strings without a container and competing containers are rejected. Live acceptance of the new resolver remains outstanding.
