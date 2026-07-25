@@ -2,6 +2,7 @@ const PROJECTION_PREFIX: &str = "/Lotus/Types/Game/Projections/";
 const OPEN_REWARD_SCREEN: &str = "OpenVoidProjectionRewardScreen";
 const CLIENT_REWARD: &str = "Client got reward info from ";
 const HOST_REWARD: &str = "Host got reward info from ";
+const WAITING_REWARD: &str = "Still waiting on response from ";
 const CLIENT_ALL_REWARDS: &str = "Client has reward info for all players now";
 const HOST_ALL_REWARDS: &str = "Host has reward info for all players now";
 const GOT_REWARDS: &str = "ProjectionRewardChoice.lua: Got rewards";
@@ -24,6 +25,7 @@ pub enum RewardLogEvent {
     },
     ResponsesComplete {
         responders: Vec<String>,
+        screen_order: Vec<String>,
         local_reward_path: Option<String>,
         local_identity: Option<String>,
     },
@@ -34,6 +36,7 @@ pub enum RewardLogEvent {
 pub struct RewardLogMachine {
     loaded_relics: Vec<String>,
     responders: Vec<String>,
+    squad_ring: Vec<String>,
     reward_window_open: bool,
     choices_emitted: bool,
     rewards_received: bool,
@@ -79,6 +82,7 @@ impl RewardLogMachine {
         if line.contains(OPEN_REWARD_SCREEN) && !self.reward_window_open {
             self.reward_window_open = true;
             self.responders.clear();
+            self.squad_ring.clear();
             self.choices_emitted = false;
             self.rewards_received = false;
             self.responses_complete_emitted = false;
@@ -109,10 +113,19 @@ impl RewardLogMachine {
                 if !identity.is_empty() {
                     if !self.responders.iter().any(|known| known == identity) {
                         self.responders.push(identity.to_owned());
+                        if self.squad_ring.is_empty() {
+                            self.squad_ring.push(identity.to_owned());
+                        }
                         return vec![RewardLogEvent::ResponderReceived {
                             identity: identity.to_owned(),
                         }];
                     }
+                }
+            }
+            if let Some((_, identity)) = line.split_once(WAITING_REWARD) {
+                let identity = identity.trim();
+                if !identity.is_empty() && !self.squad_ring.iter().any(|known| known == identity) {
+                    self.squad_ring.push(identity.to_owned());
                 }
             }
             if line.contains(CLIENT_ALL_REWARDS)
@@ -122,8 +135,22 @@ impl RewardLogMachine {
                 self.rewards_received = true;
                 if !self.responses_complete_emitted {
                     self.responses_complete_emitted = true;
+                    for identity in &self.responders {
+                        if !self.squad_ring.contains(identity) {
+                            self.squad_ring.push(identity.clone());
+                        }
+                    }
+                    let mut screen_order = self.squad_ring.clone();
+                    if let Some(local_identity) = self.local_identity.as_deref()
+                        && let Some(local_index) = screen_order
+                            .iter()
+                            .position(|identity| identity == local_identity)
+                    {
+                        screen_order.rotate_left(local_index);
+                    }
                     return vec![RewardLogEvent::ResponsesComplete {
                         responders: self.responders.clone(),
+                        screen_order,
                         local_reward_path: self.local_reward_path.clone(),
                         local_identity: self.local_identity.clone(),
                     }];
@@ -152,6 +179,7 @@ impl RewardLogMachine {
             self.reward_window_open = false;
             self.choices_emitted = false;
             self.responders.clear();
+            self.squad_ring.clear();
             self.rewards_received = false;
             self.responses_complete_emitted = false;
             self.rendered_cards = 0;

@@ -242,3 +242,30 @@ fn store_items_log_paths_match_catalog_type_paths() {
         "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb",
     ));
 }
+
+#[test]
+fn accumulated_player_records_are_assembled_with_local_reward_first() {
+    let records = std::collections::BTreeMap::from([
+        ("remote-a".to_owned(), "Orthos Prime Blueprint".to_owned()),
+        (
+            "remote-b".to_owned(),
+            "Revenant Prime Chassis Blueprint".to_owned(),
+        ),
+        ("remote-c".to_owned(), "Braton Prime Barrel".to_owned()),
+    ]);
+
+    assert_eq!(
+        app_lib::assemble_player_record_choices(
+            &["local", "remote-a", "remote-b", "remote-c"],
+            Some("local"),
+            Some("Cedo Prime Stock"),
+            &records,
+        ),
+        Some(vec![
+            "Cedo Prime Stock".into(),
+            "Orthos Prime Blueprint".into(),
+            "Revenant Prime Chassis Blueprint".into(),
+            "Braton Prime Barrel".into(),
+        ])
+    );
+}

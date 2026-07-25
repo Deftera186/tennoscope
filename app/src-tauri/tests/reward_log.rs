@@ -239,12 +239,52 @@ fn live_response_sequence_emits_ordered_responders_and_completes_before_renderin
                     "de1e7ed00000000000000004".into(),
                     "de1e7ed00000000000000006".into(),
                 ],
+                screen_order: vec![
+                    "de1e7ed00000000000000006".into(),
+                    "de1e7ed00000000000000005".into(),
+                    "de1e7ed0000000000000000a".into(),
+                    "de1e7ed00000000000000004".into(),
+                ],
                 local_reward_path: Some(
                     "/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb"
                         .into(),
                 ),
                 local_identity: Some("de1e7ed00000000000000006".into()),
             },
+        ]
+    );
+}
+
+#[test]
+fn waiting_list_ring_rotates_to_the_local_players_screen_order() {
+    let mut machine = RewardLogMachine::default();
+    let complete = [
+        "VoidProjections: OpenVoidProjectionRewardScreenRMI",
+        "VoidProjections: Client got reward info from de1e7ed00000000000000010",
+        "VoidProjections: Still waiting on response from de1e7ed0000000000000000f",
+        "VoidProjections: Still waiting on response from de1e7ed00000000000000006",
+        "VoidProjections: Still waiting on response from de1e7ed00000000000000009",
+        "VoidProjections: de1e7ed00000000000000006 gets reward /Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/BratonPrimeBarrel",
+        "VoidProjections: Client got reward info from de1e7ed00000000000000006",
+        "VoidProjections: Client got reward info from de1e7ed00000000000000009",
+        "VoidProjections: Client got reward info from de1e7ed0000000000000000f",
+        "VoidProjections: Client has reward info for all players now",
+    ]
+    .into_iter()
+    .flat_map(|line| machine.observe_line(line))
+    .find_map(|event| match event {
+        RewardLogEvent::ResponsesComplete { screen_order, .. } => Some(screen_order),
+        _ => None,
+    })
+    .unwrap();
+
+    assert_eq!(
+        complete,
+        vec![
+            "de1e7ed00000000000000006",
+            "de1e7ed00000000000000009",
+            "de1e7ed00000000000000010",
+            "de1e7ed0000000000000000f",
         ]
     );
 }

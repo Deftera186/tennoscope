@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Seek, SeekFrom},
     os::unix::fs::MetadataExt,
@@ -360,6 +361,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
     let mut early_reward_resolved = false;
+    let mut incremental_reward_records = BTreeMap::<String, String>::new();
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
         384 * 1024 * 1024,
@@ -430,6 +432,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &coordinator,
                 &mut reward_state,
                 &mut early_reward_resolved,
+                &mut incremental_reward_records,
                 &shared,
                 &app,
                 now,
@@ -437,6 +440,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         }
         if process.is_none() {
             reward_memory.clear();
+            incremental_reward_records.clear();
             if reward_state.miss().hide {
                 overlay_window::hide_reward_overlay(&app);
             }
@@ -483,14 +487,30 @@ fn handle_reward_event(
     coordinator: &RewardSourceCoordinator,
     observer: &mut RewardObserverState,
     early_reward_resolved: &mut bool,
+    incremental_reward_records: &mut BTreeMap<String, String>,
     shared: &SharedRuntime,
     app: &AppHandle,
     now: u64,
 ) {
     match event {
-        RewardLogEvent::ResponderReceived { .. } => {}
+        RewardLogEvent::ResponderReceived { identity } => {
+            if incremental_reward_records.contains_key(&identity) {
+                return;
+            }
+            let Some(process) = process else {
+                return;
+            };
+            let mut memory = memory_state.bind(procfs, process);
+            if let warframe_acquisition::RewardResolution::Confirmed { choices, .. } =
+                memory.player_records(&[identity.as_str()], None, None)
+                && let [choice] = choices.as_slice()
+            {
+                incremental_reward_records.insert(identity, choice.clone());
+            }
+        }
         RewardLogEvent::ResponsesComplete {
             responders,
+            screen_order,
             local_reward_path,
             local_identity,
         } => {
@@ -504,11 +524,53 @@ fn handle_reward_event(
                 .as_deref()
                 .and_then(|path| choice_name_for_path(memory_state.candidates(), path))
                 .map(str::to_owned);
-            let responder_refs = responders.iter().map(String::as_str).collect::<Vec<_>>();
+            let screen_order_refs = screen_order.iter().map(String::as_str).collect::<Vec<_>>();
+
+            let missing_responders = screen_order_refs
+                .iter()
+                .copied()
+                .filter(|identity| {
+                    local_identity.as_deref() != Some(*identity)
+                        && !incremental_reward_records.contains_key(*identity)
+                })
+                .collect::<Vec<_>>();
+            for identity in missing_responders {
+                let mut memory = memory_state.bind(procfs, process);
+                if let warframe_acquisition::RewardResolution::Confirmed { choices, .. } =
+                    memory.player_records(&[identity], None, None)
+                    && let [choice] = choices.as_slice()
+                {
+                    incremental_reward_records.insert(identity.to_owned(), choice.clone());
+                }
+            }
+            if let Some(choices) = assemble_player_record_choices(
+                &screen_order_refs,
+                local_identity.as_deref(),
+                local_choice.as_deref(),
+                incremental_reward_records,
+            ) {
+                publish_reward_result(
+                    RewardSourceResult {
+                        choices: RewardChoiceSet {
+                            names: choices,
+                            source: RewardChoiceSource::Memory,
+                            elapsed: Duration::ZERO,
+                        },
+                        diagnostic: RewardSourceDiagnostic::Ready,
+                    },
+                    observer,
+                    shared,
+                    app,
+                    reward_catalog,
+                    now,
+                );
+                *early_reward_resolved = true;
+                return;
+            }
             let mut memory = memory_state.bind(procfs, process);
             let Some(result) = coordinator.player_record_choices(
                 &mut memory,
-                &responder_refs,
+                &screen_order_refs,
                 local_identity.as_deref(),
                 local_choice.as_deref(),
             ) else {
@@ -519,6 +581,7 @@ fn handle_reward_event(
         }
         RewardLogEvent::BaselineRequested { relic_paths } => {
             *early_reward_resolved = false;
+            incremental_reward_records.clear();
             let candidates = catalog
                 .zip(relic_catalog)
                 .map(|(catalog, relics)| {
@@ -587,6 +650,7 @@ fn handle_reward_event(
         }
         RewardLogEvent::Closed => {
             *early_reward_resolved = false;
+            incremental_reward_records.clear();
             memory_state.clear();
             observer.miss();
             overlay_window::hide_reward_overlay(app);
@@ -617,6 +681,24 @@ pub fn reward_path_matches(log_path: &str, catalog_path: &str) -> bool {
         || log_path
             .strip_prefix("/Lotus/StoreItems")
             .is_some_and(|suffix| catalog_path == format!("/Lotus{suffix}"))
+}
+
+pub fn assemble_player_record_choices(
+    responders: &[&str],
+    local_identity: Option<&str>,
+    local_choice: Option<&str>,
+    records: &std::collections::BTreeMap<String, String>,
+) -> Option<Vec<String>> {
+    let local_identity = local_identity?;
+    let mut choices = vec![local_choice?.to_owned()];
+    for identity in responders
+        .iter()
+        .copied()
+        .filter(|identity| *identity != local_identity)
+    {
+        choices.push(records.get(identity)?.clone());
+    }
+    (choices.len() == responders.len()).then_some(choices)
 }
 
 fn publish_reward_result(

@@ -247,7 +247,7 @@ impl RewardMemoryScanner {
         local_identity: Option<&str>,
         local_choice: Option<&str>,
     ) -> Result<RewardResolution, AcquisitionError> {
-        if responders.len() <= 1 || responders.iter().any(|identity| identity.len() != 24) {
+        if responders.is_empty() || responders.iter().any(|identity| identity.len() != 24) {
             return Ok(RewardResolution::Incomplete);
         }
         let started = Instant::now();
@@ -366,6 +366,16 @@ impl RewardMemoryScanner {
                 .then(|| names.into_iter().next())
                 .flatten()
         };
+
+        if responders.len() == 1 && local_choice.is_none() {
+            return Ok(match reward_for(responders[0]) {
+                Some(choice) => RewardResolution::Confirmed {
+                    choices: vec![choice],
+                    region_start: 0,
+                },
+                None => RewardResolution::Incomplete,
+            });
+        }
 
         let inferred_local = local_identity.or_else(|| {
             let local_choice = local_choice?;

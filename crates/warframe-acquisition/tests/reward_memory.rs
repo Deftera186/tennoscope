@@ -536,3 +536,42 @@ fn player_records_ignore_a_tighter_stale_reward_cluster_and_preserve_screen_orde
         }
     );
 }
+
+#[test]
+fn one_archived_player_record_can_be_resolved_as_soon_as_its_response_arrives() {
+    let identity = "de1e7ed00000000000000009";
+    let candidate = RewardNeedle::from_paths(
+        "Perigale Prime Stock",
+        vec!["/Lotus/Types/Recipes/Weapons/WeaponParts/PerigalePrimeStock".into()],
+    )
+    .unwrap();
+    let mut bytes = vec![0_u8; 1024];
+    bytes[256..280].copy_from_slice(identity.as_bytes());
+    bytes[382..400].copy_from_slice(b"PerigalePrimeStock");
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x3bb9_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x3bb9_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(128, 4096, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Perigale Prime Stock".into()],
+            region_start: 0,
+        }
+    );
+}
