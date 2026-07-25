@@ -222,15 +222,19 @@ fn live_response_sequence_emits_ordered_responders_and_completes_before_renderin
         vec![
             RewardLogEvent::ResponderReceived {
                 identity: "de1e7ed00000000000000005".into(),
+                is_local: false,
             },
             RewardLogEvent::ResponderReceived {
                 identity: "de1e7ed0000000000000000a".into(),
+                is_local: false,
             },
             RewardLogEvent::ResponderReceived {
                 identity: "de1e7ed00000000000000004".into(),
+                is_local: false,
             },
             RewardLogEvent::ResponderReceived {
                 identity: "de1e7ed00000000000000006".into(),
+                is_local: true,
             },
             RewardLogEvent::ResponsesComplete {
                 responders: vec![

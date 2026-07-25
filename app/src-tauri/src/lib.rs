@@ -493,7 +493,10 @@ fn handle_reward_event(
     now: u64,
 ) {
     match event {
-        RewardLogEvent::ResponderReceived { identity } => {
+        RewardLogEvent::ResponderReceived { identity, is_local } => {
+            if is_local {
+                return;
+            }
             if incremental_reward_records.contains_key(&identity) {
                 return;
             }
@@ -526,23 +529,6 @@ fn handle_reward_event(
                 .map(str::to_owned);
             let screen_order_refs = screen_order.iter().map(String::as_str).collect::<Vec<_>>();
 
-            let missing_responders = screen_order_refs
-                .iter()
-                .copied()
-                .filter(|identity| {
-                    local_identity.as_deref() != Some(*identity)
-                        && !incremental_reward_records.contains_key(*identity)
-                })
-                .collect::<Vec<_>>();
-            for identity in missing_responders {
-                let mut memory = memory_state.bind(procfs, process);
-                if let warframe_acquisition::RewardResolution::Confirmed { choices, .. } =
-                    memory.player_records(&[identity], None, None)
-                    && let [choice] = choices.as_slice()
-                {
-                    incremental_reward_records.insert(identity.to_owned(), choice.clone());
-                }
-            }
             if let Some(choices) = assemble_player_record_choices(
                 &screen_order_refs,
                 local_identity.as_deref(),

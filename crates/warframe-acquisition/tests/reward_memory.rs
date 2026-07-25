@@ -605,3 +605,90 @@ fn archived_player_record_layouts_resolve_as_each_response_arrives() {
         );
     }
 }
+
+#[test]
+fn retained_remote_record_resolves_a_reward_before_the_player_identity() {
+    let identity = "de1e7ed00000000000000002";
+    let candidate = RewardNeedle::from_paths(
+        "Forma Blueprint",
+        vec!["/Lotus/Types/Recipes/Components/FormaBlueprint".into()],
+    )
+    .unwrap();
+    let mut bytes = vec![0_u8; 64 * 1024];
+    let identity_offset = 40 * 1024;
+    bytes[identity_offset..identity_offset + identity.len()].copy_from_slice(identity.as_bytes());
+    let reward_offset = identity_offset - 24_156;
+    bytes[reward_offset..reward_offset + "FormaBlueprint".len()].copy_from_slice(b"FormaBlueprint");
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x2d0e_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x2d0e_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(4096, 128 * 1024, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Forma Blueprint".into()],
+            region_start: 0,
+        }
+    );
+}
+
+#[test]
+fn retained_remote_record_rejects_ambiguous_nearby_rewards() {
+    let identity = "de1e7ed00000000000000002";
+    let candidates = [
+        ("Forma Blueprint", "FormaBlueprint"),
+        ("Fang Prime Blade", "FangPrimeBlade"),
+    ]
+    .into_iter()
+    .map(|(name, internal_name)| {
+        RewardNeedle::from_paths(name, vec![internal_name.into()]).unwrap()
+    })
+    .collect::<Vec<_>>();
+    let mut bytes = vec![0_u8; 64 * 1024];
+    let identity_offset = 40 * 1024;
+    bytes[identity_offset..identity_offset + identity.len()].copy_from_slice(identity.as_bytes());
+    for (offset, value) in [
+        (identity_offset - 24_156, "FormaBlueprint"),
+        (identity_offset - 12_000, "FangPrimeBlade"),
+    ] {
+        bytes[offset..offset + value.len()].copy_from_slice(value.as_bytes());
+    }
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x2d0e_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x2d0e_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(4096, 128 * 1024, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &candidates,
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Incomplete
+    );
+}

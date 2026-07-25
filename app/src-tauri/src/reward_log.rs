@@ -22,6 +22,7 @@ pub enum RewardLogEvent {
     },
     ResponderReceived {
         identity: String,
+        is_local: bool,
     },
     ResponsesComplete {
         responders: Vec<String>,
@@ -118,6 +119,7 @@ impl RewardLogMachine {
                         }
                         return vec![RewardLogEvent::ResponderReceived {
                             identity: identity.to_owned(),
+                            is_local: self.local_identity.as_deref() == Some(identity),
                         }];
                     }
                 }

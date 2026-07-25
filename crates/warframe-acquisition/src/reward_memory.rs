@@ -350,18 +350,29 @@ impl RewardMemoryScanner {
         buffer.zeroize();
 
         let reward_for = |identity: &str| {
-            let mut names = BTreeSet::new();
+            let mut inline_names = BTreeSet::new();
+            let mut retained_names = BTreeSet::new();
             for (_, player_address, region_start) in player_hits
                 .iter()
                 .filter(|(found, _, _)| *found == identity)
             {
                 for (name, reward_address, reward_region) in &reward_hits {
-                    let distance = reward_address.saturating_sub(*player_address);
-                    if reward_region == region_start && (64..=256).contains(&distance) {
-                        names.insert((*name).to_owned());
+                    let distance = reward_address.abs_diff(*player_address);
+                    if reward_region != region_start {
+                        continue;
+                    }
+                    if (64..=256).contains(&distance) {
+                        inline_names.insert((*name).to_owned());
+                    } else if (257..=32 * 1024).contains(&distance) {
+                        retained_names.insert((*name).to_owned());
                     }
                 }
             }
+            let names = if inline_names.is_empty() {
+                retained_names
+            } else {
+                inline_names
+            };
             (names.len() == 1)
                 .then(|| names.into_iter().next())
                 .flatten()
