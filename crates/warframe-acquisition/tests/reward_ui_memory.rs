@@ -220,6 +220,44 @@ fn rejects_candidate_strings_without_an_ordered_pointer_container() {
 }
 
 #[test]
+fn rejects_speculative_non_string_object_offsets() {
+    let names = ["Paris Prime Lower Limb", "Vasto Prime Blueprint"];
+    let candidates = names.iter().map(|name| needle(name)).collect::<Vec<_>>();
+    let base = 0x1000_u64;
+    let mut bytes = vec![0_u8; 0x6000];
+    let text_addresses = [0x1800_u64, 0x1a00];
+    for (address, name) in text_addresses.iter().zip(names) {
+        let offset = usize::try_from(*address - base).unwrap();
+        bytes[offset..offset + name.len()].copy_from_slice(name.as_bytes());
+    }
+    let fake_children = [0x3000_u64, 0x3400];
+    for (child, text) in fake_children.iter().zip(text_addresses) {
+        let field = usize::try_from(*child + 16 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&(text - 16).to_le_bytes());
+    }
+    let fake_container = 0x5000_u64;
+    for (slot, child) in fake_children.iter().enumerate() {
+        let field = usize::try_from(fake_container + 64 + slot as u64 * 8 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&child.to_le_bytes());
+    }
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            base,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(base, bytes)]),
+    };
+
+    assert_eq!(
+        PersistentRewardResolver::new(512, 128 * 1024, Duration::from_secs(1))
+            .resolve(&memory, &GameProcess::new(7), &candidates, 2)
+            .unwrap(),
+        RewardResolution::Incomplete
+    );
+}
+
+#[test]
 fn rejects_competing_ordered_containers() {
     let names = ["Braton Prime Blueprint", "Tipedo Prime Blueprint"];
     let candidates = names.iter().map(|name| needle(name)).collect::<Vec<_>>();

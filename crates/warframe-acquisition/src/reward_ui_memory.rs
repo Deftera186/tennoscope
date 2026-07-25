@@ -10,7 +10,7 @@ use crate::{
     RewardResolution,
 };
 
-const STRING_BASE_DELTAS: [u64; 7] = [0, 8, 16, 24, 32, 40, 48];
+const STRING_BASE_DELTAS: [u64; 1] = [24];
 const OBJECT_BASE_SEARCH: u64 = 256;
 const MAX_GRAPH_DEPTH: usize = 5;
 const MIN_SLOT_STRIDE: u64 = 8;
