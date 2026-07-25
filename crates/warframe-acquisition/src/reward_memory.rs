@@ -341,79 +341,113 @@ impl RewardMemoryScanner {
             .max()
             .unwrap_or(1)
             .saturating_sub(1);
-        let mut buffer = vec![0_u8; self.chunk_size + player_overlap];
+        struct RegionCursor {
+            offset: usize,
+            retained: usize,
+            buffer: Vec<u8>,
+        }
+        let mut cursors = regions
+            .iter()
+            .map(|_| RegionCursor {
+                offset: 0,
+                retained: 0,
+                buffer: vec![0_u8; self.chunk_size + player_overlap],
+            })
+            .collect::<Vec<_>>();
         let mut player_hits = Vec::<(&str, u64, u64)>::new();
         let mut structured_rewards = BTreeMap::<&str, BTreeSet<String>>::new();
         let mut bytes_read = 0_u64;
 
-        'regions: for region in &regions {
-            let mut offset = 0_usize;
-            let mut retained = 0_usize;
-            while offset < region.len() {
-                if started.elapsed() >= self.timeout || bytes_read >= player_byte_budget {
-                    break 'regions;
+        'rounds: loop {
+            let mut made_progress = false;
+            for (region, cursor) in regions.iter().zip(&mut cursors) {
+                if cursor.offset >= region.len() {
+                    continue;
                 }
-                let remaining_budget =
-                    usize::try_from(player_byte_budget - bytes_read).unwrap_or(usize::MAX);
-                let request = (region.len() - offset)
-                    .min(self.chunk_size)
-                    .min(remaining_budget);
-                if request == 0 {
-                    break 'regions;
-                }
-                let address = region.start() + u64::try_from(offset).unwrap_or(u64::MAX);
-                let read =
-                    memory.read_at(process, address, &mut buffer[retained..retained + request])?;
-                if read == 0 {
-                    break;
-                }
-                bytes_read += u64::try_from(read).unwrap_or(0);
-                let available = retained + read;
-                let base = address.saturating_sub(u64::try_from(retained).unwrap_or(0));
-                for found in player_matcher.find_overlapping_iter(&buffer[..available]) {
-                    let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
-                    let identity = responders[found.pattern().as_usize()];
-                    let record_start = hit_address.saturating_sub(1).max(region.start());
-                    let region_end = region.start() + u64::try_from(region.len()).unwrap_or(0);
-                    let mut record = [0_u8; 768];
-                    let request = usize::try_from(region_end.saturating_sub(record_start))
-                        .unwrap_or(0)
-                        .min(record.len());
-                    let record_read = if request == 0 {
-                        0
-                    } else {
-                        memory.read_at(process, record_start, &mut record[..request])?
-                    };
-                    if let Some(choice) =
-                        structured_response_reward(&record[..record_read], identity, candidates)
-                    {
-                        structured_rewards
-                            .entry(identity)
-                            .or_default()
-                            .insert(choice.to_owned());
-                        if let Some(choices) = confirmed_structured_choices(
-                            responders,
-                            local_identity,
-                            local_choice,
-                            &structured_rewards,
-                        ) {
-                            record.zeroize();
-                            buffer.zeroize();
-                            return Ok(RewardResolution::Confirmed {
-                                choices,
-                                region_start: 0,
-                            });
-                        }
+                let quantum_end = cursor
+                    .offset
+                    .saturating_add(self.chunk_size.saturating_mul(64))
+                    .min(region.len());
+                while cursor.offset < quantum_end {
+                    if started.elapsed() >= self.timeout || bytes_read >= player_byte_budget {
+                        break 'rounds;
                     }
-                    record.zeroize();
-                    player_hits.push((identity, hit_address, region.start()));
+                    let remaining_budget =
+                        usize::try_from(player_byte_budget - bytes_read).unwrap_or(usize::MAX);
+                    let request = (region.len() - cursor.offset)
+                        .min(self.chunk_size)
+                        .min(remaining_budget);
+                    if request == 0 {
+                        break 'rounds;
+                    }
+                    let address = region.start() + u64::try_from(cursor.offset).unwrap_or(u64::MAX);
+                    let read = memory.read_at(
+                        process,
+                        address,
+                        &mut cursor.buffer[cursor.retained..cursor.retained + request],
+                    )?;
+                    if read == 0 {
+                        cursor.offset = region.len();
+                        continue;
+                    }
+                    made_progress = true;
+                    bytes_read += u64::try_from(read).unwrap_or(0);
+                    let available = cursor.retained + read;
+                    let base = address.saturating_sub(u64::try_from(cursor.retained).unwrap_or(0));
+                    for found in player_matcher.find_overlapping_iter(&cursor.buffer[..available]) {
+                        let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
+                        let identity = responders[found.pattern().as_usize()];
+                        let record_start = hit_address.saturating_sub(1).max(region.start());
+                        let region_end = region.start() + u64::try_from(region.len()).unwrap_or(0);
+                        let mut record = [0_u8; 768];
+                        let request = usize::try_from(region_end.saturating_sub(record_start))
+                            .unwrap_or(0)
+                            .min(record.len());
+                        let record_read = if request == 0 {
+                            0
+                        } else {
+                            memory.read_at(process, record_start, &mut record[..request])?
+                        };
+                        if let Some(choice) =
+                            structured_response_reward(&record[..record_read], identity, candidates)
+                        {
+                            structured_rewards
+                                .entry(identity)
+                                .or_default()
+                                .insert(choice.to_owned());
+                            if let Some(choices) = confirmed_structured_choices(
+                                responders,
+                                local_identity,
+                                local_choice,
+                                &structured_rewards,
+                            ) {
+                                record.zeroize();
+                                for cursor in &mut cursors {
+                                    cursor.buffer.zeroize();
+                                }
+                                return Ok(RewardResolution::Confirmed {
+                                    choices,
+                                    region_start: 0,
+                                });
+                            }
+                        }
+                        record.zeroize();
+                        player_hits.push((identity, hit_address, region.start()));
+                    }
+                    cursor.retained = player_overlap.min(available);
+                    cursor
+                        .buffer
+                        .copy_within(available - cursor.retained..available, 0);
+                    cursor.offset += read;
                 }
-                retained = player_overlap.min(available);
-                buffer.copy_within(available - retained..available, 0);
-                offset += read;
+            }
+            if !made_progress {
+                break;
             }
         }
-        buffer.zeroize();
+        for cursor in &mut cursors {
+            cursor.buffer.zeroize();
+        }
 
         let reward_matcher = AhoCorasick::new(
             reward_patterns

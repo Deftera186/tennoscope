@@ -195,6 +195,55 @@ fn player_record_scan_reaches_a_high_response_heap_before_a_large_ui_heap() {
 }
 
 #[test]
+fn player_record_scan_samples_each_response_heap_before_exhausting_one_heap() {
+    let identity = "de1e7ed00000000000000006";
+    let mut response_heap = vec![0_u8; 512];
+    response_heap[0..24].copy_from_slice(identity.as_bytes());
+    response_heap[127..143].copy_from_slice(b"BratonPrimeStock");
+    let memory = FixtureMemory {
+        regions: vec![
+            ReadableRegion::classified(
+                0x5bf1_0000,
+                16 * 1024,
+                RegionScanPriority::WritableAnonymous,
+            ),
+            ReadableRegion::classified(
+                0x3eda_0000,
+                response_heap.len(),
+                RegionScanPriority::WritableAnonymous,
+            ),
+        ],
+        bytes: BTreeMap::from([
+            (0x5bf1_0000, vec![0; 16 * 1024]),
+            (0x3eda_0000, response_heap),
+        ]),
+        reads: Mutex::new(Vec::new()),
+    };
+    let candidate = RewardNeedle::from_paths(
+        "Braton Prime Stock",
+        vec!["/Lotus/Types/Recipes/Weapons/WeaponParts/BratonPrimeStock".into()],
+    )
+    .unwrap();
+
+    assert_eq!(
+        RewardMemoryScanner::new(128, 6 * 1024, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Braton Prime Stock".into()],
+            region_start: 0,
+        }
+    );
+}
+
+#[test]
 fn low_heap_player_record_scan_reaches_captured_response_heaps_before_high_mappings() {
     let identity = "de1e7ed00000000000000006";
     let mut response_heap = vec![0_u8; 512];
