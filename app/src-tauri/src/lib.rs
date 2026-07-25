@@ -528,13 +528,14 @@ fn handle_reward_event(
                     Duration::from_millis(1_500),
                 );
                 let responders = [identity.as_str()];
+                let mut attempt = 0_u32;
                 let resolution = scan_player_record_until_ready(
                     expected_generation,
                     &generation,
                     Duration::from_secs(3),
                     || {
-                        scanner
-                            .resolve_player_records(
+                        let result = if attempt % 2 == 0 {
+                            scanner.resolve_player_records(
                                 &procfs,
                                 &process,
                                 &candidates,
@@ -542,7 +543,18 @@ fn handle_reward_event(
                                 None,
                                 None,
                             )
-                            .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
+                        } else {
+                            scanner.resolve_player_records_from_low_heaps(
+                                &procfs,
+                                &process,
+                                &candidates,
+                                &responders,
+                                None,
+                                None,
+                            )
+                        };
+                        attempt = attempt.saturating_add(1);
+                        result.unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
                     },
                 );
                 #[cfg(debug_assertions)]

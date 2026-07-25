@@ -195,6 +195,49 @@ fn player_record_scan_reaches_a_high_response_heap_before_a_large_ui_heap() {
 }
 
 #[test]
+fn low_heap_player_record_scan_reaches_captured_response_heaps_before_high_mappings() {
+    let identity = "de1e7ed00000000000000006";
+    let mut response_heap = vec![0_u8; 512];
+    response_heap[128..152].copy_from_slice(identity.as_bytes());
+    response_heap[255..275].copy_from_slice(b"BratonPrimeBlueprint");
+    let memory = FixtureMemory {
+        regions: vec![
+            ReadableRegion::classified(0x5bf1_0000, 4096, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(
+                0x1d72_0000,
+                response_heap.len(),
+                RegionScanPriority::WritableAnonymous,
+            ),
+        ],
+        bytes: BTreeMap::from([(0x5bf1_0000, vec![0; 4096]), (0x1d72_0000, response_heap)]),
+        reads: Mutex::new(Vec::new()),
+    };
+    let candidate = RewardNeedle::from_paths(
+        "Braton Prime Blueprint",
+        vec!["/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint".into()],
+    )
+    .unwrap();
+
+    assert!(matches!(
+        RewardMemoryScanner::new(256, 512, Duration::from_secs(1))
+            .resolve_player_records_from_low_heaps(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed { .. }
+    ));
+    assert_eq!(
+        memory.reads.lock().unwrap().first().copied(),
+        Some(0x1d72_0000)
+    );
+}
+
+#[test]
 fn clips_a_live_ui_mapping_at_the_priority_band_boundary() {
     let oversized_start = 0x2700_0000;
     let oversized_len = 32 * 1024 * 1024;

@@ -247,18 +247,65 @@ impl RewardMemoryScanner {
         local_identity: Option<&str>,
         local_choice: Option<&str>,
     ) -> Result<RewardResolution, AcquisitionError> {
+        self.resolve_player_records_ordered(
+            memory,
+            process,
+            candidates,
+            responders,
+            local_identity,
+            local_choice,
+            false,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn resolve_player_records_from_low_heaps(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        candidates: &[RewardNeedle],
+        responders: &[&str],
+        local_identity: Option<&str>,
+        local_choice: Option<&str>,
+    ) -> Result<RewardResolution, AcquisitionError> {
+        self.resolve_player_records_ordered(
+            memory,
+            process,
+            candidates,
+            responders,
+            local_identity,
+            local_choice,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_player_records_ordered(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        candidates: &[RewardNeedle],
+        responders: &[&str],
+        local_identity: Option<&str>,
+        local_choice: Option<&str>,
+        low_heaps_first: bool,
+    ) -> Result<RewardResolution, AcquisitionError> {
         if responders.is_empty() || responders.iter().any(|identity| identity.len() != 24) {
             return Ok(RewardResolution::Incomplete);
         }
         let started = Instant::now();
         let mut regions = memory.readable_regions(process)?;
         regions.retain(|region| region.scan_priority() == RegionScanPriority::WritableAnonymous);
-        regions.sort_by_key(|region| {
-            (
-                region.start() >= 0x8000_0000,
-                std::cmp::Reverse(region.start()),
-            )
-        });
+        if low_heaps_first {
+            regions.sort_by_key(|region| (region.start() >= 0x8000_0000, region.start()));
+        } else {
+            regions.sort_by_key(|region| {
+                (
+                    region.start() >= 0x8000_0000,
+                    std::cmp::Reverse(region.start()),
+                )
+            });
+        }
         let player_byte_budget = self.byte_budget.saturating_mul(3);
 
         let mut reward_patterns = BTreeSet::<(&str, Vec<u8>)>::new();
