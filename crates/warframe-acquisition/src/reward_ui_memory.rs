@@ -3,6 +3,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use aho_corasick::AhoCorasick;
+
 use crate::{
     AcquisitionError, GameProcess, MemoryReader, ReadableRegion, RegionScanPriority, RewardNeedle,
     RewardResolution,
@@ -101,32 +103,6 @@ impl PersistentRewardResolver {
         process: &GameProcess,
         started: Instant,
     ) -> Result<Vec<RegionBytes>, AcquisitionError> {
-        if let Some(snapshots) = memory.recently_written_snapshot(process)? {
-            let mut bytes_read = 0_u64;
-            return Ok(snapshots
-                .into_iter()
-                .filter(|snapshot| {
-                    snapshot.scan_priority() == RegionScanPriority::WritableAnonymous
-                })
-                .take_while(|snapshot| {
-                    let next = bytes_read
-                        .saturating_add(u64::try_from(snapshot.bytes().len()).unwrap_or(u64::MAX));
-                    let accepted = started.elapsed() < self.timeout && next <= self.byte_budget;
-                    if accepted {
-                        bytes_read = next;
-                    }
-                    accepted
-                })
-                .map(|snapshot| RegionBytes {
-                    region: ReadableRegion::classified(
-                        snapshot.start(),
-                        snapshot.bytes().len(),
-                        snapshot.scan_priority(),
-                    ),
-                    bytes: snapshot.bytes().to_vec(),
-                })
-                .collect());
-        }
         let mut regions = memory
             .recently_written_regions(process)
             .or_else(|_| memory.readable_regions(process))?;
@@ -146,6 +122,9 @@ impl PersistentRewardResolver {
             let mut bytes = vec![0_u8; len];
             let mut offset = 0_usize;
             while offset < len {
+                if started.elapsed() >= self.timeout {
+                    break;
+                }
                 let request = (len - offset).min(self.chunk_size);
                 let read = memory.read_at(
                     process,
@@ -171,41 +150,42 @@ fn seed_targets(
     regions: &[RegionBytes],
     candidates: &[RewardNeedle],
 ) -> BTreeMap<u64, BTreeSet<String>> {
-    let mut patterns = Vec::<(&str, &[u8])>::new();
+    let mut pattern_choices = BTreeMap::<Vec<u8>, BTreeSet<String>>::new();
     for candidate in candidates {
-        patterns.push((candidate.choice_name(), candidate.choice_name().as_bytes()));
+        pattern_choices
+            .entry(candidate.choice_name().as_bytes().to_vec())
+            .or_default()
+            .insert(candidate.choice_name().to_owned());
         for path in candidate.internal_paths() {
-            patterns.push((candidate.choice_name(), path));
+            pattern_choices
+                .entry(path.to_vec())
+                .or_default()
+                .insert(candidate.choice_name().to_owned());
         }
     }
+    pattern_choices.remove(&Vec::new());
+    if pattern_choices.is_empty() {
+        return BTreeMap::new();
+    }
+    let patterns = pattern_choices.keys().cloned().collect::<Vec<_>>();
+    let choices = pattern_choices.values().cloned().collect::<Vec<_>>();
+    let matcher = AhoCorasick::new(&patterns).expect("non-empty reward patterns");
     let mut targets = BTreeMap::<u64, BTreeSet<String>>::new();
     for region in regions {
-        for (choice, pattern) in &patterns {
-            if pattern.is_empty() || pattern.len() > region.bytes.len() {
-                continue;
-            }
-            for offset in find_all(&region.bytes, pattern) {
-                let address = region.region.start() + u64::try_from(offset).unwrap_or(0);
-                for delta in STRING_BASE_DELTAS {
-                    if let Some(target) = address.checked_sub(delta) {
-                        targets
-                            .entry(target)
-                            .or_default()
-                            .insert((*choice).to_owned());
-                    }
+        for matched in matcher.find_overlapping_iter(&region.bytes) {
+            let address = region.region.start() + u64::try_from(matched.start()).unwrap_or(0);
+            let matched_choices = &choices[matched.pattern().as_usize()];
+            for delta in STRING_BASE_DELTAS {
+                if let Some(target) = address.checked_sub(delta) {
+                    targets
+                        .entry(target)
+                        .or_default()
+                        .extend(matched_choices.iter().cloned());
                 }
             }
         }
     }
     targets
-}
-
-fn find_all(haystack: &[u8], needle: &[u8]) -> Vec<usize> {
-    haystack
-        .windows(needle.len())
-        .enumerate()
-        .filter_map(|(offset, window)| (window == needle).then_some(offset))
-        .collect()
 }
 
 fn pointer_hits(

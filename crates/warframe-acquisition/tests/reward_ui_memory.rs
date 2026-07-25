@@ -39,6 +39,40 @@ impl MemoryReader for FixtureMemory {
     }
 }
 
+struct SnapshotTrapMemory(FixtureMemory);
+
+impl MemoryReader for SnapshotTrapMemory {
+    fn readable_regions(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        self.0.readable_regions(process)
+    }
+
+    fn recently_written_regions(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        self.0.readable_regions(process)
+    }
+
+    fn recently_written_snapshot(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Option<Vec<warframe_acquisition::MemorySnapshotRegion>>, AcquisitionError> {
+        panic!("persistent resolver must not eagerly snapshot unbounded dirty memory")
+    }
+
+    fn read_at(
+        &self,
+        process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        self.0.read_at(process, address, buffer)
+    }
+}
+
 fn needle(name: &str) -> RewardNeedle {
     RewardNeedle::from_paths(
         name,
@@ -102,6 +136,29 @@ fn resolves_an_ordered_persistent_container_through_intermediate_objects() {
             choices: choices.iter().map(|choice| (*choice).into()).collect(),
             region_start: base,
         }
+    );
+}
+
+#[test]
+fn uses_budgeted_region_reads_instead_of_an_eager_dirty_snapshot() {
+    let name = "Braton Prime Blueprint";
+    let base = 0x1000_u64;
+    let mut bytes = vec![0_u8; 4096];
+    bytes[512..512 + name.len()].copy_from_slice(name.as_bytes());
+    let memory = SnapshotTrapMemory(FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            base,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(base, bytes)]),
+    });
+
+    assert_eq!(
+        PersistentRewardResolver::new(512, 128 * 1024, Duration::from_secs(1))
+            .resolve(&memory, &GameProcess::new(7), &[needle(name)], 4)
+            .unwrap(),
+        RewardResolution::Incomplete
     );
 }
 
