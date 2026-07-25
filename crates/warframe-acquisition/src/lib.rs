@@ -12,6 +12,7 @@ mod inventory;
 #[cfg(target_os = "linux")]
 mod linux_proc;
 mod orchestrator;
+mod reward_memory;
 
 pub use authorization::AuthorizationScanner;
 pub use catalog::{CatalogError, CatalogIndex, CatalogMetadata, RewardCatalogEntry};
@@ -25,6 +26,9 @@ pub use inventory::{
 #[cfg(target_os = "linux")]
 pub use linux_proc::LinuxProc;
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
+pub use reward_memory::{
+    RewardFingerprint, RewardHit, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
+};
 
 /// A credential whose standard formatting surfaces never expose its contents.
 pub struct SecretString(Zeroizing<String>);
