@@ -13,6 +13,44 @@ fn entry(id: &str, name: &str, category: Category, quantity: u32) -> InventoryEn
     )
 }
 
+fn illustrated_entry(
+    id: &str,
+    name: &str,
+    category: Category,
+    quantity: u32,
+    image_name: &str,
+) -> InventoryEntry {
+    InventoryEntry::new(
+        CatalogItem::new(ItemId::new(id).unwrap(), name, category)
+            .unwrap()
+            .with_image_name(image_name)
+            .unwrap(),
+        quantity,
+    )
+}
+
+#[test]
+fn canonical_artwork_reaches_the_serialized_collection_view() {
+    let mut core = AppCore::in_memory().unwrap();
+    let snapshot = InventorySnapshot::coherent(vec![illustrated_entry(
+        "braton",
+        "Braton",
+        Category::Weapon,
+        1,
+        "Braton.png",
+    )])
+    .unwrap();
+
+    let view = core
+        .apply_inventory_snapshot(snapshot, SnapshotMeta::fake("art-build").unwrap())
+        .unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&view.collection().items()[0]).unwrap()["image_url"],
+        json!("https://cdn.warframestat.us/img/Braton.png")
+    );
+}
+
 #[test]
 fn in_memory_starts_empty_and_reports_honest_health() {
     let core = AppCore::in_memory().unwrap();

@@ -10,6 +10,7 @@ pub struct CatalogMetadata {
     category: Category,
     masterable: bool,
     max_rank: u32,
+    image_name: Option<String>,
 }
 
 impl CatalogMetadata {
@@ -27,6 +28,10 @@ impl CatalogMetadata {
 
     pub const fn max_rank(&self) -> u32 {
         self.max_rank
+    }
+
+    pub fn image_name(&self) -> Option<&str> {
+        self.image_name.as_deref()
     }
 }
 
@@ -60,6 +65,7 @@ impl CatalogIndex {
                     category,
                     masterable: item.masterable && is_equipment(category),
                     max_rank: catalog_max_rank(&item.name),
+                    image_name: validated_image_name(item.image_name.as_deref())?,
                 },
                 false,
             )?;
@@ -88,6 +94,7 @@ impl CatalogIndex {
                         category: Category::PrimePart,
                         masterable: false,
                         max_rank: 0,
+                        image_name: validated_image_name(component.image_name.as_deref())?,
                     },
                     true,
                 )?;
@@ -138,6 +145,8 @@ struct WfcdItem {
     masterable: bool,
     #[serde(default)]
     components: Vec<WfcdComponent>,
+    #[serde(default)]
+    image_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +160,8 @@ struct WfcdComponent {
     ducats: Option<u32>,
     #[serde(default)]
     prime_selling_price: Option<u32>,
+    #[serde(default)]
+    image_name: Option<String>,
 }
 
 fn classify_item(item: &WfcdItem) -> Option<Category> {
@@ -233,6 +244,26 @@ fn validated_name(name: &str) -> Result<String, CatalogError> {
         return Err(CatalogError::InvalidMetadata);
     }
     Ok(trimmed.to_owned())
+}
+
+fn validated_image_name(image_name: Option<&str>) -> Result<Option<String>, CatalogError> {
+    image_name
+        .map(|value| {
+            let value = value.trim();
+            if value.is_empty()
+                || value.len() > 256
+                || value.contains('/')
+                || value.contains('\\')
+                || !value.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b' ')
+                })
+            {
+                Err(CatalogError::InvalidMetadata)
+            } else {
+                Ok(value.to_owned())
+            }
+        })
+        .transpose()
 }
 
 fn valid_unique_name(path: &str) -> bool {

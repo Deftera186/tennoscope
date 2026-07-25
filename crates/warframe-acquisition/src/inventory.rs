@@ -146,6 +146,7 @@ struct AccumulatedEntry {
     mastered: bool,
     masterable: bool,
     max_rank: Option<u32>,
+    image_name: Option<String>,
 }
 
 impl SnapshotDecoder for InventoryJsonDecoder<'_> {
@@ -235,6 +236,12 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
                 let id = ItemId::new(path).map_err(|_| AcquisitionError::SnapshotInvalid)?;
                 let item = CatalogItem::new(id, name, accumulated.category)
                     .map_err(|_| AcquisitionError::SnapshotInvalid)?;
+                let item = match accumulated.image_name {
+                    Some(image_name) => item
+                        .with_image_name(image_name)
+                        .map_err(|_| AcquisitionError::SnapshotInvalid)?,
+                    None => item,
+                };
                 let quantity = u32::try_from(accumulated.quantity)
                     .map_err(|_| AcquisitionError::SnapshotInvalid)?;
                 Ok(InventoryEntry::new(item, quantity).with_mastered(accumulated.mastered))
@@ -383,6 +390,9 @@ fn accumulated_entry(
         mastered: false,
         masterable: metadata.is_some_and(|metadata| metadata.masterable()),
         max_rank: metadata.map(|metadata| metadata.max_rank()),
+        image_name: metadata
+            .and_then(|metadata| metadata.image_name())
+            .map(str::to_owned),
     }
 }
 

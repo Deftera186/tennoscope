@@ -287,6 +287,8 @@ pub struct CollectionItemView {
     category: Category,
     quantity: u32,
     mastered: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_url: Option<String>,
 }
 
 impl CollectionItemView {
@@ -309,6 +311,10 @@ impl CollectionItemView {
     pub fn mastered(&self) -> bool {
         self.mastered
     }
+
+    pub fn image_url(&self) -> Option<&str> {
+        self.image_url.as_deref()
+    }
 }
 
 impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
@@ -319,6 +325,11 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
             category: entry.item.category,
             quantity: entry.quantity,
             mastered: entry.mastered,
+            image_url: entry
+                .item
+                .image_name
+                .as_ref()
+                .map(|name| format!("https://cdn.warframestat.us/img/{name}")),
         }
     }
 }

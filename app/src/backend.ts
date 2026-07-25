@@ -4,7 +4,7 @@ export type HealthState = 'ready' | 'degraded' | 'failed'
 export interface BackendHealth { state: HealthState; message: string; last_success: string | null }
 export interface AcquisitionStageHealth { stage: string; state: HealthState; message: string }
 export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 'relic' | 'resource' | 'blueprint' | 'vehicle'
-export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean }
+export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string }
 export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }
 export interface AppView {
   collection: {

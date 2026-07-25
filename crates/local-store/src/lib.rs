@@ -8,7 +8,7 @@ use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot, ItemId,
 };
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, Error)]
@@ -100,6 +100,7 @@ impl SqliteStore {
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match version {
             0 => initialize_schema(&mut connection)?,
+            1 => migrate_v1_to_v2(&mut connection)?,
             SCHEMA_VERSION => validate_schema(&connection)?,
             other => return Err(StoreError::UnsupportedSchemaVersion(other)),
         }
@@ -128,8 +129,8 @@ impl SqliteStore {
         after_delete()?;
         {
             let mut statement = transaction.prepare(
-                "INSERT INTO inventory (item_id, name, category, quantity, mastered) \
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             )?;
             for entry in snapshot.entries() {
                 let category = encode_category(entry.item.category)?;
@@ -139,6 +140,7 @@ impl SqliteStore {
                     category,
                     i64::from(entry.quantity),
                     entry.mastered,
+                    entry.item.image_name,
                 ])?;
             }
         }
@@ -155,7 +157,7 @@ impl SqliteStore {
 
     pub fn load_collection(&self) -> Result<Collection, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT item_id, name, category, quantity, mastered FROM inventory ORDER BY item_id",
+            "SELECT item_id, name, category, quantity, mastered, image_name FROM inventory ORDER BY item_id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -164,17 +166,19 @@ impl SqliteStore {
                 row.get::<_, Value>(2)?,
                 row.get::<_, Value>(3)?,
                 row.get::<_, Value>(4)?,
+                row.get::<_, Value>(5)?,
             ))
         })?;
         let raw_entries = rows.collect::<Result<Vec<_>, _>>()?;
         let entries = raw_entries
             .into_iter()
-            .map(|(id, name, category, quantity, mastered)| {
+            .map(|(id, name, category, quantity, mastered, image_name)| {
                 let id = expect_text(id, "<unknown>", "item_id")?;
                 let name = expect_text(name, &id, "name")?;
                 let category = expect_text(category, &id, "category")?;
                 let quantity = expect_integer(quantity, &id, "quantity")?;
                 let mastered = expect_integer(mastered, &id, "mastered")?;
+                let image_name = expect_optional_text(image_name, &id, "image_name")?;
                 let category = decode_category(&id, category)?;
                 let quantity =
                     u32::try_from(quantity).map_err(|error| corrupt_row(&id, "quantity", error))?;
@@ -193,6 +197,12 @@ impl SqliteStore {
                     ItemId::new(id.clone()).map_err(|error| corrupt_row(&id, "item_id", error))?;
                 let item = CatalogItem::new(item_id, name, category)
                     .map_err(|error| corrupt_row(&id, "name", error))?;
+                let item = match image_name {
+                    Some(image_name) => item
+                        .with_image_name(image_name)
+                        .map_err(|error| corrupt_row(&id, "image_name", error))?,
+                    None => item,
+                };
                 Ok(InventoryEntry::new(item, quantity).with_mastered(mastered))
             })
             .collect::<Result<Vec<_>, StoreError>>()?;
@@ -231,6 +241,15 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+fn migrate_v1_to_v2(connection: &mut Connection) -> Result<(), StoreError> {
+    let transaction = connection.transaction()?;
+    transaction.execute("ALTER TABLE inventory ADD COLUMN image_name TEXT", [])?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    validate_schema(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct SchemaColumn {
     name: String,
@@ -249,6 +268,7 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
             ("category", "TEXT", true, 0),
             ("quantity", "INTEGER", true, 0),
             ("mastered", "INTEGER", true, 0),
+            ("image_name", "TEXT", false, 0),
         ],
     )?;
     validate_table(
@@ -505,6 +525,22 @@ fn expect_text(value: Value, item_id: &str, field: &'static str) -> Result<Strin
     }
 }
 
+fn expect_optional_text(
+    value: Value,
+    item_id: &str,
+    field: &'static str,
+) -> Result<Option<String>, StoreError> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Text(value) => Ok(Some(value)),
+        other => Err(corrupt_row(
+            item_id,
+            field,
+            format!("expected TEXT or NULL, found {:?}", other.data_type()),
+        )),
+    }
+}
+
 fn expect_integer(value: Value, item_id: &str, field: &'static str) -> Result<i64, StoreError> {
     match value {
         Value::Integer(value) => Ok(value),
@@ -603,7 +639,7 @@ mod tests {
         store
             .connection
             .execute(
-                "INSERT INTO inventory VALUES ('bad', 'Bad', 'unknown', 1, 0)",
+                "INSERT INTO inventory VALUES ('bad', 'Bad', 'unknown', 1, 0, NULL)",
                 [],
             )
             .unwrap();
@@ -618,7 +654,7 @@ mod tests {
         store
             .connection
             .execute(
-                "INSERT INTO inventory VALUES ('huge', 'Huge', 'weapon', ?1, 0)",
+                "INSERT INTO inventory VALUES ('huge', 'Huge', 'weapon', ?1, 0, NULL)",
                 [i64::MAX],
             )
             .unwrap();
@@ -634,7 +670,7 @@ mod tests {
             store
                 .connection
                 .execute(
-                    "INSERT INTO inventory VALUES (?1, ?2, 'weapon', 1, 0)",
+                    "INSERT INTO inventory VALUES (?1, ?2, 'weapon', 1, 0, NULL)",
                     params![id, name],
                 )
                 .unwrap();
@@ -654,7 +690,7 @@ mod tests {
             store
                 .connection
                 .execute(
-                    "INSERT INTO inventory VALUES ('lex', 'Lex', 'weapon', 1, ?1)",
+                    "INSERT INTO inventory VALUES ('lex', 'Lex', 'weapon', 1, ?1, NULL)",
                     [value],
                 )
                 .unwrap();
@@ -670,11 +706,11 @@ mod tests {
         for (column, sql) in [
             (
                 "quantity",
-                "INSERT INTO inventory VALUES ('lex', 'Lex', 'weapon', X'01', 0)",
+                "INSERT INTO inventory VALUES ('lex', 'Lex', 'weapon', X'01', 0, NULL)",
             ),
             (
                 "name",
-                "INSERT INTO inventory VALUES ('lex', X'01', 'weapon', 1, 0)",
+                "INSERT INTO inventory VALUES ('lex', X'01', 'weapon', 1, 0, NULL)",
             ),
         ] {
             let store = SqliteStore::in_memory().unwrap();

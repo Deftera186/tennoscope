@@ -5,7 +5,8 @@ CREATE TABLE inventory (
     name TEXT NOT NULL,
     category TEXT NOT NULL,
     quantity INTEGER NOT NULL CHECK (quantity >= 0),
-    mastered INTEGER NOT NULL CHECK (mastered IN (0, 1))
+    mastered INTEGER NOT NULL CHECK (mastered IN (0, 1)),
+    image_name TEXT
 );
 
 CREATE TABLE snapshot_audit (

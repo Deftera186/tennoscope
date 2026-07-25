@@ -5,9 +5,9 @@ fn wfcd_fixture() -> Vec<u8> {
     br#"[
       {
         "uniqueName":"/Lotus/Weapons/Tenno/Bows/PrimeHuntingBow",
-        "name":"Paris Prime","type":"Bow","category":"Primary","masterable":true,
+        "name":"Paris Prime","type":"Bow","category":"Primary","masterable":true,"imageName":"ParisPrime.png",
         "components":[
-          {"uniqueName":"/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeBowString","name":"String","tradable":true,"ducats":15,"primeSellingPrice":15},
+          {"uniqueName":"/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeBowString","name":"String","tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"PrimeBowString.png"},
           {"uniqueName":"/Lotus/Types/Items/MiscItems/Ferrite","name":"Ferrite","tradable":false}
         ]
       },
@@ -42,6 +42,12 @@ fn parses_canonical_items_and_prime_parent_components() {
     assert_eq!(prime.name(), "Paris Prime String");
     assert_eq!(prime.category(), Category::PrimePart);
     assert!(!prime.masterable());
+    assert_eq!(prime.image_name(), Some("PrimeBowString.png"));
+
+    let parent = catalog
+        .resolve("/Lotus/Weapons/Tenno/Bows/PrimeHuntingBow")
+        .unwrap();
+    assert_eq!(parent.image_name(), Some("ParisPrime.png"));
 
     let qualified = catalog
         .resolve("/Lotus/Types/Recipes/Kubrow/Collars/PrimeKubrowCollarABandComponent")
