@@ -8,6 +8,9 @@ use zeroize::Zeroize;
 
 use crate::{AcquisitionError, GameProcess, MemoryReader, RegionScanPriority};
 
+const LIVE_UI_ADDRESS_MIN: u64 = 0x1300_0000;
+const LIVE_UI_ADDRESS_MAX: u64 = 0x2800_0000;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RewardNeedle {
     choice_name: String,
@@ -286,6 +289,7 @@ impl RewardMemoryScanner {
         regions.sort_by_key(|region| {
             (
                 priority_rank(region.scan_priority()),
+                !is_live_ui_region(region.start()),
                 std::cmp::Reverse(region.start()),
             )
         });
@@ -374,4 +378,8 @@ fn priority_rank(priority: RegionScanPriority) -> u8 {
         RegionScanPriority::Anonymous => 2,
         RegionScanPriority::FileBacked => 3,
     }
+}
+
+const fn is_live_ui_region(start: u64) -> bool {
+    start >= LIVE_UI_ADDRESS_MIN && start < LIVE_UI_ADDRESS_MAX
 }
