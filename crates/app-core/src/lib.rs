@@ -8,10 +8,12 @@ use local_store::{SnapshotMeta, SqliteStore, StoreError};
 use serde::Serialize;
 use thiserror::Error;
 use warframe_acquisition::{
-    AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogLoadSource, StageState,
+    AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogIndex, CatalogLoadSource,
+    StageState,
 };
 use warframe_domain::{
-    Category, DomainError, InventorySnapshot, RewardAdvisor, RewardCandidate, RewardView,
+    CatalogItem, Category, DomainError, InventoryEntry, InventorySnapshot, RewardAdvisor,
+    RewardCandidate, RewardView,
 };
 
 #[derive(Debug, Error)]
@@ -105,6 +107,33 @@ impl AppCore {
             reward: self.reward.clone(),
             health,
         })
+    }
+
+    pub fn enrich_collection_from_catalog(
+        &mut self,
+        catalog: &CatalogIndex,
+    ) -> Result<AppView, AppError> {
+        let collection = self.store.load_collection()?;
+        let entries = collection
+            .entries()
+            .map(|entry| {
+                let Some(metadata) = catalog.resolve(entry.item.id.as_str()) else {
+                    return Ok(entry.clone());
+                };
+                let mut item = CatalogItem::new(
+                    entry.item.id.clone(),
+                    metadata.name(),
+                    metadata.category().unwrap_or(entry.item.category),
+                )?;
+                if let Some(image_name) = metadata.image_name() {
+                    item = item.with_image_name(image_name)?;
+                }
+                Ok(InventoryEntry::new(item, entry.quantity).with_mastered(entry.mastered))
+            })
+            .collect::<Result<Vec<_>, DomainError>>()?;
+        self.store
+            .update_collection_metadata(&InventorySnapshot::coherent(entries)?)?;
+        self.current_view()
     }
 
     pub fn apply_inventory_snapshot(
@@ -442,20 +471,20 @@ pub struct HealthView {
 impl HealthView {
     fn phase_one() -> Result<Self, AppError> {
         Ok(Self {
-            game_reader: BackendHealth::degraded("Phase 1 game reader not connected")?,
+            game_reader: BackendHealth::degraded("Waiting for a logged-in Warframe process")?,
             log_monitor: BackendHealth::degraded("Waiting for Warframe EE.log")?,
-            capture: BackendHealth::degraded("Phase 1 capture not connected")?,
-            catalog: BackendHealth::degraded("Phase 1 catalog not connected")?,
-            market: BackendHealth::degraded("Phase 1 market not connected")?,
+            capture: BackendHealth::degraded("Reward observer waiting for Warframe")?,
+            catalog: BackendHealth::degraded("Item catalog has not loaded yet")?,
+            market: BackendHealth::degraded("Live market pricing is not enabled")?,
             database: BackendHealth::ready("SQLite database available", None)?,
             acquisition_stages: Vec::new(),
         })
     }
 
     fn reset_phase_one_integrations(&mut self) -> Result<(), AppError> {
-        self.capture = BackendHealth::degraded("Phase 1 capture not connected")?;
-        self.catalog = BackendHealth::degraded("Phase 1 catalog not connected")?;
-        self.market = BackendHealth::degraded("Phase 1 market not connected")?;
+        self.capture = BackendHealth::degraded("Reward observer waiting for Warframe")?;
+        self.catalog = BackendHealth::degraded("Item catalog has not loaded yet")?;
+        self.market = BackendHealth::degraded("Live market pricing is not enabled")?;
         Ok(())
     }
 

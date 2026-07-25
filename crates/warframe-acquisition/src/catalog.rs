@@ -7,7 +7,7 @@ use warframe_domain::Category;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogMetadata {
     name: String,
-    category: Category,
+    category: Option<Category>,
     masterable: bool,
     max_rank: u32,
     image_name: Option<String>,
@@ -19,7 +19,7 @@ impl CatalogMetadata {
         &self.name
     }
 
-    pub const fn category(&self) -> Category {
+    pub const fn category(&self) -> Option<Category> {
         self.category
     }
 
@@ -66,15 +66,18 @@ impl CatalogIndex {
         let mut index = Self::default();
 
         for item in &raw {
-            let Some(category) = classify_item(item) else {
+            // WFCD's aggregate also contains star-chart node records whose IDs are not
+            // inventory paths. They are useful to other consumers, but not to this index.
+            if !valid_unique_name(&item.unique_name) {
                 continue;
-            };
+            }
+            let category = classify_item(item);
             index.insert(
                 &item.unique_name,
                 CatalogMetadata {
                     name: validated_name(&item.name)?,
                     category,
-                    masterable: item.masterable && is_equipment(category),
+                    masterable: item.masterable && category.is_some_and(is_equipment),
                     max_rank: catalog_max_rank(&item.name),
                     image_name: validated_image_name(item.image_name.as_deref())?,
                     ducats: item.ducats.unwrap_or(0),
@@ -103,7 +106,7 @@ impl CatalogIndex {
                     &component.unique_name,
                     CatalogMetadata {
                         name,
-                        category: Category::PrimePart,
+                        category: Some(Category::PrimePart),
                         masterable: false,
                         max_rank: 0,
                         image_name: validated_image_name(component.image_name.as_deref())?,
@@ -124,7 +127,7 @@ impl CatalogIndex {
         self.items
             .values()
             .filter(|metadata| {
-                metadata.category == Category::PrimePart || metadata.name == "Forma Blueprint"
+                metadata.category == Some(Category::PrimePart) || metadata.name == "Forma Blueprint"
             })
             .map(|metadata| RewardCatalogEntry {
                 name: metadata.name.clone(),
@@ -148,7 +151,8 @@ impl CatalogIndex {
             }
             Entry::Occupied(entry) if entry.get() == &metadata => {}
             Entry::Occupied(mut entry)
-                if richer_component_context && entry.get().category != Category::PrimePart =>
+                if richer_component_context
+                    && entry.get().category != Some(Category::PrimePart) =>
             {
                 entry.insert(metadata);
             }
@@ -275,23 +279,17 @@ fn validated_name(name: &str) -> Result<String, CatalogError> {
 }
 
 fn validated_image_name(image_name: Option<&str>) -> Result<Option<String>, CatalogError> {
-    image_name
-        .map(|value| {
-            let value = value.trim();
-            if value.is_empty()
-                || value.len() > 256
-                || value.contains('/')
-                || value.contains('\\')
-                || !value.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b' ')
-                })
-            {
-                Err(CatalogError::InvalidMetadata)
-            } else {
-                Ok(value.to_owned())
-            }
-        })
-        .transpose()
+    Ok(image_name.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()
+            && value.len() <= 256
+            && !value.contains('/')
+            && !value.contains('\\')
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b' ')
+            }))
+        .then(|| value.to_owned())
+    }))
 }
 
 fn valid_unique_name(path: &str) -> bool {

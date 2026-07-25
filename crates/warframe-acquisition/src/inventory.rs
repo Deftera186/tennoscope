@@ -385,7 +385,9 @@ fn accumulated_entry(
     let metadata = catalog.and_then(|catalog| catalog.resolve(path));
     AccumulatedEntry {
         name: metadata.map(|metadata| metadata.name().to_owned()),
-        category: metadata.map_or(fallback_category, |metadata| metadata.category()),
+        category: metadata
+            .and_then(|metadata| metadata.category())
+            .unwrap_or(fallback_category),
         quantity: 0,
         mastered: false,
         masterable: metadata.is_some_and(|metadata| metadata.masterable()),

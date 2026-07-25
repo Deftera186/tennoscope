@@ -147,7 +147,7 @@ impl CatalogCache {
             .map_err(|_| CatalogCacheError::CacheWrite)
     }
 
-    fn load_cached(&self) -> Result<CatalogLoad, CatalogCacheError> {
+    pub fn load_cached(&self) -> Result<CatalogLoad, CatalogCacheError> {
         let bytes = fs::read(self.directory.join("catalog-generation.json"))
             .map_err(|_| CatalogCacheError::Unavailable)?;
         let generation: Generation =

@@ -1,15 +1,9 @@
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
-
-const OVERLAY_LABEL = 'reward-overlay'
+import { invoke } from '@tauri-apps/api/core'
 
 export async function showRewardOverlay() {
-  const overlay = await WebviewWindow.getByLabel(OVERLAY_LABEL)
-  if (!overlay) throw new Error('reward overlay window is unavailable')
-  await overlay.show()
+  await invoke('show_reward_overlay')
 }
 
 export async function hideRewardOverlay() {
-  const overlay = await WebviewWindow.getByLabel(OVERLAY_LABEL)
-  if (!overlay) throw new Error('reward overlay window is unavailable')
-  await overlay.hide()
+  await invoke('hide_reward_overlay')
 }

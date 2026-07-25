@@ -281,7 +281,7 @@ function DiagnosticsPage({ view }: { view: AppView }) {
   const systems = [
     ['Game reader', view.health.game_reader],
     ['EE.log', view.health.log_monitor],
-    ['Screen capture', view.health.capture],
+    ['Reward observer', view.health.capture],
     ['Catalog', view.health.catalog],
     ['Market data', view.health.market],
     ['Database', view.health.database],

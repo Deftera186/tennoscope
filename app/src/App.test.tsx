@@ -135,7 +135,7 @@ describe('MVP desktop interface', () => {
     await screen.findByRole('heading', { name: 'Your collection' })
     await userEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
     const panel = screen.getByRole('region', { name: 'Diagnostics' })
-    for (const label of ['Game reader', 'EE.log', 'Screen capture', 'Catalog', 'Market data', 'Database', 'Process discovery', 'Memory read', 'Authorization scan', 'Inventory fetch', 'Schema validation']) {
+    for (const label of ['Game reader', 'EE.log', 'Reward observer', 'Catalog', 'Market data', 'Database', 'Process discovery', 'Memory read', 'Authorization scan', 'Inventory fetch', 'Schema validation']) {
       expect(within(panel).getByText(label)).toBeInTheDocument()
     }
     expect(within(panel).getByText('Last success: 1')).toBeInTheDocument()

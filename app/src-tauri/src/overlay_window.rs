@@ -1,7 +1,19 @@
+use std::process::Command;
+
+#[cfg(target_os = "linux")]
+use gtk::prelude::WidgetExt;
 use tauri::{Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OverlayGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowRect {
     pub x: i32,
     pub y: i32,
     pub width: u32,
@@ -27,37 +39,105 @@ pub fn reward_overlay_geometry(
     }
 }
 
+fn overlay_geometry(window: &WebviewWindow) -> tauri::Result<Option<OverlayGeometry>> {
+    let game_rect = warframe_window_rect();
+    let monitor = if game_rect.is_none() {
+        window
+            .primary_monitor()?
+            .or(window.current_monitor()?)
+            .or_else(|| window.available_monitors().ok()?.into_iter().next())
+    } else {
+        None
+    };
+    Ok(game_rect
+        .map(|rect| reward_overlay_geometry(rect.width, rect.height, rect.x, rect.y))
+        .or_else(|| {
+            monitor.map(|monitor| {
+                let size = monitor.size();
+                let position = monitor.position();
+                reward_overlay_geometry(size.width, size.height, position.x, position.y)
+            })
+        }))
+}
+
 pub fn configure_reward_overlay(window: &WebviewWindow) -> tauri::Result<()> {
-    let monitor = window
-        .primary_monitor()?
-        .or(window.current_monitor()?)
-        .or_else(|| window.available_monitors().ok()?.into_iter().next());
-    if let Some(monitor) = monitor {
-        let size = monitor.size();
-        let position = monitor.position();
-        let geometry = reward_overlay_geometry(size.width, size.height, position.x, position.y);
+    let geometry = overlay_geometry(window)?;
+    if let Some(geometry) = geometry {
         window.set_size(PhysicalSize::new(geometry.width, geometry.height))?;
         window.set_position(PhysicalPosition::new(geometry.x, geometry.y))?;
     }
     window.set_focusable(false)?;
     window.set_ignore_cursor_events(true)?;
     window.set_always_on_top(true)?;
-
-    #[cfg(target_os = "linux")]
-    configure_linux_layer(window);
     Ok(())
 }
 
+pub(crate) fn warframe_window_rect() -> Option<WindowRect> {
+    let output = Command::new("swaymsg")
+        .args(["-t", "get_tree", "-r"])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| warframe_window_rect_from_sway_tree(&output.stdout))
+        .flatten()
+}
+
+pub fn warframe_window_rect_from_sway_tree(bytes: &[u8]) -> Option<WindowRect> {
+    fn visit(value: &serde_json::Value) -> Option<WindowRect> {
+        if let Some(object) = value.as_object() {
+            let title = object.get("name").and_then(serde_json::Value::as_str);
+            let class = object
+                .get("window_properties")
+                .and_then(|properties| properties.get("class"))
+                .and_then(serde_json::Value::as_str);
+            let visible = object
+                .get("visible")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            let is_warframe = title.is_some_and(|title| title.eq_ignore_ascii_case("warframe"))
+                || class.is_some_and(|class| class.eq_ignore_ascii_case("steam_app_warframe"));
+            if visible && is_warframe {
+                let rect = object.get("rect")?;
+                return Some(WindowRect {
+                    x: i32::try_from(rect.get("x")?.as_i64()?).ok()?,
+                    y: i32::try_from(rect.get("y")?.as_i64()?).ok()?,
+                    width: u32::try_from(rect.get("width")?.as_u64()?).ok()?,
+                    height: u32::try_from(rect.get("height")?.as_u64()?).ok()?,
+                });
+            }
+            for child in object.values() {
+                if let Some(rect) = visit(child) {
+                    return Some(rect);
+                }
+            }
+        } else if let Some(array) = value.as_array() {
+            for child in array {
+                if let Some(rect) = visit(child) {
+                    return Some(rect);
+                }
+            }
+        }
+        None
+    }
+
+    serde_json::from_slice(bytes)
+        .ok()
+        .and_then(|tree| visit(&tree))
+}
+
 #[cfg(target_os = "linux")]
-fn configure_linux_layer(window: &WebviewWindow) {
+fn configure_linux_layer(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
+    use gtk::gdk::prelude::MonitorExt;
     use gtk::prelude::{GtkWindowExt, WidgetExt};
     use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
     if std::env::var_os("WAYLAND_DISPLAY").is_none() {
-        return;
+        return false;
     }
     let Ok(gtk_window) = window.gtk_window() else {
-        return;
+        return false;
     };
     if gtk_window.is_visible() {
         gtk_window.hide();
@@ -66,6 +146,11 @@ fn configure_linux_layer(window: &WebviewWindow) {
         gtk_window.init_layer_shell();
         gtk_window.set_namespace("tennoscope-reward-overlay");
     }
+    let display = gtk_window.display();
+    let monitor = display.monitor_at_point(geometry.x, geometry.y);
+    if let Some(monitor) = monitor.as_ref() {
+        gtk_window.set_monitor(monitor);
+    }
     gtk_window.set_layer(Layer::Overlay);
     gtk_window.set_keyboard_mode(KeyboardMode::None);
     gtk_window.set_exclusive_zone(0);
@@ -73,22 +158,46 @@ fn configure_linux_layer(window: &WebviewWindow) {
     gtk_window.set_anchor(Edge::Left, true);
     gtk_window.set_anchor(Edge::Right, false);
     gtk_window.set_anchor(Edge::Bottom, false);
-    if let Ok(position) = window.outer_position() {
-        gtk_window.set_layer_shell_margin(Edge::Top, position.y.max(0));
-        gtk_window.set_layer_shell_margin(Edge::Left, position.x.max(0));
-    }
+    let monitor_geometry = monitor.map(|monitor| monitor.geometry());
+    let monitor_x = monitor_geometry.as_ref().map_or(0, |rect| rect.x());
+    let monitor_y = monitor_geometry.as_ref().map_or(0, |rect| rect.y());
+    gtk_window.set_layer_shell_margin(Edge::Top, (geometry.y - monitor_y).max(0));
+    gtk_window.set_layer_shell_margin(Edge::Left, (geometry.x - monitor_x).max(0));
     gtk_window.set_accept_focus(false);
+    gtk_window.set_default_size(
+        i32::try_from(geometry.width).unwrap_or(1600),
+        i32::try_from(geometry.height).unwrap_or(148),
+    );
+    gtk_window.show_all();
+    true
 }
 
 pub fn show_reward_overlay(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("reward-overlay") {
-        let _ = configure_reward_overlay(&window);
-        let _ = window.show();
+        let _ = app.run_on_main_thread(move || {
+            #[cfg(target_os = "linux")]
+            if let Ok(Some(geometry)) = overlay_geometry(&window) {
+                if configure_linux_layer(&window, geometry) {
+                    return;
+                }
+            }
+            let _ = configure_reward_overlay(&window);
+            let _ = window.show();
+        });
     }
 }
 
 pub fn hide_reward_overlay(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("reward-overlay") {
-        let _ = window.hide();
+        let _ = app.run_on_main_thread(move || {
+            #[cfg(target_os = "linux")]
+            if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+                if let Ok(gtk_window) = window.gtk_window() {
+                    gtk_window.hide();
+                    return;
+                }
+            }
+            let _ = window.hide();
+        });
     }
 }

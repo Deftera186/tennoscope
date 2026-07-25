@@ -217,6 +217,28 @@ impl SqliteStore {
         Ok(collection)
     }
 
+    /// Updates catalog-owned fields without changing quantities or snapshot freshness.
+    pub fn update_collection_metadata(
+        &mut self,
+        snapshot: &InventorySnapshot,
+    ) -> Result<(), StoreError> {
+        let transaction = self.connection.transaction()?;
+        let mut statement = transaction.prepare(
+            "UPDATE inventory SET name = ?2, category = ?3, image_name = ?4 WHERE item_id = ?1",
+        )?;
+        for entry in snapshot.entries() {
+            statement.execute(params![
+                entry.item.id.as_str(),
+                entry.item.name,
+                encode_category(entry.item.category)?,
+                entry.item.image_name,
+            ])?;
+        }
+        drop(statement);
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn audit_count(&self) -> Result<u64, StoreError> {
         let count: i64 =
             self.connection

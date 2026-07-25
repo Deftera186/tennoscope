@@ -219,6 +219,13 @@ struct SwayRect {
 }
 
 fn focused_reward_region() -> Option<String> {
+    if let Some(rect) = crate::overlay_window::warframe_window_rect() {
+        let x = rect.x + i32::try_from(rect.width * 7 / 100).ok()?;
+        let y = rect.y + i32::try_from(rect.height * 8 / 100).ok()?;
+        let width = rect.width * 86 / 100;
+        let height = rect.height * 43 / 100;
+        return Some(format!("{x},{y} {width}x{height}"));
+    }
     let output = Command::new("swaymsg")
         .args(["-t", "get_outputs", "-r"])
         .output()

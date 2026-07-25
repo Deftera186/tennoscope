@@ -14,8 +14,8 @@ use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use warframe_acquisition::{
-    CatalogCache, InventoryAcquirer, InventoryHttpTransport, LinuxProc, ProcessDiscovery,
-    RewardCatalogEntry, WfcdCatalogHttp,
+    CatalogCache, CatalogIndex, InventoryAcquirer, InventoryHttpTransport, LinuxProc,
+    ProcessDiscovery, RewardCatalogEntry, WfcdCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
 
@@ -25,7 +25,9 @@ mod reward_observer;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
-pub use overlay_window::{OverlayGeometry, reward_overlay_geometry};
+pub use overlay_window::{
+    OverlayGeometry, WindowRect, reward_overlay_geometry, warframe_window_rect_from_sway_tree,
+};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
@@ -96,6 +98,7 @@ struct Runtime {
     setup_path: PathBuf,
     setup: SetupStatus,
     last_refresh_started: Option<Instant>,
+    overlay_preview_until: Option<Instant>,
     monitor_started: bool,
 }
 type SharedRuntime = Arc<Mutex<Runtime>>;
@@ -281,6 +284,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         setup_path: paths.setup,
         setup,
         last_refresh_started: None,
+        overlay_preview_until: None,
         monitor_started: false,
     })))
 }
@@ -345,10 +349,16 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let procfs = LinuxProc::new();
     let mut machine = MonitorMachine::new(15);
     let mut reward_state = RewardObserverState::new(2, 2);
-    let reward_catalog = shared
+    let catalog = shared
         .lock()
         .ok()
-        .and_then(|runtime| load_reward_catalog(&runtime.app_data))
+        .and_then(|runtime| load_catalog(&runtime.app_data));
+    if let (Some(catalog), Ok(mut runtime)) = (catalog.as_ref(), shared.lock()) {
+        let _ = runtime.core.enrich_collection_from_catalog(catalog);
+    }
+    let reward_catalog = catalog
+        .as_ref()
+        .map(CatalogIndex::reward_entries)
         .unwrap_or_default();
     loop {
         let now = SystemTime::now()
@@ -397,13 +407,17 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     }
 }
 
-fn load_reward_catalog(app_data: &Path) -> Option<Vec<RewardCatalogEntry>> {
+fn load_catalog(app_data: &Path) -> Option<CatalogIndex> {
+    let cache = CatalogCache::new(app_data.join("catalog"));
+    if let Ok(catalog) = cache.load_cached() {
+        return Some(catalog.index().clone());
+    }
     let source = WfcdCatalogHttp::new().ok()?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
-    CatalogCache::new(app_data.join("catalog"))
+    cache
         .load(&source, now)
         .ok()
-        .map(|catalog| catalog.index().reward_entries())
+        .map(|catalog| catalog.index().clone())
 }
 
 fn observe_rewards(
@@ -414,7 +428,15 @@ fn observe_rewards(
     catalog: &[RewardCatalogEntry],
     state: &mut RewardObserverState,
 ) {
+    let preview_active = shared
+        .lock()
+        .ok()
+        .and_then(|runtime| runtime.overlay_preview_until)
+        .is_some_and(|deadline| deadline > Instant::now());
     if !game_running || catalog.is_empty() {
+        if preview_active {
+            return;
+        }
         let transition = state.miss();
         if transition.hide {
             overlay_window::hide_reward_overlay(app);
@@ -433,6 +455,12 @@ fn observe_rewards(
             }
         }
         Ok(_) => {
+            if let Ok(mut runtime) = shared.lock() {
+                let _ = runtime.core.record_capture_ready(now.to_string());
+            }
+            if preview_active {
+                return;
+            }
             let transition = state.miss();
             if transition.hide {
                 overlay_window::hide_reward_overlay(app);
@@ -442,6 +470,9 @@ fn observe_rewards(
             }
         }
         Err(message) => {
+            if preview_active {
+                return;
+            }
             let transition = state.miss();
             if transition.hide {
                 overlay_window::hide_reward_overlay(app);
@@ -564,6 +595,22 @@ fn start_monitor(shared: SharedRuntime, app: AppHandle) {
     }
 }
 
+#[tauri::command]
+fn show_reward_overlay(app: AppHandle, state: State<'_, SharedRuntime>) {
+    if let Ok(mut runtime) = state.lock() {
+        runtime.overlay_preview_until = Some(Instant::now() + Duration::from_secs(30));
+    }
+    overlay_window::show_reward_overlay(&app);
+}
+
+#[tauri::command]
+fn hide_reward_overlay(app: AppHandle, state: State<'_, SharedRuntime>) {
+    if let Ok(mut runtime) = state.lock() {
+        runtime.overlay_preview_until = None;
+    }
+    overlay_window::hide_reward_overlay(&app);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -594,7 +641,9 @@ pub fn run() {
             get_setup_status,
             accept_risk_disclosure,
             refresh_inventory,
-            load_fake_session
+            load_fake_session,
+            show_reward_overlay,
+            hide_reward_overlay
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

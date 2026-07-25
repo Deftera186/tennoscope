@@ -2,6 +2,7 @@ use app_core::{AppCore, HealthState};
 use local_store::SnapshotMeta;
 use serde_json::json;
 use tempfile::tempdir;
+use warframe_acquisition::CatalogIndex;
 use warframe_domain::{
     CatalogItem, Category, InventoryEntry, InventorySnapshot, ItemId, RewardCandidate,
 };
@@ -48,6 +49,43 @@ fn canonical_artwork_reaches_the_serialized_collection_view() {
     assert_eq!(
         serde_json::to_value(&view.collection().items()[0]).unwrap()["image_url"],
         json!("https://raw.githubusercontent.com/WFCD/warframe-items/master/data/img/Braton.png")
+    );
+}
+
+#[test]
+fn cached_snapshot_can_be_enriched_without_becoming_fresh() {
+    let mut core = AppCore::in_memory().unwrap();
+    let meta = SnapshotMeta::new(
+        "2026-07-25T08:09:10Z".into(),
+        "build-42".into(),
+        "warframe-memory".into(),
+    )
+    .unwrap();
+    core.apply_inventory_snapshot(
+        InventorySnapshot::coherent(vec![entry(
+            "/Lotus/Types/Items/MiscItems/Alertium",
+            "Alertium",
+            Category::Resource,
+            7,
+        )])
+        .unwrap(),
+        meta,
+    )
+    .unwrap();
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[{"uniqueName":"/Lotus/Types/Items/MiscItems/Alertium","name":"Nitain Extract","type":"Misc","category":"Misc","imageName":"Alertium.png"}]"#,
+    )
+    .unwrap();
+
+    let view = core.enrich_collection_from_catalog(&catalog).unwrap();
+
+    let item = &view.collection().items()[0];
+    assert_eq!(item.name(), "Nitain Extract");
+    assert_eq!(item.quantity(), 7);
+    assert!(item.image_url().unwrap().ends_with("/Alertium.png"));
+    assert_eq!(
+        view.collection().snapshot().unwrap().observed_at(),
+        "2026-07-25T08:09:10Z"
     );
 }
 
@@ -205,19 +243,19 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
     assert_eq!(view.health().capture().state(), HealthState::Degraded);
     assert_eq!(
         view.health().capture().message(),
-        "Phase 1 capture not connected"
+        "Reward observer waiting for Warframe"
     );
     assert_eq!(view.health().capture().last_success(), None);
     assert_eq!(view.health().catalog().state(), HealthState::Degraded);
     assert_eq!(
         view.health().catalog().message(),
-        "Phase 1 catalog not connected"
+        "Item catalog has not loaded yet"
     );
     assert_eq!(view.health().catalog().last_success(), None);
     assert_eq!(view.health().market().state(), HealthState::Degraded);
     assert_eq!(
         view.health().market().message(),
-        "Phase 1 market not connected"
+        "Live market pricing is not enabled"
     );
     assert_eq!(view.health().market().last_success(), None);
     assert_eq!(view.health().database().state(), HealthState::Ready);

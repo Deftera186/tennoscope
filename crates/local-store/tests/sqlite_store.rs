@@ -46,6 +46,43 @@ fn authoritative_replacement_removes_absent_items_and_appends_audit_rows() {
 }
 
 #[test]
+fn catalog_metadata_update_preserves_quantity_and_snapshot_audit() {
+    let mut store = SqliteStore::in_memory().unwrap();
+    store
+        .replace_collection(
+            &snapshot(vec![entry(
+                "alertium",
+                "Alertium",
+                Category::Resource,
+                7,
+                false,
+            )]),
+            &SnapshotMeta::fake("before").unwrap(),
+        )
+        .unwrap();
+    let enriched = snapshot(vec![InventoryEntry::new(
+        CatalogItem::new(
+            ItemId::new("alertium").unwrap(),
+            "Nitain Extract",
+            Category::Resource,
+        )
+        .unwrap()
+        .with_image_name("Alertium.png")
+        .unwrap(),
+        999,
+    )]);
+
+    store.update_collection_metadata(&enriched).unwrap();
+
+    let collection = store.load_collection().unwrap();
+    let item = collection.entries().next().unwrap();
+    assert_eq!(item.quantity, 7);
+    assert_eq!(item.item.name, "Nitain Extract");
+    assert_eq!(item.item.image_name.as_deref(), Some("Alertium.png"));
+    assert_eq!(store.audit_count().unwrap(), 1);
+}
+
+#[test]
 fn all_categories_mastery_and_zero_quantity_round_trip() {
     let fixtures = [
         ("excalibur", "Excalibur", Category::Frame),
