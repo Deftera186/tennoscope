@@ -485,6 +485,7 @@ fn handle_reward_event(
     now: u64,
 ) {
     match event {
+        RewardLogEvent::ResponderReceived { .. } | RewardLogEvent::ResponsesComplete { .. } => {}
         RewardLogEvent::BaselineRequested { relic_paths } => {
             let candidates = catalog
                 .zip(relic_catalog)

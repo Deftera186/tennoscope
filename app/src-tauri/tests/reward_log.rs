@@ -23,6 +23,7 @@ fn online_sequence_requests_one_baseline_and_emits_the_observed_choice_count() {
     let events = lines
         .into_iter()
         .flat_map(|line| machine.observe_line(line))
+        .filter(is_render_lifecycle_event)
         .collect::<Vec<_>>();
 
     assert_eq!(
@@ -85,6 +86,7 @@ fn rendered_card_count_overrides_the_number_of_network_responders() {
     ]
     .into_iter()
     .flat_map(|line| machine.observe_line(line))
+    .filter(is_render_lifecycle_event)
     .collect::<Vec<_>>();
 
     assert_eq!(
@@ -115,6 +117,7 @@ fn host_sequence_emits_the_rendered_choice_count() {
     ]
     .into_iter()
     .flat_map(|line| machine.observe_line(line))
+    .filter(is_render_lifecycle_event)
     .collect::<Vec<_>>();
 
     assert_eq!(
@@ -141,6 +144,7 @@ fn choices_include_the_explicitly_logged_local_reward_path() {
     ]
     .into_iter()
     .flat_map(|line| machine.observe_line(line))
+    .filter(is_render_lifecycle_event)
     .collect::<Vec<_>>();
 
     assert_eq!(
@@ -195,4 +199,58 @@ fn byte_stream_preserves_lines_split_across_monitor_reads() {
     let events = machine.observe_bytes(b"ScreenRMI\n");
 
     assert!(events.is_empty());
+}
+
+#[test]
+fn live_response_sequence_emits_ordered_responders_and_completes_before_rendering() {
+    let mut machine = RewardLogMachine::default();
+    let events = [
+        "14189.789 Sys [Info]: VoidProjections: OpenVoidProjectionRewardScreenRMI",
+        "14189.989 Sys [Info]: VoidProjections: Client got reward info from de1e7ed00000000000000005",
+        "14190.058 Sys [Info]: VoidProjections: Client got reward info from de1e7ed0000000000000000a",
+        "14190.062 Sys [Info]: VoidProjections: Client got reward info from de1e7ed00000000000000004",
+        "14190.095 Sys [Info]: VoidProjections: de1e7ed00000000000000006 gets reward /Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb",
+        "14190.095 Sys [Info]: VoidProjections: Client got reward info from de1e7ed00000000000000006",
+        "14190.336 Sys [Info]: VoidProjections: Client has reward info for all players now",
+    ]
+    .into_iter()
+    .flat_map(|line| machine.observe_line(line))
+    .collect::<Vec<_>>();
+
+    assert_eq!(
+        events,
+        vec![
+            RewardLogEvent::ResponderReceived {
+                identity: "de1e7ed00000000000000005".into(),
+            },
+            RewardLogEvent::ResponderReceived {
+                identity: "de1e7ed0000000000000000a".into(),
+            },
+            RewardLogEvent::ResponderReceived {
+                identity: "de1e7ed00000000000000004".into(),
+            },
+            RewardLogEvent::ResponderReceived {
+                identity: "de1e7ed00000000000000006".into(),
+            },
+            RewardLogEvent::ResponsesComplete {
+                responders: vec![
+                    "de1e7ed00000000000000005".into(),
+                    "de1e7ed0000000000000000a".into(),
+                    "de1e7ed00000000000000004".into(),
+                    "de1e7ed00000000000000006".into(),
+                ],
+                local_reward_path: Some(
+                    "/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb"
+                        .into(),
+                ),
+            },
+        ]
+    );
+}
+
+fn is_render_lifecycle_event(event: &RewardLogEvent) -> bool {
+    matches!(
+        event,
+        RewardLogEvent::BaselineRequested { .. } | RewardLogEvent::ChoicesReady { .. }
+    )
 }

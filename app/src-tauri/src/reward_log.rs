@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 const PROJECTION_PREFIX: &str = "/Lotus/Types/Game/Projections/";
 const OPEN_REWARD_SCREEN: &str = "OpenVoidProjectionRewardScreen";
 const CLIENT_REWARD: &str = "Client got reward info from ";
@@ -21,16 +19,24 @@ pub enum RewardLogEvent {
         expected_choices: usize,
         local_reward_path: Option<String>,
     },
+    ResponderReceived {
+        identity: String,
+    },
+    ResponsesComplete {
+        responders: Vec<String>,
+        local_reward_path: Option<String>,
+    },
     Closed,
 }
 
 #[derive(Default)]
 pub struct RewardLogMachine {
     loaded_relics: Vec<String>,
-    responders: BTreeSet<String>,
+    responders: Vec<String>,
     reward_window_open: bool,
     choices_emitted: bool,
     rewards_received: bool,
+    responses_complete_emitted: bool,
     rendered_cards: usize,
     local_reward_path: Option<String>,
     carry: Vec<u8>,
@@ -73,6 +79,7 @@ impl RewardLogMachine {
             self.responders.clear();
             self.choices_emitted = false;
             self.rewards_received = false;
+            self.responses_complete_emitted = false;
             self.rendered_cards = 0;
             self.local_reward_path = None;
             return Vec::new();
@@ -89,7 +96,12 @@ impl RewardLogMachine {
                 .find_map(|marker| line.split_once(marker).map(|(_, value)| value.trim()))
             {
                 if !identity.is_empty() {
-                    self.responders.insert(identity.to_owned());
+                    if !self.responders.iter().any(|known| known == identity) {
+                        self.responders.push(identity.to_owned());
+                        return vec![RewardLogEvent::ResponderReceived {
+                            identity: identity.to_owned(),
+                        }];
+                    }
                 }
             }
             if line.contains(CLIENT_ALL_REWARDS)
@@ -97,6 +109,13 @@ impl RewardLogMachine {
                 || line.contains(GOT_REWARDS)
             {
                 self.rewards_received = true;
+                if !self.responses_complete_emitted {
+                    self.responses_complete_emitted = true;
+                    return vec![RewardLogEvent::ResponsesComplete {
+                        responders: self.responders.clone(),
+                        local_reward_path: self.local_reward_path.clone(),
+                    }];
+                }
             }
             if line.contains(RENDERED_REWARD) {
                 self.rendered_cards = self.rendered_cards.saturating_add(1);
@@ -122,6 +141,7 @@ impl RewardLogMachine {
             self.choices_emitted = false;
             self.responders.clear();
             self.rewards_received = false;
+            self.responses_complete_emitted = false;
             self.rendered_cards = 0;
             self.local_reward_path = None;
             self.loaded_relics.clear();
