@@ -134,8 +134,10 @@ pub fn resolve_reward_choices(
         .map(hit_identity)
         .collect::<BTreeSet<_>>();
     let mut regions = BTreeMap::<u64, Vec<&RewardHit>>::new();
+    let mut new_hits = Vec::new();
     for hit in &current.hits {
         if !old.contains(&hit_identity(hit)) {
+            new_hits.push(hit);
             regions.entry(hit.region_start).or_default().push(hit);
         }
     }
@@ -176,7 +178,31 @@ pub fn resolve_reward_choices(
     }
     complete.sort_by_key(|(span, _, _)| *span);
     let Some((best_span, _, _)) = complete.first() else {
-        return RewardResolution::Incomplete;
+        let mut earliest = BTreeMap::<&str, &RewardHit>::new();
+        for hit in new_hits {
+            earliest
+                .entry(hit.choice_name())
+                .and_modify(|existing| {
+                    if hit.address() < existing.address() {
+                        *existing = hit;
+                    }
+                })
+                .or_insert(hit);
+        }
+        if earliest.len() != expected_choices {
+            return RewardResolution::Incomplete;
+        }
+        let mut choices = earliest.values().copied().collect::<Vec<_>>();
+        choices.sort_by_key(|hit| hit.address());
+        return RewardResolution::Confirmed {
+            choices: choices
+                .into_iter()
+                .map(|hit| hit.choice_name().to_owned())
+                .collect(),
+            // Zero denotes a cross-region temporal set. There is no single
+            // region to re-read for confirmation.
+            region_start: 0,
+        };
     };
     if complete
         .get(1)

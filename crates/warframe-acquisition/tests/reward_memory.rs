@@ -349,6 +349,45 @@ fn temporal_resolution_rejects_equally_complete_competing_clusters() {
 }
 
 #[test]
+fn temporal_resolution_combines_an_exact_choice_set_across_regions() {
+    let baseline = fingerprint(
+        vec![b'.'; 1024],
+        vec![
+            ReadableRegion::classified(0x1000, 256, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(0x3000, 256, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(0x5000, 512, RegionScanPriority::WritableAnonymous),
+        ],
+    );
+    let mut current = vec![b'.'; 1024];
+    current[40..47].copy_from_slice(b"Burston");
+    current[300..305].copy_from_slice(b"Forma");
+    current[600..608].copy_from_slice(b"Perigale");
+    current[700..706].copy_from_slice(b"Trumna");
+    current[760..768].copy_from_slice(b"Perigale");
+    let current = fingerprint(
+        current,
+        vec![
+            ReadableRegion::classified(0x1000, 256, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(0x3000, 256, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(0x5000, 512, RegionScanPriority::WritableAnonymous),
+        ],
+    );
+
+    assert_eq!(
+        resolve_reward_choices(&baseline, &current, 4, 128),
+        RewardResolution::Confirmed {
+            choices: vec![
+                "Burston".into(),
+                "Forma".into(),
+                "Perigale".into(),
+                "Trumna".into(),
+            ],
+            region_start: 0,
+        }
+    );
+}
+
+#[test]
 fn current_cluster_can_recover_when_the_baseline_was_contaminated() {
     let mut current_bytes = vec![b'.'; 1024];
     current_bytes[500..507].copy_from_slice(b"Burston");

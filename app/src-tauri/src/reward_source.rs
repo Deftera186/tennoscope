@@ -124,6 +124,9 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
         let RewardResolution::Confirmed { region_start, .. } = resolution else {
             return resolution;
         };
+        if region_start == 0 {
+            return resolution;
+        }
         let Ok(regions) = self.memory.readable_regions(&self.process) else {
             return RewardResolution::Incomplete;
         };
