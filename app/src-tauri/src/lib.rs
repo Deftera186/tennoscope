@@ -13,6 +13,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(debug_assertions)]
+use std::{fs::OpenOptions, io::Write};
+
 use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome};
 use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
@@ -517,6 +520,7 @@ fn handle_reward_event(
             let generation = Arc::clone(reward_generation);
             let expected_generation = generation.load(Ordering::Acquire);
             std::thread::spawn(move || {
+                let started = Instant::now();
                 let procfs = LinuxProc::new();
                 let scanner = RewardMemoryScanner::new(
                     256 * 1024,
@@ -527,6 +531,13 @@ fn handle_reward_event(
                 let resolution = scanner
                     .resolve_player_records(&procfs, &process, &candidates, &responders, None, None)
                     .unwrap_or(warframe_acquisition::RewardResolution::Incomplete);
+                #[cfg(debug_assertions)]
+                trace_incremental_reward_scan(
+                    &identity,
+                    expected_generation,
+                    started.elapsed(),
+                    &resolution,
+                );
                 store_player_record_if_current(
                     expected_generation,
                     &generation,
@@ -560,6 +571,12 @@ fn handle_reward_event(
                 local_choice.as_deref(),
                 incremental_reward_records,
                 Duration::from_millis(1_400),
+            );
+            #[cfg(debug_assertions)]
+            trace_incremental_reward_assembly(
+                screen_order_refs.len(),
+                incremental_reward_records,
+                choices.is_some(),
             );
             if let Some(choices) = choices {
                 publish_reward_result(
@@ -761,6 +778,50 @@ fn wait_for_player_record_choices(
         }
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+#[cfg(debug_assertions)]
+fn trace_incremental_reward_scan(
+    identity: &str,
+    generation: u64,
+    elapsed: Duration,
+    resolution: &warframe_acquisition::RewardResolution,
+) {
+    let Ok(mut output) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/tennoscope-reward-debug.log")
+    else {
+        return;
+    };
+    let identity_suffix = identity
+        .get(identity.len().saturating_sub(6)..)
+        .unwrap_or(identity);
+    let _ = writeln!(
+        output,
+        "[DEBUG-incremental] generation={generation} responder=…{identity_suffix} elapsed_ms={} resolution={resolution:?}",
+        elapsed.as_millis(),
+    );
+}
+
+#[cfg(debug_assertions)]
+fn trace_incremental_reward_assembly(
+    expected: usize,
+    records: &Mutex<BTreeMap<String, String>>,
+    complete: bool,
+) {
+    let record_count = records.lock().map_or(0, |records| records.len());
+    let Ok(mut output) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/tennoscope-reward-debug.log")
+    else {
+        return;
+    };
+    let _ = writeln!(
+        output,
+        "[DEBUG-incremental] assembly expected={expected} remote_records={record_count} complete={complete}"
+    );
 }
 
 fn publish_reward_result(
