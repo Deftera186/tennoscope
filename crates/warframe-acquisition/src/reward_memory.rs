@@ -18,6 +18,11 @@ const LIVE_UI_ADDRESS_MIN: u64 = 0x1300_0000;
 const LIVE_UI_ADDRESS_MAX: u64 = 0x2800_0000;
 const PROTON_RESPONSE_ADDRESS_MIN: u64 = 0x1d00_0000;
 const PROTON_RESPONSE_ADDRESS_MAX: u64 = 0x6000_0000;
+const STORE_ITEM_PREFIX: &[u8] = b"/Lotus/StoreItems/";
+/// How far before an identity hit a response record's reward path has been observed to sit. The
+/// host-side record captured on 2026-07-26 put it 181 bytes back.
+const RECORD_LOOKBEHIND: u64 = 256;
+const RECORD_WINDOW: usize = 1024;
 
 struct SnapshotMemoryReader<'a> {
     live: &'a dyn MemoryReader,
@@ -572,11 +577,17 @@ impl RewardMemoryScanner {
                         let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
                         let identity = responders[found.pattern().as_usize()];
                         let containing = memory.readable_region_containing(process, hit_address)?;
-                        let record_start = containing.map_or_else(
-                            || hit_address.saturating_sub(1),
-                            |region| hit_address.saturating_sub(1).max(region.start()),
-                        );
-                        let mut record = [0_u8; 768];
+                        // Look behind the identity as well as ahead: the record a client
+                        // serialises for itself carries the reward path after the id, while the
+                        // records a host keeps for each squad member carry it before.
+                        let lookbehind = containing.map_or(RECORD_LOOKBEHIND, |region| {
+                            hit_address
+                                .saturating_sub(region.start())
+                                .min(RECORD_LOOKBEHIND)
+                        });
+                        let record_start = hit_address.saturating_sub(lookbehind);
+                        let identity_offset = usize::try_from(lookbehind).unwrap_or(0);
+                        let mut record = [0_u8; RECORD_WINDOW];
                         let request = containing.map_or(record.len(), |region| {
                             let end = region.start().saturating_add(region.len() as u64);
                             usize::try_from(end.saturating_sub(record_start))
@@ -588,16 +599,20 @@ impl RewardMemoryScanner {
                         // A genuine response record opens with the identity's length prefix. Every
                         // other identity hit is EE.log text or a UI string table, and capturing
                         // those exhausts the reject budget before a real record is ever seen.
-                        let is_record_header = record
-                            .first()
+                        let is_record_header = identity_offset
+                            .checked_sub(1)
+                            .and_then(|at| record.get(at))
                             .copied()
                             .is_some_and(|prefix| usize::from(prefix) == identity.len());
                         if is_record_header {
                             record_headers += 1;
                         }
-                        if let Some(choice) =
-                            structured_response_reward(&record[..record_read], identity, candidates)
-                        {
+                        if let Some(choice) = structured_response_reward(
+                            &record[..record_read],
+                            identity_offset,
+                            identity,
+                            candidates,
+                        ) {
                             structured_rewards
                                 .entry(identity)
                                 .or_default()
@@ -1026,28 +1041,53 @@ fn confirmed_structured_choices(
 
 fn structured_response_reward<'a>(
     bytes: &[u8],
+    identity_offset: usize,
     identity: &str,
     candidates: &'a [RewardNeedle],
 ) -> Option<&'a str> {
-    if bytes.first().copied() != Some(identity.len() as u8)
-        || bytes.get(1..1 + identity.len()) != Some(identity.as_bytes())
+    if identity_offset.checked_sub(1).and_then(|at| bytes.get(at))
+        != Some(&(u8::try_from(identity.len()).ok()?))
+        || bytes.get(identity_offset..identity_offset.checked_add(identity.len())?)
+            != Some(identity.as_bytes())
     {
         return None;
     }
-    let search = bytes.get(1 + identity.len()..)?;
-    let path_start = search
-        .windows(b"/Lotus/StoreItems/".len())
-        .position(|window| window == b"/Lotus/StoreItems/")?;
-    let encoded_length = path_start
-        .checked_sub(2)
-        .and_then(|offset| search.get(offset))
-        .copied()
-        .map(usize::from)?;
-    if encoded_length < b"/Lotus/StoreItems/".len() {
+    // Both record layouts store the path as a length-prefixed string. The length byte sits either
+    // immediately before the path or one byte further back, so try both and keep the first that
+    // could actually span a path. Nearest to the identity wins, since neighbouring records in the
+    // same allocation carry paths of their own.
+    let mut nearest: Option<(usize, &str)> = None;
+    for start in 0..bytes.len() {
+        if !bytes[start..].starts_with(STORE_ITEM_PREFIX) {
+            continue;
+        }
+        let Some(path) = [1_usize, 2]
+            .into_iter()
+            .filter_map(|back| start.checked_sub(back).and_then(|at| bytes.get(at)))
+            .map(|length| usize::from(*length))
+            .filter(|length| *length >= STORE_ITEM_PREFIX.len())
+            .find_map(|length| bytes.get(start..start.checked_add(length)?))
+        else {
+            continue;
+        };
+        let Some(choice) = matching_candidate(path, candidates) else {
+            continue;
+        };
+        let distance = start.abs_diff(identity_offset);
+        if nearest.is_none_or(|(closest, _)| distance < closest) {
+            nearest = Some((distance, choice));
+        }
+    }
+    nearest.map(|(_, choice)| choice)
+}
+
+/// The one candidate whose display name or internal path ends in the same basename, if exactly one
+/// does. Two candidates sharing a basename are indistinguishable from the path alone, so fail closed.
+fn matching_candidate<'a>(path: &[u8], candidates: &'a [RewardNeedle]) -> Option<&'a str> {
+    let response_basename = path.rsplit(|byte| *byte == b'/').next()?;
+    if response_basename.is_empty() {
         return None;
     }
-    let path = search.get(path_start..path_start.checked_add(encoded_length)?)?;
-    let response_basename = path.rsplit(|byte| *byte == b'/').next()?;
     let mut matches = BTreeSet::new();
     for candidate in candidates {
         let compact_choice = candidate

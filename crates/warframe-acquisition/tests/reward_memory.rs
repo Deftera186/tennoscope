@@ -1628,3 +1628,59 @@ fn structured_response_reads_a_record_captured_from_the_live_game() {
         }
     );
 }
+
+/// `fixtures/void-response-record-host.bin` is 288 bytes captured verbatim while the local player
+/// hosted a relic squad (account id and display name scrubbed, lengths preserved). The host keeps a
+/// record per squad member in which the reward path sits *before* the account id:
+///
+///   .. <len=0x48> <reward path> .. <len=0x18> <account id> <len> <display name>
+///
+/// The outgoing record a client serialises for itself puts the path after the id instead, so the
+/// scan has to look both ways around an identity hit.
+#[test]
+fn structured_response_reads_a_host_record_whose_reward_precedes_the_identity() {
+    let record = include_bytes!("fixtures/void-response-record-host.bin");
+    let identity = "aaaabbbbccccddddeeeeffff";
+    let identity_offset = 224;
+    assert_eq!(record[identity_offset - 1], identity.len() as u8);
+    assert_eq!(
+        &record[identity_offset..identity_offset + identity.len()],
+        identity.as_bytes()
+    );
+
+    let candidates = [
+        (
+            "Burston Prime Receiver",
+            "/Lotus/Types/Recipes/Weapons/WeaponParts/BurstonPrimeReceiver",
+        ),
+        (
+            "Bronco Prime Receiver",
+            "/Lotus/Types/Recipes/Weapons/WeaponParts/BroncoPrimeReceiver",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, path)| RewardNeedle::from_paths(name, vec![path.into()]).unwrap())
+    .collect::<Vec<_>>();
+
+    let mut bytes = vec![0_u8; 8192];
+    bytes[1024..1024 + record.len()].copy_from_slice(record);
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x3eda_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x3eda_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(4096, 65536, Duration::from_secs(1))
+            .resolve_live_player_record(&memory, &GameProcess::new(9), &candidates, identity)
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Burston Prime Receiver".into()],
+            region_start: 0,
+        }
+    );
+}
