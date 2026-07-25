@@ -318,6 +318,31 @@ impl RewardMemoryScanner {
                 let base = address.saturating_sub(u64::try_from(retained).unwrap_or(0));
                 for found in player_matcher.find_overlapping_iter(&buffer[..available]) {
                     let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
+                    if responders.len() == 1 {
+                        let identity = responders[found.pattern().as_usize()];
+                        let record_start = hit_address.saturating_sub(1).max(region.start());
+                        let region_end = region.start() + u64::try_from(region.len()).unwrap_or(0);
+                        let mut record = [0_u8; 768];
+                        let request = usize::try_from(region_end.saturating_sub(record_start))
+                            .unwrap_or(0)
+                            .min(record.len());
+                        let record_read = if request == 0 {
+                            0
+                        } else {
+                            memory.read_at(process, record_start, &mut record[..request])?
+                        };
+                        if let Some(choice) =
+                            structured_response_reward(&record[..record_read], identity, candidates)
+                        {
+                            record.zeroize();
+                            buffer.zeroize();
+                            return Ok(RewardResolution::Confirmed {
+                                choices: vec![choice.to_owned()],
+                                region_start: 0,
+                            });
+                        }
+                        record.zeroize();
+                    }
                     player_hits.push((
                         responders[found.pattern().as_usize()],
                         hit_address,
@@ -330,6 +355,38 @@ impl RewardMemoryScanner {
             }
         }
         buffer.zeroize();
+
+        let mut structured_rewards = BTreeMap::<&str, BTreeSet<String>>::new();
+        let mut record_buffer = vec![0_u8; 768];
+        for (identity, player_address, region_start) in &player_hits {
+            let Some(region) = regions
+                .iter()
+                .find(|region| region.start() == *region_start)
+            else {
+                continue;
+            };
+            let record_start = player_address.saturating_sub(1).max(region.start());
+            let region_end = region.start() + u64::try_from(region.len()).unwrap_or(u64::MAX);
+            let request = usize::try_from(region_end.saturating_sub(record_start))
+                .unwrap_or(0)
+                .min(record_buffer.len());
+            if request == 0 {
+                continue;
+            }
+            let read = memory.read_at(process, record_start, &mut record_buffer[..request])?;
+            if read == 0 {
+                continue;
+            }
+            if let Some(name) =
+                structured_response_reward(&record_buffer[..read], identity, candidates)
+            {
+                structured_rewards
+                    .entry(identity)
+                    .or_default()
+                    .insert(name.to_owned());
+            }
+        }
+        record_buffer.zeroize();
 
         let reward_matcher = AhoCorasick::new(
             reward_patterns
@@ -405,6 +462,11 @@ impl RewardMemoryScanner {
         buffer.zeroize();
 
         let reward_for = |identity: &str| {
+            if let Some(names) = structured_rewards.get(identity)
+                && names.len() == 1
+            {
+                return names.iter().next().cloned();
+            }
             let mut inline_names = BTreeSet::new();
             let mut retained_names = BTreeSet::new();
             for (_, player_address, region_start) in player_hits
@@ -612,6 +674,47 @@ impl RewardMemoryScanner {
             elapsed: started.elapsed(),
         })
     }
+}
+
+fn structured_response_reward<'a>(
+    bytes: &[u8],
+    identity: &str,
+    candidates: &'a [RewardNeedle],
+) -> Option<&'a str> {
+    if bytes.first().copied() != Some(identity.len() as u8)
+        || bytes.get(1..1 + identity.len()) != Some(identity.as_bytes())
+    {
+        return None;
+    }
+    let search = bytes.get(1 + identity.len()..)?;
+    let path_start = search
+        .windows(b"/Lotus/StoreItems/".len())
+        .position(|window| window == b"/Lotus/StoreItems/")?;
+    let encoded_length = path_start
+        .checked_sub(2)
+        .and_then(|offset| search.get(offset))
+        .copied()
+        .map(usize::from)?;
+    if encoded_length < b"/Lotus/StoreItems/".len() {
+        return None;
+    }
+    let path = search.get(path_start..path_start.checked_add(encoded_length)?)?;
+    let mut matches = BTreeSet::new();
+    for candidate in candidates {
+        for internal_path in candidate.internal_paths() {
+            let basename = internal_path.rsplit(|byte| *byte == b'/').next()?;
+            if !basename.is_empty()
+                && path
+                    .windows(basename.len())
+                    .any(|window| window == basename)
+            {
+                matches.insert(candidate.choice_name());
+            }
+        }
+    }
+    (matches.len() == 1)
+        .then(|| matches.into_iter().next())
+        .flatten()
 }
 
 fn priority_rank(priority: RegionScanPriority) -> u8 {

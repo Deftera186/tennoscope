@@ -738,3 +738,221 @@ fn retained_remote_record_rejects_ambiguous_nearby_rewards() {
         RewardResolution::Incomplete
     );
 }
+
+#[test]
+fn structured_response_record_wins_over_stale_nearby_reward_strings() {
+    let identity = "de1e7ed00000000000000006";
+    let candidates = [
+        (
+            "Braton Prime Stock",
+            "/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/BratonPrimeStock",
+        ),
+        (
+            "Forma Blueprint",
+            "/Lotus/StoreItems/Types/Recipes/Components/FormaBlueprint",
+        ),
+    ]
+    .into_iter()
+    .map(|(name, path)| RewardNeedle::from_paths(name, vec![path.into()]).unwrap())
+    .collect::<Vec<_>>();
+    let mut bytes = vec![0_u8; 4096];
+    let identity_offset = 1024;
+    bytes[identity_offset - 1] = identity.len() as u8;
+    bytes[identity_offset..identity_offset + identity.len()].copy_from_slice(identity.as_bytes());
+    let player_name = b"player001";
+    let player_name_length = identity_offset + identity.len();
+    bytes[player_name_length] = player_name.len() as u8;
+    bytes[player_name_length + 1..player_name_length + 1 + player_name.len()]
+        .copy_from_slice(player_name);
+    let session_marker = player_name_length + 1 + player_name.len();
+    bytes[session_marker..session_marker + 4].copy_from_slice(&[0xee, 0x80, 0x80, 0x00]);
+    let session_length = session_marker + 4;
+    bytes[session_length] = 32;
+    let session = b"5e551000000000000000000000000002";
+    bytes[session_length + 1..session_length + 1 + session.len()].copy_from_slice(session);
+    let reward_marker = session_length + 1 + session.len();
+    bytes[reward_marker..reward_marker + 4].copy_from_slice(&[0x76, 0x81, 0x44, 0x00]);
+    let reward_path = b"/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/BratonPrimeStock";
+    let reward_offset = reward_marker + 4;
+    bytes[reward_offset..reward_offset + reward_path.len()].copy_from_slice(reward_path);
+
+    let stale = b"FormaBlueprint";
+    bytes[identity_offset + 220..identity_offset + 220 + stale.len()].copy_from_slice(stale);
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x3eda_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x3eda_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(256, 8192, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &candidates,
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Braton Prime Stock".into()],
+            region_start: 0,
+        }
+    );
+}
+
+#[test]
+fn structured_single_response_stops_before_scanning_unrelated_lower_heaps() {
+    let identity = "de1e7ed00000000000000006";
+    let candidate = RewardNeedle::from_paths(
+        "Braton Prime Stock",
+        vec!["/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/BratonPrimeStock".into()],
+    )
+    .unwrap();
+    let mut response = vec![0_u8; 2048];
+    let identity_offset = 128;
+    response[identity_offset - 1] = identity.len() as u8;
+    response[identity_offset..identity_offset + identity.len()]
+        .copy_from_slice(identity.as_bytes());
+    let name_offset = identity_offset + identity.len();
+    response[name_offset] = 5;
+    response[name_offset + 1..name_offset + 6].copy_from_slice(b"Tenno");
+    let session_marker = name_offset + 6;
+    response[session_marker..session_marker + 4].copy_from_slice(&[0xee, 0x80, 0x80, 0x00]);
+    let session_length = session_marker + 4;
+    response[session_length] = 32;
+    response[session_length + 1..session_length + 33]
+        .copy_from_slice(b"5e551000000000000000000000000002");
+    let reward_marker = session_length + 33;
+    response[reward_marker..reward_marker + 4].copy_from_slice(&[0x76, 0x81, 0x44, 0x00]);
+    let path = b"/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/BratonPrimeStock";
+    response[reward_marker + 4..reward_marker + 4 + path.len()].copy_from_slice(path);
+
+    let high = 0x3eda_0000;
+    let low = 0x1900_0000;
+    let memory = FixtureMemory {
+        regions: vec![
+            ReadableRegion::classified(low, 4096, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(high, response.len(), RegionScanPriority::WritableAnonymous),
+        ],
+        bytes: BTreeMap::from([(low, vec![0; 4096]), (high, response)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert!(matches!(
+        RewardMemoryScanner::new(256, 8192, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed { .. }
+    ));
+    assert!(
+        memory
+            .reads
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|address| *address >= high)
+    );
+}
+
+#[test]
+fn structured_squad_records_preserve_the_supplied_screen_order() {
+    let responders = [
+        "de1e7ed00000000000000006",
+        "de1e7ed0000000000000000e",
+        "de1e7ed0000000000000000d",
+        "de1e7ed0000000000000000b",
+    ];
+    let rewards = [
+        (
+            "Nagantaka Prime Stock",
+            "/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/NagantakaPrimeStock",
+            "/Lotus/Types/Recipes/Weapons/WeaponParts/NagantakaPrimeStock",
+        ),
+        (
+            "Forma Blueprint",
+            "/Lotus/StoreItems/Types/Recipes/Components/FormaBlueprint",
+            "/Lotus/Types/Recipes/Components/FormaBlueprint",
+        ),
+        (
+            "Wukong Prime Neuroptics Blueprint",
+            "/Lotus/StoreItems/Types/Recipes/WarframeRecipes/WukongPrimeHelmetComponent",
+            "/Lotus/Types/Recipes/WarframeRecipes/WukongPrimeHelmetComponent",
+        ),
+        (
+            "Kompressa Prime Blueprint",
+            "/Lotus/StoreItems/Types/Recipes/Weapons/KompressaPrimeBlueprint",
+            "/Lotus/Types/Recipes/Weapons/KompressaPrimeBlueprint",
+        ),
+    ];
+    let candidates = rewards
+        .iter()
+        .map(|(name, _, catalog_path)| {
+            RewardNeedle::from_paths(*name, vec![(*catalog_path).into()]).unwrap()
+        })
+        .collect::<Vec<_>>();
+    let mut bytes = vec![0_u8; 16 * 1024];
+
+    // Allocation order is deliberately unrelated to the screen order.
+    for (offset, responder_index) in [(1024, 2), (4096, 0), (7168, 3), (10_240, 1)] {
+        let identity = responders[responder_index];
+        let path = rewards[responder_index].1.as_bytes();
+        bytes[offset - 1] = identity.len() as u8;
+        bytes[offset..offset + identity.len()].copy_from_slice(identity.as_bytes());
+        let name_offset = offset + identity.len();
+        bytes[name_offset] = 5;
+        bytes[name_offset + 1..name_offset + 6].copy_from_slice(b"Tenno");
+        let session_marker = name_offset + 6;
+        bytes[session_marker..session_marker + 4].copy_from_slice(&[0xee, 0x80, 0x80, 0x00]);
+        bytes[session_marker + 4] = 32;
+        bytes[session_marker + 5..session_marker + 37]
+            .copy_from_slice(b"5e551000000000000000000000000002");
+        let reward_marker = session_marker + 37;
+        bytes[reward_marker..reward_marker + 4].copy_from_slice(&[
+            0x76,
+            0x81,
+            path.len() as u8,
+            0x00,
+        ]);
+        bytes[reward_marker + 4..reward_marker + 4 + path.len()].copy_from_slice(path);
+    }
+
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x3eda_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x3eda_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(256, 32 * 1024, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &candidates,
+                &responders,
+                Some(responders[0]),
+                Some(rewards[0].0),
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: rewards.iter().map(|(name, _, _)| (*name).into()).collect(),
+            region_start: 0,
+        }
+    );
+}

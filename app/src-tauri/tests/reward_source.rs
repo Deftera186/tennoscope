@@ -115,6 +115,22 @@ fn confirmed_memory_wins_without_invoking_ocr() {
 }
 
 #[test]
+fn empty_candidate_baseline_clears_the_previous_reward_run() {
+    let mut memory = Memory {
+        resolution: RewardResolution::Incomplete,
+        record_resolution: RewardResolution::Incomplete,
+        baselines: 0,
+        choices: 0,
+        record_choices: 0,
+    };
+    let mut coordinator = RewardSourceCoordinator::new(false);
+
+    coordinator.baseline(&mut memory, &[]);
+
+    assert_eq!(memory.baselines, 1);
+}
+
+#[test]
 fn incomplete_memory_falls_back_to_ocr() {
     let mut memory = Memory {
         resolution: RewardResolution::Incomplete,
@@ -289,5 +305,24 @@ fn accumulated_player_records_are_assembled_with_local_reward_first() {
             "Revenant Prime Chassis Blueprint".into(),
             "Braton Prime Barrel".into(),
         ])
+    );
+}
+
+#[test]
+fn confirmed_single_player_resolution_is_accumulated_for_the_final_screen() {
+    let mut records = std::collections::BTreeMap::new();
+
+    app_lib::store_incremental_player_record(
+        "remote-a",
+        RewardResolution::Confirmed {
+            choices: vec!["Orthos Prime Blueprint".into()],
+            region_start: 0,
+        },
+        &mut records,
+    );
+
+    assert_eq!(
+        records.get("remote-a").map(String::as_str),
+        Some("Orthos Prime Blueprint")
     );
 }

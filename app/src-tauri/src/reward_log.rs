@@ -45,6 +45,7 @@ pub struct RewardLogMachine {
     rendered_cards: usize,
     local_reward_path: Option<String>,
     local_identity: Option<String>,
+    baseline_requested: bool,
     carry: Vec<u8>,
 }
 
@@ -74,6 +75,7 @@ impl RewardLogMachine {
             if !self.loaded_relics.iter().any(|loaded| loaded == path) {
                 self.loaded_relics.push(path.to_owned());
                 if self.loaded_relics.len() >= 2 && !self.reward_window_open {
+                    self.baseline_requested = true;
                     return vec![RewardLogEvent::BaselineRequested {
                         relic_paths: self.loaded_relics.clone(),
                     }];
@@ -90,6 +92,12 @@ impl RewardLogMachine {
             self.rendered_cards = 0;
             self.local_reward_path = None;
             self.local_identity = None;
+            if !self.loaded_relics.is_empty() && !self.baseline_requested {
+                self.baseline_requested = true;
+                return vec![RewardLogEvent::BaselineRequested {
+                    relic_paths: self.loaded_relics.clone(),
+                }];
+            }
             return Vec::new();
         }
         if self.reward_window_open {
@@ -111,17 +119,15 @@ impl RewardLogMachine {
                 .into_iter()
                 .find_map(|marker| line.split_once(marker).map(|(_, value)| value.trim()))
             {
-                if !identity.is_empty() {
-                    if !self.responders.iter().any(|known| known == identity) {
-                        self.responders.push(identity.to_owned());
-                        if self.squad_ring.is_empty() {
-                            self.squad_ring.push(identity.to_owned());
-                        }
-                        return vec![RewardLogEvent::ResponderReceived {
-                            identity: identity.to_owned(),
-                            is_local: self.local_identity.as_deref() == Some(identity),
-                        }];
+                if !identity.is_empty() && !self.responders.iter().any(|known| known == identity) {
+                    self.responders.push(identity.to_owned());
+                    if self.squad_ring.is_empty() {
+                        self.squad_ring.push(identity.to_owned());
                     }
+                    return vec![RewardLogEvent::ResponderReceived {
+                        identity: identity.to_owned(),
+                        is_local: self.local_identity.as_deref() == Some(identity),
+                    }];
                 }
             }
             if let Some((_, identity)) = line.split_once(WAITING_REWARD) {
@@ -188,6 +194,7 @@ impl RewardLogMachine {
             self.local_reward_path = None;
             self.local_identity = None;
             self.loaded_relics.clear();
+            self.baseline_requested = false;
             return vec![RewardLogEvent::Closed];
         }
         Vec::new()

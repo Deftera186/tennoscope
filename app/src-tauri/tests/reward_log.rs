@@ -260,6 +260,25 @@ fn live_response_sequence_emits_ordered_responders_and_completes_before_renderin
 }
 
 #[test]
+fn opening_reward_screen_initializes_candidates_for_one_unique_relic() {
+    let mut machine = RewardLogMachine::default();
+    let relic = "/Lotus/Types/Game/Projections/LithA1Bronze";
+
+    assert!(
+        machine
+            .observe_line(&format!("LoadResource {relic}"))
+            .is_empty()
+    );
+
+    assert_eq!(
+        machine.observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI"),
+        vec![RewardLogEvent::BaselineRequested {
+            relic_paths: vec![relic.into()],
+        }]
+    );
+}
+
+#[test]
 fn waiting_list_ring_rotates_to_the_local_players_screen_order() {
     let mut machine = RewardLogMachine::default();
     let complete = [

@@ -493,7 +493,17 @@ fn handle_reward_event(
     now: u64,
 ) {
     match event {
-        RewardLogEvent::ResponderReceived { .. } => {}
+        RewardLogEvent::ResponderReceived { identity, .. } => {
+            if *early_reward_resolved || incremental_reward_records.contains_key(&identity) {
+                return;
+            }
+            let Some(process) = process else {
+                return;
+            };
+            let mut memory = memory_state.bind(procfs, process);
+            let resolution = memory.player_records(&[identity.as_str()], None, None);
+            store_incremental_player_record(&identity, resolution, incremental_reward_records);
+        }
         RewardLogEvent::ResponsesComplete {
             responders,
             screen_order,
@@ -668,6 +678,19 @@ pub fn assemble_player_record_choices(
         choices.push(records.get(identity)?.clone());
     }
     (choices.len() == responders.len()).then_some(choices)
+}
+
+pub fn store_incremental_player_record(
+    identity: &str,
+    resolution: warframe_acquisition::RewardResolution,
+    records: &mut std::collections::BTreeMap<String, String>,
+) {
+    let warframe_acquisition::RewardResolution::Confirmed { choices, .. } = resolution else {
+        return;
+    };
+    if let [choice] = choices.as_slice() {
+        records.insert(identity.to_owned(), choice.clone());
+    }
 }
 
 fn publish_reward_result(

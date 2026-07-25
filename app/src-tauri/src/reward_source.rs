@@ -241,9 +241,7 @@ impl RewardSourceCoordinator {
     }
 
     pub fn baseline(&mut self, memory: &mut dyn MemoryRewardSource, candidates: &[RewardNeedle]) {
-        if !candidates.is_empty() {
-            memory.baseline(candidates);
-        }
+        memory.baseline(candidates);
     }
 
     pub fn player_record_choices(
