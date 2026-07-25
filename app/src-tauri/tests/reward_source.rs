@@ -307,22 +307,3 @@ fn accumulated_player_records_are_assembled_with_local_reward_first() {
         ])
     );
 }
-
-#[test]
-fn confirmed_single_player_resolution_is_accumulated_for_the_final_screen() {
-    let mut records = std::collections::BTreeMap::new();
-
-    app_lib::store_incremental_player_record(
-        "remote-a",
-        RewardResolution::Confirmed {
-            choices: vec!["Orthos Prime Blueprint".into()],
-            region_start: 0,
-        },
-        &mut records,
-    );
-
-    assert_eq!(
-        records.get("remote-a").map(String::as_str),
-        Some("Orthos Prime Blueprint")
-    );
-}

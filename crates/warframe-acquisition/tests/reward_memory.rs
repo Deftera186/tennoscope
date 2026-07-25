@@ -779,12 +779,19 @@ fn structured_response_record_wins_over_stale_nearby_reward_strings() {
     let stale = b"FormaBlueprint";
     bytes[identity_offset + 220..identity_offset + 220 + stale.len()].copy_from_slice(stale);
     let memory = FixtureMemory {
-        regions: vec![ReadableRegion::classified(
-            0x3eda_0000,
-            bytes.len(),
-            RegionScanPriority::WritableAnonymous,
-        )],
-        bytes: BTreeMap::from([(0x3eda_0000, bytes)]),
+        regions: vec![
+            ReadableRegion::classified(
+                0x3eda_0000,
+                bytes.len(),
+                RegionScanPriority::WritableAnonymous,
+            ),
+            ReadableRegion::classified(
+                0x2d0e_0000,
+                16 * 1024,
+                RegionScanPriority::WritableAnonymous,
+            ),
+        ],
+        bytes: BTreeMap::from([(0x2d0e_0000, vec![0; 16 * 1024]), (0x3eda_0000, bytes)]),
         reads: Mutex::new(Vec::new()),
     };
 
@@ -804,6 +811,118 @@ fn structured_response_record_wins_over_stale_nearby_reward_strings() {
             region_start: 0,
         }
     );
+    assert!(
+        memory
+            .reads
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|address| *address >= 0x3eda_0000)
+    );
+}
+
+#[test]
+fn structured_response_matches_the_visible_blueprint_when_catalog_uses_component() {
+    let identity = "de1e7ed0000000000000000c";
+    let candidate = RewardNeedle::from_paths(
+        "Sevagoth Prime Systems Blueprint",
+        vec!["/Lotus/Types/Recipes/WarframeRecipes/SevagothPrimeSystemsComponent".into()],
+    )
+    .unwrap();
+    let mut bytes = vec![0_u8; 1024];
+    let identity_offset = 128;
+    bytes[identity_offset - 1] = identity.len() as u8;
+    bytes[identity_offset..identity_offset + identity.len()].copy_from_slice(identity.as_bytes());
+    let name_offset = identity_offset + identity.len();
+    let player_name = b"MI-NUA-BUA";
+    bytes[name_offset] = player_name.len() as u8;
+    bytes[name_offset + 1..name_offset + 1 + player_name.len()].copy_from_slice(player_name);
+    let session_marker = name_offset + 1 + player_name.len();
+    bytes[session_marker..session_marker + 4].copy_from_slice(&[0xee, 0x80, 0x82, 0x00]);
+    bytes[session_marker + 4] = 32;
+    bytes[session_marker + 5..session_marker + 37]
+        .copy_from_slice(b"5e551000000000000000000000000003");
+    let path = b"/Lotus/StoreItems/Types/Recipes/WarframeRecipes/SevagothPrimeSystemsBlueprint";
+    let reward_marker = session_marker + 37;
+    bytes[reward_marker..reward_marker + 4].copy_from_slice(&[0x96, 0x83, path.len() as u8, 0x00]);
+    bytes[reward_marker + 4..reward_marker + 4 + path.len()].copy_from_slice(path);
+    let memory = FixtureMemory {
+        regions: vec![
+            ReadableRegion::classified(
+                0x3eda_0000,
+                bytes.len(),
+                RegionScanPriority::WritableAnonymous,
+            ),
+            ReadableRegion::classified(
+                0x2d0e_0000,
+                16 * 1024,
+                RegionScanPriority::WritableAnonymous,
+            ),
+        ],
+        bytes: BTreeMap::from([(0x2d0e_0000, vec![0; 16 * 1024]), (0x3eda_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec!["Sevagoth Prime Systems Blueprint".into()],
+            region_start: 0,
+        }
+    );
+}
+
+#[test]
+fn player_record_scan_prioritizes_low_proton_heaps_over_high_unrelated_mappings() {
+    let identity = "de1e7ed0000000000000000c";
+    let candidate = RewardNeedle::from_paths(
+        "Sevagoth Prime Systems Blueprint",
+        vec!["/Lotus/Types/Recipes/WarframeRecipes/SevagothPrimeSystemsBlueprint".into()],
+    )
+    .unwrap();
+    let mut response = vec![0_u8; 2048];
+    let identity_offset = 128;
+    response[identity_offset - 1] = identity.len() as u8;
+    response[identity_offset..identity_offset + identity.len()]
+        .copy_from_slice(identity.as_bytes());
+    let path = b"/Lotus/StoreItems/Types/Recipes/WarframeRecipes/SevagothPrimeSystemsBlueprint";
+    let path_offset = identity_offset + 76;
+    response[path_offset - 2] = path.len() as u8;
+    response[path_offset..path_offset + path.len()].copy_from_slice(path);
+    let low = 0x3eda_0000;
+    let high = 0x7fff_0000_0000;
+    let memory = FixtureMemory {
+        regions: vec![
+            ReadableRegion::classified(high, 8192, RegionScanPriority::WritableAnonymous),
+            ReadableRegion::classified(low, response.len(), RegionScanPriority::WritableAnonymous),
+        ],
+        bytes: BTreeMap::from([(low, response), (high, vec![0; 8192])]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert!(matches!(
+        RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                &[identity],
+                None,
+                None,
+            )
+            .unwrap(),
+        RewardResolution::Confirmed { .. }
+    ));
+    assert_eq!(memory.reads.lock().unwrap().first().copied(), Some(low));
 }
 
 #[test]
@@ -930,12 +1049,19 @@ fn structured_squad_records_preserve_the_supplied_screen_order() {
     }
 
     let memory = FixtureMemory {
-        regions: vec![ReadableRegion::classified(
-            0x3eda_0000,
-            bytes.len(),
-            RegionScanPriority::WritableAnonymous,
-        )],
-        bytes: BTreeMap::from([(0x3eda_0000, bytes)]),
+        regions: vec![
+            ReadableRegion::classified(
+                0x3eda_0000,
+                bytes.len(),
+                RegionScanPriority::WritableAnonymous,
+            ),
+            ReadableRegion::classified(
+                0x2d0e_0000,
+                16 * 1024,
+                RegionScanPriority::WritableAnonymous,
+            ),
+        ],
+        bytes: BTreeMap::from([(0x2d0e_0000, vec![0; 16 * 1024]), (0x3eda_0000, bytes)]),
         reads: Mutex::new(Vec::new()),
     };
 
@@ -954,5 +1080,13 @@ fn structured_squad_records_preserve_the_supplied_screen_order() {
             choices: rewards.iter().map(|(name, _, _)| (*name).into()).collect(),
             region_start: 0,
         }
+    );
+    assert!(
+        memory
+            .reads
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|address| *address >= 0x3eda_0000)
     );
 }

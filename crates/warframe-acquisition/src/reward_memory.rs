@@ -253,7 +253,13 @@ impl RewardMemoryScanner {
         let started = Instant::now();
         let mut regions = memory.readable_regions(process)?;
         regions.retain(|region| region.scan_priority() == RegionScanPriority::WritableAnonymous);
-        regions.sort_by_key(|region| std::cmp::Reverse(region.start()));
+        regions.sort_by_key(|region| {
+            (
+                region.start() >= 0x8000_0000,
+                std::cmp::Reverse(region.start()),
+            )
+        });
+        let player_byte_budget = self.byte_budget.saturating_mul(3);
 
         let mut reward_patterns = BTreeSet::<(&str, Vec<u8>)>::new();
         for candidate in candidates {
@@ -290,17 +296,18 @@ impl RewardMemoryScanner {
             .saturating_sub(1);
         let mut buffer = vec![0_u8; self.chunk_size + player_overlap];
         let mut player_hits = Vec::<(&str, u64, u64)>::new();
+        let mut structured_rewards = BTreeMap::<&str, BTreeSet<String>>::new();
         let mut bytes_read = 0_u64;
 
         'regions: for region in &regions {
             let mut offset = 0_usize;
             let mut retained = 0_usize;
             while offset < region.len() {
-                if started.elapsed() >= self.timeout || bytes_read >= self.byte_budget {
+                if started.elapsed() >= self.timeout || bytes_read >= player_byte_budget {
                     break 'regions;
                 }
                 let remaining_budget =
-                    usize::try_from(self.byte_budget - bytes_read).unwrap_or(usize::MAX);
+                    usize::try_from(player_byte_budget - bytes_read).unwrap_or(usize::MAX);
                 let request = (region.len() - offset)
                     .min(self.chunk_size)
                     .min(remaining_budget);
@@ -318,36 +325,41 @@ impl RewardMemoryScanner {
                 let base = address.saturating_sub(u64::try_from(retained).unwrap_or(0));
                 for found in player_matcher.find_overlapping_iter(&buffer[..available]) {
                     let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
-                    if responders.len() == 1 {
-                        let identity = responders[found.pattern().as_usize()];
-                        let record_start = hit_address.saturating_sub(1).max(region.start());
-                        let region_end = region.start() + u64::try_from(region.len()).unwrap_or(0);
-                        let mut record = [0_u8; 768];
-                        let request = usize::try_from(region_end.saturating_sub(record_start))
-                            .unwrap_or(0)
-                            .min(record.len());
-                        let record_read = if request == 0 {
-                            0
-                        } else {
-                            memory.read_at(process, record_start, &mut record[..request])?
-                        };
-                        if let Some(choice) =
-                            structured_response_reward(&record[..record_read], identity, candidates)
-                        {
+                    let identity = responders[found.pattern().as_usize()];
+                    let record_start = hit_address.saturating_sub(1).max(region.start());
+                    let region_end = region.start() + u64::try_from(region.len()).unwrap_or(0);
+                    let mut record = [0_u8; 768];
+                    let request = usize::try_from(region_end.saturating_sub(record_start))
+                        .unwrap_or(0)
+                        .min(record.len());
+                    let record_read = if request == 0 {
+                        0
+                    } else {
+                        memory.read_at(process, record_start, &mut record[..request])?
+                    };
+                    if let Some(choice) =
+                        structured_response_reward(&record[..record_read], identity, candidates)
+                    {
+                        structured_rewards
+                            .entry(identity)
+                            .or_default()
+                            .insert(choice.to_owned());
+                        if let Some(choices) = confirmed_structured_choices(
+                            responders,
+                            local_identity,
+                            local_choice,
+                            &structured_rewards,
+                        ) {
                             record.zeroize();
                             buffer.zeroize();
                             return Ok(RewardResolution::Confirmed {
-                                choices: vec![choice.to_owned()],
+                                choices,
                                 region_start: 0,
                             });
                         }
-                        record.zeroize();
                     }
-                    player_hits.push((
-                        responders[found.pattern().as_usize()],
-                        hit_address,
-                        region.start(),
-                    ));
+                    record.zeroize();
+                    player_hits.push((identity, hit_address, region.start()));
                 }
                 retained = player_overlap.min(available);
                 buffer.copy_within(available - retained..available, 0);
@@ -355,38 +367,6 @@ impl RewardMemoryScanner {
             }
         }
         buffer.zeroize();
-
-        let mut structured_rewards = BTreeMap::<&str, BTreeSet<String>>::new();
-        let mut record_buffer = vec![0_u8; 768];
-        for (identity, player_address, region_start) in &player_hits {
-            let Some(region) = regions
-                .iter()
-                .find(|region| region.start() == *region_start)
-            else {
-                continue;
-            };
-            let record_start = player_address.saturating_sub(1).max(region.start());
-            let region_end = region.start() + u64::try_from(region.len()).unwrap_or(u64::MAX);
-            let request = usize::try_from(region_end.saturating_sub(record_start))
-                .unwrap_or(0)
-                .min(record_buffer.len());
-            if request == 0 {
-                continue;
-            }
-            let read = memory.read_at(process, record_start, &mut record_buffer[..request])?;
-            if read == 0 {
-                continue;
-            }
-            if let Some(name) =
-                structured_response_reward(&record_buffer[..read], identity, candidates)
-            {
-                structured_rewards
-                    .entry(identity)
-                    .or_default()
-                    .insert(name.to_owned());
-            }
-        }
-        record_buffer.zeroize();
 
         let reward_matcher = AhoCorasick::new(
             reward_patterns
@@ -676,6 +656,34 @@ impl RewardMemoryScanner {
     }
 }
 
+fn confirmed_structured_choices(
+    responders: &[&str],
+    local_identity: Option<&str>,
+    local_choice: Option<&str>,
+    rewards: &BTreeMap<&str, BTreeSet<String>>,
+) -> Option<Vec<String>> {
+    let unique_reward = |identity: &str| {
+        let names = rewards.get(identity)?;
+        (names.len() == 1)
+            .then(|| names.iter().next().cloned())
+            .flatten()
+    };
+    if responders.len() == 1 && local_choice.is_none() {
+        return Some(vec![unique_reward(responders[0])?]);
+    }
+
+    let local_identity = local_identity?;
+    let mut choices = vec![local_choice?.to_owned()];
+    for identity in responders
+        .iter()
+        .copied()
+        .filter(|identity| *identity != local_identity)
+    {
+        choices.push(unique_reward(identity)?);
+    }
+    (choices.len() == responders.len()).then_some(choices)
+}
+
 fn structured_response_reward<'a>(
     bytes: &[u8],
     identity: &str,
@@ -699,15 +707,21 @@ fn structured_response_reward<'a>(
         return None;
     }
     let path = search.get(path_start..path_start.checked_add(encoded_length)?)?;
+    let response_basename = path.rsplit(|byte| *byte == b'/').next()?;
     let mut matches = BTreeSet::new();
     for candidate in candidates {
+        let compact_choice = candidate
+            .choice_name()
+            .bytes()
+            .filter(|byte| byte.is_ascii_alphanumeric())
+            .collect::<Vec<_>>();
+        if response_basename == compact_choice {
+            matches.insert(candidate.choice_name());
+            continue;
+        }
         for internal_path in candidate.internal_paths() {
             let basename = internal_path.rsplit(|byte| *byte == b'/').next()?;
-            if !basename.is_empty()
-                && path
-                    .windows(basename.len())
-                    .any(|window| window == basename)
-            {
+            if !basename.is_empty() && response_basename == basename {
                 matches.insert(candidate.choice_name());
             }
         }
