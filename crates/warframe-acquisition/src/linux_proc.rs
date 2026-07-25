@@ -2,15 +2,20 @@ use std::{
     cmp::Reverse,
     collections::HashMap,
     fs::{self, File},
-    io::{self, Write},
+    io::{self, IoSliceMut, Write},
     os::unix::fs::FileExt,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
+use nix::{
+    sys::uio::{RemoteIoVec, process_vm_readv},
+    unistd::Pid,
+};
+
 use crate::{
-    AcquisitionError, GameProcess, MemoryReader, ProcessDiscovery, ReadableRegion,
-    RegionScanPriority,
+    AcquisitionError, GameProcess, MemoryReader, MemorySnapshotRegion, ProcessDiscovery,
+    ReadableRegion, RegionScanPriority,
 };
 
 const FULL_PROCESS_NAME: &str = "Warframe.x64.exe";
@@ -249,6 +254,42 @@ impl MemoryReader for LinuxProc {
         }
         self.validate_identity(process)?;
         Ok(dirty)
+    }
+
+    fn recently_written_snapshot(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Option<Vec<MemorySnapshotRegion>>, AcquisitionError> {
+        let regions = self.recently_written_regions(process)?;
+        let mut snapshots = Vec::with_capacity(regions.len());
+        for batch in regions.chunks(512) {
+            let mut buffers = batch
+                .iter()
+                .map(|region| vec![0_u8; region.len()])
+                .collect::<Vec<_>>();
+            let remote = batch
+                .iter()
+                .map(|region| RemoteIoVec {
+                    base: usize::try_from(region.start()).unwrap_or(usize::MAX),
+                    len: region.len(),
+                })
+                .collect::<Vec<_>>();
+            let mut local = buffers
+                .iter_mut()
+                .map(|buffer| IoSliceMut::new(buffer))
+                .collect::<Vec<_>>();
+            process_vm_readv(
+                Pid::from_raw(i32::try_from(process.pid()).unwrap_or(i32::MAX)),
+                &mut local,
+                &remote,
+            )
+            .map_err(|_| AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
+            drop(local);
+            snapshots.extend(batch.iter().zip(buffers).map(|(region, bytes)| {
+                MemorySnapshotRegion::new(region.start(), bytes, region.scan_priority())
+            }));
+        }
+        Ok(Some(snapshots))
     }
 }
 

@@ -6,10 +6,57 @@ use std::{
 use aho_corasick::AhoCorasick;
 use zeroize::Zeroize;
 
-use crate::{AcquisitionError, GameProcess, MemoryReader, RegionScanPriority};
+use crate::{
+    AcquisitionError, GameProcess, MemoryReader, MemorySnapshotRegion, ReadableRegion,
+    RegionScanPriority,
+};
 
 const LIVE_UI_ADDRESS_MIN: u64 = 0x1300_0000;
 const LIVE_UI_ADDRESS_MAX: u64 = 0x2800_0000;
+
+struct SnapshotMemoryReader<'a> {
+    live: &'a dyn MemoryReader,
+    snapshots: Vec<MemorySnapshotRegion>,
+}
+
+impl MemoryReader for SnapshotMemoryReader<'_> {
+    fn readable_regions(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        Ok(self
+            .snapshots
+            .iter()
+            .map(|snapshot| {
+                ReadableRegion::classified(
+                    snapshot.start(),
+                    snapshot.bytes().len(),
+                    snapshot.scan_priority(),
+                )
+            })
+            .collect())
+    }
+
+    fn read_at(
+        &self,
+        process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        if let Some(snapshot) = self.snapshots.iter().find(|snapshot| {
+            address >= snapshot.start()
+                && address.saturating_add(buffer.len() as u64)
+                    <= snapshot
+                        .start()
+                        .saturating_add(snapshot.bytes().len() as u64)
+        }) {
+            let offset = usize::try_from(address - snapshot.start()).unwrap_or(usize::MAX);
+            buffer.copy_from_slice(&snapshot.bytes()[offset..offset + buffer.len()]);
+            return Ok(buffer.len());
+        }
+        self.live.read_at(process, address, buffer)
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RewardNeedle {
@@ -290,6 +337,21 @@ impl RewardMemoryScanner {
         local_choice: Option<&str>,
         low_heaps_first: bool,
     ) -> Result<RewardResolution, AcquisitionError> {
+        if let Some(snapshots) = memory.recently_written_snapshot(process)? {
+            let snapshot_memory = SnapshotMemoryReader {
+                live: memory,
+                snapshots,
+            };
+            return self.resolve_player_records_ordered(
+                &snapshot_memory,
+                process,
+                candidates,
+                responders,
+                local_identity,
+                local_choice,
+                low_heaps_first,
+            );
+        }
         if responders.is_empty() || responders.iter().any(|identity| identity.len() != 24) {
             return Ok(RewardResolution::Incomplete);
         }

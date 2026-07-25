@@ -146,6 +146,33 @@ pub struct ReadableRegion {
     scan_priority: RegionScanPriority,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemorySnapshotRegion {
+    start: u64,
+    bytes: Vec<u8>,
+    scan_priority: RegionScanPriority,
+}
+
+impl MemorySnapshotRegion {
+    pub fn new(start: u64, bytes: Vec<u8>, scan_priority: RegionScanPriority) -> Self {
+        Self {
+            start,
+            bytes,
+            scan_priority,
+        }
+    }
+
+    pub const fn start(&self) -> u64 {
+        self.start
+    }
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    pub const fn scan_priority(&self) -> RegionScanPriority {
+        self.scan_priority
+    }
+}
+
 impl ReadableRegion {
     pub const fn new(start: u64, len: usize) -> Self {
         Self::classified(start, len, RegionScanPriority::Anonymous)
@@ -208,6 +235,13 @@ pub trait MemoryReader {
     ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
         self.readable_regions(process)
     }
+
+    fn recently_written_snapshot(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Option<Vec<MemorySnapshotRegion>>, AcquisitionError> {
+        Ok(None)
+    }
 }
 impl<T: MemoryReader + ?Sized> MemoryReader for &T {
     fn readable_regions(
@@ -232,6 +266,12 @@ impl<T: MemoryReader + ?Sized> MemoryReader for &T {
         process: &GameProcess,
     ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
         (**self).recently_written_regions(process)
+    }
+    fn recently_written_snapshot(
+        &self,
+        process: &GameProcess,
+    ) -> Result<Option<Vec<MemorySnapshotRegion>>, AcquisitionError> {
+        (**self).recently_written_snapshot(process)
     }
 }
 
