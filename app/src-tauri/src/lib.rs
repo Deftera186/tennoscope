@@ -439,7 +439,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 overlay_window::hide_reward_overlay(&app);
             }
         }
-        std::thread::sleep(Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -516,6 +516,11 @@ fn handle_reward_event(
             let Some(result) =
                 coordinator.choices(&mut memory, &mut visual, expected_choices, visual_catalog)
             else {
+                if let Ok(mut runtime) = shared.lock() {
+                    let _ = runtime.core.record_capture_degraded(
+                        "Memory recognition was incomplete; OCR did not resolve every reward",
+                    );
+                }
                 return;
             };
             let observations = result

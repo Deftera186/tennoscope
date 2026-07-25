@@ -186,19 +186,18 @@ impl RewardSourceCoordinator {
             }
             RewardResolution::Incomplete
             | RewardResolution::Ambiguous
-            | RewardResolution::TimedOut => {
-                visual
-                    .choices(candidates)
-                    .ok()
-                    .map(|names| RewardSourceResult {
-                        choices: RewardChoiceSet {
-                            names,
-                            source: RewardChoiceSource::Ocr,
-                            elapsed: started.elapsed(),
-                        },
-                        diagnostic: RewardSourceDiagnostic::MemoryFallback,
-                    })
-            }
+            | RewardResolution::TimedOut => visual
+                .choices(candidates)
+                .ok()
+                .filter(|names| (2..=expected).contains(&names.len()))
+                .map(|names| RewardSourceResult {
+                    choices: RewardChoiceSet {
+                        names,
+                        source: RewardChoiceSource::Ocr,
+                        elapsed: started.elapsed(),
+                    },
+                    diagnostic: RewardSourceDiagnostic::MemoryFallback,
+                }),
         }
     }
 }

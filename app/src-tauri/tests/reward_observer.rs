@@ -47,3 +47,16 @@ fn observer_debounces_show_and_hide_to_prevent_overlay_flicker() {
     assert!(!state.miss().hide);
     assert!(state.miss().hide);
 }
+
+#[test]
+fn observer_accepts_three_rewards_when_one_player_did_not_crack_a_relic() {
+    let mut state = RewardObserverState::new(1, 1);
+    let transition = state.observe(vec![
+        RewardObservation::certain("Braton Prime Barrel"),
+        RewardObservation::certain("Forma Blueprint"),
+        RewardObservation::certain("Paris Prime String"),
+    ]);
+
+    assert!(transition.show);
+    assert_eq!(transition.choices.len(), 3);
+}

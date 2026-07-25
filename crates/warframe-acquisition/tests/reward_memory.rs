@@ -173,6 +173,33 @@ fn temporal_resolution_ignores_catalog_strings_and_orders_the_new_cluster() {
 }
 
 #[test]
+fn temporal_resolution_treats_player_count_as_a_choice_upper_bound() {
+    let baseline_bytes = vec![b'.'; 1024];
+    let mut current_bytes = baseline_bytes.clone();
+    current_bytes[500..507].copy_from_slice(b"Burston");
+    current_bytes[540..545].copy_from_slice(b"Forma");
+    current_bytes[580..588].copy_from_slice(b"Perigale");
+    let regions = vec![ReadableRegion::classified(
+        0x1000,
+        1024,
+        RegionScanPriority::WritableAnonymous,
+    )];
+
+    assert_eq!(
+        resolve_reward_choices(
+            &fingerprint(baseline_bytes, regions.clone()),
+            &fingerprint(current_bytes, regions),
+            4,
+            256,
+        ),
+        RewardResolution::Confirmed {
+            choices: vec!["Burston".into(), "Forma".into(), "Perigale".into()],
+            region_start: 0x1000,
+        }
+    );
+}
+
+#[test]
 fn temporal_resolution_rejects_equally_complete_competing_clusters() {
     let baseline = fingerprint(
         vec![b'.'; 2048],

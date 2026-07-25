@@ -100,6 +100,45 @@ fn incomplete_memory_falls_back_to_ocr() {
 }
 
 #[test]
+fn ocr_may_return_fewer_choices_than_network_responders() {
+    let mut memory = Memory {
+        resolution: RewardResolution::Incomplete,
+        baselines: 0,
+        choices: 0,
+    };
+    let mut visual = Visual {
+        names: Ok(vec!["A".into(), "B".into(), "C".into()]),
+        calls: 0,
+    };
+
+    let result = RewardSourceCoordinator::new(false)
+        .choices(&mut memory, &mut visual, 4, &catalog())
+        .unwrap();
+
+    assert_eq!(result.choices.names.len(), 3);
+    assert_eq!(result.choices.source, RewardChoiceSource::Ocr);
+}
+
+#[test]
+fn incomplete_ocr_is_not_published_as_a_reward_set() {
+    let mut memory = Memory {
+        resolution: RewardResolution::Incomplete,
+        baselines: 0,
+        choices: 0,
+    };
+    let mut visual = Visual {
+        names: Ok(vec!["A".into()]),
+        calls: 0,
+    };
+
+    let result =
+        RewardSourceCoordinator::new(false).choices(&mut memory, &mut visual, 4, &catalog());
+
+    assert!(result.is_none());
+    assert_eq!(visual.calls, 1);
+}
+
+#[test]
 fn validation_mode_reports_memory_and_ocr_disagreement() {
     let mut memory = Memory {
         resolution: RewardResolution::Confirmed {

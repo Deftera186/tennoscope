@@ -4233,6 +4233,7 @@ dependencies = [
 name = "warframe-acquisition"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "atomicwrites",
  "libc",
  "memchr",

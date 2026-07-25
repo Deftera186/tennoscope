@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+aho-corasick = "1"
 libc = "0.2"
 atomicwrites = "0.4"
 memchr = "2"

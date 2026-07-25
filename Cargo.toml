@@ -17,3 +17,6 @@ rust-version = "1.85"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 zeroize = "1"
+
+[profile.dev]
+opt-level = 2

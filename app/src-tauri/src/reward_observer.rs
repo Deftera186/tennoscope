@@ -49,7 +49,7 @@ impl RewardObserverState {
     }
 
     pub fn observe(&mut self, choices: Vec<RewardObservation>) -> ObserverTransition {
-        if choices.len() != 4 {
+        if !(2..=4).contains(&choices.len()) {
             return self.miss();
         }
         self.misses = 0;

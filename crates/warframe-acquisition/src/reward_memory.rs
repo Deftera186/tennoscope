@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use aho_corasick::AhoCorasick;
 use zeroize::Zeroize;
 
 use crate::{AcquisitionError, GameProcess, MemoryReader, RegionScanPriority};
@@ -121,7 +122,7 @@ pub fn resolve_reward_choices(
     expected_choices: usize,
     maximum_span: u64,
 ) -> RewardResolution {
-    if expected_choices == 0 {
+    if expected_choices < 2 {
         return RewardResolution::Incomplete;
     }
     let old = baseline
@@ -148,7 +149,7 @@ pub fn resolve_reward_choices(
                 })
                 .or_insert(hit);
         }
-        if earliest.len() != expected_choices {
+        if !(2..=expected_choices).contains(&earliest.len()) {
             continue;
         }
         let mut ordered = earliest.into_values().collect::<Vec<_>>();
@@ -167,7 +168,16 @@ pub fn resolve_reward_choices(
             ));
         }
     }
-    match complete.as_slice() {
+    let largest = complete
+        .iter()
+        .map(|(_, choices)| choices.len())
+        .max()
+        .unwrap_or(0);
+    let strongest = complete
+        .iter()
+        .filter(|(_, choices)| choices.len() == largest)
+        .collect::<Vec<_>>();
+    match strongest.as_slice() {
         [(region_start, choices)] => RewardResolution::Confirmed {
             choices: choices.clone(),
             region_start: *region_start,
@@ -263,6 +273,18 @@ impl RewardMemoryScanner {
             .max()
             .unwrap_or(1);
         let overlap = longest.saturating_sub(1);
+        let mut patterns = Vec::<&[u8]>::new();
+        let mut pattern_metadata = Vec::<(&str, RewardRepresentation)>::new();
+        for candidate in candidates {
+            patterns.push(&candidate.display_name);
+            pattern_metadata.push((candidate.choice_name(), RewardRepresentation::DisplayName));
+            for path in &candidate.internal_paths {
+                patterns.push(path);
+                pattern_metadata
+                    .push((candidate.choice_name(), RewardRepresentation::InternalPath));
+            }
+        }
+        let matcher = AhoCorasick::new(patterns).map_err(|_| AcquisitionError::SnapshotInvalid)?;
         let mut buffer = vec![0_u8; self.chunk_size + overlap];
         let mut hits = Vec::new();
         let mut seen = BTreeSet::new();
@@ -292,30 +314,18 @@ impl RewardMemoryScanner {
                 bytes_read += u64::try_from(read).unwrap_or(0);
                 let available = retained + read;
                 let base = address.saturating_sub(u64::try_from(retained).unwrap_or(0));
-                for candidate in candidates {
-                    record_hits(
-                        &mut hits,
-                        &mut seen,
-                        &buffer[..available],
-                        &candidate.display_name,
-                        candidate,
-                        RewardRepresentation::DisplayName,
-                        base,
-                        region.start(),
-                        region.scan_priority(),
-                    );
-                    for path in &candidate.internal_paths {
-                        record_hits(
-                            &mut hits,
-                            &mut seen,
-                            &buffer[..available],
-                            path,
-                            candidate,
-                            RewardRepresentation::InternalPath,
-                            base,
-                            region.start(),
-                            region.scan_priority(),
-                        );
+                for found in matcher.find_overlapping_iter(&buffer[..available]) {
+                    let (choice_name, representation) =
+                        pattern_metadata[found.pattern().as_usize()];
+                    let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
+                    if seen.insert((hit_address, representation)) {
+                        hits.push(RewardHit {
+                            choice_name: choice_name.to_owned(),
+                            address: hit_address,
+                            region_start: region.start(),
+                            priority: region.scan_priority(),
+                            representation,
+                        });
                     }
                 }
                 retained = overlap.min(available);
@@ -338,34 +348,5 @@ fn priority_rank(priority: RegionScanPriority) -> u8 {
         RegionScanPriority::WritablePrivateFileBacked => 1,
         RegionScanPriority::Anonymous => 2,
         RegionScanPriority::FileBacked => 3,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn record_hits(
-    hits: &mut Vec<RewardHit>,
-    seen: &mut BTreeSet<(u64, RewardRepresentation)>,
-    haystack: &[u8],
-    needle: &[u8],
-    candidate: &RewardNeedle,
-    representation: RewardRepresentation,
-    base: u64,
-    region_start: u64,
-    priority: RegionScanPriority,
-) {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return;
-    }
-    for index in memchr::memmem::find_iter(haystack, needle) {
-        let address = base + u64::try_from(index).unwrap_or(0);
-        if seen.insert((address, representation)) {
-            hits.push(RewardHit {
-                choice_name: candidate.choice_name.clone(),
-                address,
-                region_start,
-                priority,
-                representation,
-            });
-        }
     }
 }
