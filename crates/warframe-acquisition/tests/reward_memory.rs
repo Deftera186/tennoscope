@@ -1090,3 +1090,87 @@ fn structured_squad_records_preserve_the_supplied_screen_order() {
             .all(|address| *address >= 0x3eda_0000)
     );
 }
+
+#[test]
+fn captured_caliban_athodai_vadarya_sevagoth_screen_replays_in_ltr_order() {
+    let responders = [
+        "de1e7ed00000000000000006",
+        "de1e7ed00000000000000007",
+        "de1e7ed00000000000000001",
+        "de1e7ed0000000000000000c",
+    ];
+    let remote_rewards = [
+        (
+            responders[1],
+            "Athodai Prime Blueprint",
+            "/Lotus/StoreItems/Types/Recipes/Weapons/AthodaiPrimeBlueprint",
+            "/Lotus/Types/Recipes/Weapons/AthodaiPrimeBlueprint",
+        ),
+        (
+            responders[2],
+            "Vadarya Prime Receiver",
+            "/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/PrimeLightningGunReceiver",
+            "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeLightningGunReceiver",
+        ),
+        (
+            responders[3],
+            "Sevagoth Prime Systems Blueprint",
+            "/Lotus/StoreItems/Types/Recipes/WarframeRecipes/SevagothPrimeSystemsBlueprint",
+            "/Lotus/Types/Recipes/WarframeRecipes/SevagothPrimeSystemsComponent",
+        ),
+    ];
+    let mut candidates = remote_rewards
+        .iter()
+        .map(|(_, name, _, catalog_path)| {
+            RewardNeedle::from_paths(*name, vec![(*catalog_path).into()]).unwrap()
+        })
+        .collect::<Vec<_>>();
+    candidates.push(
+        RewardNeedle::from_paths(
+            "Caliban Prime Chassis Blueprint",
+            vec!["/Lotus/Types/Recipes/WarframeRecipes/CalibanPrimeChassisComponent".into()],
+        )
+        .unwrap(),
+    );
+    let mut bytes = vec![0_u8; 8192];
+    for ((identity, _, response_path, _), offset) in remote_rewards.iter().zip([512, 3072, 5632]) {
+        let identity = identity.as_bytes();
+        let response_path = response_path.as_bytes();
+        bytes[offset - 1] = identity.len() as u8;
+        bytes[offset..offset + identity.len()].copy_from_slice(identity);
+        let path_offset = offset + 76;
+        bytes[path_offset - 2] = response_path.len() as u8;
+        bytes[path_offset..path_offset + response_path.len()].copy_from_slice(response_path);
+    }
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            0x3eda_0000,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(0x3eda_0000, bytes)]),
+        reads: Mutex::new(Vec::new()),
+    };
+
+    assert_eq!(
+        RewardMemoryScanner::new(256, 32 * 1024, Duration::from_secs(1))
+            .resolve_player_records(
+                &memory,
+                &GameProcess::new(9),
+                &candidates,
+                &responders,
+                Some(responders[0]),
+                Some("Caliban Prime Chassis Blueprint"),
+            )
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: vec![
+                "Caliban Prime Chassis Blueprint".into(),
+                "Athodai Prime Blueprint".into(),
+                "Vadarya Prime Receiver".into(),
+                "Sevagoth Prime Systems Blueprint".into(),
+            ],
+            region_start: 0,
+        }
+    );
+}
