@@ -52,6 +52,11 @@ impl RewardLogMachine {
         if let Some(path) = projection_path(line) {
             if !self.loaded_relics.iter().any(|loaded| loaded == path) {
                 self.loaded_relics.push(path.to_owned());
+                if self.loaded_relics.len() >= 2 && !self.reward_window_open {
+                    return vec![RewardLogEvent::BaselineRequested {
+                        relic_paths: self.loaded_relics.clone(),
+                    }];
+                }
             }
         }
         if line.contains(OPEN_REWARD_SCREEN) && !self.reward_window_open {
@@ -60,9 +65,7 @@ impl RewardLogMachine {
             self.choices_emitted = false;
             self.rewards_received = false;
             self.rendered_cards = 0;
-            return vec![RewardLogEvent::BaselineRequested {
-                relic_paths: self.loaded_relics.clone(),
-            }];
+            return Vec::new();
         }
         if self.reward_window_open {
             if let Some(identity) = line

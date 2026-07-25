@@ -42,6 +42,31 @@ fn online_sequence_requests_one_baseline_and_emits_the_observed_choice_count() {
 }
 
 #[test]
+fn multi_player_relic_paths_request_a_baseline_before_the_reward_window() {
+    let mut machine = RewardLogMachine::default();
+
+    assert!(
+        machine
+            .observe_line("loaded (/Lotus/Types/Game/Projections/First)")
+            .is_empty()
+    );
+    assert_eq!(
+        machine.observe_line("loaded (/Lotus/Types/Game/Projections/Second)"),
+        vec![RewardLogEvent::BaselineRequested {
+            relic_paths: vec![
+                "/Lotus/Types/Game/Projections/First".into(),
+                "/Lotus/Types/Game/Projections/Second".into(),
+            ],
+        }]
+    );
+    assert!(
+        machine
+            .observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI")
+            .is_empty()
+    );
+}
+
+#[test]
 fn rendered_card_count_overrides_the_number_of_network_responders() {
     let mut machine = RewardLogMachine::default();
     let events = [
@@ -63,14 +88,9 @@ fn rendered_card_count_overrides_the_number_of_network_responders() {
 
     assert_eq!(
         events,
-        vec![
-            RewardLogEvent::BaselineRequested {
-                relic_paths: Vec::new(),
-            },
-            RewardLogEvent::ChoicesReady {
-                expected_choices: 3,
-            },
-        ]
+        vec![RewardLogEvent::ChoicesReady {
+            expected_choices: 3,
+        }]
     );
 }
 
@@ -98,11 +118,10 @@ fn shutdown_closes_and_resets_the_reward_window() {
         machine.observe_line("ProjectionRewardChoice.lua: Relic reward screen shut down"),
         vec![RewardLogEvent::Closed]
     );
-    assert_eq!(
-        machine.observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI"),
-        vec![RewardLogEvent::BaselineRequested {
-            relic_paths: Vec::new(),
-        }]
+    assert!(
+        machine
+            .observe_line("VoidProjections: OpenVoidProjectionRewardScreenRMI")
+            .is_empty()
     );
 }
 
@@ -117,10 +136,5 @@ fn byte_stream_preserves_lines_split_across_monitor_reads() {
     );
     let events = machine.observe_bytes(b"ScreenRMI\n");
 
-    assert_eq!(
-        events,
-        vec![RewardLogEvent::BaselineRequested {
-            relic_paths: Vec::new(),
-        }]
-    );
+    assert!(events.is_empty());
 }
