@@ -605,14 +605,8 @@ fn handle_reward_event(
                             .any(|path| path.as_slice() == local_path.as_bytes())
                     })
                     .map(warframe_acquisition::RewardNeedle::choice_name)
-                && let Some(index) = result
-                    .choices
-                    .names
-                    .iter()
-                    .position(|name| name == local_name)
             {
-                let local = result.choices.names.remove(index);
-                result.choices.names.insert(0, local);
+                rotate_choices_to_local(&mut result.choices.names, local_name);
             }
             publish_reward_result(result, observer, shared, app, reward_catalog, now);
             *early_reward_resolved = true;
@@ -627,6 +621,12 @@ fn handle_reward_event(
                 let _ = runtime.core.apply_reward_candidates(Vec::new());
             }
         }
+    }
+}
+
+pub fn rotate_choices_to_local(choices: &mut [String], local_name: &str) {
+    if let Some(index) = choices.iter().position(|name| name == local_name) {
+        choices.rotate_left(index);
     }
 }
 

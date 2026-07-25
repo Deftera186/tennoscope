@@ -2,8 +2,30 @@ use std::time::Duration;
 
 use app_lib::{
     MemoryRewardSource, RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic,
-    VisualRewardSource, reward_path_matches,
+    VisualRewardSource, reward_path_matches, rotate_choices_to_local,
 };
+
+#[test]
+fn memory_reward_ring_rotates_without_scrambling_screen_order() {
+    let mut choices = vec![
+        "Caliban Prime Chassis Blueprint".into(),
+        "Paris Prime Lower Limb".into(),
+        "Burston Prime Blueprint".into(),
+        "Nautilus Prime Carapace".into(),
+    ];
+
+    rotate_choices_to_local(&mut choices, "Paris Prime Lower Limb");
+
+    assert_eq!(
+        choices,
+        vec![
+            "Paris Prime Lower Limb",
+            "Burston Prime Blueprint",
+            "Nautilus Prime Carapace",
+            "Caliban Prime Chassis Blueprint",
+        ]
+    );
+}
 use warframe_acquisition::{RewardCatalogEntry, RewardNeedle, RewardResolution};
 
 struct Memory {

@@ -8,7 +8,7 @@ use warframe_acquisition::{
     RewardNeedle, RewardResolution, resolve_reward_choices,
 };
 
-const MAXIMUM_REWARD_CLUSTER_SPAN: u64 = 2 * 1024 * 1024;
+const MAXIMUM_REWARD_CLUSTER_SPAN: u64 = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RewardChoiceSource {
