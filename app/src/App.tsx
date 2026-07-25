@@ -121,15 +121,15 @@ function App() {
     setBusy(false)
   }
 
-  if (accepted === null && !error) return <main className="startup"><div className="spinner" aria-hidden="true"/><p>Starting Warframe Helper…</p></main>
+  if (accepted === null && !error) return <main className="startup"><div className="spinner" aria-hidden="true"/><p>Starting TennoScope…</p></main>
   if (!accepted) return <SetupScreen busy={busy} error={error} onAccept={accept}/>
 
   const liveState = view?.health.game_reader.state ?? 'degraded'
   return <div className="app-frame">
     <aside className="sidebar">
-      <div className="brand" aria-label="Warframe Helper">
-        <span className="brand-mark">WH</span>
-        <span><strong>Warframe</strong><small>Helper</small></span>
+      <div className="brand" aria-label="TennoScope">
+        <span className="brand-mark">TS</span>
+        <span><strong>Tenno</strong><small>Scope</small></span>
       </div>
       <nav aria-label="Primary">
         {(['collection', 'rewards', 'diagnostics', 'settings'] as const).map(item => <button
@@ -165,7 +165,7 @@ function App() {
 function SetupScreen({ busy, error, onAccept }: { busy: boolean; error: string | null; onAccept: () => void }) {
   return <main className="setup-shell">
     <section className="setup-card" aria-labelledby="setup-title">
-      <div className="setup-brand"><span className="brand-mark">WH</span><span>WARFRAME HELPER</span></div>
+      <div className="setup-brand"><span className="brand-mark">TS</span><span>TENNOSCOPE</span></div>
       <p className="eyebrow">One-time setup · Read carefully</p>
       <h1 id="setup-title">Read-only game access</h1>
       <p className="setup-lead">Automatic inventory sync needs permission to inspect the running Warframe process and make a direct inventory request.</p>
@@ -264,8 +264,8 @@ function DiagnosticsPage({ view }: { view: AppView }) {
 }
 
 function SettingsPage() {
-  return <section className="page" aria-labelledby="settings-title"><div className="page-heading"><div><p className="eyebrow">Application</p><h1 id="settings-title">Settings &amp; about</h1><p>Warframe Helper is a free, open-source, local-first companion.</p></div><span className="snapshot-mark">MVP · GPLv3</span></div>
-    <div className="settings-grid"><article className="settings-card"><span className="settings-icon">⌂</span><div><h2>Local-first storage</h2><p>Your inventory snapshot and preferences are stored on this device in the application data directory. The UI has no telemetry or cloud account.</p></div></article><article className="settings-card warning"><span className="settings-icon">!</span><div><h2>Read-only access disclosure</h2><p>Warframe Helper inspects the running game process. Third-party software and process inspection may carry account-policy or anti-cheat risk even when no game memory is modified.</p></div></article><article className="settings-card"><span className="settings-icon">↻</span><div><h2>Automatic synchronization</h2><p>The local EE.log monitor watches for inventory synchronization and refreshes automatically. Manual refresh remains available in the top bar.</p></div></article><article className="settings-card"><span className="settings-icon">▱</span><div><h2>Reward overlay</h2><p>Preview the focused always-on-top reward window. It remains honest when no reward source is connected.</p><button type="button" className="secondary-action" onClick={() => void showRewardOverlay()}>Preview reward overlay</button></div></article></div>
+  return <section className="page" aria-labelledby="settings-title"><div className="page-heading"><div><p className="eyebrow">Application</p><h1 id="settings-title">Settings &amp; about</h1><p>TennoScope is a free, open-source, local-first companion.</p></div><span className="snapshot-mark">MVP · GPLv3</span></div>
+    <div className="settings-grid"><article className="settings-card"><span className="settings-icon">⌂</span><div><h2>Local-first storage</h2><p>Your inventory snapshot and preferences are stored on this device in the application data directory. The UI has no telemetry or cloud account.</p></div></article><article className="settings-card warning"><span className="settings-icon">!</span><div><h2>Read-only access disclosure</h2><p>TennoScope inspects the running game process. Third-party software and process inspection may carry account-policy or anti-cheat risk even when no game memory is modified.</p></div></article><article className="settings-card"><span className="settings-icon">↻</span><div><h2>Automatic synchronization</h2><p>The local EE.log monitor watches for inventory synchronization and refreshes automatically. Manual refresh remains available in the top bar.</p></div></article><article className="settings-card"><span className="settings-icon">▱</span><div><h2>Reward overlay</h2><p>Preview the focused always-on-top reward window. It remains honest when no reward source is connected.</p><button type="button" className="secondary-action" onClick={() => void showRewardOverlay()}>Preview reward overlay</button></div></article></div>
   </section>
 }
 

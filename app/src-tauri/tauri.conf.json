@@ -1,6 +1,6 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Warframe Helper",
+  "productName": "TennoScope",
   "version": "0.1.0",
   "identifier": "org.warframehelper.app",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Warframe Helper — Local-first Companion",
+        "title": "TennoScope — Local-first Warframe Companion",
         "width": 1180,
         "height": 760,
         "minWidth": 360,
@@ -23,7 +23,7 @@
       },
       {
         "label": "reward-overlay",
-        "title": "Warframe Helper — Reward Advisor",
+        "title": "TennoScope — Reward Advisor",
         "url": "/overlay",
         "width": 1100,
         "height": 190,

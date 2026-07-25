@@ -28,6 +28,29 @@ pub struct SetupStatus {
     pub risk_accepted: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct LocalPaths {
+    pub setup: PathBuf,
+    pub database: PathBuf,
+}
+
+pub fn resolve_local_paths(app_data: &Path) -> LocalPaths {
+    let legacy_setup = app_data.join("setup.json");
+    let legacy_database = app_data.join("warframe-helper.sqlite3");
+    LocalPaths {
+        setup: if legacy_setup.exists() {
+            legacy_setup
+        } else {
+            app_data.join("tennoscope-setup.json")
+        },
+        database: if legacy_database.exists() {
+            legacy_database
+        } else {
+            app_data.join("tennoscope.sqlite3")
+        },
+    }
+}
+
 pub fn read_setup_status(path: &Path) -> Result<SetupStatus, String> {
     match fs::read(path) {
         Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
@@ -63,6 +86,7 @@ pub fn contains_inventory_sync_trigger(bytes: &[u8]) -> bool {
 struct Runtime {
     core: AppCore,
     app_data: PathBuf,
+    setup_path: PathBuf,
     setup: SetupStatus,
     last_refresh_started: Option<Instant>,
     monitor_started: bool,
@@ -100,7 +124,7 @@ async fn accept_risk_disclosure(state: State<'_, SharedRuntime>) -> Result<Setup
         let mut runtime = shared
             .lock()
             .map_err(|_| "application state is unavailable".to_owned())?;
-        let status = accept_setup_risk(&runtime.app_data.join("setup.json"))?;
+        let status = accept_setup_risk(&runtime.setup_path)?;
         runtime.setup = status.clone();
         Ok(status)
     })
@@ -238,11 +262,13 @@ fn apply_outcome(
 fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::error::Error>> {
     let app_data = app.path().app_data_dir()?;
     fs::create_dir_all(&app_data)?;
-    let setup = read_setup_status(&app_data.join("setup.json")).map_err(std::io::Error::other)?;
-    let core = AppCore::open(&app_data.join("warframe-helper.sqlite3"))?;
+    let paths = resolve_local_paths(&app_data);
+    let setup = read_setup_status(&paths.setup).map_err(std::io::Error::other)?;
+    let core = AppCore::open(&paths.database)?;
     Ok(Arc::new(Mutex::new(Runtime {
         core,
         app_data,
+        setup_path: paths.setup,
         setup,
         last_refresh_started: None,
         monitor_started: false,

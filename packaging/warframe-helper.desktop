@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Warframe Helper
-Comment=Local-first Warframe inventory companion
-Exec=warframe-helper
-Icon=warframe-helper
+Name=TennoScope
+Comment=Local-first Warframe collection and relic companion
+Exec=tennoscope
+Icon=tennoscope
 Terminal=false
 Categories=Utility;

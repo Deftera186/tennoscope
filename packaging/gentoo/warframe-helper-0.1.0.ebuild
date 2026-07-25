@@ -2,7 +2,7 @@ EAPI=8
 
 inherit desktop xdg
 
-DESCRIPTION="Local-first Linux Warframe inventory companion"
+DESCRIPTION="Local-first Linux Warframe collection and relic companion"
 S="${WORKDIR}/${P}"
 
 LICENSE="GPL-3"
@@ -56,8 +56,8 @@ src_test() {
 }
 
 src_install() {
-	dobin "${WORKDIR}/target/release/warframe-helper"
+	dobin "${WORKDIR}/target/release/tennoscope"
 	domenu packaging/warframe-helper.desktop
-	newicon -s 128 app/src-tauri/icons/128x128.png warframe-helper.png
+	newicon -s 128 app/src-tauri/icons/128x128.png tennoscope.png
 	dodoc LICENSE THIRD_PARTY_NOTICES.md
 }
