@@ -10,6 +10,8 @@ use crate::{AcquisitionError, GameProcess, MemoryReader, RegionScanPriority};
 
 const LIVE_UI_ADDRESS_MIN: u64 = 0x1300_0000;
 const LIVE_UI_ADDRESS_MAX: u64 = 0x2800_0000;
+const REWARD_CARD_ADDRESS_MIN: u64 = 0x4e00_0000;
+const REWARD_CARD_ADDRESS_MAX: u64 = 0x5800_0000;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RewardNeedle {
@@ -86,6 +88,7 @@ impl RewardHit {
 #[derive(Clone, Debug)]
 pub struct RewardFingerprint {
     hits: Vec<RewardHit>,
+    card_slots: BTreeMap<usize, BTreeSet<String>>,
     bytes_read: u64,
     elapsed: Duration,
 }
@@ -193,6 +196,50 @@ pub fn resolve_reward_choices(
     }
 }
 
+pub fn resolve_reward_choices_with_anchor(
+    baseline: &RewardFingerprint,
+    current: &RewardFingerprint,
+    expected_choices: usize,
+    maximum_span: u64,
+    local_choice: Option<&str>,
+) -> RewardResolution {
+    let Some(local_choice) = local_choice else {
+        return resolve_reward_choices(baseline, current, expected_choices, maximum_span);
+    };
+    let mut observed_card_evidence = false;
+    let mut choices = vec![local_choice.to_owned()];
+    for slot in 2..=expected_choices {
+        let current_names = current.card_slots.get(&slot).cloned().unwrap_or_default();
+        let baseline_names = baseline.card_slots.get(&slot).cloned().unwrap_or_default();
+        let names = current_names
+            .difference(&baseline_names)
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        observed_card_evidence |= !current_names.is_empty();
+        if names.len() > 1 {
+            return RewardResolution::Ambiguous;
+        }
+        let Some(name) = names.into_iter().next() else {
+            if observed_card_evidence || !current.card_slots.is_empty() {
+                return RewardResolution::Incomplete;
+            }
+            return resolve_reward_choices(baseline, current, expected_choices, maximum_span);
+        };
+        if choices.contains(&name) {
+            return RewardResolution::Ambiguous;
+        }
+        choices.push(name);
+    }
+    if choices.len() == expected_choices {
+        RewardResolution::Confirmed {
+            choices,
+            region_start: 0,
+        }
+    } else {
+        RewardResolution::Incomplete
+    }
+}
+
 pub fn resolve_current_reward_choices(
     current: &RewardFingerprint,
     expected_choices: usize,
@@ -201,6 +248,7 @@ pub fn resolve_current_reward_choices(
     resolve_reward_choices(
         &RewardFingerprint {
             hits: Vec::new(),
+            card_slots: BTreeMap::new(),
             bytes_read: 0,
             elapsed: Duration::ZERO,
         },
@@ -256,6 +304,7 @@ impl RewardMemoryScanner {
         )?;
         let baseline = RewardFingerprint {
             hits: Vec::new(),
+            card_slots: BTreeMap::new(),
             bytes_read: 0,
             elapsed: Duration::ZERO,
         };
@@ -289,41 +338,84 @@ impl RewardMemoryScanner {
         regions.sort_by_key(|region| {
             (
                 priority_rank(region.scan_priority()),
-                !is_live_ui_region(region.start()),
+                address_band_rank(region.start()),
                 std::cmp::Reverse(region.start()),
             )
         });
+        let card_tags = (2..=4)
+            .map(|slot| {
+                (
+                    slot,
+                    format!("RewardList.Item{slot}.TagContainer.Tag1.IconText"),
+                )
+            })
+            .collect::<Vec<_>>();
+        let compact_names = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.choice_name(),
+                    candidate
+                        .choice_name()
+                        .chars()
+                        .filter(|character| character.is_ascii_alphanumeric())
+                        .collect::<String>(),
+                )
+            })
+            .collect::<Vec<_>>();
         let longest = candidates
             .iter()
             .flat_map(|candidate| {
                 std::iter::once(candidate.display_name.len())
                     .chain(candidate.internal_paths.iter().map(Vec::len))
             })
+            .chain(card_tags.iter().map(|(_, tag)| tag.len()))
+            .chain(compact_names.iter().map(|(_, name)| name.len()))
             .max()
             .unwrap_or(1);
         let overlap = longest.saturating_sub(1);
         let mut patterns = Vec::<&[u8]>::new();
-        let mut pattern_metadata = Vec::<(&str, RewardRepresentation)>::new();
+        enum PatternMetadata<'a> {
+            Reward(&'a str, RewardRepresentation),
+            CardName(&'a str),
+            CardTag(usize),
+        }
+        let mut pattern_metadata = Vec::<PatternMetadata<'_>>::new();
         for candidate in candidates {
             patterns.push(&candidate.display_name);
-            pattern_metadata.push((candidate.choice_name(), RewardRepresentation::DisplayName));
+            pattern_metadata.push(PatternMetadata::Reward(
+                candidate.choice_name(),
+                RewardRepresentation::DisplayName,
+            ));
             for path in &candidate.internal_paths {
                 patterns.push(path);
-                pattern_metadata
-                    .push((candidate.choice_name(), RewardRepresentation::InternalPath));
+                pattern_metadata.push(PatternMetadata::Reward(
+                    candidate.choice_name(),
+                    RewardRepresentation::InternalPath,
+                ));
             }
+        }
+        for (slot, tag) in &card_tags {
+            patterns.push(tag.as_bytes());
+            pattern_metadata.push(PatternMetadata::CardTag(*slot));
+        }
+        for (choice_name, compact_name) in &compact_names {
+            patterns.push(compact_name.as_bytes());
+            pattern_metadata.push(PatternMetadata::CardName(choice_name));
         }
         let matcher = AhoCorasick::new(patterns).map_err(|_| AcquisitionError::SnapshotInvalid)?;
         let mut buffer = vec![0_u8; self.chunk_size + overlap];
         let mut hits = Vec::new();
+        let mut card_name_hits = Vec::<(&str, u64, u64)>::new();
+        let mut card_tag_hits = Vec::<(usize, u64, u64)>::new();
         let mut seen = BTreeSet::new();
         let mut bytes_read = 0_u64;
 
         'regions: for region in regions {
-            let region_len = if is_live_ui_region(region.start()) {
-                region.len().min(
-                    usize::try_from(LIVE_UI_ADDRESS_MAX - region.start()).unwrap_or(usize::MAX),
-                )
+            let region_len = if let Some(band_end) = priority_band_end(region.start()) {
+                region
+                    .len()
+                    .min(usize::try_from(band_end - region.start()).unwrap_or(usize::MAX))
             } else {
                 region.len()
             };
@@ -351,17 +443,25 @@ impl RewardMemoryScanner {
                 let available = retained + read;
                 let base = address.saturating_sub(u64::try_from(retained).unwrap_or(0));
                 for found in matcher.find_overlapping_iter(&buffer[..available]) {
-                    let (choice_name, representation) =
-                        pattern_metadata[found.pattern().as_usize()];
                     let hit_address = base + u64::try_from(found.start()).unwrap_or(0);
-                    if seen.insert((hit_address, representation)) {
-                        hits.push(RewardHit {
-                            choice_name: choice_name.to_owned(),
-                            address: hit_address,
-                            region_start: region.start(),
-                            priority: region.scan_priority(),
-                            representation,
-                        });
+                    match pattern_metadata[found.pattern().as_usize()] {
+                        PatternMetadata::Reward(choice_name, representation) => {
+                            if seen.insert((hit_address, representation)) {
+                                hits.push(RewardHit {
+                                    choice_name: choice_name.to_owned(),
+                                    address: hit_address,
+                                    region_start: region.start(),
+                                    priority: region.scan_priority(),
+                                    representation,
+                                });
+                            }
+                        }
+                        PatternMetadata::CardTag(slot) => {
+                            card_tag_hits.push((slot, hit_address, region.start()));
+                        }
+                        PatternMetadata::CardName(choice_name) => {
+                            card_name_hits.push((choice_name, hit_address, region.start()));
+                        }
                     }
                 }
                 retained = overlap.min(available);
@@ -369,9 +469,23 @@ impl RewardMemoryScanner {
                 offset += read;
             }
         }
+        let mut card_slots = BTreeMap::<usize, BTreeSet<String>>::new();
+        for (slot, tag_address, region_start) in card_tag_hits {
+            for (choice_name, _, _) in card_name_hits.iter().filter(|(_, address, hit_region)| {
+                *hit_region == region_start
+                    && *address > tag_address
+                    && *address - tag_address <= 256
+            }) {
+                card_slots
+                    .entry(slot)
+                    .or_default()
+                    .insert((*choice_name).to_owned());
+            }
+        }
         buffer.zeroize();
         Ok(RewardFingerprint {
             hits,
+            card_slots,
             bytes_read,
             elapsed: started.elapsed(),
         })
@@ -389,4 +503,28 @@ fn priority_rank(priority: RegionScanPriority) -> u8 {
 
 const fn is_live_ui_region(start: u64) -> bool {
     start >= LIVE_UI_ADDRESS_MIN && start < LIVE_UI_ADDRESS_MAX
+}
+
+const fn is_reward_card_region(start: u64) -> bool {
+    start >= REWARD_CARD_ADDRESS_MIN && start < REWARD_CARD_ADDRESS_MAX
+}
+
+const fn address_band_rank(start: u64) -> u8 {
+    if is_reward_card_region(start) {
+        0
+    } else if is_live_ui_region(start) {
+        1
+    } else {
+        2
+    }
+}
+
+const fn priority_band_end(start: u64) -> Option<u64> {
+    if is_reward_card_region(start) {
+        Some(REWARD_CARD_ADDRESS_MAX)
+    } else if is_live_ui_region(start) {
+        Some(LIVE_UI_ADDRESS_MAX)
+    } else {
+        None
+    }
 }

@@ -10,6 +10,7 @@ struct Memory {
     resolution: RewardResolution,
     baselines: usize,
     choices: usize,
+    anchors: Vec<Option<String>>,
 }
 
 impl MemoryRewardSource for Memory {
@@ -17,8 +18,9 @@ impl MemoryRewardSource for Memory {
         self.baselines += 1;
     }
 
-    fn choices(&mut self, _expected: usize) -> RewardResolution {
+    fn choices(&mut self, _expected: usize, local_choice: Option<&str>) -> RewardResolution {
         self.choices += 1;
+        self.anchors.push(local_choice.map(str::to_owned));
         self.resolution.clone()
     }
 }
@@ -58,6 +60,7 @@ fn confirmed_memory_wins_without_invoking_ocr() {
         },
         baselines: 0,
         choices: 0,
+        anchors: Vec::new(),
     };
     let mut visual = Visual {
         names: Ok(vec![]),
@@ -67,10 +70,11 @@ fn confirmed_memory_wins_without_invoking_ocr() {
 
     coordinator.baseline(&mut memory, &candidates());
     let result = coordinator
-        .choices(&mut memory, &mut visual, 4, &catalog())
+        .choices(&mut memory, &mut visual, 4, Some("A"), &catalog())
         .unwrap();
 
     assert_eq!(memory.baselines, 1);
+    assert_eq!(memory.anchors, vec![Some("A".into())]);
     assert_eq!(result.choices.source, RewardChoiceSource::Memory);
     assert_eq!(result.choices.names, vec!["A", "B", "C", "D"]);
     assert_eq!(result.diagnostic, RewardSourceDiagnostic::Ready);
@@ -84,6 +88,7 @@ fn incomplete_memory_falls_back_to_ocr() {
         resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        anchors: Vec::new(),
     };
     let mut visual = Visual {
         names: Ok(vec!["A".into(), "B".into(), "C".into(), "D".into()]),
@@ -91,7 +96,7 @@ fn incomplete_memory_falls_back_to_ocr() {
     };
 
     let result = RewardSourceCoordinator::new(false)
-        .choices(&mut memory, &mut visual, 4, &catalog())
+        .choices(&mut memory, &mut visual, 4, None, &catalog())
         .unwrap();
 
     assert_eq!(result.choices.source, RewardChoiceSource::Ocr);
@@ -105,6 +110,7 @@ fn ocr_accepts_the_rendered_three_choice_count() {
         resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        anchors: Vec::new(),
     };
     let mut visual = Visual {
         names: Ok(vec!["A".into(), "B".into(), "C".into()]),
@@ -112,7 +118,7 @@ fn ocr_accepts_the_rendered_three_choice_count() {
     };
 
     let result = RewardSourceCoordinator::new(false)
-        .choices(&mut memory, &mut visual, 3, &catalog())
+        .choices(&mut memory, &mut visual, 3, None, &catalog())
         .unwrap();
 
     assert_eq!(result.choices.names.len(), 3);
@@ -125,6 +131,7 @@ fn incomplete_ocr_is_not_published_as_a_reward_set() {
         resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        anchors: Vec::new(),
     };
     let mut visual = Visual {
         names: Ok(vec!["A".into()]),
@@ -132,7 +139,7 @@ fn incomplete_ocr_is_not_published_as_a_reward_set() {
     };
 
     let result =
-        RewardSourceCoordinator::new(false).choices(&mut memory, &mut visual, 4, &catalog());
+        RewardSourceCoordinator::new(false).choices(&mut memory, &mut visual, 4, None, &catalog());
 
     assert!(result.is_none());
     assert_eq!(visual.calls, 1);
@@ -147,6 +154,7 @@ fn validation_mode_reports_memory_and_ocr_disagreement() {
         },
         baselines: 0,
         choices: 0,
+        anchors: Vec::new(),
     };
     let mut visual = Visual {
         names: Ok(vec!["D".into(), "C".into(), "B".into(), "A".into()]),
@@ -154,7 +162,7 @@ fn validation_mode_reports_memory_and_ocr_disagreement() {
     };
 
     let result = RewardSourceCoordinator::new(true)
-        .choices(&mut memory, &mut visual, 4, &catalog())
+        .choices(&mut memory, &mut visual, 4, None, &catalog())
         .unwrap();
 
     assert_eq!(result.choices.source, RewardChoiceSource::Memory);
@@ -168,6 +176,7 @@ fn solo_choice_events_invoke_neither_source() {
         resolution: RewardResolution::Incomplete,
         baselines: 0,
         choices: 0,
+        anchors: Vec::new(),
     };
     let mut visual = Visual {
         names: Ok(vec![]),
@@ -175,7 +184,7 @@ fn solo_choice_events_invoke_neither_source() {
     };
 
     let result =
-        RewardSourceCoordinator::new(false).choices(&mut memory, &mut visual, 1, &catalog());
+        RewardSourceCoordinator::new(false).choices(&mut memory, &mut visual, 1, None, &catalog());
 
     assert!(result.is_none());
     assert_eq!(memory.choices, 0);
