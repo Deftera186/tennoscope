@@ -47,7 +47,7 @@ fn canonical_artwork_reaches_the_serialized_collection_view() {
 
     assert_eq!(
         serde_json::to_value(&view.collection().items()[0]).unwrap()["image_url"],
-        json!("https://cdn.warframestat.us/img/Braton.png")
+        json!("https://raw.githubusercontent.com/WFCD/warframe-items/master/data/img/Braton.png")
     );
 }
 

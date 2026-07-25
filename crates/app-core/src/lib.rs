@@ -357,7 +357,11 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
                 .item
                 .image_name
                 .as_ref()
-                .map(|name| format!("https://cdn.warframestat.us/img/{name}")),
+                .map(|name| {
+                    format!(
+                        "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/img/{name}"
+                    )
+                }),
         }
     }
 }

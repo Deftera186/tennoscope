@@ -566,6 +566,9 @@ pub fn run() {
                 )?;
             }
             let runtime = initialize_runtime(app.handle())?;
+            if let Some(overlay) = app.get_webview_window("reward-overlay") {
+                overlay_window::configure_reward_overlay(&overlay)?;
+            }
             let should_refresh = runtime
                 .lock()
                 .map(|state| state.setup.risk_accepted)
