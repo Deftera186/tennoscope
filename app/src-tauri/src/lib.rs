@@ -19,7 +19,7 @@ use std::{fs::OpenOptions, io::Write};
 use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome};
 use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CatalogIndex, GameProcess, InventoryAcquirer, InventoryHttpTransport, LinuxProc,
     MemoryReader, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry,
@@ -832,6 +832,7 @@ fn publish_reward_result(
     if transition.publish {
         apply_reward_observations(shared, reward_catalog, &transition.choices);
         overlay_window::show_reward_overlay(app);
+        let _ = app.emit_to("reward-overlay", "reward-updated", ());
     }
     if let Ok(mut runtime) = shared.lock() {
         let source = match result.choices.source {

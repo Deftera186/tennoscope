@@ -12,7 +12,7 @@ use crate::{
 
 const STRING_BASE_DELTAS: [u64; 7] = [0, 8, 16, 24, 32, 40, 48];
 const OBJECT_BASE_SEARCH: u64 = 256;
-const MAX_GRAPH_DEPTH: usize = 3;
+const MAX_GRAPH_DEPTH: usize = 5;
 const MIN_SLOT_STRIDE: u64 = 8;
 const MAX_SLOT_STRIDE: u64 = 64;
 
@@ -80,6 +80,8 @@ impl PersistentRewardResolver {
         if targets.is_empty() {
             return Ok(RewardResolution::Incomplete);
         }
+        let mut deepest_confirmed = None::<ContainerCandidate>;
+        let mut saw_ambiguity = false;
 
         for depth in 0..MAX_GRAPH_DEPTH {
             if started.elapsed() >= self.timeout {
@@ -104,13 +106,10 @@ impl PersistentRewardResolver {
                 match select_container(containers) {
                     Some(Ok(container)) => {
                         if confirm_container(memory, process, &container, &targets)? {
-                            return Ok(RewardResolution::Confirmed {
-                                choices: container.choices,
-                                region_start: container.region_start,
-                            });
+                            deepest_confirmed = Some(container);
                         }
                     }
-                    Some(Err(())) => return Ok(RewardResolution::Ambiguous),
+                    Some(Err(())) => saw_ambiguity = true,
                     None => {}
                 }
             }
@@ -119,7 +118,16 @@ impl PersistentRewardResolver {
                 break;
             }
         }
-        Ok(RewardResolution::Incomplete)
+        if let Some(container) = deepest_confirmed {
+            Ok(RewardResolution::Confirmed {
+                choices: container.choices,
+                region_start: container.region_start,
+            })
+        } else if saw_ambiguity {
+            Ok(RewardResolution::Ambiguous)
+        } else {
+            Ok(RewardResolution::Incomplete)
+        }
     }
 
     fn read_regions(

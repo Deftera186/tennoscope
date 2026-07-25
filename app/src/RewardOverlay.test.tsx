@@ -1,10 +1,17 @@
-import { cleanup, render, screen, within } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const backend = vi.hoisted(() => ({ getView: vi.fn() }))
 const overlay = vi.hoisted(() => ({ hideRewardOverlay: vi.fn() }))
+const events = vi.hoisted(() => ({ listener: undefined as undefined | (() => void), listen: vi.fn() }))
 vi.mock('./backend', () => backend)
 vi.mock('./overlay', () => overlay)
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: events.listen.mockImplementation((_event: string, listener: () => void) => {
+    events.listener = listener
+    return Promise.resolve(() => { events.listener = undefined })
+  }),
+}))
 
 import { AppRoute } from './Root'
 import { routeForPath } from './routing'
@@ -33,6 +40,7 @@ describe('reward overlay route', () => {
   afterEach(cleanup)
   beforeEach(() => {
     vi.clearAllMocks()
+    events.listener = undefined
     backend.getView.mockResolvedValue(overlayView)
     overlay.hideRewardOverlay.mockResolvedValue(undefined)
   })
@@ -57,5 +65,22 @@ describe('reward overlay route', () => {
     backend.getView.mockResolvedValue({ ...overlayView, reward: { cards: [], best_value_index: null } })
     render(<AppRoute pathname="/overlay" />)
     expect(await screen.findByText('No reward choices detected')).toBeInTheDocument()
+  })
+
+  it('refreshes immediately when native reward data is published', async () => {
+    render(<AppRoute pathname="/overlay" />)
+    expect(await screen.findByText('Certain')).toBeInTheDocument()
+    backend.getView.mockResolvedValue({
+      ...overlayView,
+      reward: {
+        cards: [{ name: 'Fresh reward', platinum: 20, ducats: 45, owned: 0, mastery_relevant: false, confidence: 1 }],
+        best_value_index: 0,
+      },
+    })
+
+    events.listener?.()
+
+    await waitFor(() => expect(screen.getByText('Fresh reward')).toBeInTheDocument())
+    expect(backend.getView).toHaveBeenCalledTimes(2)
   })
 })

@@ -360,3 +360,68 @@ fn continues_to_a_deeper_container_when_a_shallow_candidate_is_stale() {
         }
     );
 }
+
+#[test]
+fn prefers_the_deeper_card_list_over_a_confirmed_shallow_subobject_array() {
+    let names = [
+        "2X Forma Blueprint",
+        "Vadarya Prime Stock",
+        "Dual Zoren Prime Blueprint",
+        "Paris Prime Grip",
+    ];
+    let candidates = names.iter().map(|name| needle(name)).collect::<Vec<_>>();
+    let base = 0x1000_u64;
+    let mut bytes = vec![0_u8; 0xc000];
+    let text_addresses = [0x1800_u64, 0x1a00, 0x1c00, 0x1e00];
+    for (address, name) in text_addresses.iter().zip(names) {
+        let offset = usize::try_from(*address - base).unwrap();
+        bytes[offset..offset + name.len()].copy_from_slice(name.as_bytes());
+    }
+
+    let real_children = [0x3000_u64, 0x3400, 0x3800, 0x3c00];
+    for (child, text) in real_children.iter().zip(text_addresses) {
+        let field = usize::try_from(*child + 16 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&(text - 24).to_le_bytes());
+    }
+
+    let forma_subobjects = [0x4400_u64, 0x4800, 0x4c00, 0x5000];
+    for subobject in forma_subobjects {
+        let field = usize::try_from(subobject + 16 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&(text_addresses[0] - 24).to_le_bytes());
+    }
+    let shallow = 0x5800_u64;
+    for (slot, subobject) in forma_subobjects.iter().enumerate() {
+        let field = usize::try_from(shallow + 64 + slot as u64 * 8 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&subobject.to_le_bytes());
+    }
+
+    let card_objects = [0x7000_u64, 0x7400, 0x7800, 0x7c00];
+    for (card, child) in card_objects.iter().zip(real_children) {
+        let field = usize::try_from(*card + 24 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&child.to_le_bytes());
+    }
+    let card_list = 0x9000_u64;
+    for (slot, card) in card_objects.iter().enumerate() {
+        let field = usize::try_from(card_list + 64 + slot as u64 * 8 - base).unwrap();
+        bytes[field..field + 8].copy_from_slice(&card.to_le_bytes());
+    }
+
+    let memory = FixtureMemory {
+        regions: vec![ReadableRegion::classified(
+            base,
+            bytes.len(),
+            RegionScanPriority::WritableAnonymous,
+        )],
+        bytes: BTreeMap::from([(base, bytes)]),
+    };
+
+    assert_eq!(
+        PersistentRewardResolver::new(512, 256 * 1024, Duration::from_secs(1))
+            .resolve(&memory, &GameProcess::new(7), &candidates, 4)
+            .unwrap(),
+        RewardResolution::Confirmed {
+            choices: names.iter().map(|name| (*name).to_owned()).collect(),
+            region_start: base,
+        }
+    );
+}

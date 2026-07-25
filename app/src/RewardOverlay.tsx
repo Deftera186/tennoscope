@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getView, type AppView } from './backend'
 import { RewardCards } from './RewardCards'
 
@@ -11,7 +12,8 @@ export default function RewardOverlay() {
     document.documentElement.classList.add('overlay-mode')
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
-    const update = async () => {
+    let unlisten: UnlistenFn | undefined
+    const refresh = async () => {
       const request = ++generation.current
       try {
         const next = await getView()
@@ -19,10 +21,17 @@ export default function RewardOverlay() {
       } catch {
         if (active && request === generation.current) setError(true)
       }
-      if (active) timer = setTimeout(update, 1500)
     }
-    void update()
-    return () => { active = false; generation.current += 1; document.documentElement.classList.remove('overlay-mode'); if (timer) clearTimeout(timer) }
+    const poll = async () => {
+      await refresh()
+      if (active) timer = setTimeout(poll, 1500)
+    }
+    void listen('reward-updated', () => { void refresh() }).then(stop => {
+      if (active) unlisten = stop
+      else stop()
+    })
+    void poll()
+    return () => { active = false; generation.current += 1; unlisten?.(); document.documentElement.classList.remove('overlay-mode'); if (timer) clearTimeout(timer) }
   }, [])
 
   return <main className="overlay-shell" aria-label="Reward overlay">
