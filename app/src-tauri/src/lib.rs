@@ -21,6 +21,7 @@ use warframe_domain::RewardCandidate;
 
 mod monitor;
 mod overlay_window;
+mod reward_log;
 mod reward_observer;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
@@ -28,6 +29,7 @@ pub use monitor::{
 pub use overlay_window::{
     OverlayGeometry, WindowRect, reward_overlay_geometry, warframe_window_rect_from_sway_tree,
 };
+pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
