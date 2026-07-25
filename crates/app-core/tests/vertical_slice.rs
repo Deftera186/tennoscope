@@ -283,6 +283,24 @@ fn reward_application_preserves_source_order_and_domain_tie_breaking() {
 }
 
 #[test]
+fn reward_observer_health_exposes_only_source_and_bounded_timing() {
+    let mut core = AppCore::in_memory().unwrap();
+
+    let view = core
+        .record_capture_source_ready("memory", 89, "2026-07-25T00:00:00Z")
+        .unwrap();
+
+    assert_eq!(view.health().capture().state(), HealthState::Ready);
+    assert_eq!(
+        view.health().capture().message(),
+        "Memory reward observer ready (89 ms)"
+    );
+    let json = serde_json::to_string(&view).unwrap();
+    assert!(!json.contains("0x"));
+    assert!(!json.contains("/Lotus/"));
+}
+
+#[test]
 fn file_backed_collection_persists_but_rewards_are_ephemeral() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("helper.sqlite");

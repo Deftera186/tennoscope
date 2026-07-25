@@ -204,6 +204,7 @@ impl RewardMemoryScanner {
         self.fingerprint_regions(memory, process, candidates, None)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn confirm_region(
         &self,
         memory: &dyn MemoryReader,

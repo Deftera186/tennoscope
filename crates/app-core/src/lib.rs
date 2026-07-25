@@ -282,6 +282,24 @@ impl AppCore {
         self.current_view()
     }
 
+    pub fn record_capture_source_ready(
+        &mut self,
+        source: &str,
+        elapsed_ms: u128,
+        observed_at: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        let source = if source.eq_ignore_ascii_case("memory") {
+            "Memory"
+        } else {
+            "OCR"
+        };
+        self.health.capture = BackendHealth::ready(
+            format!("{source} reward observer ready ({elapsed_ms} ms)"),
+            Some(observed_at.into()),
+        )?;
+        self.current_view()
+    }
+
     pub fn record_capture_degraded(
         &mut self,
         message: impl Into<String>,

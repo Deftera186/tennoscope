@@ -530,7 +530,15 @@ fn handle_reward_event(
                 overlay_window::show_reward_overlay(app);
             }
             if let Ok(mut runtime) = shared.lock() {
-                let _ = runtime.core.record_capture_ready(now.to_string());
+                let source = match result.choices.source {
+                    RewardChoiceSource::Memory => "memory",
+                    RewardChoiceSource::Ocr => "ocr",
+                };
+                let _ = runtime.core.record_capture_source_ready(
+                    source,
+                    result.choices.elapsed.as_millis(),
+                    now.to_string(),
+                );
                 if result.diagnostic == RewardSourceDiagnostic::Disagreement {
                     let _ = runtime
                         .core
