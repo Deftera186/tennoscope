@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 use warframe_acquisition::{
     AcquisitionError, GameProcess, MemoryReader, ReadableRegion, RegionScanPriority,
     RewardMemoryScanner, RewardNeedle, RewardRepresentation, RewardResolution,
-    resolve_reward_choices,
+    resolve_current_reward_choices, resolve_reward_choices,
 };
 
 struct FixtureMemory {
@@ -226,6 +226,36 @@ fn temporal_resolution_rejects_equally_complete_competing_clusters() {
     assert_eq!(
         resolve_reward_choices(&baseline, &current, 4, 256),
         RewardResolution::Ambiguous
+    );
+}
+
+#[test]
+fn current_cluster_can_recover_when_the_baseline_was_contaminated() {
+    let mut current_bytes = vec![b'.'; 1024];
+    current_bytes[500..507].copy_from_slice(b"Burston");
+    current_bytes[540..545].copy_from_slice(b"Forma");
+    current_bytes[580..588].copy_from_slice(b"Perigale");
+    current_bytes[620..626].copy_from_slice(b"Trumna");
+    let current = fingerprint(
+        current_bytes,
+        vec![ReadableRegion::classified(
+            0x1000,
+            1024,
+            RegionScanPriority::WritableAnonymous,
+        )],
+    );
+
+    assert_eq!(
+        resolve_current_reward_choices(&current, 4, 256),
+        RewardResolution::Confirmed {
+            choices: vec![
+                "Burston".into(),
+                "Forma".into(),
+                "Perigale".into(),
+                "Trumna".into(),
+            ],
+            region_start: 0x1000,
+        }
     );
 }
 

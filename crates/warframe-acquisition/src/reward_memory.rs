@@ -178,6 +178,23 @@ pub fn resolve_reward_choices(
     }
 }
 
+pub fn resolve_current_reward_choices(
+    current: &RewardFingerprint,
+    expected_choices: usize,
+    maximum_span: u64,
+) -> RewardResolution {
+    resolve_reward_choices(
+        &RewardFingerprint {
+            hits: Vec::new(),
+            bytes_read: 0,
+            elapsed: Duration::ZERO,
+        },
+        current,
+        expected_choices,
+        maximum_span,
+    )
+}
+
 fn hit_identity(hit: &RewardHit) -> (&str, RewardRepresentation, RegionScanPriority, u64) {
     (
         hit.choice_name(),

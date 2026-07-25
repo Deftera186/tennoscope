@@ -2,6 +2,7 @@ use std::{env, time::Duration};
 
 use warframe_acquisition::{
     LinuxProc, ProcessDiscovery, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
+    RewardResolution, resolve_current_reward_choices,
 };
 
 fn main() {
@@ -45,4 +46,17 @@ fn main() {
         fingerprint.elapsed().as_millis(),
         fingerprint.hits().len()
     );
+    if let Some(expected) = env::var("TENN_OSCOPE_EXPECTED_CHOICES")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+    {
+        let (status, count) =
+            match resolve_current_reward_choices(&fingerprint, expected, 2 * 1024 * 1024) {
+                RewardResolution::Confirmed { choices, .. } => ("confirmed", choices.len()),
+                RewardResolution::Incomplete => ("incomplete", 0),
+                RewardResolution::Ambiguous => ("ambiguous", 0),
+                RewardResolution::TimedOut => ("timed_out", 0),
+            };
+        println!("resolution={status} choice_count={count}");
+    }
 }

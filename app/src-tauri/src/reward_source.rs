@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use warframe_acquisition::{
     GameProcess, MemoryReader, RewardCatalogEntry, RewardFingerprint, RewardMemoryScanner,
-    RewardNeedle, RewardResolution, resolve_reward_choices,
+    RewardNeedle, RewardResolution, resolve_current_reward_choices, resolve_reward_choices,
 };
 
 const MAXIMUM_REWARD_CLUSTER_SPAN: u64 = 2 * 1024 * 1024;
@@ -111,8 +111,14 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
         else {
             return RewardResolution::Incomplete;
         };
-        let resolution =
+        let temporal =
             resolve_reward_choices(baseline, &current, expected, MAXIMUM_REWARD_CLUSTER_SPAN);
+        let resolution = match temporal {
+            RewardResolution::Incomplete => {
+                resolve_current_reward_choices(&current, expected, MAXIMUM_REWARD_CLUSTER_SPAN)
+            }
+            other => other,
+        };
         let RewardResolution::Confirmed { region_start, .. } = resolution else {
             return resolution;
         };
