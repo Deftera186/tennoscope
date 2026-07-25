@@ -43,12 +43,16 @@ impl MemoryReader for SnapshotMemoryReader<'_> {
         address: u64,
         buffer: &mut [u8],
     ) -> Result<usize, AcquisitionError> {
-        if let Some(snapshot) = self.snapshots.iter().find(|snapshot| {
-            address >= snapshot.start()
-                && address.saturating_add(buffer.len() as u64)
-                    <= snapshot
-                        .start()
-                        .saturating_add(snapshot.bytes().len() as u64)
+        let snapshot = self
+            .snapshots
+            .partition_point(|snapshot| snapshot.start() <= address)
+            .checked_sub(1)
+            .and_then(|index| self.snapshots.get(index));
+        if let Some(snapshot) = snapshot.filter(|snapshot| {
+            address.saturating_add(buffer.len() as u64)
+                <= snapshot
+                    .start()
+                    .saturating_add(snapshot.bytes().len() as u64)
         }) {
             let offset = usize::try_from(address - snapshot.start()).unwrap_or(usize::MAX);
             buffer.copy_from_slice(&snapshot.bytes()[offset..offset + buffer.len()]);
