@@ -63,7 +63,20 @@ impl PersistentRewardResolver {
         }
         let started = Instant::now();
         let regions = self.read_regions(memory, process, started)?;
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[DEBUG-ui-graph] regions={} bytes={} read_ms={}",
+            regions.len(),
+            regions.iter().map(|region| region.bytes.len()).sum::<usize>(),
+            started.elapsed().as_millis()
+        );
         let mut targets = seed_targets(&regions, candidates);
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[DEBUG-ui-graph] seed_targets={} seed_ms={}",
+            targets.len(),
+            started.elapsed().as_millis()
+        );
         if targets.is_empty() {
             return Ok(RewardResolution::Incomplete);
         }
@@ -73,8 +86,21 @@ impl PersistentRewardResolver {
                 return Ok(RewardResolution::TimedOut);
             }
             let hits = pointer_hits(&regions, &targets);
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[DEBUG-ui-graph] depth={depth} targets={} pointer_hits={} elapsed_ms={}",
+                targets.len(),
+                hits.len(),
+                started.elapsed().as_millis()
+            );
             if depth > 0 {
                 let containers = ordered_containers(&hits, &targets, expected_choices);
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[DEBUG-ui-graph] depth={depth} containers={} elapsed_ms={}",
+                    containers.len(),
+                    started.elapsed().as_millis()
+                );
                 match select_container(containers) {
                     Some(Ok(container)) => {
                         if confirm_container(memory, process, &container, &targets)? {
