@@ -364,8 +364,8 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut incremental_reward_records = BTreeMap::<String, String>::new();
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
-        384 * 1024 * 1024,
-        Duration::from_millis(800),
+        768 * 1024 * 1024,
+        Duration::from_millis(1_500),
     ));
     let coordinator = RewardSourceCoordinator::new(cfg!(debug_assertions));
     let catalog = shared
@@ -493,24 +493,7 @@ fn handle_reward_event(
     now: u64,
 ) {
     match event {
-        RewardLogEvent::ResponderReceived { identity, is_local } => {
-            if is_local {
-                return;
-            }
-            if incremental_reward_records.contains_key(&identity) {
-                return;
-            }
-            let Some(process) = process else {
-                return;
-            };
-            let mut memory = memory_state.bind(procfs, process);
-            if let warframe_acquisition::RewardResolution::Confirmed { choices, .. } =
-                memory.player_records(&[identity.as_str()], None, None)
-                && let [choice] = choices.as_slice()
-            {
-                incremental_reward_records.insert(identity, choice.clone());
-            }
-        }
+        RewardLogEvent::ResponderReceived { .. } => {}
         RewardLogEvent::ResponsesComplete {
             responders,
             screen_order,

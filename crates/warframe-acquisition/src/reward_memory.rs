@@ -253,12 +253,7 @@ impl RewardMemoryScanner {
         let started = Instant::now();
         let mut regions = memory.readable_regions(process)?;
         regions.retain(|region| region.scan_priority() == RegionScanPriority::WritableAnonymous);
-        regions.sort_by_key(|region| {
-            (
-                !is_live_ui_region(region.start()),
-                std::cmp::Reverse(region.start()),
-            )
-        });
+        regions.sort_by_key(|region| std::cmp::Reverse(region.start()));
 
         enum RecordPattern<'a> {
             Player(&'a str),
