@@ -178,16 +178,16 @@
 .secondary-action { padding: .5rem .7rem; color: #cce9ec; border: 1px solid #28515b; border-radius: .45rem; background: #10232a; font-size: .64rem; font-weight: 750; cursor: pointer; }
 .settings-card .secondary-action { margin-top: .75rem; }
 
-.overlay-shell { min-height: 100vh; padding: .55rem; overflow: hidden; border: 1px solid #375d68; border-radius: .8rem; background: rgb(6 12 17 / 94%); box-shadow: 0 1rem 3rem rgb(0 0 0 / 45%); }
-.overlay-title { display: flex; align-items: center; justify-content: space-between; height: 1.5rem; padding: 0 .35rem .35rem; color: #86a2ae; font-size: .57rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-.overlay-title button { display: grid; place-items: center; width: 1.35rem; height: 1.35rem; padding: 0; color: #aebdc4; border: 0; border-radius: 50%; background: #162630; cursor: pointer; }
-.overlay-rewards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .45rem; }
-.overlay-rewards .reward-card { min-height: 8.4rem; padding: .65rem; }
-.overlay-rewards .reward-card h2 { min-height: auto; margin: .4rem 0; font-size: .75rem; }
+.overlay-shell { min-height: 100vh; padding: 0; overflow: hidden; background: transparent; }
+.overlay-rewards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.25rem; height: 100vh; }
+.overlay-rewards .reward-card { min-height: 0; padding: .65rem .8rem; border: 1px solid rgb(217 224 215 / 36%); border-radius: 0; background: linear-gradient(90deg, rgb(8 11 10 / 89%), rgb(14 19 17 / 82%)); box-shadow: 0 .45rem 1.4rem rgb(0 0 0 / 42%); clip-path: polygon(.65rem 0, 100% 0, 100% calc(100% - .65rem), calc(100% - .65rem) 100%, 0 100%, 0 .65rem); }
+.overlay-rewards .reward-card h2 { min-height: auto; margin: .3rem 0; font-size: .76rem; }
 .overlay-rewards .value-row { margin: .35rem 0; }
 .overlay-rewards .value-row strong { font-size: 1.15rem; }
-.overlay-rewards .best-ribbon { top: .45rem; padding: .22rem .45rem; }
-.overlay-empty { display: grid; place-items: center; height: 8.4rem; align-content: center; color: var(--muted); font-size: .68rem; text-align: center; }
+.overlay-rewards .best-ribbon { top: 0; right: 0; padding: .22rem .45rem; }
+.overlay-rewards .badges { flex-wrap: nowrap; overflow: hidden; }
+.market-pending { color: #819089 !important; }
+.overlay-empty { display: grid; place-items: center; height: 100vh; align-content: center; color: var(--muted); border: 1px solid rgb(217 224 215 / 25%); background: rgb(8 11 10 / 80%); font-size: .68rem; text-align: center; }
 .overlay-empty strong { color: #d9e4e8; }
 .overlay-empty span { margin-top: .3rem; color: var(--subtle); }
 .empty-state, .state-card { display: grid; place-items: center; min-height: 16rem; align-content: center; padding: 2rem; color: var(--subtle); text-align: center; }

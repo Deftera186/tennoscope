@@ -11,6 +11,7 @@ pub struct CatalogMetadata {
     masterable: bool,
     max_rank: u32,
     image_name: Option<String>,
+    ducats: u32,
 }
 
 impl CatalogMetadata {
@@ -33,6 +34,10 @@ impl CatalogMetadata {
     pub fn image_name(&self) -> Option<&str> {
         self.image_name.as_deref()
     }
+
+    pub const fn ducats(&self) -> u32 {
+        self.ducats
+    }
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -46,6 +51,12 @@ pub enum CatalogError {
 #[derive(Clone, Debug, Default)]
 pub struct CatalogIndex {
     items: BTreeMap<String, CatalogMetadata>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RewardCatalogEntry {
+    pub name: String,
+    pub ducats: u32,
 }
 
 impl CatalogIndex {
@@ -66,6 +77,7 @@ impl CatalogIndex {
                     masterable: item.masterable && is_equipment(category),
                     max_rank: catalog_max_rank(&item.name),
                     image_name: validated_image_name(item.image_name.as_deref())?,
+                    ducats: item.ducats.unwrap_or(0),
                 },
                 false,
             )?;
@@ -95,6 +107,7 @@ impl CatalogIndex {
                         masterable: false,
                         max_rank: 0,
                         image_name: validated_image_name(component.image_name.as_deref())?,
+                        ducats: component.ducats.unwrap_or(0),
                     },
                     true,
                 )?;
@@ -105,6 +118,19 @@ impl CatalogIndex {
 
     pub fn resolve(&self, unique_name: &str) -> Option<&CatalogMetadata> {
         self.items.get(unique_name)
+    }
+
+    pub fn reward_entries(&self) -> Vec<RewardCatalogEntry> {
+        self.items
+            .values()
+            .filter(|metadata| {
+                metadata.category == Category::PrimePart || metadata.name == "Forma Blueprint"
+            })
+            .map(|metadata| RewardCatalogEntry {
+                name: metadata.name.clone(),
+                ducats: metadata.ducats,
+            })
+            .collect()
     }
 
     fn insert(
@@ -147,6 +173,8 @@ struct WfcdItem {
     components: Vec<WfcdComponent>,
     #[serde(default)]
     image_name: Option<String>,
+    #[serde(default)]
+    ducats: Option<u32>,
 }
 
 #[derive(Deserialize)]

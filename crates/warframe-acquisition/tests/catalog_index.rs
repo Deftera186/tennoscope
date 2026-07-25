@@ -43,6 +43,11 @@ fn parses_canonical_items_and_prime_parent_components() {
     assert_eq!(prime.category(), Category::PrimePart);
     assert!(!prime.masterable());
     assert_eq!(prime.image_name(), Some("PrimeBowString.png"));
+    assert_eq!(prime.ducats(), 15);
+    assert!(catalog
+        .reward_entries()
+        .iter()
+        .any(|entry| entry.name == "Paris Prime String" && entry.ducats == 15));
 
     let parent = catalog
         .resolve("/Lotus/Weapons/Tenno/Bows/PrimeHuntingBow")

@@ -14,7 +14,7 @@ mod linux_proc;
 mod orchestrator;
 
 pub use authorization::AuthorizationScanner;
-pub use catalog::{CatalogError, CatalogIndex, CatalogMetadata};
+pub use catalog::{CatalogError, CatalogIndex, CatalogMetadata, RewardCatalogEntry};
 pub use catalog_cache::{
     CatalogCache, CatalogCacheError, CatalogFetch, CatalogLoad, CatalogLoadSource, CatalogSource,
     WFCD_ALL_JSON_URL, WfcdCatalogHttp,

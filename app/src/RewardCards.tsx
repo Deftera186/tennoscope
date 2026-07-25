@@ -8,7 +8,7 @@ export function RewardCards({ cards, bestValueIndex, className = 'reward-grid' }
       {best && <span className="best-ribbon">Best value</span>}
       <span className="reward-index">Choice {index + 1}</span>
       <h2>{card.name}</h2>
-      <div className="value-row"><strong>{card.platinum}<small> plat</small></strong><span>{card.ducats} ducats</span></div>
+      <div className="value-row">{card.platinum > 0 ? <strong>{card.platinum}<small> plat</small></strong> : <strong className="market-pending">—<small> plat</small></strong>}<span>{card.ducats} ducats</span></div>
       <div className="badges">
         {card.owned > 0 ? <span className="badge quantity">Owned ×{card.owned}</span> : <span className="badge missing">Not owned</span>}
         {card.mastery_relevant && <span className="badge mastered">✦ Mastery needed</span>}

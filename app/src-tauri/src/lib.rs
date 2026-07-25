@@ -15,13 +15,20 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use warframe_acquisition::{
     CatalogCache, InventoryAcquirer, InventoryHttpTransport, LinuxProc, ProcessDiscovery,
-    WfcdCatalogHttp,
+    RewardCatalogEntry, WfcdCatalogHttp,
 };
+use warframe_domain::RewardCandidate;
 
 mod monitor;
+mod overlay_window;
+mod reward_observer;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
+pub use reward_observer::{
+    RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
+};
+pub use overlay_window::{OverlayGeometry, reward_overlay_geometry};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SetupStatus {
@@ -118,7 +125,10 @@ fn get_setup_status(state: State<'_, SharedRuntime>) -> Result<SetupStatus, Stri
 }
 
 #[tauri::command]
-async fn accept_risk_disclosure(state: State<'_, SharedRuntime>) -> Result<SetupStatus, String> {
+async fn accept_risk_disclosure(
+    app: AppHandle,
+    state: State<'_, SharedRuntime>,
+) -> Result<SetupStatus, String> {
     let shared = Arc::clone(state.inner());
     let result = tauri::async_runtime::spawn_blocking(move || {
         let mut runtime = shared
@@ -131,7 +141,7 @@ async fn accept_risk_disclosure(state: State<'_, SharedRuntime>) -> Result<Setup
     .await
     .map_err(|_| "setup task failed".to_owned())?;
     if result.is_ok() {
-        start_monitor(Arc::clone(state.inner()));
+        start_monitor(Arc::clone(state.inner()), app);
     }
     result
 }
@@ -331,9 +341,15 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
     None
 }
 
-fn monitor_game(shared: SharedRuntime) {
+fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let procfs = LinuxProc::new();
     let mut machine = MonitorMachine::new(15);
+    let mut reward_state = RewardObserverState::new(2, 2);
+    let reward_catalog = shared
+        .lock()
+        .ok()
+        .and_then(|runtime| load_reward_catalog(&runtime.app_data))
+        .unwrap_or_default();
     loop {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -369,8 +385,100 @@ fn monitor_game(shared: SharedRuntime) {
                 };
             }
         }
+        observe_rewards(
+            &shared,
+            &app,
+            now,
+            machine.process_pid().is_some(),
+            &reward_catalog,
+            &mut reward_state,
+        );
         std::thread::sleep(Duration::from_secs(5));
     }
+}
+
+fn load_reward_catalog(app_data: &Path) -> Option<Vec<RewardCatalogEntry>> {
+    let source = WfcdCatalogHttp::new().ok()?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    CatalogCache::new(app_data.join("catalog"))
+        .load(&source, now)
+        .ok()
+        .map(|catalog| catalog.index().reward_entries())
+}
+
+fn observe_rewards(
+    shared: &SharedRuntime,
+    app: &AppHandle,
+    now: u64,
+    game_running: bool,
+    catalog: &[RewardCatalogEntry],
+    state: &mut RewardObserverState,
+) {
+    if !game_running || catalog.is_empty() {
+        let transition = state.miss();
+        if transition.hide {
+            overlay_window::hide_reward_overlay(app);
+        }
+        return;
+    }
+    match reward_observer::observe_live_rewards(catalog) {
+        Ok(choices) if choices.len() == 4 => {
+            let transition = state.observe(choices);
+            if transition.show {
+                apply_reward_observations(shared, catalog, &transition.choices);
+                overlay_window::show_reward_overlay(app);
+            }
+            if let Ok(mut runtime) = shared.lock() {
+                let _ = runtime.core.record_capture_ready(now.to_string());
+            }
+        }
+        Ok(_) => {
+            let transition = state.miss();
+            if transition.hide {
+                overlay_window::hide_reward_overlay(app);
+                if let Ok(mut runtime) = shared.lock() {
+                    let _ = runtime.core.apply_reward_candidates(Vec::new());
+                }
+            }
+        }
+        Err(message) => {
+            let transition = state.miss();
+            if transition.hide {
+                overlay_window::hide_reward_overlay(app);
+            }
+            if let Ok(mut runtime) = shared.lock() {
+                let _ = runtime.core.record_capture_degraded(message);
+            }
+        }
+    }
+}
+
+fn apply_reward_observations(
+    shared: &SharedRuntime,
+    catalog: &[RewardCatalogEntry],
+    observations: &[RewardObservation],
+) {
+    let Ok(mut runtime) = shared.lock() else { return };
+    let Ok(view) = runtime.core.current_view() else { return };
+    let candidates = observations
+        .iter()
+        .filter_map(|observation| {
+            let ducats = catalog.iter().find(|entry| entry.name == observation.name)
+                .map_or(0, |entry| entry.ducats);
+            let owned = view.collection().items().iter()
+                .find(|item| item.name() == observation.name)
+                .map_or(0, |item| item.quantity());
+            RewardCandidate::new(
+                &observation.name,
+                0,
+                ducats,
+                owned,
+                false,
+                observation.confidence,
+            ).ok()
+        })
+        .collect();
+    let _ = runtime.core.apply_reward_candidates(candidates);
 }
 
 fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> MonitorInput {
@@ -426,7 +534,7 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> MonitorI
     )
 }
 
-fn start_monitor(shared: SharedRuntime) {
+fn start_monitor(shared: SharedRuntime, app: AppHandle) {
     let should_start = shared
         .lock()
         .map(|mut runtime| {
@@ -441,7 +549,7 @@ fn start_monitor(shared: SharedRuntime) {
     if should_start {
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(3));
-            monitor_game(shared);
+            monitor_game(shared, app);
         });
     }
 }
@@ -464,7 +572,10 @@ pub fn run() {
                 .unwrap_or(false);
             app.manage(runtime);
             if should_refresh {
-                start_monitor(Arc::clone(app.state::<SharedRuntime>().inner()));
+                start_monitor(
+                    Arc::clone(app.state::<SharedRuntime>().inner()),
+                    app.handle().clone(),
+                );
             }
             Ok(())
         })

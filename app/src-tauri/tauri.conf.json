@@ -33,6 +33,8 @@
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
+        "focus": false,
+        "focusable": false,
         "skipTaskbar": true,
         "resizable": false,
         "fullscreen": false

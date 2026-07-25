@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import { getView, type AppView } from './backend'
-import { hideRewardOverlay } from './overlay'
 import { RewardCards } from './RewardCards'
 
 export default function RewardOverlay() {
@@ -27,11 +26,10 @@ export default function RewardOverlay() {
   }, [])
 
   return <main className="overlay-shell" aria-label="Reward overlay">
-    <div className="overlay-title"><span>Reward advisor</span><button type="button" aria-label="Hide reward overlay" onClick={() => void hideRewardOverlay()}>×</button></div>
     {error ? <div className="overlay-empty">Reward data is unavailable.</div>
       : !view ? <div className="overlay-empty">Loading reward choices…</div>
         : view.reward.cards.length
           ? <RewardCards cards={view.reward.cards} bestValueIndex={view.reward.best_value_index} className="overlay-rewards"/>
-          : <div className="overlay-empty"><strong>No reward choices detected</strong><span>Waiting for a reward source. OCR is not connected yet.</span></div>}
+          : <div className="overlay-empty"><strong>No reward choices detected</strong><span>Watching the active Warframe display.</span></div>}
   </main>
 }

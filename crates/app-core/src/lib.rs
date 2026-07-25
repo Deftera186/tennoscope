@@ -243,6 +243,26 @@ impl AppCore {
         self.health.log_monitor = BackendHealth::ready("EE.log monitor ready", None)?;
         self.current_view()
     }
+
+    pub fn record_capture_ready(
+        &mut self,
+        observed_at: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        self.health.capture = BackendHealth::ready(
+            "Reward screen observer ready",
+            Some(observed_at.into()),
+        )?;
+        self.current_view()
+    }
+
+    pub fn record_capture_degraded(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        let last_success = self.health.capture.last_success.clone();
+        self.health.capture = BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.current_view()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

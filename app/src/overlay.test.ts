@@ -8,13 +8,13 @@ import { hideRewardOverlay, showRewardOverlay } from './overlay'
 describe('reward overlay window actions', () => {
   beforeEach(() => windowMock.getByLabel.mockReset())
 
-  it('shows and focuses the configured overlay window', async () => {
+  it('shows the configured overlay without stealing game focus', async () => {
     const window = { show: vi.fn(), setFocus: vi.fn(), hide: vi.fn() }
     windowMock.getByLabel.mockResolvedValue(window)
     await showRewardOverlay()
     expect(windowMock.getByLabel).toHaveBeenCalledWith('reward-overlay')
     expect(window.show).toHaveBeenCalledOnce()
-    expect(window.setFocus).toHaveBeenCalledOnce()
+    expect(window.setFocus).not.toHaveBeenCalled()
   })
 
   it('hides the configured overlay window', async () => {

@@ -1,5 +1,4 @@
 import { cleanup, render, screen, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const backend = vi.hoisted(() => ({ getView: vi.fn() }))
@@ -44,15 +43,14 @@ describe('reward overlay route', () => {
     expect(routeForPath('/collection')).toBe('main')
   })
 
-  it('renders reward decisions and can hide the overlay', async () => {
+  it('renders reward decisions without interactive window chrome', async () => {
     render(<AppRoute pathname="/overlay" />)
     const advisor = await screen.findByRole('main', { name: 'Reward overlay' })
     expect(within(advisor).getAllByRole('article')).toHaveLength(2)
     expect(within(advisor).getByRole('article', { name: 'Uncertain' })).toHaveTextContent('Uncertain recognition')
     expect(within(advisor).getByRole('article', { name: 'Uncertain' })).not.toHaveTextContent('Best value')
     expect(within(advisor).getByRole('article', { name: 'Certain' })).toHaveTextContent('Mastery needed')
-    await userEvent.click(screen.getByRole('button', { name: 'Hide reward overlay' }))
-    expect(overlay.hideRewardOverlay).toHaveBeenCalledOnce()
+    expect(within(advisor).queryByRole('button')).not.toBeInTheDocument()
   })
 
   it('renders an honest empty overlay', async () => {
