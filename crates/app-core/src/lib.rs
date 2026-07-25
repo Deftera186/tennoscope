@@ -248,10 +248,8 @@ impl AppCore {
         &mut self,
         observed_at: impl Into<String>,
     ) -> Result<AppView, AppError> {
-        self.health.capture = BackendHealth::ready(
-            "Reward screen observer ready",
-            Some(observed_at.into()),
-        )?;
+        self.health.capture =
+            BackendHealth::ready("Reward screen observer ready", Some(observed_at.into()))?;
         self.current_view()
     }
 
@@ -301,7 +299,6 @@ impl CollectionView {
     pub fn total_entries(&self) -> usize {
         self.total_entries
     }
-
 
     pub fn snapshot(&self) -> Option<&SnapshotMeta> {
         self.snapshot.as_ref()
@@ -353,15 +350,11 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
             category: entry.item.category,
             quantity: entry.quantity,
             mastered: entry.mastered,
-            image_url: entry
-                .item
-                .image_name
-                .as_ref()
-                .map(|name| {
-                    format!(
-                        "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/img/{name}"
-                    )
-                }),
+            image_url: entry.item.image_name.as_ref().map(|name| {
+                format!(
+                    "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/img/{name}"
+                )
+            }),
         }
     }
 }

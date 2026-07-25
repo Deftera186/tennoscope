@@ -1,5 +1,8 @@
 use serde::Serialize;
-use std::{io::Write, process::{Command, Stdio}};
+use std::{
+    io::Write,
+    process::{Command, Stdio},
+};
 use warframe_acquisition::RewardCatalogEntry;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -10,7 +13,10 @@ pub struct RewardObservation {
 
 impl RewardObservation {
     pub fn certain(name: impl Into<String>) -> Self {
-        Self { name: name.into(), confidence: 1.0 }
+        Self {
+            name: name.into(),
+            confidence: 1.0,
+        }
     }
 }
 
@@ -57,7 +63,11 @@ impl RewardObserverState {
         if show {
             self.visible = true;
         }
-        ObserverTransition { show, hide: false, choices }
+        ObserverTransition {
+            show,
+            hide: false,
+            choices,
+        }
     }
 
     pub fn miss(&mut self) -> ObserverTransition {
@@ -68,20 +78,31 @@ impl RewardObserverState {
         if hide {
             self.visible = false;
         }
-        ObserverTransition { show: false, hide, choices: Vec::new() }
+        ObserverTransition {
+            show: false,
+            hide,
+            choices: Vec::new(),
+        }
     }
 }
 
 fn same_choices(left: &[RewardObservation], right: &[RewardObservation]) -> bool {
     left.len() == right.len()
-        && left.iter().zip(right).all(|(left, right)| left.name == right.name)
+        && left
+            .iter()
+            .zip(right)
+            .all(|(left, right)| left.name == right.name)
 }
 
 pub fn normalize_ocr(value: &str) -> String {
     value
         .chars()
         .map(|character| {
-            if character.is_alphanumeric() { character.to_ascii_lowercase() } else { ' ' }
+            if character.is_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
         })
         .collect::<String>()
         .split_whitespace()
@@ -110,11 +131,21 @@ pub fn match_reward_text(text: &str, catalog: &[&str]) -> Vec<RewardObservation>
         if let Some((confidence, name)) = best
             && !matches.iter().any(|(_, reward)| reward.name == name)
         {
-            matches.push((line_index, RewardObservation { name: name.to_owned(), confidence }));
+            matches.push((
+                line_index,
+                RewardObservation {
+                    name: name.to_owned(),
+                    confidence,
+                },
+            ));
         }
     }
     matches.sort_by_key(|(line_index, _)| *line_index);
-    matches.into_iter().map(|(_, reward)| reward).take(4).collect()
+    matches
+        .into_iter()
+        .map(|(_, reward)| reward)
+        .take(4)
+        .collect()
 }
 
 fn levenshtein(left: &str, right: &str) -> usize {
@@ -154,25 +185,48 @@ pub fn observe_live_rewards(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "Tesseract is unavailable")?;
-    child.stdin.take().ok_or("OCR input unavailable")?
-        .write_all(&screenshot.stdout).map_err(|_| "OCR input failed")?;
+    child
+        .stdin
+        .take()
+        .ok_or("OCR input unavailable")?
+        .write_all(&screenshot.stdout)
+        .map_err(|_| "OCR input failed")?;
     let output = child.wait_with_output().map_err(|_| "OCR failed")?;
-    if !output.status.success() { return Err("OCR failed"); }
+    if !output.status.success() {
+        return Err("OCR failed");
+    }
     let text = String::from_utf8_lossy(&output.stdout);
-    let names = catalog.iter().map(|entry| entry.name.as_str()).collect::<Vec<_>>();
+    let names = catalog
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
     Ok(match_reward_text(&text, &names))
 }
 
 #[derive(serde::Deserialize)]
-struct SwayOutput { active: bool, focused: bool, rect: SwayRect }
+struct SwayOutput {
+    active: bool,
+    focused: bool,
+    rect: SwayRect,
+}
 
 #[derive(serde::Deserialize)]
-struct SwayRect { x: i32, y: i32, width: u32, height: u32 }
+struct SwayRect {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
 
 fn focused_reward_region() -> Option<String> {
-    let output = Command::new("swaymsg").args(["-t", "get_outputs", "-r"]).output().ok()?;
+    let output = Command::new("swaymsg")
+        .args(["-t", "get_outputs", "-r"])
+        .output()
+        .ok()?;
     let outputs: Vec<SwayOutput> = serde_json::from_slice(&output.stdout).ok()?;
-    let output = outputs.iter().find(|output| output.active && output.focused)
+    let output = outputs
+        .iter()
+        .find(|output| output.active && output.focused)
         .or_else(|| outputs.iter().find(|output| output.active))?;
     let x = output.rect.x + i32::try_from(output.rect.width * 7 / 100).ok()?;
     let y = output.rect.y + i32::try_from(output.rect.height * 8 / 100).ok()?;

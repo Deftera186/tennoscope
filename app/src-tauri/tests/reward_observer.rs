@@ -2,7 +2,10 @@ use app_lib::{RewardObservation, RewardObserverState, match_reward_text, normali
 
 #[test]
 fn ocr_normalization_removes_noise_without_destroying_names() {
-    assert_eq!(normalize_ocr("  Paris   Prime\nSTRING!  "), "paris prime string");
+    assert_eq!(
+        normalize_ocr("  Paris   Prime\nSTRING!  "),
+        "paris prime string"
+    );
 }
 
 #[test]
@@ -18,7 +21,10 @@ fn reward_text_resolves_four_catalog_names_in_screen_order() {
     let rewards = match_reward_text(text, &catalog);
 
     assert_eq!(
-        rewards.iter().map(|reward| reward.name.as_str()).collect::<Vec<_>>(),
+        rewards
+            .iter()
+            .map(|reward| reward.name.as_str())
+            .collect::<Vec<_>>(),
         catalog
     );
     assert!(rewards[0].confidence >= 0.8);

@@ -133,9 +133,7 @@ fn latest_snapshot_metadata_round_trips_and_empty_store_has_none() {
         "warframe-memory".into(),
     )
     .unwrap();
-    store
-        .replace_collection(&snapshot(vec![]), &meta)
-        .unwrap();
+    store.replace_collection(&snapshot(vec![]), &meta).unwrap();
 
     assert_eq!(store.latest_snapshot_meta().unwrap(), Some(meta));
 }

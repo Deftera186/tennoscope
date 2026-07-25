@@ -25,10 +25,10 @@ mod reward_observer;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
+pub use overlay_window::{OverlayGeometry, reward_overlay_geometry};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
-pub use overlay_window::{OverlayGeometry, reward_overlay_geometry};
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SetupStatus {
@@ -458,14 +458,23 @@ fn apply_reward_observations(
     catalog: &[RewardCatalogEntry],
     observations: &[RewardObservation],
 ) {
-    let Ok(mut runtime) = shared.lock() else { return };
-    let Ok(view) = runtime.core.current_view() else { return };
+    let Ok(mut runtime) = shared.lock() else {
+        return;
+    };
+    let Ok(view) = runtime.core.current_view() else {
+        return;
+    };
     let candidates = observations
         .iter()
         .filter_map(|observation| {
-            let ducats = catalog.iter().find(|entry| entry.name == observation.name)
+            let ducats = catalog
+                .iter()
+                .find(|entry| entry.name == observation.name)
                 .map_or(0, |entry| entry.ducats);
-            let owned = view.collection().items().iter()
+            let owned = view
+                .collection()
+                .items()
+                .iter()
                 .find(|item| item.name() == observation.name)
                 .map_or(0, |item| item.quantity());
             RewardCandidate::new(
@@ -475,7 +484,8 @@ fn apply_reward_observations(
                 owned,
                 false,
                 observation.confidence,
-            ).ok()
+            )
+            .ok()
         })
         .collect();
     let _ = runtime.core.apply_reward_candidates(candidates);

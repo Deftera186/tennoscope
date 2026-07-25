@@ -17,9 +17,14 @@ pub fn reward_overlay_geometry(
     let width = ((screen_width as f64 * 0.75).round() as u32).clamp(720, 1600);
     let height = 148;
     let x = screen_x + i32::try_from((screen_width - width) / 2).unwrap_or_default();
-    let y = screen_y + i32::try_from((screen_height as f64 * 0.56).round() as i64)
-        .unwrap_or_default();
-    OverlayGeometry { x, y, width, height }
+    let y =
+        screen_y + i32::try_from((screen_height as f64 * 0.56).round() as i64).unwrap_or_default();
+    OverlayGeometry {
+        x,
+        y,
+        width,
+        height,
+    }
 }
 
 pub fn configure_reward_overlay(window: &WebviewWindow) -> tauri::Result<()> {
