@@ -68,6 +68,62 @@ def readable_regions(pid: int) -> list[tuple[int, int, str]]:
     return regions
 
 
+REWARD_NAMESPACE = "/Lotus/StoreItems/Types/Recipes/"
+# Offsets before a path's first byte at which a pointer to its string object plausibly aims: the
+# path itself, its length prefix, and a few header slots.
+POINTER_OFFSETS = (0, -1, -2, -8, -16, -24, -32)
+
+
+def pointer_sites(
+    pid: int, regions: list[tuple[int, int, str]], paths: dict[str, list[int]]
+) -> list[dict]:
+    """Every 8-aligned word that points at a reward-namespace path string.
+
+    Client-mode memory holds no identity-to-reward record, so the only thing that can order the
+    four cards is whatever structure references the four path strings. Recording the referencing
+    sites lets a labelled run confirm or kill the ordered-array hypothesis offline.
+    """
+    import numpy as np
+
+    wanted: dict[int, str] = {}
+    for path, addresses in paths.items():
+        if REWARD_NAMESPACE not in path:
+            continue
+        for address in addresses:
+            for offset in POINTER_OFFSETS:
+                wanted[address + offset] = path
+    if not wanted:
+        return []
+    allowed = np.array(sorted(wanted), dtype=np.uint64)
+
+    sites: list[dict] = []
+    with open(f"/proc/{pid}/mem", "rb", buffering=0) as mem:
+        for start, end, mapping in regions:
+            address = start - (start % 8) + (8 if start % 8 else 0)
+            while address < end:
+                try:
+                    mem.seek(address)
+                    block = mem.read(min(CHUNK, end - address) & ~7)
+                except OSError:
+                    break
+                if len(block) < 8:
+                    break
+                words = np.frombuffer(block, dtype=np.uint64)
+                for index in np.flatnonzero(np.isin(words, allowed)):
+                    value = int(words[index])
+                    sites.append(
+                        {
+                            "site": address + int(index) * 8,
+                            "value": value,
+                            "path": wanted[value],
+                            "mapping": mapping,
+                        }
+                    )
+                address += len(block)
+    sites.sort(key=lambda site: site["site"])
+    return sites
+
+
 def main() -> int:
     pid = process_id()
     identities = squad_identities()
@@ -81,6 +137,7 @@ def main() -> int:
     records: list[dict] = []
     paths: dict[str, list[int]] = {}
     identity_hits: dict[str, int] = {identity: 0 for identity in identities}
+    identity_sites: dict[str, list[int]] = {identity: [] for identity in identities}
     scanned = 0
 
     with open(f"/proc/{pid}/mem", "rb", buffering=0) as mem, record_blob.open("wb") as blob:
@@ -118,7 +175,11 @@ def main() -> int:
                     paths.setdefault(match.group().decode(), []).append(address + match.start())
 
                 for identity, needle in zip(identities, needles):
-                    identity_hits[identity] += block.count(needle)
+                    at = block.find(needle)
+                    while at >= 0:
+                        identity_hits[identity] += 1
+                        identity_sites[identity].append(address + at)
+                        at = block.find(needle, at + 1)
 
                 address += max(len(block) - OVERLAP, 1)
 
@@ -128,9 +189,11 @@ def main() -> int:
         "scanned_bytes": scanned,
         "squad": identities,
         "identity_hits": identity_hits,
+        "identity_sites": identity_sites,
         "records": records,
         "records_with_reward_path": [record for record in records if record["path"]],
         "reward_paths": {path: hits[:8] for path, hits in sorted(paths.items())},
+        "pointer_sites": pointer_sites(pid, regions, paths),
         "record_blob": str(record_blob),
     }
     out = Path(f"/tmp/tennoscope-sweep-{pid}-{stamp}.json")
