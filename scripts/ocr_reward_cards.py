@@ -19,9 +19,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-# (x, y, width, height) of each card's title text, keyed by screenshot size. Filled in from a real
-# reward screenshot -- see docs; a wrong box shows up immediately as empty OCR output.
-CARD_BOXES: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {}
+# (x, y, width, height) of each card's title text, keyed by screenshot size. Calibrated from
+# /tmp/tennoscope-screen-20260726-031440-1.png: four 242px-pitch cards starting at x=478, titles at
+# y=430. The box is tall enough for a title that wraps to two lines, which means it also catches a
+# few pixels of the divider below; the closed-set match absorbs that trailing noise.
+CARD_BOXES: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {
+    (1920, 1080): [(478 + slot * 242, 430, 240, 48) for slot in range(4)],
+}
 
 PROJECTION_PREFIX = "/Lotus/Types/Game/Projections/"
 LOG_PATH = Path(
