@@ -310,6 +310,29 @@ impl AppCore {
         self.current_view()
     }
 
+    /// Live prices arrived for at least one card. Until this fires the overlay shows an em dash
+    /// rather than a zero, so the panel never implies an item is worthless when it is just unpriced.
+    pub fn record_market_ready(
+        &mut self,
+        priced: usize,
+        observed_at: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        self.health.market = BackendHealth::ready(
+            format!("warframe.market pricing ready ({priced} priced)"),
+            Some(observed_at.into()),
+        )?;
+        self.current_view()
+    }
+
+    pub fn record_market_degraded(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        let last_success = self.health.market.last_success.clone();
+        self.health.market = BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.current_view()
+    }
+
     pub fn record_capture_degraded(
         &mut self,
         message: impl Into<String>,

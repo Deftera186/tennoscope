@@ -11,6 +11,7 @@ mod catalog_cache;
 mod inventory;
 #[cfg(target_os = "linux")]
 mod linux_proc;
+mod market;
 mod orchestrator;
 mod relic_catalog;
 mod reward_memory;
@@ -28,14 +29,15 @@ pub use inventory::{
 };
 #[cfg(target_os = "linux")]
 pub use linux_proc::LinuxProc;
+pub use market::{MarketPriceSource, WarframeMarketHttp, lowest_sell_price, market_slug};
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 pub use relic_catalog::RelicRewardIndex;
+#[cfg(debug_assertions)]
+pub use reward_memory::append_debug_line;
 pub use reward_memory::{
     RewardFingerprint, RewardHit, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
     RewardResolution, resolve_current_reward_choices, resolve_reward_choices,
 };
-#[cfg(debug_assertions)]
-pub use reward_memory::append_debug_line;
 pub use reward_ui_memory::PersistentRewardResolver;
 
 /// A credential whose standard formatting surfaces never expose its contents.

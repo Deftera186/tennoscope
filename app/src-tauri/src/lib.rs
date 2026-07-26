@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CatalogIndex, GameProcess, InventoryAcquirer, InventoryHttpTransport, LinuxProc,
-    MemoryReader, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry,
-    RewardMemoryScanner, WfcdCatalogHttp, WfcdRelicCatalogHttp,
+    MarketPriceSource, MemoryReader, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex,
+    RewardCatalogEntry, RewardMemoryScanner, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
 
@@ -37,10 +37,10 @@ pub use overlay_window::{
     OverlayGeometry, WindowRect, reward_overlay_geometry, warframe_window_rect_from_sway_tree,
 };
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
-pub use reward_ocr::{ScreenRewardSource, best_match, read_cards};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
+pub use reward_ocr::{ScreenRewardSource, best_match, read_cards};
 pub use reward_source::{
     BoundMemoryRewardSource, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSet,
     RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic, RewardSourceResult,
@@ -934,9 +934,15 @@ fn publish_reward_result(
         .collect::<Vec<_>>();
     let transition = observer.observe(observations);
     if transition.publish {
-        apply_reward_observations(shared, reward_catalog, &transition.choices);
+        apply_reward_observations(
+            shared,
+            reward_catalog,
+            &transition.choices,
+            &BTreeMap::new(),
+        );
         overlay_window::show_reward_overlay(app);
         let _ = app.emit_to("reward-overlay", "reward-updated", ());
+        spawn_market_price_fetch(&transition.choices, shared, app, reward_catalog, now);
     }
     if let Ok(mut runtime) = shared.lock() {
         let source = match result.choices.source {
@@ -956,10 +962,54 @@ fn publish_reward_result(
     }
 }
 
+/// Fetch platinum prices without blocking the overlay.
+///
+/// Ducats cannot rank relic rewards on their own, since most commons share a value; platinum is
+/// what separates them. But the cards matter more than their prices, and the reward screen only
+/// lives for fifteen seconds, so the overlay goes up first and the prices land when they land. The
+/// cards render an em dash until then.
+fn spawn_market_price_fetch(
+    choices: &[RewardObservation],
+    shared: &SharedRuntime,
+    app: &AppHandle,
+    reward_catalog: &[RewardCatalogEntry],
+    now: u64,
+) {
+    let names = choices.to_vec();
+    let shared = Arc::clone(shared);
+    let app = app.clone();
+    let reward_catalog = reward_catalog.to_vec();
+    std::thread::spawn(move || {
+        let Some(market) = warframe_acquisition::WarframeMarketHttp::new() else {
+            return;
+        };
+        let prices = names
+            .iter()
+            .filter_map(|choice| Some((choice.name.clone(), market.lowest_sell(&choice.name)?)))
+            .collect::<BTreeMap<_, _>>();
+        if prices.is_empty() {
+            if let Ok(mut runtime) = shared.lock() {
+                let _ = runtime
+                    .core
+                    .record_market_degraded("No live warframe.market sellers for these rewards");
+            }
+            return;
+        }
+        apply_reward_observations(&shared, &reward_catalog, &names, &prices);
+        if let Ok(mut runtime) = shared.lock() {
+            let _ = runtime
+                .core
+                .record_market_ready(prices.len(), now.to_string());
+        }
+        let _ = app.emit_to("reward-overlay", "reward-updated", ());
+    });
+}
+
 fn apply_reward_observations(
     shared: &SharedRuntime,
     catalog: &[RewardCatalogEntry],
     observations: &[RewardObservation],
+    prices: &BTreeMap<String, u32>,
 ) {
     let Ok(mut runtime) = shared.lock() else {
         return;
@@ -982,7 +1032,7 @@ fn apply_reward_observations(
                 .map_or(0, |item| item.quantity());
             RewardCandidate::new(
                 &observation.name,
-                0,
+                prices.get(&observation.name).copied().unwrap_or(0),
                 ducats,
                 owned,
                 false,
