@@ -982,13 +982,15 @@ fn trace_player_record_evidence(
 ///
 /// The line is written with a single `write_all` so that concurrent scans appending to the same
 /// O_APPEND file cannot interleave halves of a line and destroy the evidence.
+///
+/// `TENNOSCOPE_DEBUG_LOG` redirects the file. Tests that exercise instrumented code otherwise
+/// append to the same log the live app writes, and a test fixture's output is indistinguishable
+/// from a real run once it is in there -- which already cost one misreading of this log.
 #[cfg(debug_assertions)]
 pub fn append_debug_line(line: &str) {
-    let Ok(mut output) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("/tmp/tennoscope-reward-debug.log")
-    else {
+    let path = std::env::var("TENNOSCOPE_DEBUG_LOG")
+        .unwrap_or_else(|_| "/tmp/tennoscope-reward-debug.log".to_owned());
+    let Ok(mut output) = OpenOptions::new().create(true).append(true).open(path) else {
         return;
     };
     let _ = output.write_all(format!("{line}\n").as_bytes());

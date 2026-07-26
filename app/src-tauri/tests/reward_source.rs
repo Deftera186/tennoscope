@@ -10,6 +10,8 @@ use app_lib::{
     scan_player_record_until_ready, store_player_record_if_current,
 };
 
+mod common;
+
 #[test]
 fn memory_reward_ring_rotates_without_scrambling_screen_order() {
     let mut choices = vec![
@@ -77,10 +79,14 @@ impl VisualRewardSource for Visual {
 }
 
 fn candidates() -> Vec<RewardNeedle> {
+    // Every test that reaches an instrumented path builds its inputs through these two helpers, so
+    // redirecting the debug log here covers the file without a line in each test.
+    common::isolate_debug_log();
     vec![RewardNeedle::new("A", ["/Lotus/A"]).unwrap()]
 }
 
 fn catalog() -> Vec<RewardCatalogEntry> {
+    common::isolate_debug_log();
     ["A", "B", "C", "D"]
         .into_iter()
         .map(|name| RewardCatalogEntry {

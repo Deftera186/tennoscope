@@ -812,22 +812,63 @@ fn spawn_reward_screen_poller(
     visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
     visual_polling: &Arc<std::sync::atomic::AtomicBool>,
 ) {
+    spawn_reward_screen_poller_with(
+        pool,
+        visual_reads,
+        visual_polling,
+        POLLER_INTERVAL,
+        POLLER_LIFETIME,
+        ScreenRewardSource::new,
+    );
+}
+
+/// The body of the poller, with the screen and the clock as parameters.
+///
+/// Four live runs produced no overlay and no way to tell arming from polling from reading, because
+/// the only way to reach this loop was to play a fissure. Taking the source as an argument lets a
+/// test drive it against a scripted screen in milliseconds, which is how the retry, the stop flag,
+/// and the four-name guard below are actually checked rather than argued about.
+///
+/// Returns the join handle so a test can wait for the thread instead of sleeping, and `None` when
+/// arming was declined.
+pub fn spawn_reward_screen_poller_with<S, F>(
+    pool: Vec<RewardCatalogEntry>,
+    visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
+    visual_polling: &Arc<std::sync::atomic::AtomicBool>,
+    interval: Duration,
+    lifetime: Duration,
+    make_source: F,
+) -> Option<std::thread::JoinHandle<()>>
+where
+    F: FnOnce() -> S + Send + 'static,
+    S: VisualRewardSource + Send + 'static,
+{
+    // Claim the flag only once this call is definitely going to spawn. Taking it first and then
+    // bailing on an empty pool leaves it set with no thread behind it, and since only a running
+    // poller or the screen shutting down ever clears it, every later relic load in that fissure is
+    // declined as a duplicate. The first relic pair is exactly when the pool can still be empty --
+    // a vaulted relic resolves to no candidates -- so the poller was being poisoned before the
+    // fissure that needed it had even started.
+    if pool.is_empty() {
+        #[cfg(debug_assertions)]
+        warframe_acquisition::append_debug_line("[DEBUG-poller] arm declined: empty pool");
+        return None;
+    }
     let already_running = visual_polling.swap(true, Ordering::AcqRel);
     #[cfg(debug_assertions)]
     warframe_acquisition::append_debug_line(&format!(
         "[DEBUG-poller] arm pool={} already_running={already_running}",
         pool.len()
     ));
-    if pool.is_empty() || already_running {
-        return;
+    if already_running {
+        return None;
     }
     let visual_reads = Arc::clone(visual_reads);
     let visual_polling = Arc::clone(visual_polling);
-    std::thread::spawn(move || {
-        let mut source = ScreenRewardSource::new();
-        let deadline = Instant::now() + POLLER_LIFETIME;
+    Some(std::thread::spawn(move || {
+        let mut source = make_source();
+        let deadline = Instant::now() + lifetime;
         while visual_polling.load(Ordering::Acquire) && Instant::now() < deadline {
-            std::thread::sleep(POLLER_INTERVAL);
             let outcome = VisualRewardSource::choices(&mut source, &pool);
             #[cfg(debug_assertions)]
             if let Err(reason) = &outcome {
@@ -835,18 +876,17 @@ fn spawn_reward_screen_poller(
                     "[DEBUG-poller] poll failed: {reason}"
                 ));
             }
-            let Ok(names) = outcome else {
-                continue;
-            };
-            if names.len() == 4
+            if let Ok(names) = outcome
+                && names.len() == 4
                 && let Ok(mut slot) = visual_reads.lock()
             {
                 *slot = Some(names);
                 break;
             }
+            std::thread::sleep(interval);
         }
         visual_polling.store(false, Ordering::Release);
-    });
+    }))
 }
 
 /// The relic pool as catalog entries, so the visual source can match against exactly the rewards

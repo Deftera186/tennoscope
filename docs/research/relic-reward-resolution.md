@@ -83,6 +83,40 @@ pitch from 478/1920, titles at 430/1080, height 48/1080.
 Two guards keep a bad read off the screen: anything below the match floor is dropped, and a read
 that does not contain the log's local reward is discarded.
 
+## Watching for the screen instead of being told about it
+
+EE.log is flushed seconds after the events it describes -- measured at ~7.5s on 2026-07-27, against
+a screen that lives for fifteen. Every reward capture triggered by `Got rewards` therefore starts
+at or after the point the screen is already tearing down, which is why the overlay never appeared
+on a live run and why the memory evidence below is weaker than it looks.
+
+Relic *loading* is logged minutes earlier -- 125s ahead of the screen in the run replayed by
+`app/src-tauri/tests/relic_run_replay.rs` -- so that is what arms a poller instead. The closed-set
+match doubles as the detector: only the reward screen yields four names from this squad's relic
+pool, so no separate "is the screen up" check is needed.
+
+### Why it did not run
+
+Arming claimed the "a poller is already running" flag *before* checking whether the relic pool was
+empty, then returned without spawning a thread. Nothing clears that flag except a running poller
+exiting or the screen shutting down, so one empty pool left it set with nothing behind it and every
+later relic load in that fissure was declined as a duplicate. The pool is empty exactly when the
+first relic pair does not resolve, which is the common case early in a fissure.
+
+From outside this is invisible: no thread, no reads, no log line, indistinguishable from the poller
+having run and found nothing. It stayed unnoticed for four live runs because the loop hardcoded its
+screen source and could only be reached by playing a fissure. `spawn_reward_screen_poller_with`
+takes the source and the timings as arguments so `app/src-tauri/tests/reward_poller.rs` can drive
+it against a scripted screen in milliseconds; that test caught this on its first run.
+
+The first poll now happens immediately rather than one interval in.
+
+### Instrumentation
+
+`append_debug_line` honours `TENNOSCOPE_DEBUG_LOG`. Tests set it to a scratch file, because fixture
+output in the live log is indistinguishable from a real fissure -- 68 lines of it were briefly read
+as evidence from a live run.
+
 ## Pricing
 
 Ducats cannot rank relic rewards on their own — most commons are worth the same 15. Platinum comes

@@ -93,6 +93,16 @@ impl MemoryReader for FixtureMemory {
 }
 
 fn candidate() -> RewardNeedle {
+    // Instrumented scans append to the log the live app uses as its only evidence channel for a
+    // real reward run. Every test here builds its needles through this helper, so redirecting it
+    // once keeps fixture output out of that file.
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        std::env::set_var(
+            "TENNOSCOPE_DEBUG_LOG",
+            std::env::temp_dir().join("tennoscope-test.log"),
+        );
+    });
     RewardNeedle::new(
         "Perigale Prime Receiver",
         ["/Lotus/StoreItems/PerigalePrimeReceiver"],

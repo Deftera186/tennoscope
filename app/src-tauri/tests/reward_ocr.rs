@@ -1,6 +1,8 @@
 use app_lib::best_match;
 use warframe_acquisition::RewardCatalogEntry;
 
+mod common;
+
 fn pool() -> Vec<RewardCatalogEntry> {
     // The relic pool from the labelled 2026-07-26 run whose screen produced the reads below.
     [
@@ -80,6 +82,7 @@ fn text_from_outside_the_pool_scores_below_the_floor() {
 /// Needs ImageMagick and tesseract, the same tools the live path shells out to.
 #[test]
 fn the_calibrated_geometry_reads_a_real_reward_screen() {
+    common::isolate_debug_log();
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/reward-screen-1920x1080.png");
     assert_eq!(
