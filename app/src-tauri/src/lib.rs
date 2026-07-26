@@ -24,6 +24,11 @@ use warframe_acquisition::{
 };
 use warframe_domain::RewardCandidate;
 
+/// How long to keep re-reading the reward screen before giving up. The cards appear a few
+/// milliseconds after the log announces them and the screen lives for fifteen seconds, so this is
+/// generous enough to cover a slow paint while still leaving the overlay useful.
+const VISUAL_READ_DEADLINE: Duration = Duration::from_secs(3);
+
 mod monitor;
 mod overlay_window;
 mod reward_log;
@@ -740,6 +745,7 @@ fn try_publish_player_records(
                 &pool,
                 squad.screen_order.len(),
                 local_choice.as_deref(),
+                VISUAL_READ_DEADLINE,
             )
         });
     let Some(result) = result else {

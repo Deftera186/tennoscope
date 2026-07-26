@@ -1,5 +1,9 @@
 use std::time::{Duration, Instant};
 
+/// How long to wait between screen reads while the reward cards are still being painted. Capture
+/// plus four crops and OCR costs roughly 150ms, so this paces attempts without spinning.
+const VISUAL_RETRY_INTERVAL: Duration = Duration::from_millis(200);
+
 #[cfg(debug_assertions)]
 use warframe_acquisition::append_debug_line;
 
@@ -235,29 +239,49 @@ impl RewardSourceCoordinator {
     /// this is the only source for three of the four cards in the common case. EE.log states the
     /// local player's own reward exactly, which gives a free check: a read that does not contain it
     /// is wrong somewhere, and is dropped rather than shown.
+    ///
+    /// The log announces the rewards about three milliseconds before Warframe paints the cards, so
+    /// a single capture reads an empty screen and finds nothing. Retry until the cards exist or the
+    /// deadline passes; the screen itself lives for fifteen seconds.
     pub fn visual_choices(
         &self,
         visual: &mut dyn VisualRewardSource,
         candidates: &[RewardCatalogEntry],
         expected: usize,
         local_choice: Option<&str>,
+        deadline: Duration,
     ) -> Option<RewardSourceResult> {
         let started = Instant::now();
-        let names = visual.choices(candidates).ok()?;
-        if names.len() != expected {
-            return None;
+        let mut attempts = 0_u32;
+        loop {
+            attempts += 1;
+            let attempt = visual.choices(candidates);
+            #[cfg(debug_assertions)]
+            trace_visual_read(attempts, started.elapsed(), &attempt);
+            if let Some(names) =
+                attempt
+                    .ok()
+                    .filter(|names| names.len() == expected)
+                    .filter(|names| {
+                        local_choice.is_none_or(|local| names.iter().any(|name| name == local))
+                    })
+            {
+                return Some(RewardSourceResult {
+                    choices: RewardChoiceSet {
+                        names,
+                        source: RewardChoiceSource::Ocr,
+                        elapsed: started.elapsed(),
+                    },
+                    diagnostic: RewardSourceDiagnostic::MemoryFallback,
+                });
+            }
+            if started.elapsed() >= deadline {
+                return None;
+            }
+            std::thread::sleep(
+                VISUAL_RETRY_INTERVAL.min(deadline.saturating_sub(started.elapsed())),
+            );
         }
-        if local_choice.is_some_and(|local| !names.iter().any(|name| name == local)) {
-            return None;
-        }
-        Some(RewardSourceResult {
-            choices: RewardChoiceSet {
-                names,
-                source: RewardChoiceSource::Ocr,
-                elapsed: started.elapsed(),
-            },
-            diagnostic: RewardSourceDiagnostic::MemoryFallback,
-        })
     }
 
     pub fn choices(
@@ -308,4 +332,14 @@ impl RewardSourceCoordinator {
                 }),
         }
     }
+}
+
+/// The screen read was silent in the log, which is why a blank first capture looked identical to
+/// OCR never running at all. Trace every attempt.
+#[cfg(debug_assertions)]
+fn trace_visual_read(attempt: u32, elapsed: Duration, outcome: &Result<Vec<String>, &'static str>) {
+    append_debug_line(&format!(
+        "[DEBUG-visual] attempt={attempt} elapsed_ms={} outcome={outcome:?}",
+        elapsed.as_millis(),
+    ));
 }

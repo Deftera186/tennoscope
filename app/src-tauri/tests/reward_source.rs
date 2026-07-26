@@ -451,7 +451,13 @@ fn visual_choices_publish_when_they_contain_the_logged_local_reward() {
         calls: 0,
     };
     let result = RewardSourceCoordinator::new(false)
-        .visual_choices(&mut visual, &catalog(), 4, Some("C"))
+        .visual_choices(
+            &mut visual,
+            &catalog(),
+            4,
+            Some("C"),
+            Duration::from_millis(50),
+        )
         .expect("a read containing the local reward publishes");
     assert_eq!(result.choices.names, ["A", "B", "C", "D"]);
     assert_eq!(result.choices.source, RewardChoiceSource::Ocr);
@@ -468,7 +474,7 @@ fn visual_choices_are_dropped_when_the_logged_local_reward_is_absent() {
     // The log is exact about the local player's reward, so a read missing it is wrong somewhere.
     assert!(
         RewardSourceCoordinator::new(false)
-            .visual_choices(&mut visual, &catalog(), 4, Some("Z"))
+            .visual_choices(&mut visual, &catalog(), 4, Some("Z"), Duration::ZERO)
             .is_none()
     );
 }
@@ -481,7 +487,7 @@ fn visual_choices_are_dropped_when_the_card_count_is_wrong() {
     };
     assert!(
         RewardSourceCoordinator::new(false)
-            .visual_choices(&mut visual, &catalog(), 4, None)
+            .visual_choices(&mut visual, &catalog(), 4, None, Duration::ZERO)
             .is_none()
     );
 }
@@ -494,7 +500,62 @@ fn a_failed_capture_publishes_nothing() {
     };
     assert!(
         RewardSourceCoordinator::new(false)
-            .visual_choices(&mut visual, &catalog(), 4, Some("A"))
+            .visual_choices(&mut visual, &catalog(), 4, Some("A"), Duration::ZERO)
             .is_none()
     );
+}
+
+struct SlowVisual {
+    failures: usize,
+    calls: usize,
+    names: Vec<String>,
+}
+
+impl VisualRewardSource for SlowVisual {
+    fn choices(&mut self, _candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
+        self.calls += 1;
+        if self.calls <= self.failures {
+            // What an unpainted reward screen looks like to the matcher.
+            return Err("a reward card read as blank");
+        }
+        Ok(self.names.clone())
+    }
+}
+
+/// The log announces the rewards about three milliseconds before Warframe paints the cards, so the
+/// first capture reads an empty screen. Retry until the cards exist rather than giving up on the
+/// first blank read.
+#[test]
+fn visual_choices_retry_until_the_cards_are_painted() {
+    let mut visual = SlowVisual {
+        failures: 2,
+        calls: 0,
+        names: vec!["A".into(), "B".into(), "C".into(), "D".into()],
+    };
+    let result = RewardSourceCoordinator::new(false)
+        .visual_choices(
+            &mut visual,
+            &catalog(),
+            4,
+            Some("C"),
+            Duration::from_millis(1_500),
+        )
+        .expect("a later attempt sees the painted cards");
+    assert_eq!(result.choices.names, ["A", "B", "C", "D"]);
+    assert_eq!(visual.calls, 3, "should have retried past the blank reads");
+}
+
+#[test]
+fn visual_choices_give_up_at_the_deadline() {
+    let mut visual = SlowVisual {
+        failures: usize::MAX,
+        calls: 0,
+        names: Vec::new(),
+    };
+    assert!(
+        RewardSourceCoordinator::new(false)
+            .visual_choices(&mut visual, &catalog(), 4, None, Duration::from_millis(250))
+            .is_none()
+    );
+    assert!(visual.calls >= 2, "should have retried before giving up");
 }
