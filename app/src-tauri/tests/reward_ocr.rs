@@ -1,5 +1,5 @@
-use warframe_acquisition::RewardCatalogEntry;
 use app_lib::best_match;
+use warframe_acquisition::RewardCatalogEntry;
 
 fn pool() -> Vec<RewardCatalogEntry> {
     // The relic pool from the labelled 2026-07-26 run whose screen produced the reads below.
@@ -91,4 +91,33 @@ fn the_calibrated_geometry_reads_a_real_reward_screen() {
             "Trumna Prime Blueprint",
         ]
     );
+}
+
+/// Exercises the real shell-out chain against a running game: window discovery, PPM capture,
+/// header parsing, cropping and tesseract. Ignored by default because it needs Warframe on screen.
+///
+/// Run with `cargo test -p warframe-helper --test reward_ocr -- --ignored --nocapture`. Outside a
+/// reward screen the cards will not match, which is the correct answer; what is being checked is
+/// that the failure is a match failure and not a broken capture.
+#[test]
+#[ignore = "needs a running Warframe window"]
+fn live_capture_reaches_the_game_window() {
+    let mut source = app_lib::ScreenRewardSource::new();
+    let outcome =
+        <app_lib::ScreenRewardSource as app_lib::VisualRewardSource>::choices(&mut source, &pool());
+    println!("live capture outcome: {outcome:?}");
+    assert_ne!(
+        outcome,
+        Err("no Warframe window found"),
+        "window discovery failed"
+    );
+    assert_ne!(outcome, Err("import is not available"));
+    assert_ne!(outcome, Err("magick is not available"));
+    assert_ne!(outcome, Err("tesseract is not available"));
+    assert_ne!(
+        outcome,
+        Err("capture was not a PNG or PPM"),
+        "PPM header parsing failed"
+    );
+    assert_ne!(outcome, Err("could not capture the game window"));
 }
