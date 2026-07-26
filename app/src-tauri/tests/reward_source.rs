@@ -441,3 +441,60 @@ fn a_finished_early_scan_releases_the_identity_for_the_real_response() {
 
     assert!(active.lock().unwrap().insert("remote-player".to_owned()));
 }
+
+/// The client-mode path. Memory cannot attribute the cards, so the screen supplies all four and the
+/// log's local reward is the check that the read is sane.
+#[test]
+fn visual_choices_publish_when_they_contain_the_logged_local_reward() {
+    let mut visual = Visual {
+        names: Ok(vec!["A".into(), "B".into(), "C".into(), "D".into()]),
+        calls: 0,
+    };
+    let result = RewardSourceCoordinator::new(false)
+        .visual_choices(&mut visual, &catalog(), 4, Some("C"))
+        .expect("a read containing the local reward publishes");
+    assert_eq!(result.choices.names, ["A", "B", "C", "D"]);
+    assert_eq!(result.choices.source, RewardChoiceSource::Ocr);
+    assert_eq!(result.diagnostic, RewardSourceDiagnostic::MemoryFallback);
+    assert_eq!(visual.calls, 1);
+}
+
+#[test]
+fn visual_choices_are_dropped_when_the_logged_local_reward_is_absent() {
+    let mut visual = Visual {
+        names: Ok(vec!["A".into(), "B".into(), "C".into(), "D".into()]),
+        calls: 0,
+    };
+    // The log is exact about the local player's reward, so a read missing it is wrong somewhere.
+    assert!(
+        RewardSourceCoordinator::new(false)
+            .visual_choices(&mut visual, &catalog(), 4, Some("Z"))
+            .is_none()
+    );
+}
+
+#[test]
+fn visual_choices_are_dropped_when_the_card_count_is_wrong() {
+    let mut visual = Visual {
+        names: Ok(vec!["A".into(), "B".into()]),
+        calls: 0,
+    };
+    assert!(
+        RewardSourceCoordinator::new(false)
+            .visual_choices(&mut visual, &catalog(), 4, None)
+            .is_none()
+    );
+}
+
+#[test]
+fn a_failed_capture_publishes_nothing() {
+    let mut visual = Visual {
+        names: Err("no Warframe window found"),
+        calls: 0,
+    };
+    assert!(
+        RewardSourceCoordinator::new(false)
+            .visual_choices(&mut visual, &catalog(), 4, Some("A"))
+            .is_none()
+    );
+}

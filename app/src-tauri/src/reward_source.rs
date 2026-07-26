@@ -229,6 +229,37 @@ impl RewardSourceCoordinator {
         })
     }
 
+    /// Read the cards off the screen when memory could not attribute them.
+    ///
+    /// A client's memory holds the four rewards but nothing tying them to a player or a slot, so
+    /// this is the only source for three of the four cards in the common case. EE.log states the
+    /// local player's own reward exactly, which gives a free check: a read that does not contain it
+    /// is wrong somewhere, and is dropped rather than shown.
+    pub fn visual_choices(
+        &self,
+        visual: &mut dyn VisualRewardSource,
+        candidates: &[RewardCatalogEntry],
+        expected: usize,
+        local_choice: Option<&str>,
+    ) -> Option<RewardSourceResult> {
+        let started = Instant::now();
+        let names = visual.choices(candidates).ok()?;
+        if names.len() != expected {
+            return None;
+        }
+        if local_choice.is_some_and(|local| !names.iter().any(|name| name == local)) {
+            return None;
+        }
+        Some(RewardSourceResult {
+            choices: RewardChoiceSet {
+                names,
+                source: RewardChoiceSource::Ocr,
+                elapsed: started.elapsed(),
+            },
+            diagnostic: RewardSourceDiagnostic::MemoryFallback,
+        })
+    }
+
     pub fn choices(
         &self,
         memory: &mut dyn MemoryRewardSource,

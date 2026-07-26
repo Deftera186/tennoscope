@@ -28,6 +28,7 @@ mod monitor;
 mod overlay_window;
 mod reward_log;
 mod reward_observer;
+mod reward_ocr;
 mod reward_source;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
@@ -36,6 +37,7 @@ pub use overlay_window::{
     OverlayGeometry, WindowRect, reward_overlay_geometry, warframe_window_rect_from_sway_tree,
 };
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
+pub use reward_ocr::{ScreenRewardSource, best_match, read_cards};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
@@ -721,17 +723,48 @@ fn try_publish_player_records(
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>();
+    // Matching a card against the squad's own relic pool rather than the whole catalog is what
+    // keeps a garbled read on the right item; a few dozen names, not a few thousand.
+    let pool = relic_pool_entries(memory_state.candidates(), reward_catalog);
     let mut memory = memory_state.bind(procfs, process);
-    let Some(result) = coordinator.player_record_choices(
-        &mut memory,
-        &responders,
-        squad.local_identity.as_deref(),
-        local_choice.as_deref(),
-    ) else {
+    let result = coordinator
+        .player_record_choices(
+            &mut memory,
+            &responders,
+            squad.local_identity.as_deref(),
+            local_choice.as_deref(),
+        )
+        .or_else(|| {
+            coordinator.visual_choices(
+                &mut ScreenRewardSource::new(),
+                &pool,
+                squad.screen_order.len(),
+                local_choice.as_deref(),
+            )
+        });
+    let Some(result) = result else {
         return false;
     };
     publish_reward_result(result, observer, shared, app, reward_catalog, now);
     true
+}
+
+/// The relic pool as catalog entries, so the visual source can match against exactly the rewards
+/// this squad's relics can produce.
+fn relic_pool_entries(
+    candidates: &[warframe_acquisition::RewardNeedle],
+    reward_catalog: &[RewardCatalogEntry],
+) -> Vec<RewardCatalogEntry> {
+    candidates
+        .iter()
+        .map(|needle| RewardCatalogEntry {
+            name: needle.choice_name().to_owned(),
+            ducats: reward_catalog
+                .iter()
+                .find(|entry| entry.name == needle.choice_name())
+                .map_or(0, |entry| entry.ducats),
+        })
+        .collect()
 }
 
 fn spawn_player_record_scan(
