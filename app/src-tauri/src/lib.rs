@@ -29,8 +29,11 @@ use warframe_domain::RewardCandidate;
 /// generous enough to cover a slow paint while still leaving the overlay useful.
 const VISUAL_READ_DEADLINE: Duration = Duration::from_secs(8);
 
-/// Gap between screen polls while a fissure mission is running.
-const POLLER_INTERVAL: Duration = Duration::from_millis(700);
+/// Gap between screen polls while a fissure mission is running. A poll costs about 160ms, almost
+/// all of it process startup rather than OCR, so the interval is the only real lever on cost. Two
+/// seconds keeps it near 8% of one core while still giving roughly seven attempts at a screen that
+/// lives for fifteen.
+const POLLER_INTERVAL: Duration = Duration::from_secs(2);
 /// Upper bound on how long a single fissure mission is worth watching for.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 
