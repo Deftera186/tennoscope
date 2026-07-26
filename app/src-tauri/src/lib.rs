@@ -812,7 +812,13 @@ fn spawn_reward_screen_poller(
     visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
     visual_polling: &Arc<std::sync::atomic::AtomicBool>,
 ) {
-    if pool.is_empty() || visual_polling.swap(true, Ordering::AcqRel) {
+    let already_running = visual_polling.swap(true, Ordering::AcqRel);
+    #[cfg(debug_assertions)]
+    warframe_acquisition::append_debug_line(&format!(
+        "[DEBUG-poller] arm pool={} already_running={already_running}",
+        pool.len()
+    ));
+    if pool.is_empty() || already_running {
         return;
     }
     let visual_reads = Arc::clone(visual_reads);
@@ -822,7 +828,14 @@ fn spawn_reward_screen_poller(
         let deadline = Instant::now() + POLLER_LIFETIME;
         while visual_polling.load(Ordering::Acquire) && Instant::now() < deadline {
             std::thread::sleep(POLLER_INTERVAL);
-            let Ok(names) = VisualRewardSource::choices(&mut source, &pool) else {
+            let outcome = VisualRewardSource::choices(&mut source, &pool);
+            #[cfg(debug_assertions)]
+            if let Err(reason) = &outcome {
+                warframe_acquisition::append_debug_line(&format!(
+                    "[DEBUG-poller] poll failed: {reason}"
+                ));
+            }
+            let Ok(names) = outcome else {
                 continue;
             };
             if names.len() == 4
