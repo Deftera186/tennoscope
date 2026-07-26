@@ -26,10 +26,11 @@ use crate::reward_source::VisualRewardSource;
 const CARD_LEFT: f32 = 478.0 / 1920.0;
 const CARD_PITCH: f32 = 242.0 / 1920.0;
 const CARD_WIDTH: f32 = 240.0 / 1920.0;
-const TITLE_TOP: f32 = 430.0 / 1080.0;
-/// Tall enough for a title that wraps to two lines, which also catches a few pixels of the divider
-/// below. The closed-set match absorbs the resulting trailing junk.
-const TITLE_HEIGHT: f32 = 48.0 / 1080.0;
+const TITLE_TOP: f32 = 418.0 / 1080.0;
+/// A long reward name wraps to two lines, and the block is anchored so its first line sits above
+/// where a single-line title would. The box has to cover both. A taller crop also reads cleaner:
+/// the divider noise a tighter box picked up stops dominating the block.
+const TITLE_HEIGHT: f32 = 76.0 / 1080.0;
 
 /// Below this, the read is treated as a failure rather than published as a guess.
 const MATCH_FLOOR: f32 = 0.6;
@@ -86,7 +87,15 @@ pub fn read_cards(
             (CARD_WIDTH * width as f32) as u32,
             (TITLE_HEIGHT * height as f32) as u32,
         )?;
-        let (name, score) = best_match(&text, candidates).ok_or("a reward card read as blank")?;
+        let matched = best_match(&text, candidates);
+        // Without the raw text a failed read is unattributable: reading the wrong place, reading a
+        // screen that is not the reward screen, and reading a card whose name is not in the pool
+        // all surface as the same error.
+        #[cfg(debug_assertions)]
+        warframe_acquisition::append_debug_line(&format!(
+            "[DEBUG-card] slot={slot} raw={text:?} match={matched:?}"
+        ));
+        let (name, score) = matched.ok_or("a reward card read as blank")?;
         if score < MATCH_FLOOR {
             return Err("reward card text did not match the relic pool");
         }
