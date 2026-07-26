@@ -27,7 +27,12 @@ use warframe_domain::RewardCandidate;
 /// How long to keep re-reading the reward screen before giving up. The cards appear a few
 /// milliseconds after the log announces them and the screen lives for fifteen seconds, so this is
 /// generous enough to cover a slow paint while still leaving the overlay useful.
-const VISUAL_READ_DEADLINE: Duration = Duration::from_secs(3);
+const VISUAL_READ_DEADLINE: Duration = Duration::from_secs(8);
+
+/// Gap between screen polls while a fissure mission is running.
+const POLLER_INTERVAL: Duration = Duration::from_millis(700);
+/// Upper bound on how long a single fissure mission is worth watching for.
+const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 
 mod monitor;
 mod overlay_window;
@@ -405,6 +410,14 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         .lock()
         .ok()
         .and_then(|runtime| load_relic_catalog(&runtime.app_data));
+    // EE.log reaches us seconds after the events it describes -- measured at ~7.5s on 2026-07-27,
+    // by which time the fifteen-second reward screen can already be gone. The relic-load signal
+    // arrives minutes ahead of the screen though, so it can arm a poller that watches for the cards
+    // directly. The closed-set match is its own detector: only the reward screen yields four names
+    // from this squad's relic pool.
+    let visual_reads = Arc::new(Mutex::new(None::<Vec<String>>));
+    let visual_polling = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     loop {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -472,7 +485,29 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &shared,
                 &app,
                 now,
+                &visual_reads,
+                &visual_polling,
             );
+        }
+        if let Some(names) = visual_reads.lock().ok().and_then(|mut slot| slot.take())
+            && !early_reward_resolved
+        {
+            publish_reward_result(
+                RewardSourceResult {
+                    choices: RewardChoiceSet {
+                        names,
+                        source: RewardChoiceSource::Ocr,
+                        elapsed: Duration::ZERO,
+                    },
+                    diagnostic: RewardSourceDiagnostic::MemoryFallback,
+                },
+                &mut reward_state,
+                &shared,
+                &app,
+                &reward_catalog,
+                now,
+            );
+            early_reward_resolved = true;
         }
         if process.is_none() {
             reward_memory.clear();
@@ -544,6 +579,8 @@ fn handle_reward_event(
     shared: &SharedRuntime,
     app: &AppHandle,
     now: u64,
+    visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
+    visual_polling: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     match event {
         RewardLogEvent::RewardWindowOpened => {
@@ -632,6 +669,11 @@ fn handle_reward_event(
                 return;
             };
             memory_state.prepare_candidates(&candidates);
+            spawn_reward_screen_poller(
+                relic_pool_entries(&candidates, reward_catalog),
+                visual_reads,
+                visual_polling,
+            );
         }
         RewardLogEvent::ChoicesReady {
             expected_choices, ..
@@ -673,6 +715,7 @@ fn handle_reward_event(
             }
         }
         RewardLogEvent::Closed => {
+            visual_polling.store(false, Ordering::Release);
             *early_reward_resolved = false;
             *pending_reward_squad = None;
             reward_generation.fetch_add(1, Ordering::AcqRel);
@@ -753,6 +796,41 @@ fn try_publish_player_records(
     };
     publish_reward_result(result, observer, shared, app, reward_catalog, now);
     true
+}
+
+/// Watch for the reward screen instead of waiting to be told about it.
+///
+/// EE.log is flushed by the game seconds after the fact, so the announcement can arrive after the
+/// fifteen-second screen has closed. Relic loading is logged minutes earlier, which is early enough
+/// to survive any flush delay, so that is what arms this. Each poll is a capture plus four crops,
+/// roughly 150ms; the interval keeps it to about a tenth of a core while a fissure is running.
+fn spawn_reward_screen_poller(
+    pool: Vec<RewardCatalogEntry>,
+    visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
+    visual_polling: &Arc<std::sync::atomic::AtomicBool>,
+) {
+    if pool.is_empty() || visual_polling.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let visual_reads = Arc::clone(visual_reads);
+    let visual_polling = Arc::clone(visual_polling);
+    std::thread::spawn(move || {
+        let mut source = ScreenRewardSource::new();
+        let deadline = Instant::now() + POLLER_LIFETIME;
+        while visual_polling.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(POLLER_INTERVAL);
+            let Ok(names) = VisualRewardSource::choices(&mut source, &pool) else {
+                continue;
+            };
+            if names.len() == 4
+                && let Ok(mut slot) = visual_reads.lock()
+            {
+                *slot = Some(names);
+                break;
+            }
+        }
+        visual_polling.store(false, Ordering::Release);
+    });
 }
 
 /// The relic pool as catalog entries, so the visual source can match against exactly the rewards
