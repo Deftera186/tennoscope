@@ -111,6 +111,18 @@ it against a scripted screen in milliseconds; that test caught this on its first
 
 The first poll now happens immediately rather than one interval in.
 
+### Taking it down again
+
+The same flush delay applies to `ProjectionRewardChoice.lua: Relic reward screen shut down`, so
+hiding on that line left the overlay up for seconds after the screen it describes had gone. The
+poller keeps looking after it has found the cards and reports the screen disappearing instead,
+which is the same signal the show path uses. Two consecutive failed reads are required, because a
+card reads blank often enough mid-screen that one miss is not evidence.
+
+The screen's life is deterministic once the cards render -- `ProjectionsCountdown.lua: Initialize
+timer nil 15` to `Countdown timer expired` was exactly 15.000s in both captured runs -- but every
+one of those lines is lagged, so the timer is useful for understanding and useless for triggering.
+
 ### Instrumentation
 
 `append_debug_line` honours `TENNOSCOPE_DEBUG_LOG`. Tests set it to a scratch file, because fixture

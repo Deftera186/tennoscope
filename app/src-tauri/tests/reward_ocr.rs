@@ -119,7 +119,10 @@ fn concurrent_reads_do_not_corrupt_each_other() {
         .collect::<Vec<_>>();
 
     for reader in readers {
-        let names = reader.join().expect("reader panicked").expect("read failed");
+        let names = reader
+            .join()
+            .expect("reader panicked")
+            .expect("read failed");
         assert_eq!(names, expected);
     }
 }

@@ -34,6 +34,12 @@ const VISUAL_READ_DEADLINE: Duration = Duration::from_secs(8);
 /// seconds keeps it near 8% of one core while still giving roughly seven attempts at a screen that
 /// lives for fifteen.
 const POLLER_INTERVAL: Duration = Duration::from_secs(2);
+/// Once the cards are up the screen only lives fifteen seconds, so the question changes from "is
+/// it here yet" to "has it gone", and that wants answering quickly.
+const POLLER_WATCH_INTERVAL: Duration = Duration::from_millis(400);
+/// Consecutive failed reads before the screen counts as closed. Cards read blank often enough
+/// mid-screen that one miss is not evidence.
+const POLLER_GONE_STREAK: u32 = 2;
 /// Upper bound on how long a single fissure mission is worth watching for.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 
@@ -420,6 +426,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     // from this squad's relic pool.
     let visual_reads = Arc::new(Mutex::new(None::<Vec<String>>));
     let visual_polling = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let visual_screen_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     loop {
         let now = SystemTime::now()
@@ -490,6 +497,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 now,
                 &visual_reads,
                 &visual_polling,
+                &visual_screen_gone,
             );
         }
         if let Some(names) = visual_reads.lock().ok().and_then(|mut slot| slot.take())
@@ -511,6 +519,13 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 now,
             );
             early_reward_resolved = true;
+        }
+        // The poller saw the screen disappear. Taking the overlay down here rather than waiting for
+        // the shutdown line in EE.log saves the same flush delay that used to make the overlay miss
+        // the screen entirely -- it is why the overlay used to linger for seconds after the window
+        // it describes was gone. `Closed` still arrives later and does the rest of the teardown.
+        if visual_screen_gone.swap(false, Ordering::AcqRel) && reward_state.miss().hide {
+            overlay_window::hide_reward_overlay(&app);
         }
         if process.is_none() {
             reward_memory.clear();
@@ -584,6 +599,7 @@ fn handle_reward_event(
     now: u64,
     visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
     visual_polling: &Arc<std::sync::atomic::AtomicBool>,
+    visual_screen_gone: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     match event {
         RewardLogEvent::RewardWindowOpened => {
@@ -676,6 +692,7 @@ fn handle_reward_event(
                 relic_pool_entries(&candidates, reward_catalog),
                 visual_reads,
                 visual_polling,
+                visual_screen_gone,
             );
         }
         RewardLogEvent::ChoicesReady {
@@ -811,15 +828,39 @@ fn spawn_reward_screen_poller(
     pool: Vec<RewardCatalogEntry>,
     visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
     visual_polling: &Arc<std::sync::atomic::AtomicBool>,
+    visual_screen_gone: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     spawn_reward_screen_poller_with(
         pool,
         visual_reads,
         visual_polling,
-        POLLER_INTERVAL,
-        POLLER_LIFETIME,
+        visual_screen_gone,
+        PollerTiming::live(),
         ScreenRewardSource::new,
     );
+}
+
+/// How often the poller looks, before and after it has found the cards.
+///
+/// Two rates because the poller does two jobs. Before the cards it may wait minutes, so it looks
+/// slowly. Once they are up the screen only lives fifteen seconds and the question becomes when it
+/// disappears, which wants a fast answer -- a miss costs one crop, since the read stops at the
+/// first card that will not match.
+#[derive(Clone, Copy, Debug)]
+pub struct PollerTiming {
+    pub interval: Duration,
+    pub watch_interval: Duration,
+    pub lifetime: Duration,
+}
+
+impl PollerTiming {
+    pub const fn live() -> Self {
+        Self {
+            interval: POLLER_INTERVAL,
+            watch_interval: POLLER_WATCH_INTERVAL,
+            lifetime: POLLER_LIFETIME,
+        }
+    }
 }
 
 /// The body of the poller, with the screen and the clock as parameters.
@@ -835,8 +876,8 @@ pub fn spawn_reward_screen_poller_with<S, F>(
     pool: Vec<RewardCatalogEntry>,
     visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
     visual_polling: &Arc<std::sync::atomic::AtomicBool>,
-    interval: Duration,
-    lifetime: Duration,
+    visual_screen_gone: &Arc<std::sync::atomic::AtomicBool>,
+    timing: PollerTiming,
     make_source: F,
 ) -> Option<std::thread::JoinHandle<()>>
 where
@@ -865,9 +906,15 @@ where
     }
     let visual_reads = Arc::clone(visual_reads);
     let visual_polling = Arc::clone(visual_polling);
+    let visual_screen_gone = Arc::clone(visual_screen_gone);
     Some(std::thread::spawn(move || {
         let mut source = make_source();
-        let deadline = Instant::now() + lifetime;
+        let deadline = Instant::now() + timing.lifetime;
+        // Keep polling after the cards are found, to see the screen go away. The shutdown line in
+        // EE.log arrives with the same flush delay as everything else, so hiding on it leaves the
+        // overlay up for seconds after the screen it describes has gone.
+        let mut found = false;
+        let mut misses = 0_u32;
         while visual_polling.load(Ordering::Acquire) && Instant::now() < deadline {
             let outcome = VisualRewardSource::choices(&mut source, &pool);
             #[cfg(debug_assertions)]
@@ -876,14 +923,34 @@ where
                     "[DEBUG-poller] poll failed: {reason}"
                 ));
             }
-            if let Ok(names) = outcome
-                && names.len() == 4
-                && let Ok(mut slot) = visual_reads.lock()
-            {
-                *slot = Some(names);
-                break;
+            match outcome {
+                Ok(names) if names.len() == 4 => {
+                    if !found && let Ok(mut slot) = visual_reads.lock() {
+                        *slot = Some(names);
+                        found = true;
+                    }
+                    misses = 0;
+                }
+                // A card reads blank often enough mid-screen that one miss cannot mean the screen
+                // closed; require a streak before taking the overlay down.
+                _ if found => {
+                    misses += 1;
+                    if misses >= POLLER_GONE_STREAK {
+                        #[cfg(debug_assertions)]
+                        warframe_acquisition::append_debug_line(
+                            "[DEBUG-poller] reward screen gone",
+                        );
+                        visual_screen_gone.store(true, Ordering::Release);
+                        break;
+                    }
+                }
+                _ => {}
             }
-            std::thread::sleep(interval);
+            std::thread::sleep(if found {
+                timing.watch_interval
+            } else {
+                timing.interval
+            });
         }
         visual_polling.store(false, Ordering::Release);
     }))
