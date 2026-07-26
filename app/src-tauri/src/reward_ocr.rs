@@ -35,6 +35,21 @@ const TITLE_HEIGHT: f32 = 76.0 / 1080.0;
 /// Below this, the read is treated as a failure rather than published as a guess.
 const MATCH_FLOOR: f32 = 0.6;
 
+/// Distinguishes the temp files of concurrent readers.
+///
+/// Two readers are live at once whenever the log-triggered retry overlaps the poller, which is
+/// exactly during the reward screen. Sharing one capture path and one crop path means each deletes
+/// the other's file mid-read, so the reads fail precisely when they are needed.
+static SCRATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn scratch_file(kind: &str, extension: &str) -> PathBuf {
+    let ticket = SCRATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "tennoscope-{kind}-{}-{ticket}.{extension}",
+        std::process::id()
+    ))
+}
+
 pub struct ScreenRewardSource {
     capture: PathBuf,
 }
@@ -51,7 +66,7 @@ impl ScreenRewardSource {
             // PPM, not PNG: the capture is thrown away after four crops, and PNG-encoding a
             // 1920x1080 frame costs 1.9s against 0.04s for raw pixels. That is the difference
             // between the overlay landing inside the first second of the screen and not.
-            capture: std::env::temp_dir().join("tennoscope-reward-screen.ppm"),
+            capture: scratch_file("reward-screen", "ppm"),
         }
     }
 }
@@ -178,7 +193,7 @@ fn read_region(
     width: u32,
     height: u32,
 ) -> Result<String, &'static str> {
-    let crop = std::env::temp_dir().join("tennoscope-reward-crop.png");
+    let crop = scratch_file("reward-crop", "png");
     let cropped = Command::new("magick")
         .arg(image)
         .args(["-crop", &format!("{width}x{height}+{x}+{y}"), "+repage"])

@@ -96,6 +96,34 @@ fn the_calibrated_geometry_reads_a_real_reward_screen() {
     );
 }
 
+/// Two readers are live at once whenever the log-triggered retry overlaps the poller, which is
+/// exactly during the reward screen. They used to share one capture path and one crop path, so
+/// each deleted the other's file mid-read and the reads failed precisely when they were needed.
+#[test]
+fn concurrent_reads_do_not_corrupt_each_other() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-1920x1080.png");
+    let expected = vec![
+        "Braton Prime Blueprint",
+        "2X Forma Blueprint",
+        "Burston Prime Stock",
+        "Trumna Prime Blueprint",
+    ];
+
+    let readers = (0..8)
+        .map(|_| {
+            let fixture = fixture.clone();
+            std::thread::spawn(move || app_lib::read_cards(&fixture, &pool()))
+        })
+        .collect::<Vec<_>>();
+
+    for reader in readers {
+        let names = reader.join().expect("reader panicked").expect("read failed");
+        assert_eq!(names, expected);
+    }
+}
+
 /// Exercises the real shell-out chain against a running game: window discovery, PPM capture,
 /// header parsing, cropping and tesseract. Ignored by default because it needs Warframe on screen.
 ///
