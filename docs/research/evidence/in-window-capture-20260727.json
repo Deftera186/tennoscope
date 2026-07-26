@@ -1,0 +1,45 @@
+{
+ "captured": "2026-07-27T01:10:48+03:00",
+ "trigger": "reward screen visible (scripts/watch_reward_visual.py)",
+ "screen_lifetime_s": 15,
+ "players_capture_elapsed_s": 6.5,
+ "sweep_elapsed_s": 17.9,
+ "sweep_scanned_bytes": 4962691584,
+ "on_screen_left_to_right": [
+  "Daikyu Prime Blueprint",
+  "Forma Blueprint",
+  "Daikyu Prime Blueprint",
+  "Perigale Prime Receiver"
+ ],
+ "squad": [
+  {
+   "role": "remote-0",
+   "account_id_resident": true,
+   "account_id_hits": 12,
+   "response_record": false,
+   "reward_path": null
+  },
+  {
+   "role": "remote-1",
+   "account_id_resident": true,
+   "account_id_hits": 8,
+   "response_record": false,
+   "reward_path": null
+  },
+  {
+   "role": "remote-2",
+   "account_id_resident": true,
+   "account_id_hits": 8,
+   "response_record": false,
+   "reward_path": null
+  },
+  {
+   "role": "local",
+   "account_id_resident": true,
+   "account_id_hits": 100,
+   "response_record": true,
+   "reward_path": "/Lotus/StoreItems/Types/Recipes/Weapons/PrimeDaikyuBlueprint"
+  }
+ ],
+ "note": "Account ids and display names omitted. The only record carrying a reward path belongs to the local player and matches screen slot 1."
+}

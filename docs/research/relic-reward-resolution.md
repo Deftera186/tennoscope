@@ -65,6 +65,31 @@ Useful incidental facts: a pointer to a reward string aims at `path_start - 24`,
 header. A reward may be resident under `/Lotus/Types/Recipes/...`, the `/Lotus/StoreItems/...`
 alias, or both — filtering on the alias alone silently dropped a quarter of one squad.
 
+### It was not a timing artefact
+
+Every capture above was triggered by `Got rewards` in EE.log, which arrives with the flush delay
+described below — so all of them may have run after the screen tore down. Interned path strings
+outlive the screen, per-player structures would not, and "no such record exists" and "we looked
+after it was freed" produce identical evidence. That confound made the whole table suspect.
+
+`scripts/watch_reward_visual.py` removes it by firing the captures on the screen being *visible*.
+Run of 2026-07-27 01:10:48, captured 6.5s into a fifteen-second screen:
+
+| squad member | account id resident | response record | reward path |
+|---|---|---|---|
+| `…5e5292` remote | yes, 12 hits | no | no |
+| `…126865` remote | yes, 8 hits | no | no |
+| `…22563e` remote | yes, 8 hits | no | no |
+| `…57b7f7` local | yes, 100 hits | yes, at three addresses | `PrimeDaikyuBlueprint` |
+
+The local record is the control: found in-window, at three addresses, carrying the reward the
+screenshot shows in slot 1. The scan therefore works at that moment, so the three remote absences
+are absences rather than a scan that ran too late. Reading in-window changes nothing — a client
+holds a response record for itself and for nobody else.
+
+Note the sweep's other "records" are false positives: `BeastNeutralStance` entries belonging to pet
+companion ids, not squad members.
+
 ## Reading the screen
 
 Warframe runs under Proton as an XWayland client, so `import -window` reaches it with no compositor
@@ -157,7 +182,13 @@ Neuroptics is `XakuPrimeHelmet`, Fang Prime Handle is `PrimeFangHandle`, Vadarya
 
 ## Still open
 
-- The assembled chain has not run against a live reward screen. Every component is pinned by
-  captured evidence; the composition is not.
 - `mastery_relevant` on a reward card is always false. Doing it properly needs mastery tracking the
   app does not collect.
+
+## Settled
+
+- The chain published a correct overlay on a live reward screen on 2026-07-27, after the poller
+  arming bug and the shared-scratch-file race were fixed.
+- Reading memory inside the fifteen-second window gives the same answer as reading it late, so the
+  client-mode attribution gap is real and not an artefact of the log delay.
+
