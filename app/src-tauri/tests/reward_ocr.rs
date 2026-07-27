@@ -3,6 +3,10 @@ use warframe_acquisition::RewardCatalogEntry;
 
 mod common;
 
+fn names(cards: Vec<(String, f32)>) -> Vec<String> {
+    cards.into_iter().map(|(name, _)| name).collect()
+}
+
 fn pool() -> Vec<RewardCatalogEntry> {
     // The relic pool from the labelled 2026-07-26 run whose screen produced the reads below.
     [
@@ -86,7 +90,7 @@ fn the_calibrated_geometry_reads_a_real_reward_screen() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/reward-screen-1920x1080.png");
     assert_eq!(
-        app_lib::read_cards(&fixture, &pool()).unwrap(),
+        names(app_lib::read_cards(&fixture, &pool()).unwrap()),
         vec![
             "Braton Prime Blueprint",
             "2X Forma Blueprint",
@@ -94,6 +98,58 @@ fn the_calibrated_geometry_reads_a_real_reward_screen() {
             "Trumna Prime Blueprint",
         ]
     );
+}
+
+/// The relic pool of the host run of 2026-07-27, whose screen is the wrapped-title fixture. The
+/// two Caliban parts are in deliberately: a clipped read of the wrapped card still has to pick the
+/// chassis blueprint over the bare blueprint.
+fn wrapped_pool() -> Vec<RewardCatalogEntry> {
+    [
+        ("Caliban Prime Chassis Blueprint", 15),
+        ("Caliban Prime Blueprint", 15),
+        ("Caliban Prime Neuroptics Blueprint", 15),
+        ("Bronco Prime Receiver", 15),
+        ("Bronco Prime Barrel", 15),
+        ("Forma Blueprint", 0),
+    ]
+    .into_iter()
+    .map(|(name, ducats)| RewardCatalogEntry {
+        name: name.to_owned(),
+        ducats,
+    })
+    .collect()
+}
+
+/// `fixtures/reward-screen-wrapped-title.png` is a real captured reward screen from the host run of
+/// 2026-07-27, masked to the title band the same way the fixture above is. Slot 0 is "Caliban Prime
+/// Chassis Blueprint", long enough to wrap onto two lines.
+///
+/// The title box used to start below that first line's ascenders and end inside the divider below
+/// the card, so this screen read as "Caliban Flime Gnassis Blueprint 4". Note what that does *not*
+/// do: it does not fail. The closed-set match absorbed the damage and still returned the right
+/// name, at 0.83 against a floor of 0.6, which is why five live runs went by without the geometry
+/// being questioned. The score is the only thing that moves, so the score is what is asserted.
+#[test]
+fn a_title_that_wraps_to_two_lines_is_not_clipped() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-wrapped-title.png");
+    let cards = app_lib::read_cards(&fixture, &wrapped_pool()).unwrap();
+    assert_eq!(
+        names(cards.clone()),
+        vec![
+            "Caliban Prime Chassis Blueprint",
+            "Bronco Prime Receiver",
+            "Forma Blueprint",
+            "Caliban Prime Blueprint",
+        ]
+    );
+    // Every card on all three captured screens reads exactly once the title is separated from the
+    // card art. 0.95 leaves room for a tesseract build that differs by a character without letting
+    // the old 0.83 back in.
+    for (name, score) in cards {
+        assert!(score >= 0.95, "{name} read at only {score}");
+    }
 }
 
 /// Two readers are live at once whenever the log-triggered retry overlaps the poller, which is
@@ -119,11 +175,11 @@ fn concurrent_reads_do_not_corrupt_each_other() {
         .collect::<Vec<_>>();
 
     for reader in readers {
-        let names = reader
+        let cards = reader
             .join()
             .expect("reader panicked")
             .expect("read failed");
-        assert_eq!(names, expected);
+        assert_eq!(names(cards), expected);
     }
 }
 
