@@ -1,132 +1,172 @@
+<div align="center">
+
 # TennoScope
 
-TennoScope is a Linux-first, GPLv3 desktop companion for Warframe. It runs without Overwolf, treats Wine/Proton as a supported environment, and keeps player collection data on the local machine.
+**A Linux-first Warframe companion. No Overwolf, no account, no telemetry.**
 
-The current MVP discovers a running Warframe process, reads its memory without modifying it, obtains an ephemeral inventory authorization value, validates a complete inventory snapshot, enriches it with WFCD catalog data and artwork, and stores the collection in SQLite. The TennoScope interface provides a paginated visual collection index, explicit sync freshness, diagnostics, automatic refresh, and an automatic click-through relic reward overlay on the supported capture path.
+Reads your collection straight off the running game and tells you which relic reward is
+actually worth taking — while the timer is still going.
 
-This project is unofficial and is not affiliated with or endorsed by Digital Extremes. Process inspection and undocumented game interfaces may carry account-policy or anti-cheat risk even when access is read-only. The application explains this on first run and does nothing until the user accepts the disclosure.
+[![CI](https://github.com/Deftera186/tennoscope/actions/workflows/ci.yml/badge.svg)](https://github.com/Deftera186/tennoscope/actions/workflows/ci.yml)
+[![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-informational.svg)](#requirements)
 
-## MVP features
+</div>
 
-- Native Linux process discovery, including Wine's truncated `Warframe.x64.ex` process name.
-- Read-only `/proc/<pid>/maps` and `/proc/<pid>/mem` inventory acquisition.
-- Strict, bounded parsing: incomplete snapshots are rejected rather than partially replacing the collection.
-- Local SQLite inventory snapshots with authoritative replacement semantics.
-- A cached, integrity-checked WFCD item catalog with offline fallback to the last complete generation.
-- Automatic refresh when Warframe starts and when `EE.log` reports a completed inventory sync, plus a manual refresh button.
-- Canonical item artwork, collection search, category/ownership filters, 48-item pagination, mastery state, and pipeline diagnostics.
-- Persisted exact snapshot metadata with a human-readable freshness indicator.
-- English reward-name OCR through X11 capture and Tesseract, matched against the squad's own relic pool rather than the whole catalog, with consecutive-frame debounce.
-- Live warframe.market platinum prices for the recognised rewards, quoted from in-game sellers only, alongside ducat values — the best card by each measure is called separately, because they often disagree.
-- A non-focusable GTK layer-shell reward strip aligned below the in-game reward row and hidden automatically when recognition ends.
-- No account, telemetry service, or cloud synchronization.
+---
 
-## Current limitations
+## The four-card problem
 
-- Platinum prices are best-effort. The whole relic pool is priced from warframe.market while the mission is still running, so the cards are normally already priced when the reward screen appears; anything the warm-up missed is fetched then and shows a dash until it lands. Untradeable items — Forma among them — have no listing and stay unpriced permanently. Only sellers who are currently in game are quoted, since offline listings are prices nobody can trade at.
-- Reward capture reads the game window through X11 (`xwininfo` and `import`). Warframe runs under
-  Proton as an XWayland client, so this does not need a compositor portal and is not tied to
-  wlroots — but it has only been exercised on sway, and is untested on GNOME, KDE and bare X11.
-- Overlay *placement* is the part that is compositor-specific. The game window rectangle is read
-  with `swaymsg`, so on any other compositor — Hyprland included, despite the shared wlroots
-  lineage — the overlay falls back to centring on the primary monitor instead of tracking the game
-  window. Layering uses GTK layer-shell and is skipped outside Wayland.
-- The reward card geometry is calibrated against 16:9 captures and scales by window width. If
-  Warframe scales its HUD by height instead, both the capture crop and the overlay will drift on
-  ultrawide displays. Untested — nobody has run it on one.
-- Inventory acquisition currently targets Linux `/proc` and a Warframe session running through Wine/Proton. Native Windows and macOS acquisition adapters are not included.
-- The memory/API technique depends on undocumented game behavior and may need maintenance after a Warframe update.
-- The application is English-only, and release repositories/packages are not published yet.
+A relic cracks. You have seconds, four rewards, and no idea which one is worth anything.
+TennoScope reads the cards off the screen and puts the answer under them — **in platinum and in
+ducats, called separately, because they usually disagree.**
 
-## Requirements
+![The reward overlay, aligned under the in-game reward row](docs/screenshots/reward-overlay.png)
 
-- Linux with a desktop environment or window manager capable of running GTK/WebKit applications.
-- Warframe running through Wine or Proton and logged in before inventory acquisition can succeed.
-- Permission for the same desktop user to inspect the Warframe process. See [process permissions](#process-permissions-and-yama).
-- Network access for the Warframe inventory request and the initial WFCD catalog download. A validated catalog generation is cached for later offline use.
-- For the automatic reward overlay, the following are invoked as external commands: `xwininfo` and
-  `import` (X11 window discovery and capture), `magick` (**ImageMagick 7** — version 6 ships
-  `convert` and no `magick`, and is not currently detected), and `tesseract` with English data.
-  `swaymsg` is used for overlay placement where present. GTK layer-shell is used to keep the strip
-  above the game on Wayland.
+Prices are live from warframe.market, quoted from **sellers who are actually online** — an offline
+listing is a price nobody can trade at. The whole relic pool is priced while the mission is still
+running, so the numbers are already local when the screen appears. Untradeable items get a dash,
+not a guess.
 
-Build requirements are Rust 1.85 or newer, Node.js 20.19+ (or a compatible version listed in [`app/package.json`](app/package.json)), pnpm 10, and the Tauri 2 Linux system libraries. Distribution-specific prerequisite commands are documented in [packaging/README.md](packaging/README.md).
+The strip is non-focusable and click-through. It never takes input from the game.
 
-## Development
+## Your collection, held locally
 
-Install JavaScript dependencies once:
+1,100 items with real artwork, mastery state, search and filters. No spreadsheet, no third-party
+account, no upload.
+
+![The collection browser](docs/screenshots/collection.png)
+
+It refreshes itself: TennoScope notices Warframe starting, watches the game's own log for a
+completed inventory sync, and re-reads. The log is only a trigger — nothing is scraped from it.
+
+## When something breaks, it says so
+
+![Diagnostics](docs/screenshots/diagnostics.png)
+
+Every stage reports its own state, and status messages are scrubbed of anything sensitive before
+they are shown. Four states, distinct by shape as well as colour: **ready**, **idle** (working,
+nothing to do yet), **degraded**, **failed**.
+
+---
+
+## Read this before you install it
+
+> [!IMPORTANT]
+> TennoScope reads the Warframe process's memory to obtain a session token, then asks Warframe's
+> own inventory endpoint for your collection. **It never writes to the game, and never modifies,
+> automates, or influences gameplay.** Digital Extremes has not endorsed this, and any third-party
+> tool that inspects a game process may carry account-policy or anti-cheat risk.
+
+The risk is real but small, and it is worth being precise about why. This is the same technique
+used by tools DE has publicly tolerated for years — [AlecaFrame](https://alecaframe.com/) is the
+best-known, and there are others. Overwolf-hosted overlays are explicitly permitted. Nothing here
+goes further than those do: no memory writes, no injection, no input automation, no game files
+touched.
+
+But *tolerated* is not *authorized*. DE has never published a rule that makes this safe in
+writing, and only they can. If you are not willing to accept that, do not run this — or any of the
+others.
+
+TennoScope shows this disclosure on first run and does nothing at all until you accept it.
+
+## Install
+
+No release is published yet. Build it:
 
 ```bash
-cd app
 corepack enable
-pnpm install --frozen-lockfile
+cd app && pnpm install --frozen-lockfile
+pnpm tauri build          # AppImage, .deb and .rpm land in target/release/bundle/
 ```
 
-Run the desktop application in development mode:
+Per-distribution prerequisites, plus Arch and Gentoo recipes, are in
+[`packaging/`](packaging/README.md).
+
+### Requirements
+
+- **Linux**, with Warframe running through Wine or Proton and logged in.
+- Permission to inspect your own game process — see [Yama](#process-permissions) if acquisition
+  fails.
+- For the reward overlay: `xwininfo`, `import`, **ImageMagick 7** (`magick`, not the v6 `convert`),
+  and `tesseract` with English data. `swaymsg` is used for placement where present.
+- Network access for the inventory request, the item catalog, and market prices. A validated
+  catalog is cached for offline use.
+
+To build: Rust 1.85+, Node 20.19+, pnpm 10, and the Tauri 2 Linux libraries.
+
+### What is not done yet
+
+Stated plainly, because you will hit these:
+
+| | |
+| --- | --- |
+| **Compositors** | Capture works anywhere X11 does (Warframe is an XWayland client under Proton). Overlay *placement* reads the game rectangle from `swaymsg` — everywhere else, including Hyprland, it falls back to centring on the primary monitor. |
+| **Displays** | Card geometry is calibrated on 16:9 and scales by window width. Ultrawide is untested and may drift. |
+| **Platforms** | Linux `/proc` only. No Windows or macOS acquisition adapter, and none planned. |
+| **Language** | English reward names only. |
+| **Durability** | The acquisition technique depends on undocumented game behaviour and may need maintenance after a Warframe update. |
+
+## Privacy
+
+- The account identifier and nonce are **session credentials**. They stay in memory, are redacted
+  from `Debug` and `Display`, and are never written to the database or any log.
+- Raw inventory responses are validated in memory and not persisted.
+- What is stored on disk: your normalized collection snapshot, setup state, and health metadata.
+- No telemetry, no analytics, no remote account, no crash reporting.
+- Network requests go to the pinned Warframe inventory origin, the pinned catalog source, and
+  warframe.market. Nothing else.
+
+## Process permissions
+
+TennoScope must read `/proc/<pid>/maps` and `/proc/<pid>/mem` of your own game process.
 
 ```bash
-cd app
-pnpm tauri dev
+cat /proc/sys/kernel/yama/ptrace_scope   # 0 normally permits same-user inspection
 ```
 
-Run the complete non-interactive verification suite:
-
-```bash
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
-cd app
-pnpm check
-```
-
-The ignored live acquisition tests require a logged-in Warframe session and explicit local opt-in; normal test runs never inspect a game process.
-
-## First run and automatic refresh
-
-On first launch, TennoScope shows a one-time disclosure describing its read-only process inspection, privacy behavior, and account-policy uncertainty. Acceptance is saved locally. After acceptance, acquisition is enabled by default.
-
-Start and log into Warframe normally. TennoScope detects the Proton/Wine process and performs an initial refresh. It also locates the active prefix's `EE.log` and watches for a complete `Inventory sync done` line. That signal schedules another inventory refresh with a cooldown. The log is only a trigger; inventory contents are not scraped from it.
-
-If automatic refresh cannot find the process or log, use the Diagnostics page and try **Refresh inventory** after Warframe has finished logging in.
-
-## Process permissions and Yama
-
-TennoScope must be able to read the same user's `/proc/<pid>/maps` and `/proc/<pid>/mem`. Check the active Yama policy with:
-
-```bash
-cat /proc/sys/kernel/yama/ptrace_scope
-```
-
-`0` normally permits same-user inspection. With `1` or higher, the kernel may reject access because TennoScope is not Warframe's parent process. For a temporary, system-wide test until reboot:
+At `1` or higher the kernel may refuse, because TennoScope is not Warframe's parent. To test until
+reboot:
 
 ```bash
 sudo sysctl kernel.yama.ptrace_scope=0
 ```
 
-This weakens ptrace isolation for all same-user processes while enabled. Do not run TennoScope as root, do not make the AppImage setuid, and do not grant broad capabilities merely to bypass the policy. If the temporary setting resolves acquisition, decide whether a persistent sysctl change matches your machine's threat model and distribution policy.
+That weakens ptrace isolation for every same-user process while it is set — decide whether a
+permanent change fits your machine. **Do not run TennoScope as root, do not make the AppImage
+setuid, and do not grant it capabilities to work around the policy.** Also check that Warframe and
+TennoScope run as the same Unix user; sandboxed launchers impose `/proc` restrictions that no Yama
+change will fix.
 
-Also verify that Warframe and TennoScope run as the same Unix user. Sandboxed launchers can impose additional `/proc` restrictions that a Yama change will not solve.
+## Development
 
-## Privacy and network access
+```bash
+cd app && pnpm tauri dev
+```
 
-- Ephemeral account and nonce values are kept in memory only, redacted from `Debug`/`Display`, and never written to the database or logs.
-- Raw inventory responses are validated in memory and are not persisted by default.
-- The durable player data is the normalized local collection snapshot, application setup state, and health metadata.
-- There is no telemetry, analytics, remote account, or secret persistence.
-- Network requests are limited to the pinned Warframe inventory HTTPS origin and the pinned WFCD catalog source in the current MVP.
+The full check, which is exactly what CI runs:
 
-See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for data-source and research attribution.
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cd app && pnpm check
+```
 
-## Packaging
+The live tests are `#[ignore]`d — no normal test run ever touches a game process.
 
-Tauri is configured to build AppImage, Debian, and RPM bundles. The repository also includes honest, release-infrastructure-neutral guidance for Arch Linux and Gentoo:
-
-- [Linux packaging overview](packaging/README.md)
-- [AppImage](packaging/appimage.md)
-- [Arch Linux](packaging/arch.md)
-- [Gentoo](packaging/gentoo.md)
-
-No package repository, AUR package, Gentoo overlay, Debian repository, or Fedora repository exists yet.
+| | |
+| --- | --- |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Conventions, and the two rules that are not negotiable |
+| [SECURITY.md](SECURITY.md) | What counts as a vulnerability in a tool with no server |
+| [docs/](docs/README.md) | Design decisions and the live research behind them |
+| [RELEASING.md](RELEASING.md) | Versioning and how a release is cut |
+| [CHANGELOG.md](CHANGELOG.md) | |
 
 ## License
 
-TennoScope source code is licensed under [GNU GPLv3 only](LICENSE). Warframe and its data remain the property of their respective rights holders. Runtime catalog data has its own upstream licensing; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[GPL-3.0-only](LICENSE). Warframe, its data and its artwork remain the property of Digital
+Extremes. Runtime catalog data has its own upstream licensing — see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+TennoScope is unofficial and not affiliated with or endorsed by Digital Extremes.
