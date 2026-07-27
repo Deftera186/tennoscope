@@ -993,7 +993,28 @@ pub fn append_debug_line(line: &str) {
     let Ok(mut output) = OpenOptions::new().create(true).append(true).open(path) else {
         return;
     };
-    let _ = output.write_all(format!("{line}\n").as_bytes());
+    let _ = output.write_all(format!("{} {line}\n", wall_clock()).as_bytes());
+}
+
+/// Wall clock as `HH:MM:SS.mmm`, UTC.
+///
+/// Every line in here used to be untimed, which is fine for "did this happen" and useless for
+/// "how long did it take". A report that the overlay lingered for about five seconds could not be
+/// answered from this log at all -- the ordering was there and the timing was not, and the only
+/// timestamps available were the mtimes of the crop files, by accident.
+#[cfg(debug_assertions)]
+fn wall_clock() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let seconds = now.as_secs();
+    format!(
+        "[{:02}:{:02}:{:02}.{:03}]",
+        seconds / 3600 % 24,
+        seconds / 60 % 60,
+        seconds % 60,
+        now.subsec_millis()
+    )
 }
 
 #[cfg(debug_assertions)]
