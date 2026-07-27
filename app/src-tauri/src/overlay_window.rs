@@ -20,17 +20,36 @@ pub struct WindowRect {
     pub height: u32,
 }
 
+/// Overlay height as a fraction of the screen: room for a wrapped reward name, the value row and a
+/// badge row, without covering more of the game than it has to.
+const OVERLAY_HEIGHT: f32 = 156.0 / 1080.0;
+
+/// Place the overlay directly under the game's four reward cards.
+///
+/// The rectangle comes from `reward_ocr`'s calibrated card block rather than from proportions
+/// invented here, so the overlay is exactly as wide as the cards and starts just below the
+/// player-name row. It used to be 75% of the screen wide at 56% of the height, which on a 1080p
+/// screen made it 1440px against the cards' 966 and put it ~75px too low, with columns that lined
+/// up with nothing.
+///
+/// No clamp on the width: the point is to track the cards, and a clamp is what would break that.
 pub fn reward_overlay_geometry(
     screen_width: u32,
     screen_height: u32,
     screen_x: i32,
     screen_y: i32,
 ) -> OverlayGeometry {
-    let width = ((screen_width as f64 * 0.75).round() as u32).clamp(720, 1600);
-    let height = 148;
-    let x = screen_x + i32::try_from((screen_width - width) / 2).unwrap_or_default();
-    let y =
-        screen_y + i32::try_from((screen_height as f64 * 0.56).round() as i64).unwrap_or_default();
+    let fraction = |value: f32, of: u32| f64::from(value) * f64::from(of);
+    let width = fraction(crate::reward_ocr::CARD_BLOCK_WIDTH, screen_width).round() as u32;
+    let height = (f64::from(OVERLAY_HEIGHT) * f64::from(screen_height)).round() as u32;
+    let x = screen_x
+        + i32::try_from(fraction(crate::reward_ocr::CARD_BLOCK_LEFT, screen_width).round() as i64)
+            .unwrap_or_default();
+    let y = screen_y
+        + i32::try_from(
+            fraction(crate::reward_ocr::CARD_BLOCK_BOTTOM, screen_height).round() as i64,
+        )
+        .unwrap_or_default();
     OverlayGeometry {
         x,
         y,
@@ -164,25 +183,52 @@ fn configure_linux_layer(window: &WebviewWindow, geometry: OverlayGeometry) -> b
     gtk_window.set_layer_shell_margin(Edge::Top, (geometry.y - monitor_y).max(0));
     gtk_window.set_layer_shell_margin(Edge::Left, (geometry.x - monitor_x).max(0));
     gtk_window.set_accept_focus(false);
-    gtk_window.set_default_size(
-        i32::try_from(geometry.width).unwrap_or(1600),
-        i32::try_from(geometry.height).unwrap_or(148),
-    );
+    let width = i32::try_from(geometry.width).unwrap_or(966);
+    let height = i32::try_from(geometry.height).unwrap_or(156);
+    // `set_default_size` is only an initial hint, and a layer surface anchored on two edges is free
+    // to come out wider than it. The overlay is a four-column grid sized to the game's four cards,
+    // so any extra width is shared out and every card renders wider than the reward it sits under.
+    // `set_size_request` is the part that actually pins it.
+    gtk_window.set_size_request(width, height);
+    gtk_window.set_default_size(width, height);
     gtk_window.show_all();
+    // The rest of the overlay's window properties live in `configure_reward_overlay`, which this
+    // path returns before ever reaching. Click-through is the one that is felt: without it the
+    // strip is an input-grabbing surface sitting over the game, so the pointer catches on it for as
+    // long as the overlay is up.
+    let _ = window.set_ignore_cursor_events(true);
+    let _ = window.set_focusable(false);
     true
+}
+
+/// Both ends of the overlay's life are traced, because "the overlay lingered" has several possible
+/// owners -- the poller not noticing the screen went, the monitor not acting on it, or the hide
+/// call itself not taking effect -- and they are indistinguishable from outside.
+#[cfg(debug_assertions)]
+fn trace_overlay(action: &str) {
+    warframe_acquisition::append_debug_line(&format!("[DEBUG-overlay] {action}"));
 }
 
 pub fn show_reward_overlay(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("reward-overlay") {
         let _ = app.run_on_main_thread(move || {
+            #[cfg(debug_assertions)]
+            trace_overlay("show");
             #[cfg(target_os = "linux")]
             if let Ok(Some(geometry)) = overlay_geometry(&window) {
                 if configure_linux_layer(&window, geometry) {
+                    #[cfg(debug_assertions)]
+                    trace_overlay(&format!(
+                        "shown via layer-shell {}x{} at {},{}",
+                        geometry.width, geometry.height, geometry.x, geometry.y
+                    ));
                     return;
                 }
             }
             let _ = configure_reward_overlay(&window);
             let _ = window.show();
+            #[cfg(debug_assertions)]
+            trace_overlay("shown via plain window");
         });
     }
 }
@@ -190,14 +236,20 @@ pub fn show_reward_overlay(app: &tauri::AppHandle) {
 pub fn hide_reward_overlay(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("reward-overlay") {
         let _ = app.run_on_main_thread(move || {
+            #[cfg(debug_assertions)]
+            trace_overlay("hide");
             #[cfg(target_os = "linux")]
             if std::env::var_os("WAYLAND_DISPLAY").is_some() {
                 if let Ok(gtk_window) = window.gtk_window() {
                     gtk_window.hide();
+                    #[cfg(debug_assertions)]
+                    trace_overlay("hidden via gtk");
                     return;
                 }
             }
             let _ = window.hide();
+            #[cfg(debug_assertions)]
+            trace_overlay("hidden via plain window");
         });
     }
 }
