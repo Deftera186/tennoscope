@@ -1,0 +1,40 @@
+2535.221 Sys [Info]: ResourceLoader 0x0000000020B88330 (/Lotus/Types/Game/Projections/T2VoidProjectionGyrePrimeABronze) Found 19 items to load (0ms) [Heap: 1,040,828,416/1,253,507,072 Footprint: 2,968,150,016 Handles: 0]
+2535.262 Sys [Info]: Resloader 0x0000000020B88330 (/Lotus/Types/Game/Projections/T2VoidProjectionGyrePrimeABronze) starting
+2535.262 Sys [Info]: Resource load completed 0x0000000020B88330 (/Lotus/Types/Game/Projections/T2VoidProjectionGyrePrimeABronze) in one pass and 0.0s (I/O ~= 0.0%, inherited 18 of 19)
+2535.426 Sys [Info]: ResourceLoader 0x00000000444971F0 (/Lotus/Types/Game/Projections/T2VoidProjectionTitaniaGaraVaultBPlatinum) Found 17 items to load (0ms) [Heap: 1,020,316,384/1,253,507,072 Footprint: 2,968,424,448 Handles: 0]
+2535.453 Sys [Info]: ResourceLoader 0x0000000030308480 (/Lotus/Types/Game/Projections/T2VoidProjectionGyrePrimeFBronze) Found 20 items to load (0ms) [Heap: 1,014,921,984/1,253,507,072 Footprint: 2,968,154,112 Handles: 0]
+2535.455 Sys [Info]: Resloader 0x00000000444971F0 (/Lotus/Types/Game/Projections/T2VoidProjectionTitaniaGaraVaultBPlatinum) starting
+2535.455 Sys [Info]: Resource load completed 0x00000000444971F0 (/Lotus/Types/Game/Projections/T2VoidProjectionTitaniaGaraVaultBPlatinum) in one pass and 0.0s (I/O ~= 0.0%, inherited 16 of 17)
+2535.481 Sys [Info]: Resloader 0x0000000030308480 (/Lotus/Types/Game/Projections/T2VoidProjectionGyrePrimeFBronze) starting
+2535.481 Sys [Info]: Resource load completed 0x0000000030308480 (/Lotus/Types/Game/Projections/T2VoidProjectionGyrePrimeFBronze) in one pass and 0.0s (I/O ~= 0.0%, inherited 19 of 20)
+2539.481 Sys [Info]: ResourceLoader 0x00000000814648F0 (/Lotus/Types/Game/Projections/T2VoidProjectionHildrynPrimeEBronze) Found 22 items to load (0ms) [Heap: 1,057,733,328/1,253,507,072 Footprint: 2,973,573,120 Handles: 0]
+2539.758 Sys [Info]: Resloader 0x00000000814648F0 (/Lotus/Types/Game/Projections/T2VoidProjectionHildrynPrimeEBronze) starting
+2539.758 Sys [Info]: Resource load completed 0x00000000814648F0 (/Lotus/Types/Game/Projections/T2VoidProjectionHildrynPrimeEBronze) in one pass and 0.3s (I/O ~= 70%, inherited 21 of 22)
+2660.508 Sys [Info]: VoidProjections: OpenVoidProjectionRewardScreenRMI
+2660.530 Script [Info]: ProjectionRewardChoice.lua: Relic rewards initialized
+2660.530 Sys [Info]: VoidProjections: GetVoidProjectionRewards
+2660.858 Sys [Info]: VoidProjections: de1e7ed00000000000000011 gets reward /Lotus/StoreItems/Types/Recipes/Components/FormaBlueprint
+2660.858 Sys [Info]: VoidProjections: Client got reward info from de1e7ed00000000000000011
+2660.858 Sys [Info]: VoidProjections: Still waiting on response from de1e7ed00000000000000012
+2660.858 Sys [Info]: VoidProjections: Still waiting on response from de1e7ed00000000000000013
+2660.858 Sys [Info]: VoidProjections: Still waiting on response from de1e7ed00000000000000014
+2660.858 Sys [Info]: VoidProjections: Sending reward info from de1e7ed00000000000000011 to host!
+2661.045 Sys [Info]: VoidProjections: Client got reward info from de1e7ed00000000000000014
+2661.045 Sys [Info]: VoidProjections: Still waiting on response from de1e7ed00000000000000012
+2661.045 Sys [Info]: VoidProjections: Still waiting on response from de1e7ed00000000000000013
+2661.045 Sys [Info]: VoidProjections: Client got reward info from de1e7ed00000000000000013
+2661.045 Sys [Info]: VoidProjections: Still waiting on response from de1e7ed00000000000000012
+2661.271 Sys [Info]: VoidProjections: Client got reward info from de1e7ed00000000000000012
+2661.271 Sys [Info]: VoidProjections: Client has reward info for all players now
+2661.272 Script [Info]: ProjectionsCountdown.lua: Relic timer closed
+2661.272 Script [Info]: ProjectionRewardChoice.lua: Got rewards
+2661.273 Script [Info]: ProjectionRewardChoice.lua: Missing icon data!
+2661.275 Script [Info]: ProjectionRewardChoice.lua: Missing icon data!
+2661.275 Script [Info]: ProjectionRewardChoice.lua: Missing icon data!
+2661.276 Script [Info]: ProjectionRewardChoice.lua: Missing icon data!
+2661.276 Script [Info]: ProjectionsCountdown.lua: Initialize timer nil	15
+2676.273 Script [Info]: ProjectionsCountdown.lua: Countdown timer expired
+2676.273 Script [Info]: ProjectionsCountdown.lua: Relic timer closed
+2676.273 Script [Info]: ProjectionRewardChoice.lua: Selection countdown done
+2676.273 Script [Info]: ProjectionsCountdown.lua: Initialize timer nil	0
+2676.273 Script [Info]: ProjectionRewardChoice.lua: Relic reward screen shut down
