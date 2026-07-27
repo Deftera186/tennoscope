@@ -17,13 +17,13 @@ name = "tennoscope"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "2.6.3" }
+tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 serde_json = "1.0"
 serde.workspace = true
 log = "0.4"
-tauri = { version = "2.11.3" }
+tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
 app-core = { path = "../../crates/app-core" }
 local-store = { path = "../../crates/local-store" }

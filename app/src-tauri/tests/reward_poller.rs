@@ -42,6 +42,10 @@ fn pool() -> Vec<RewardCatalogEntry> {
         .collect()
 }
 
+fn shared_pool() -> app_lib::SharedRelicPool {
+    Arc::new(Mutex::new(pool()))
+}
+
 fn cards() -> Vec<String> {
     [
         "Athodai Prime Blueprint",
@@ -91,15 +95,16 @@ fn run(absent_before: usize, showings: usize) -> Outcome {
     let polling = Arc::new(AtomicBool::new(false));
     let gone = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
-    let handle = spawn_reward_screen_poller_with(pool(), &reads, &polling, &gone, timing(), {
-        let calls = Arc::clone(&calls);
-        move || ScriptedScreen {
-            absent_before,
-            showings,
-            calls,
-        }
-    })
-    .expect("poller declined to arm");
+    let handle =
+        spawn_reward_screen_poller_with(&shared_pool(), &reads, &polling, &gone, timing(), {
+            let calls = Arc::clone(&calls);
+            move || ScriptedScreen {
+                absent_before,
+                showings,
+                calls,
+            }
+        })
+        .expect("poller declined to arm");
     handle.join().expect("poller thread panicked");
     Outcome {
         names: reads.lock().unwrap().clone(),
@@ -166,14 +171,15 @@ fn one_blank_read_mid_screen_does_not_close_the_overlay() {
     let gone = Arc::new(AtomicBool::new(false));
     let polls = Arc::new(AtomicUsize::new(0));
     const GONE_AFTER: usize = 12;
-    let handle = spawn_reward_screen_poller_with(pool(), &reads, &polling, &gone, timing(), {
-        let polls = Arc::clone(&polls);
-        move || Flickering {
-            polls,
-            gone_after: GONE_AFTER,
-        }
-    })
-    .expect("poller declined to arm");
+    let handle =
+        spawn_reward_screen_poller_with(&shared_pool(), &reads, &polling, &gone, timing(), {
+            let polls = Arc::clone(&polls);
+            move || Flickering {
+                polls,
+                gone_after: GONE_AFTER,
+            }
+        })
+        .expect("poller declined to arm");
 
     handle.join().expect("poller thread panicked");
     assert_eq!(reads.lock().unwrap().as_deref(), Some(cards().as_slice()));
@@ -199,22 +205,24 @@ fn arming_twice_starts_only_one_poller() {
     let gone = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
 
-    let first = spawn_reward_screen_poller_with(pool(), &reads, &polling, &gone, timing(), {
-        let calls = Arc::clone(&calls);
-        move || ScriptedScreen {
-            absent_before: 3,
-            showings: 2,
-            calls,
-        }
-    });
-    let second = spawn_reward_screen_poller_with(pool(), &reads, &polling, &gone, timing(), {
-        let calls = Arc::clone(&calls);
-        move || ScriptedScreen {
-            absent_before: 3,
-            showings: 2,
-            calls,
-        }
-    });
+    let first =
+        spawn_reward_screen_poller_with(&shared_pool(), &reads, &polling, &gone, timing(), {
+            let calls = Arc::clone(&calls);
+            move || ScriptedScreen {
+                absent_before: 3,
+                showings: 2,
+                calls,
+            }
+        });
+    let second =
+        spawn_reward_screen_poller_with(&shared_pool(), &reads, &polling, &gone, timing(), {
+            let calls = Arc::clone(&calls);
+            move || ScriptedScreen {
+                absent_before: 3,
+                showings: 2,
+                calls,
+            }
+        });
 
     assert!(first.is_some(), "the first arm should start a poller");
     assert!(
@@ -232,14 +240,18 @@ fn an_empty_pool_does_not_arm() {
     let reads = Arc::new(Mutex::new(None));
     let polling = Arc::new(AtomicBool::new(false));
     let gone = Arc::new(AtomicBool::new(false));
-    let handle =
-        spawn_reward_screen_poller_with(Vec::new(), &reads, &polling, &gone, timing(), || {
-            ScriptedScreen {
-                absent_before: 0,
-                showings: 1,
-                calls: Arc::new(AtomicUsize::new(0)),
-            }
-        });
+    let handle = spawn_reward_screen_poller_with(
+        &Arc::new(Mutex::new(Vec::new())),
+        &reads,
+        &polling,
+        &gone,
+        timing(),
+        || ScriptedScreen {
+            absent_before: 0,
+            showings: 1,
+            calls: Arc::new(AtomicUsize::new(0)),
+        },
+    );
     assert!(handle.is_none(), "armed a poller with nothing to match");
     assert!(
         !polling.load(Ordering::Acquire),
@@ -256,7 +268,7 @@ fn clearing_the_flag_stops_the_poller() {
     let gone = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
     let handle = spawn_reward_screen_poller_with(
-        pool(),
+        &shared_pool(),
         &reads,
         &polling,
         &gone,
@@ -279,4 +291,57 @@ fn clearing_the_flag_stops_the_poller() {
     polling.store(false, Ordering::Release);
     handle.join().expect("poller thread panicked");
     assert!(reads.lock().unwrap().is_none());
+}
+
+/// The bug that produced no overlay on three consecutive live runs on 2026-07-27.
+///
+/// Squad relics are logged one at a time as they load, and `BaselineRequested` fires on the second
+/// of four. The pool was handed to the poller by value at that moment, so the two later relics only
+/// reached the arming calls that the "already running" guard declined -- the live log shows
+/// `arm pool=11 already_running=false` followed by `arm pool=17 already_running=true`. The poller
+/// then matched a four-card screen against a pool missing six of its rewards, and since one
+/// unmatched card fails the whole read, nothing was ever published.
+///
+/// The screen here returns a card that only exists in the later pool, so a poller that captured the
+/// pool at arm time can never match it.
+#[test]
+fn a_relic_that_loads_after_arming_still_reaches_the_running_poller() {
+    struct LateCard;
+    impl VisualRewardSource for LateCard {
+        fn choices(
+            &mut self,
+            candidates: &[RewardCatalogEntry],
+        ) -> Result<Vec<String>, &'static str> {
+            if !candidates
+                .iter()
+                .any(|entry| entry.name == "Late Prime Blueprint")
+            {
+                return Err("reward card text did not match the relic pool");
+            }
+            Ok(cards())
+        }
+    }
+
+    isolate_debug_log();
+    let reads = Arc::new(Mutex::new(None));
+    let polling = Arc::new(AtomicBool::new(false));
+    let gone = Arc::new(AtomicBool::new(false));
+    let shared = shared_pool();
+
+    let handle =
+        spawn_reward_screen_poller_with(&shared, &reads, &polling, &gone, timing(), || LateCard)
+            .expect("poller declined to arm");
+
+    // The third squad member's relic finishes loading after the poller is already running.
+    shared.lock().unwrap().push(RewardCatalogEntry {
+        name: "Late Prime Blueprint".to_owned(),
+        ducats: 15,
+    });
+
+    handle.join().expect("poller thread panicked");
+    assert_eq!(
+        reads.lock().unwrap().as_deref(),
+        Some(cards().as_slice()),
+        "the poller never saw the relic that loaded after it armed"
+    );
 }

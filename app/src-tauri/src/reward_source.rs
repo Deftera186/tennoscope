@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
 
 /// How long to wait between screen reads while the reward cards are still being painted. Capture
 /// plus four crops and OCR costs roughly 150ms, so this paces attempts without spinning.
@@ -233,16 +236,24 @@ impl RewardSourceCoordinator {
         })
     }
 
-    /// Read the cards off the screen when memory could not attribute them.
+    /// Read the cards off the screen.
     ///
-    /// A client's memory holds the four rewards but nothing tying them to a player or a slot, so
-    /// this is the only source for three of the four cards in the common case. EE.log states the
-    /// local player's own reward exactly, which gives a free check: a read that does not contain it
-    /// is wrong somewhere, and is dropped rather than shown.
+    /// Memory holds the four rewards but nothing tying them to a player or a slot, hosting or not,
+    /// so this is the only source for three of the four cards. EE.log states the local player's own
+    /// reward exactly, which gives a free check: a read that does not contain it is wrong somewhere,
+    /// and is dropped rather than shown.
     ///
     /// The log announces the rewards about three milliseconds before Warframe paints the cards, so
     /// a single capture reads an empty screen and finds nothing. Retry until the cards exist or the
     /// deadline passes; the screen itself lives for fifteen seconds.
+    ///
+    /// `abort` ends the retry early, and it matters more than it looks. This runs synchronously on
+    /// the monitor thread, and that same thread is the one that watches for the screen going away
+    /// and takes the overlay down. EE.log's flush delay means this can easily be entered *after*
+    /// the screen has already closed, and without a way out it then spends the full deadline
+    /// retrying against a screen that is gone -- with the monitor blocked behind it, unable to
+    /// hide an overlay it has already been told to hide. That is seconds of the overlay sitting
+    /// over the game after the rewards are no longer there.
     pub fn visual_choices(
         &self,
         visual: &mut dyn VisualRewardSource,
@@ -250,10 +261,19 @@ impl RewardSourceCoordinator {
         expected: usize,
         local_choice: Option<&str>,
         deadline: Duration,
+        abort: &AtomicBool,
     ) -> Option<RewardSourceResult> {
         let started = Instant::now();
         let mut attempts = 0_u32;
         loop {
+            if abort.load(Ordering::Acquire) {
+                #[cfg(debug_assertions)]
+                append_debug_line(&format!(
+                    "[DEBUG-visual] aborted after {}ms: the screen is already gone",
+                    started.elapsed().as_millis()
+                ));
+                return None;
+            }
             attempts += 1;
             let attempt = visual.choices(candidates);
             #[cfg(debug_assertions)]

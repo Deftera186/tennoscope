@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CatalogIndex, GameProcess, InventoryAcquirer, InventoryHttpTransport, LinuxProc,
-    MarketPriceSource, MemoryReader, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex,
+    MarketPriceCache, MemoryReader, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex,
     RewardCatalogEntry, RewardMemoryScanner, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
@@ -42,6 +42,9 @@ const POLLER_WATCH_INTERVAL: Duration = Duration::from_millis(400);
 const POLLER_GONE_STREAK: u32 = 2;
 /// Upper bound on how long a single fissure mission is worth watching for.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
+/// Pause between warm-up price requests. The relic pool is a few dozen names and the reward screen
+/// is minutes away, so there is no reason to arrive at warframe.market as a burst.
+const MARKET_WARM_GAP: Duration = Duration::from_millis(250);
 
 mod monitor;
 mod overlay_window;
@@ -398,6 +401,10 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let incremental_reward_records = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
     let active_reward_scans = Arc::new(Mutex::new(BTreeSet::<String>::new()));
     let reward_generation = Arc::new(AtomicU64::new(0));
+    // Survives across missions on purpose: the same relic pools recur all evening, so a price
+    // fetched two runs ago is one this run does not have to make.
+    let price_cache = MarketPriceCache::new();
+    let visual_pool: SharedRelicPool = Arc::new(Mutex::new(Vec::new()));
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
         768 * 1024 * 1024,
@@ -498,6 +505,8 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &visual_reads,
                 &visual_polling,
                 &visual_screen_gone,
+                &visual_pool,
+                &price_cache,
             );
         }
         if let Some(names) = visual_reads.lock().ok().and_then(|mut slot| slot.take())
@@ -516,6 +525,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &shared,
                 &app,
                 &reward_catalog,
+                &price_cache,
                 now,
             );
             early_reward_resolved = true;
@@ -600,6 +610,8 @@ fn handle_reward_event(
     visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
     visual_polling: &Arc<std::sync::atomic::AtomicBool>,
     visual_screen_gone: &Arc<std::sync::atomic::AtomicBool>,
+    visual_pool: &SharedRelicPool,
+    price_cache: &MarketPriceCache,
 ) {
     match event {
         RewardLogEvent::RewardWindowOpened => {
@@ -642,25 +654,26 @@ fn handle_reward_event(
         RewardLogEvent::ResponsesComplete {
             screen_order,
             local_reward_path,
-            local_identity,
             ..
         } => {
             *pending_reward_squad = Some(PendingRewardSquad {
                 screen_order,
                 local_reward_path,
-                local_identity,
             });
-            if let (Some(process), Some(squad)) = (process, pending_reward_squad.as_ref())
+            // The screen read needs a window, not a process handle, but a dead game has neither:
+            // requiring the process keeps a vanished game from burning the retry deadline.
+            if process.is_some()
+                && let Some(squad) = pending_reward_squad.as_ref()
                 && try_publish_player_records(
                     squad,
-                    process,
-                    procfs,
                     memory_state,
                     coordinator,
                     observer,
                     shared,
                     app,
                     reward_catalog,
+                    price_cache,
+                    visual_screen_gone,
                     now,
                 )
             {
@@ -688,8 +701,19 @@ fn handle_reward_event(
                 return;
             };
             memory_state.prepare_candidates(&candidates);
+            // Publish the pool before arming, and on every baseline rather than only the first.
+            // A running poller reads this cell each poll, so a relic that loads after it started
+            // still reaches it -- which is the common case, since the baseline fires on the second
+            // of four relics.
+            let entries = relic_pool_entries(&candidates, reward_catalog);
+            if let Ok(mut pool) = visual_pool.lock()
+                && entries.len() > pool.len()
+            {
+                *pool = entries.clone();
+            }
+            spawn_market_price_warm(&entries, price_cache);
             spawn_reward_screen_poller(
-                relic_pool_entries(&candidates, reward_catalog),
+                visual_pool,
                 visual_reads,
                 visual_polling,
                 visual_screen_gone,
@@ -701,9 +725,9 @@ fn handle_reward_event(
             if *early_reward_resolved {
                 return;
             }
-            let Some(process) = process else {
+            if process.is_none() {
                 return;
-            };
+            }
             let Some(squad) = pending_reward_squad
                 .as_ref()
                 .filter(|squad| squad.screen_order.len() == expected_choices)
@@ -717,14 +741,14 @@ fn handle_reward_event(
             };
             if try_publish_player_records(
                 squad,
-                process,
-                procfs,
                 memory_state,
                 coordinator,
                 observer,
                 shared,
                 app,
                 reward_catalog,
+                price_cache,
+                visual_screen_gone,
                 now,
             ) {
                 *early_reward_resolved = true;
@@ -755,24 +779,36 @@ fn handle_reward_event(
     }
 }
 
+/// The squad roster in screen order, plus the one reward EE.log states outright. `local_identity`
+/// used to ride along for the memory scan's per-player attribution; the screen read needs only the
+/// local player's reward name, as a check that the four cards it read include the one the log
+/// already confirmed.
 #[derive(Clone, Debug)]
 struct PendingRewardSquad {
     screen_order: Vec<String>,
     local_reward_path: Option<String>,
-    local_identity: Option<String>,
 }
 
+/// Publish the four cards, read off the screen.
+///
+/// Memory used to be tried first here and the screen kept as a fallback. It never once answered on
+/// a live run: ten reward events across host and client sessions on 2026-07-27 all resolved
+/// `Incomplete`, and the only per-player record ever confirmed belongs to the local player, whose
+/// reward EE.log already states exactly and which arrives here as `local_choice`. Hosting was
+/// expected to be the case that worked and was measured doing the same thing, so the scan bought
+/// nothing but 130-200MB of reads per reward screen. The scanner and its fixtures stay in
+/// `warframe-acquisition` for the attribution question to be reopened against evidence.
 #[allow(clippy::too_many_arguments)]
 fn try_publish_player_records(
     squad: &PendingRewardSquad,
-    process: GameProcess,
-    procfs: &LinuxProc,
-    memory_state: &mut LiveMemoryRewardState,
+    memory_state: &LiveMemoryRewardState,
     coordinator: &RewardSourceCoordinator,
     observer: &mut RewardObserverState,
     shared: &SharedRuntime,
     app: &AppHandle,
     reward_catalog: &[RewardCatalogEntry],
+    price_cache: &MarketPriceCache,
+    visual_screen_gone: &std::sync::atomic::AtomicBool,
     now: u64,
 ) -> bool {
     let local_choice = squad.local_reward_path.as_deref().and_then(|path| {
@@ -786,35 +822,28 @@ fn try_publish_player_records(
             })
             .map(|needle| needle.choice_name().to_owned())
     });
-    let responders = squad
-        .screen_order
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
     // Matching a card against the squad's own relic pool rather than the whole catalog is what
     // keeps a garbled read on the right item; a few dozen names, not a few thousand.
     let pool = relic_pool_entries(memory_state.candidates(), reward_catalog);
-    let mut memory = memory_state.bind(procfs, process);
-    let result = coordinator
-        .player_record_choices(
-            &mut memory,
-            &responders,
-            squad.local_identity.as_deref(),
-            local_choice.as_deref(),
-        )
-        .or_else(|| {
-            coordinator.visual_choices(
-                &mut ScreenRewardSource::new(),
-                &pool,
-                squad.screen_order.len(),
-                local_choice.as_deref(),
-                VISUAL_READ_DEADLINE,
-            )
-        });
-    let Some(result) = result else {
+    let Some(result) = coordinator.visual_choices(
+        &mut ScreenRewardSource::new(),
+        &pool,
+        squad.screen_order.len(),
+        local_choice.as_deref(),
+        VISUAL_READ_DEADLINE,
+        visual_screen_gone,
+    ) else {
         return false;
     };
-    publish_reward_result(result, observer, shared, app, reward_catalog, now);
+    publish_reward_result(
+        result,
+        observer,
+        shared,
+        app,
+        reward_catalog,
+        price_cache,
+        now,
+    );
     true
 }
 
@@ -825,7 +854,7 @@ fn try_publish_player_records(
 /// to survive any flush delay, so that is what arms this. Each poll is a capture plus four crops,
 /// roughly 150ms; the interval keeps it to about a tenth of a core while a fissure is running.
 fn spawn_reward_screen_poller(
-    pool: Vec<RewardCatalogEntry>,
+    pool: &SharedRelicPool,
     visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
     visual_polling: &Arc<std::sync::atomic::AtomicBool>,
     visual_screen_gone: &Arc<std::sync::atomic::AtomicBool>,
@@ -839,6 +868,19 @@ fn spawn_reward_screen_poller(
         ScreenRewardSource::new,
     );
 }
+
+/// The relic pool the poller matches against, shared because it is still growing when the poller
+/// starts.
+///
+/// Each squad member's relic is logged as it loads, and the baseline fires on the second one --
+/// long before the other two arrive. The pool was passed to the poller by value at that moment, so
+/// the later relics were only ever seen by the arming call that the "already running" guard then
+/// declined. The poller spent the rest of the fissure matching a screen of four rewards against a
+/// pool that only knew two relics' worth, and one unmatched card fails the whole read, so the
+/// overlay never appeared. Observed live on 2026-07-27: armed at 11 names, the 17-name pool
+/// declined, and `Banshee Prime Neuroptics Blueprint` -- on screen, in the newer pool, not in the
+/// older one -- failed every attempt.
+pub type SharedRelicPool = Arc<Mutex<Vec<RewardCatalogEntry>>>;
 
 /// How often the poller looks, before and after it has found the cards.
 ///
@@ -873,7 +915,7 @@ impl PollerTiming {
 /// Returns the join handle so a test can wait for the thread instead of sleeping, and `None` when
 /// arming was declined.
 pub fn spawn_reward_screen_poller_with<S, F>(
-    pool: Vec<RewardCatalogEntry>,
+    pool: &SharedRelicPool,
     visual_reads: &Arc<Mutex<Option<Vec<String>>>>,
     visual_polling: &Arc<std::sync::atomic::AtomicBool>,
     visual_screen_gone: &Arc<std::sync::atomic::AtomicBool>,
@@ -890,7 +932,8 @@ where
     // declined as a duplicate. The first relic pair is exactly when the pool can still be empty --
     // a vaulted relic resolves to no candidates -- so the poller was being poisoned before the
     // fissure that needed it had even started.
-    if pool.is_empty() {
+    let pool_size = pool.lock().map(|pool| pool.len()).unwrap_or(0);
+    if pool_size == 0 {
         #[cfg(debug_assertions)]
         warframe_acquisition::append_debug_line("[DEBUG-poller] arm declined: empty pool");
         return None;
@@ -898,12 +941,12 @@ where
     let already_running = visual_polling.swap(true, Ordering::AcqRel);
     #[cfg(debug_assertions)]
     warframe_acquisition::append_debug_line(&format!(
-        "[DEBUG-poller] arm pool={} already_running={already_running}",
-        pool.len()
+        "[DEBUG-poller] arm pool={pool_size} already_running={already_running}"
     ));
     if already_running {
         return None;
     }
+    let pool = Arc::clone(pool);
     let visual_reads = Arc::clone(visual_reads);
     let visual_polling = Arc::clone(visual_polling);
     let visual_screen_gone = Arc::clone(visual_screen_gone);
@@ -916,7 +959,15 @@ where
         let mut found = false;
         let mut misses = 0_u32;
         while visual_polling.load(Ordering::Acquire) && Instant::now() < deadline {
-            let outcome = VisualRewardSource::choices(&mut source, &pool);
+            // Re-read the pool every poll rather than capturing it at arm time. Squadmates' relics
+            // are still loading when this thread starts, and a card missing from the pool fails the
+            // whole screen.
+            let current = pool.lock().map(|pool| pool.clone()).unwrap_or_default();
+            if current.is_empty() {
+                std::thread::sleep(timing.interval);
+                continue;
+            }
+            let outcome = VisualRewardSource::choices(&mut source, &current);
             #[cfg(debug_assertions)]
             if let Err(reason) = &outcome {
                 warframe_acquisition::append_debug_line(&format!(
@@ -1125,12 +1176,14 @@ fn trace_responder_reward_scan(
     ));
 }
 
+#[allow(clippy::too_many_arguments)]
 fn publish_reward_result(
     result: RewardSourceResult,
     observer: &mut RewardObserverState,
     shared: &SharedRuntime,
     app: &AppHandle,
     reward_catalog: &[RewardCatalogEntry],
+    price_cache: &MarketPriceCache,
     now: u64,
 ) {
     let observations = result
@@ -1149,7 +1202,14 @@ fn publish_reward_result(
         );
         overlay_window::show_reward_overlay(app);
         let _ = app.emit_to("reward-overlay", "reward-updated", ());
-        spawn_market_price_fetch(&transition.choices, shared, app, reward_catalog, now);
+        spawn_market_price_fetch(
+            &transition.choices,
+            shared,
+            app,
+            reward_catalog,
+            price_cache,
+            now,
+        );
     }
     if let Ok(mut runtime) = shared.lock() {
         let source = match result.choices.source {
@@ -1180,20 +1240,38 @@ fn spawn_market_price_fetch(
     shared: &SharedRuntime,
     app: &AppHandle,
     reward_catalog: &[RewardCatalogEntry],
+    price_cache: &MarketPriceCache,
     now: u64,
 ) {
     let names = choices.to_vec();
     let shared = Arc::clone(shared);
     let app = app.clone();
     let reward_catalog = reward_catalog.to_vec();
+    let price_cache = price_cache.clone();
     std::thread::spawn(move || {
-        let Some(market) = warframe_acquisition::WarframeMarketHttp::new() else {
-            return;
-        };
-        let prices = names
+        // Anything the pool warmed while the mission was still running is already here, so the
+        // common case does no requests at all and the overlay never shows a dash. Only a reward
+        // the warm pass missed -- a pool that never loaded, an API that was down then -- is
+        // fetched now, and it is fetched with no gap because the screen is already up.
+        let mut prices = names
             .iter()
-            .filter_map(|choice| Some((choice.name.clone(), market.lowest_sell(&choice.name)?)))
+            .filter_map(|choice| Some((choice.name.clone(), price_cache.get(&choice.name)?)))
             .collect::<BTreeMap<_, _>>();
+        let missing = names
+            .iter()
+            .filter(|choice| !prices.contains_key(&choice.name))
+            .map(|choice| choice.name.clone())
+            .collect::<Vec<_>>();
+        if !missing.is_empty()
+            && let Some(market) = warframe_acquisition::WarframeMarketHttp::new()
+        {
+            price_cache.warm(&market, &missing, Duration::ZERO);
+            for name in missing {
+                if let Some(price) = price_cache.get(&name) {
+                    prices.insert(name, price);
+                }
+            }
+        }
         if prices.is_empty() {
             if let Ok(mut runtime) = shared.lock() {
                 let _ = runtime
@@ -1209,6 +1287,27 @@ fn spawn_market_price_fetch(
                 .record_market_ready(prices.len(), now.to_string());
         }
         let _ = app.emit_to("reward-overlay", "reward-updated", ());
+    });
+}
+
+/// Price the whole relic pool while the mission is still being played.
+///
+/// The pool is known when the relics load and the reward screen is minutes away, so there is time
+/// to be unhurried and polite about it. Doing this later -- when the cards are actually on screen
+/// -- is what made every card show a dash for the first seconds of a fifteen-second window.
+fn spawn_market_price_warm(pool: &[RewardCatalogEntry], price_cache: &MarketPriceCache) {
+    let names = pool
+        .iter()
+        .map(|entry| entry.name.clone())
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        return;
+    }
+    let price_cache = price_cache.clone();
+    std::thread::spawn(move || {
+        if let Some(market) = warframe_acquisition::WarframeMarketHttp::new() {
+            price_cache.warm(&market, &names, MARKET_WARM_GAP);
+        }
     });
 }
 

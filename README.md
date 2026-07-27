@@ -16,14 +16,24 @@ This project is unofficial and is not affiliated with or endorsed by Digital Ext
 - Automatic refresh when Warframe starts and when `EE.log` reports a completed inventory sync, plus a manual refresh button.
 - Canonical item artwork, collection search, category/ownership filters, 48-item pagination, mastery state, and pipeline diagnostics.
 - Persisted exact snapshot metadata with a human-readable freshness indicator.
-- English reward-name OCR on wlroots through `grim` and Tesseract, with consecutive-frame debounce.
+- English reward-name OCR through X11 capture and Tesseract, matched against the squad's own relic pool rather than the whole catalog, with consecutive-frame debounce.
+- Live warframe.market platinum prices for the recognised rewards, quoted from in-game sellers only, alongside ducat values — the best card by each measure is called separately, because they often disagree.
 - A non-focusable GTK layer-shell reward strip aligned below the in-game reward row and hidden automatically when recognition ends.
 - No account, telemetry service, or cloud synchronization.
 
 ## Current limitations
 
-- Live Warframe Market prices are **not implemented**. The MVP does not present live platinum values or make market recommendations.
-- Automatic reward capture currently supports wlroots compositors such as sway and Hyprland. PipeWire portal capture for GNOME/KDE Wayland and an X11 adapter remain required for the full desktop matrix; collection synchronization and browsing are unaffected there.
+- Platinum prices are best-effort. The whole relic pool is priced from warframe.market while the mission is still running, so the cards are normally already priced when the reward screen appears; anything the warm-up missed is fetched then and shows a dash until it lands. Untradeable items — Forma among them — have no listing and stay unpriced permanently. Only sellers who are currently in game are quoted, since offline listings are prices nobody can trade at.
+- Reward capture reads the game window through X11 (`xwininfo` and `import`). Warframe runs under
+  Proton as an XWayland client, so this does not need a compositor portal and is not tied to
+  wlroots — but it has only been exercised on sway, and is untested on GNOME, KDE and bare X11.
+- Overlay *placement* is the part that is compositor-specific. The game window rectangle is read
+  with `swaymsg`, so on any other compositor — Hyprland included, despite the shared wlroots
+  lineage — the overlay falls back to centring on the primary monitor instead of tracking the game
+  window. Layering uses GTK layer-shell and is skipped outside Wayland.
+- The reward card geometry is calibrated against 16:9 captures and scales by window width. If
+  Warframe scales its HUD by height instead, both the capture crop and the overlay will drift on
+  ultrawide displays. Untested — nobody has run it on one.
 - Inventory acquisition currently targets Linux `/proc` and a Warframe session running through Wine/Proton. Native Windows and macOS acquisition adapters are not included.
 - The memory/API technique depends on undocumented game behavior and may need maintenance after a Warframe update.
 - The application is English-only, and release repositories/packages are not published yet.
@@ -34,7 +44,11 @@ This project is unofficial and is not affiliated with or endorsed by Digital Ext
 - Warframe running through Wine or Proton and logged in before inventory acquisition can succeed.
 - Permission for the same desktop user to inspect the Warframe process. See [process permissions](#process-permissions-and-yama).
 - Network access for the Warframe inventory request and the initial WFCD catalog download. A validated catalog generation is cached for later offline use.
-- For the current automatic reward overlay: `grim`, Tesseract with English data, and GTK layer-shell on a wlroots Wayland session.
+- For the automatic reward overlay, the following are invoked as external commands: `xwininfo` and
+  `import` (X11 window discovery and capture), `magick` (**ImageMagick 7** — version 6 ships
+  `convert` and no `magick`, and is not currently detected), and `tesseract` with English data.
+  `swaymsg` is used for overlay placement where present. GTK layer-shell is used to keep the strip
+  above the game on Wayland.
 
 Build requirements are Rust 1.85 or newer, Node.js 20.19+ (or a compatible version listed in [`app/package.json`](app/package.json)), pnpm 10, and the Tauri 2 Linux system libraries. Distribution-specific prerequisite commands are documented in [packaging/README.md](packaging/README.md).
 

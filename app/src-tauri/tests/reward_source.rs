@@ -1,3 +1,4 @@
+use std::sync::atomic::AtomicBool;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, atomic::AtomicU64},
@@ -463,6 +464,7 @@ fn visual_choices_publish_when_they_contain_the_logged_local_reward() {
             4,
             Some("C"),
             Duration::from_millis(50),
+            &AtomicBool::new(false),
         )
         .expect("a read containing the local reward publishes");
     assert_eq!(result.choices.names, ["A", "B", "C", "D"]);
@@ -480,7 +482,14 @@ fn visual_choices_are_dropped_when_the_logged_local_reward_is_absent() {
     // The log is exact about the local player's reward, so a read missing it is wrong somewhere.
     assert!(
         RewardSourceCoordinator::new(false)
-            .visual_choices(&mut visual, &catalog(), 4, Some("Z"), Duration::ZERO)
+            .visual_choices(
+                &mut visual,
+                &catalog(),
+                4,
+                Some("Z"),
+                Duration::ZERO,
+                &AtomicBool::new(false)
+            )
             .is_none()
     );
 }
@@ -493,7 +502,14 @@ fn visual_choices_are_dropped_when_the_card_count_is_wrong() {
     };
     assert!(
         RewardSourceCoordinator::new(false)
-            .visual_choices(&mut visual, &catalog(), 4, None, Duration::ZERO)
+            .visual_choices(
+                &mut visual,
+                &catalog(),
+                4,
+                None,
+                Duration::ZERO,
+                &AtomicBool::new(false)
+            )
             .is_none()
     );
 }
@@ -506,7 +522,14 @@ fn a_failed_capture_publishes_nothing() {
     };
     assert!(
         RewardSourceCoordinator::new(false)
-            .visual_choices(&mut visual, &catalog(), 4, Some("A"), Duration::ZERO)
+            .visual_choices(
+                &mut visual,
+                &catalog(),
+                4,
+                Some("A"),
+                Duration::ZERO,
+                &AtomicBool::new(false)
+            )
             .is_none()
     );
 }
@@ -545,6 +568,7 @@ fn visual_choices_retry_until_the_cards_are_painted() {
             4,
             Some("C"),
             Duration::from_millis(1_500),
+            &AtomicBool::new(false),
         )
         .expect("a later attempt sees the painted cards");
     assert_eq!(result.choices.names, ["A", "B", "C", "D"]);
@@ -560,8 +584,66 @@ fn visual_choices_give_up_at_the_deadline() {
     };
     assert!(
         RewardSourceCoordinator::new(false)
-            .visual_choices(&mut visual, &catalog(), 4, None, Duration::from_millis(250))
+            .visual_choices(
+                &mut visual,
+                &catalog(),
+                4,
+                None,
+                Duration::from_millis(250),
+                &AtomicBool::new(false)
+            )
             .is_none()
     );
     assert!(visual.calls >= 2, "should have retried before giving up");
+}
+
+/// The reason a live overlay sat over the game for seconds after the rewards had gone.
+///
+/// This retry runs on the monitor thread, and that thread is also the one that notices the screen
+/// disappear and takes the overlay down. EE.log's flush delay means the retry is routinely entered
+/// after the screen has already closed, and it used to grind the whole eight-second deadline first
+/// -- with the monitor blocked behind it, holding up a hide it had already been told to perform.
+#[test]
+fn a_screen_that_has_already_gone_stops_the_retry_instead_of_blocking_the_monitor() {
+    struct NeverPaints {
+        attempts: Arc<AtomicU64>,
+    }
+    impl app_lib::VisualRewardSource for NeverPaints {
+        fn choices(
+            &mut self,
+            _candidates: &[RewardCatalogEntry],
+        ) -> Result<Vec<String>, &'static str> {
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            Err("a reward card read as blank")
+        }
+    }
+
+    let attempts = Arc::new(AtomicU64::new(0));
+    let mut visual = NeverPaints {
+        attempts: Arc::clone(&attempts),
+    };
+    let gone = AtomicBool::new(true);
+    let started = std::time::Instant::now();
+
+    let result = RewardSourceCoordinator::new(false).visual_choices(
+        &mut visual,
+        &catalog(),
+        4,
+        None,
+        Duration::from_secs(8),
+        &gone,
+    );
+
+    assert!(result.is_none());
+    assert_eq!(
+        attempts.load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "must not even capture once when the screen is known to be gone"
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "held the monitor thread for {:?} against an eight-second deadline",
+        started.elapsed()
+    );
 }
