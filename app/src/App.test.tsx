@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const backend = vi.hoisted(() => ({
   getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(),
 }))
-const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn() }))
+const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverlay: vi.fn() }))
 vi.mock('./backend', () => backend)
 vi.mock('./overlay', () => overlay)
 
@@ -60,6 +60,7 @@ describe('MVP desktop interface', () => {
     backend.getView.mockResolvedValue(view)
     backend.refreshInventory.mockResolvedValue(view)
     overlay.showRewardOverlay.mockResolvedValue(undefined)
+    overlay.hideRewardOverlay.mockResolvedValue(undefined)
   })
 
   it('requires an accessible one-time risk disclosure before enabling acquisition', async () => {
@@ -110,7 +111,7 @@ describe('MVP desktop interface', () => {
     for (const label of ['Frame', 'Weapon', 'Companion', 'Prime Part', 'Relic', 'Resource', 'Blueprint', 'Vehicle']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
     }
-    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Sort collection' }), 'quantity-desc')
+    await userEvent.click(within(screen.getByRole('group', { name: 'Sort collection' })).getByRole('button', { name: 'Quantity' }))
     const cards = screen.getAllByRole('article').filter(node => node.closest('[aria-label="Collection items"]'))
     expect(cards[0]).toHaveAccessibleName('Lith A1 Relic')
   })
@@ -141,8 +142,8 @@ describe('MVP desktop interface', () => {
     }
     expect(within(panel).getByText('Last success: 1')).toBeInTheDocument()
     expect(panel).not.toHaveTextContent(/accountId|nonce|authorization token/i)
-    await userEvent.click(within(panel).getByRole('button', { name: 'Preview reward overlay' }))
-    expect(overlay.showRewardOverlay).toHaveBeenCalledOnce()
+    // Diagnostics reports live health; the overlay preview is a setup affordance and lives in Settings.
+    expect(within(panel).queryByRole('button', { name: /reward overlay/i })).not.toBeInTheDocument()
   })
 
   it('renders zero to four reward decisions with value, ownership, and mastery indicators', async () => {
@@ -170,8 +171,11 @@ describe('MVP desktop interface', () => {
     expect(screen.getByRole('heading', { name: 'Settings & about' })).toBeInTheDocument()
     expect(screen.getByText(/stored on this device/i)).toBeInTheDocument()
     expect(screen.getByText(/process inspection may carry/i)).toBeInTheDocument()
+    // A preview you cannot dismiss is a trap: the same control has to put it away.
     await userEvent.click(screen.getByRole('button', { name: 'Preview reward overlay' }))
     expect(overlay.showRewardOverlay).toHaveBeenCalledOnce()
+    await userEvent.click(screen.getByRole('button', { name: 'Hide reward overlay' }))
+    expect(overlay.hideRewardOverlay).toHaveBeenCalledOnce()
   })
 
   it('refreshes inventory and announces live state', async () => {

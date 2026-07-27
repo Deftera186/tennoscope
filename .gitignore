@@ -8,3 +8,4 @@ app/dist/
 *.sqlite3-shm
 *.sqlite3-wal
 __pycache__/
+.impeccable/live/sessions/

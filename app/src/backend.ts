@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 
-export type HealthState = 'ready' | 'degraded' | 'failed'
+export type HealthState = 'ready' | 'idle' | 'degraded' | 'failed'
 export interface BackendHealth { state: HealthState; message: string; last_success: string | null }
 export interface AcquisitionStageHealth { stage: string; state: HealthState; message: string }
 export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 'relic' | 'resource' | 'blueprint' | 'vehicle'

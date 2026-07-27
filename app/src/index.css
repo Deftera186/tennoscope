@@ -1,7 +1,50 @@
+/* TennoScope base layer — the touchstone.
+   See DESIGN.md. Nothing here glows, floats, or rounds. */
+
 :root {
-  font-family: "IBM Plex Sans", "Noto Sans", ui-sans-serif, system-ui, sans-serif;
-  color: #dce4ed;
-  background: #060b10;
+  /* Ground: the basalt slab metal is tested against. */
+  --touchstone: #0b0c0e;
+  --plate: #131417;
+  --raised: #1a1c20;
+  --well: #0e0f12;
+
+  /* Engraving */
+  --rule: #2a2d33;
+  --rule-bright: #3c4048;
+  /* Control boundaries need 3:1 under WCAG 1.4.11; the sheet's own hairlines do not. */
+  --rule-control: #5c616b;
+
+  /* The two metals, plus the failed assay. */
+  --platinum: #e8ebef;
+  --platinum-dim: #9aa1ab;
+  --platinum-deep: #868d97;
+  --gold: #d8b04a;
+  --gold-dim: #a8863a;
+  --oxblood: #dd6f60;
+
+  /* A mark struck into metal: dark lip above, catch-light below. No blur radius —
+     a strike is a hard edge, not a soft shadow. */
+  --strike: inset 0 1px 0 rgb(0 0 0 / 78%), inset 0 -1px 0 rgb(232 235 239 / 9%);
+  --strike-deep: inset 0 2px 0 rgb(0 0 0 / 88%), inset 0 -1px 0 rgb(232 235 239 / 7%);
+
+  /* The hallmark cartouche: the house-shaped platinum standard mark. */
+  --cartouche: polygon(0 0, 100% 0, 100% 68%, 50% 100%, 0 68%);
+
+  --face-mark: "Liberation Sans Narrow", "DejaVu Sans Condensed", "Archivo Narrow", "Roboto Condensed", ui-sans-serif, system-ui, sans-serif;
+  --face-text: ui-sans-serif, system-ui, "DejaVu Sans", "Liberation Sans", sans-serif;
+  --face-register: ui-monospace, "DejaVu Sans Mono", "Liberation Mono", "Cascadia Mono", monospace;
+
+  /* One rhythm. Nothing off-scale. */
+  --hair: 4px;
+  --tight: 8px;
+  --step: 16px;
+  --course: 32px;
+  --field: 64px;
+  --bed: 112px;
+
+  font-family: var(--face-text);
+  color: var(--platinum);
+  background: var(--touchstone);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -9,14 +52,61 @@
 }
 
 * { box-sizing: border-box; }
-html { min-width: 20rem; min-height: 100%; background: #060b10; }
+
+html { min-width: 20rem; min-height: 100%; background: var(--touchstone); }
 html.overlay-mode, html.overlay-mode body { background: transparent; }
-body { margin: 0; min-width: 20rem; min-height: 100vh; overflow-x: hidden; }
+
+body {
+  margin: 0;
+  min-width: 20rem;
+  min-height: 100vh;
+  overflow-x: hidden;
+  /* Guilloché: interfering curves, the way a real security print is made. Kept
+     low but not invisible — it should read as engine-turned ground when looked for. */
+  background-image: url("data:image/svg+xml;utf8,\
+<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240'>\
+<g fill='none' stroke='%23e8ebef' stroke-opacity='0.05' stroke-width='0.6'>\
+<circle cx='120' cy='120' r='104'/><circle cx='120' cy='120' r='86'/>\
+<circle cx='120' cy='120' r='68'/><circle cx='120' cy='120' r='50'/>\
+<ellipse cx='120' cy='120' rx='104' ry='40'/><ellipse cx='120' cy='120' rx='40' ry='104'/>\
+<ellipse cx='120' cy='120' rx='96' ry='62' transform='rotate(30 120 120)'/>\
+<ellipse cx='120' cy='120' rx='96' ry='62' transform='rotate(-30 120 120)'/>\
+<ellipse cx='120' cy='120' rx='96' ry='62' transform='rotate(75 120 120)'/>\
+</g></svg>");
+  background-size: 240px 240px;
+}
+html.overlay-mode body { background-image: none; }
+
 button, input, select { font: inherit; }
 button { color: inherit; }
-button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #77dff1; outline-offset: 3px; }
-::selection { color: #061016; background: #7de4ef; }
+
+/* A focus ring in the world's own grammar: a struck platinum edge, square. */
+button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--platinum);
+  outline-offset: 2px;
+}
+
+::selection { color: var(--touchstone); background: var(--platinum); }
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* The cartouches suppress their outline and show focus by inverting; under forced
+   colours that inversion is gone, so the outline has to come back. */
+@media (forced-colors: active) {
+  button:focus-visible, .punch:focus-visible, .shield:focus-visible {
+    outline: 3px solid Highlight !important;
+    outline-offset: 2px;
+  }
 }
