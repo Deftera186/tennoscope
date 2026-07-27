@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security or privacy report
+    url: https://github.com/Deftera186/tennoscope/security/advisories/new
+    about: Session credentials, player data, memory writes, privilege escalation — report privately, not here.
+  - name: Question or idea
+    url: https://github.com/Deftera186/tennoscope/discussions
+    about: Anything that is not a bug or a concrete request.

@@ -7,11 +7,9 @@ import subprocess
 import time
 from pathlib import Path
 
+import _paths
 
-LOG_PATH = Path(
-    "$WINEPREFIX/pfx/drive_c/users/steamuser/"
-    "AppData/Local/Warframe/EE.log"
-)
+
 TRIGGER = "ProjectionRewardChoice.lua: Got rewards"
 CAPTURE = Path(__file__).with_name("capture_reward_players.py")
 ORDER_CAPTURE = Path(__file__).with_name("capture_reward_order.py")
@@ -20,10 +18,11 @@ SCREEN = Path(__file__).with_name("capture_reward_screen.py")
 
 
 def main() -> None:
-    position = LOG_PATH.stat().st_size
+    log_path = _paths.ee_log()
+    position = log_path.stat().st_size
     print(f"REWARD_CAPTURE_ARMED offset={position}", flush=True)
     while True:
-        with LOG_PATH.open("r", errors="replace") as log:
+        with log_path.open("r", errors="replace") as log:
             log.seek(position)
             while line := log.readline():
                 position = log.tell()

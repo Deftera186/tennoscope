@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest something TennoScope should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A few things are settled and will not change, so it is worth checking first:
+
+        - No account, no telemetry, no cloud sync.
+        - Nothing writes to game memory, ever.
+        - Nothing automates gameplay or trading.
+        - Linux is the platform. Windows and macOS adapters are not planned.
+
+        Everything else is open.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that TennoScope makes hard or impossible?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you have in mind
+      description: Optional. The problem is more useful than the solution.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do instead today
+      description: A spreadsheet, another tool, alt-tabbing — whatever it currently costs you.

@@ -11,6 +11,8 @@ import struct
 import time
 from pathlib import Path
 
+import _paths
+
 
 SPEC = importlib.util.spec_from_file_location(
     "capture_reward_order", Path(__file__).with_name("capture_reward_order.py")
@@ -21,7 +23,7 @@ SPEC.loader.exec_module(capture)
 
 
 def current_player_ids() -> list[str]:
-    lines = capture.LOG_PATH.read_text(errors="replace").splitlines()
+    lines = _paths.ee_log().read_text(errors="replace").splitlines()
     open_index = max(
         index
         for index, line in enumerate(lines)

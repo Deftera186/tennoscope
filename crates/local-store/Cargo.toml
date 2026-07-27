@@ -1,9 +1,13 @@
 [package]
 name = "local-store"
 version = "0.1.0"
+description = "Local SQLite persistence for TennoScope collection snapshots"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+# Internal workspace crate: the shipped artifact is the TennoScope bundle, not a crates.io release.
+publish = false
 
 [dependencies]
 rusqlite = { version = "0.37", features = ["bundled"] }

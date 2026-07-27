@@ -11,14 +11,9 @@ import subprocess
 import time
 from pathlib import Path
 
+import _paths
 
-LOG_PATH = Path(
-    "$WINEPREFIX/pfx/drive_c/users/steamuser/"
-    "AppData/Local/Warframe/EE.log"
-)
-CATALOG_PATH = Path(
-    "$XDG_DATA_HOME/org.warframehelper.app/catalog/relic-generation.json"
-)
+
 PROJECTION_PREFIX = "/Lotus/Types/Game/Projections/"
 PRIMARY_ADDRESS_MIN = 0x1300_0000
 PRIMARY_ADDRESS_MAX = 0x2800_0000
@@ -29,14 +24,11 @@ LAYOUT_RADIUS = 4096
 
 
 def process_id() -> int:
-    output = subprocess.check_output(
-        ["pgrep", "-f", "Warframe.x64.exe"], text=True
-    ).splitlines()
-    return int(output[0])
+    return _paths.process_id()
 
 
 def current_projection_paths() -> list[str]:
-    lines = LOG_PATH.read_text(errors="replace").splitlines()
+    lines = _paths.ee_log().read_text(errors="replace").splitlines()
     open_index = max(
         index
         for index, line in enumerate(lines)
@@ -71,7 +63,7 @@ def current_projection_paths() -> list[str]:
 
 
 def candidate_names(paths: list[str]) -> list[str]:
-    catalog = json.loads(CATALOG_PATH.read_text())
+    catalog = json.loads(_paths.catalog().read_text())
     wanted = set(paths)
     return sorted(
         {

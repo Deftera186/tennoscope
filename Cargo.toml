@@ -12,6 +12,7 @@ resolver = "2"
 edition = "2024"
 license = "GPL-3.0-only"
 rust-version = "1.85"
+repository = "https://github.com/Deftera186/tennoscope"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

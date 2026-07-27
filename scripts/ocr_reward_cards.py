@@ -19,6 +19,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import _paths
+
 # (x, y, width, height) of each card's title text, keyed by screenshot size. Calibrated from
 # /tmp/tennoscope-screen-20260726-031440-1.png: four 242px-pitch cards starting at x=478, titles at
 # y=430. The box is tall enough for a title that wraps to two lines, which means it also catches a
@@ -28,11 +30,6 @@ CARD_BOXES: dict[tuple[int, int], list[tuple[int, int, int, int]]] = {
 }
 
 PROJECTION_PREFIX = "/Lotus/Types/Game/Projections/"
-LOG_PATH = Path(
-    "$WINEPREFIX/drive_c/users/steamuser/"
-    "AppData/Local/Warframe/EE.log"
-)
-CATALOG = Path("$XDG_DATA_HOME/org.warframehelper.app/catalog/relic-generation.json")
 
 
 def png_size(path: Path) -> tuple[int, int]:
@@ -46,7 +43,7 @@ def candidate_names() -> list[str]:
     """Every reward the relics in the current squad can produce."""
     import json
 
-    lines = LOG_PATH.read_text(errors="replace").splitlines()
+    lines = _paths.ee_log().read_text(errors="replace").splitlines()
     opened = max(
         index for index, line in enumerate(lines) if "OpenVoidProjectionRewardScreen" in line
     )
@@ -64,7 +61,7 @@ def candidate_names() -> list[str]:
             (i for i, ch in enumerate(remainder) if ch == ")" or ch.isspace()), len(remainder)
         )
         paths.add(remainder[:end])
-    catalog = json.loads(CATALOG.read_text())
+    catalog = json.loads(_paths.catalog().read_text())
     return sorted(
         {
             reward["item"]["name"]

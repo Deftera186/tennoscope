@@ -25,10 +25,8 @@ import sys
 import time
 from pathlib import Path
 
-LOG_PATH = Path(
-    "$WINEPREFIX/drive_c/users/steamuser/"
-    "AppData/Local/Warframe/EE.log"
-)
+import _paths
+
 RECORD = re.compile(rb"\x18([0-9a-f]{24})")
 REWARD_PATH = re.compile(rb"/Lotus/(?:StoreItems|Types)/[A-Za-z0-9/_\-]{8,120}")
 RECORD_BYTES = 768
@@ -37,14 +35,12 @@ OVERLAP = 1024
 
 
 def process_id() -> int:
-    if len(sys.argv) > 1:
-        return int(sys.argv[1])
-    return int(subprocess.check_output(["pgrep", "-f", "Warframe.x64.exe"], text=True).split()[0])
+    return _paths.process_id(int(sys.argv[1]) if len(sys.argv) > 1 else None)
 
 
 def squad_identities() -> list[str]:
     """Account ids named since the most recent reward screen opened."""
-    lines = LOG_PATH.read_text(errors="replace").splitlines()
+    lines = _paths.ee_log().read_text(errors="replace").splitlines()
     opened = [i for i, line in enumerate(lines) if "OpenVoidProjectionRewardScreen" in line]
     identities: list[str] = []
     for line in lines[opened[-1] :] if opened else []:

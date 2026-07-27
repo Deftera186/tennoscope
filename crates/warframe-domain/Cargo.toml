@@ -1,9 +1,13 @@
 [package]
 name = "warframe-domain"
 version = "0.1.0"
+description = "Collection and reward domain types with enforced invariants"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
+repository.workspace = true
+# Internal workspace crate: the shipped artifact is the TennoScope bundle, not a crates.io release.
+publish = false
 
 [dependencies]
 serde.workspace = true
