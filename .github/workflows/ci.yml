@@ -55,7 +55,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The pnpm version lives in app/package.json, not at the repo root, so the action has to be
+      # pointed at it or it finds nothing to install.
       - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: app/package.json
 
       - uses: actions/setup-node@v5
         with:
