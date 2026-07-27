@@ -1,4 +1,6 @@
-use warframe_acquisition::{lowest_sell_price, market_slug};
+use std::time::Duration;
+
+use warframe_acquisition::{MarketPriceCache, MarketPriceSource, lowest_sell_price, market_slug};
 
 /// Verified against the live warframe.market v2 API for every reward name observed in a real run.
 #[test]
@@ -61,4 +63,92 @@ fn an_unreadable_or_empty_response_has_no_price() {
     assert_eq!(orders("not json"), None);
     assert_eq!(orders(r#"{"data":[]}"#), None);
     assert_eq!(orders(r#"{"error":"not found"}"#), None);
+}
+
+/// A source that records every name it is asked for, so a test can prove the cache stopped a
+/// request rather than merely returning the right number.
+struct CountingMarket {
+    priced: std::collections::HashMap<String, u32>,
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+impl CountingMarket {
+    fn new(priced: &[(&str, u32)]) -> Self {
+        Self {
+            priced: priced
+                .iter()
+                .map(|(name, price)| ((*name).to_owned(), *price))
+                .collect(),
+            asked: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
+impl MarketPriceSource for CountingMarket {
+    fn lowest_sell(&self, name: &str) -> Option<u32> {
+        self.asked.lock().unwrap().push(name.to_owned());
+        self.priced.get(name).copied()
+    }
+}
+
+fn names(values: &[&str]) -> Vec<String> {
+    values.iter().map(|value| (*value).to_owned()).collect()
+}
+
+/// The relic pool is known when the relics load, minutes before the reward screen exists. Warming
+/// it then is the whole point: by the time four of those rewards are on screen the prices are
+/// already local, instead of the player watching dashes during the fifteen seconds they have to
+/// decide.
+#[test]
+fn warming_the_pool_prices_it_before_the_reward_screen_asks() {
+    let market =
+        CountingMarket::new(&[("Braton Prime Blueprint", 12), ("Trumna Prime Barrel", 45)]);
+    let cache = MarketPriceCache::new();
+
+    let stored = cache.warm(
+        &market,
+        &names(&["Braton Prime Blueprint", "Trumna Prime Barrel"]),
+        Duration::ZERO,
+    );
+
+    assert_eq!(stored, 2);
+    assert_eq!(cache.get("Braton Prime Blueprint"), Some(12));
+    assert_eq!(cache.get("Trumna Prime Barrel"), Some(45));
+}
+
+#[test]
+fn a_warmed_price_is_not_requested_again() {
+    let market = CountingMarket::new(&[("Braton Prime Blueprint", 12)]);
+    let cache = MarketPriceCache::new();
+    cache.warm(&market, &names(&["Braton Prime Blueprint"]), Duration::ZERO);
+
+    cache.warm(
+        &market,
+        &names(&["Braton Prime Blueprint", "Trumna Prime Barrel"]),
+        Duration::ZERO,
+    );
+
+    assert_eq!(
+        market.asked(),
+        vec!["Braton Prime Blueprint", "Trumna Prime Barrel"],
+        "the cached name must not be requested a second time"
+    );
+}
+
+/// Forma is untradeable and an unreachable API looks identical from here. Storing either as a
+/// price would leave the card permanently unpriced, so a miss stays a miss and is retried.
+#[test]
+fn an_unpriced_name_is_retried_rather_than_cached_as_a_failure() {
+    let market = CountingMarket::new(&[]);
+    let cache = MarketPriceCache::new();
+
+    cache.warm(&market, &names(&["Forma Blueprint"]), Duration::ZERO);
+    cache.warm(&market, &names(&["Forma Blueprint"]), Duration::ZERO);
+
+    assert_eq!(cache.get("Forma Blueprint"), None);
+    assert_eq!(market.asked().len(), 2, "a miss must not be cached");
 }
