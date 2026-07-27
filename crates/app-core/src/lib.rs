@@ -542,7 +542,10 @@ impl HealthView {
             log_monitor: BackendHealth::degraded("Waiting for Warframe EE.log")?,
             capture: BackendHealth::idle("OCR reward observer idle; no reward screen yet", None)?,
             catalog: BackendHealth::degraded("Item catalog has not loaded yet")?,
-            market: BackendHealth::idle("warframe.market pricing idle; nothing to price yet", None)?,
+            market: BackendHealth::idle(
+                "warframe.market pricing idle; nothing to price yet",
+                None,
+            )?,
             database: BackendHealth::ready("SQLite database available", None)?,
             acquisition_stages: Vec::new(),
         })
