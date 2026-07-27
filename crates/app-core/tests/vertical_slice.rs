@@ -362,7 +362,8 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
                     {"name": "Rare Prime Set", "platinum": 30, "ducats": 100, "owned": 0, "mastery_relevant": false, "confidence": 0.79_f32},
                     {"name": "Paris Prime String", "platinum": 6, "ducats": 45, "owned": 1, "mastery_relevant": false, "confidence": 1.0}
                 ],
-                "best_value_index": 0
+                "best_value_index": 0,
+                "best_ducat_index": 3
             },
             "health": {
                 "acquisition_stages": [],

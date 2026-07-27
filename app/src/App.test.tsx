@@ -34,6 +34,7 @@ const view: AppView = {
       { name: 'Paris Prime String', platinum: 6, ducats: 45, owned: 1, mastery_relevant: false, confidence: 1 },
     ],
     best_value_index: 0,
+    best_ducat_index: 3,
   },
   health: {
     game_reader: { state: 'degraded', message: 'Warframe is not running', last_success: null },
@@ -120,7 +121,7 @@ describe('MVP desktop interface', () => {
     backend.getView.mockImplementationOnce(() => new Promise(resolve => { resolveView = resolve }))
     render(<App />)
     expect(await screen.findByText('Loading your local collection…')).toBeInTheDocument()
-    await act(async () => resolveView?.({ ...view, collection: { items: [], total_entries: 0 }, reward: { cards: [], best_value_index: null } }))
+    await act(async () => resolveView?.({ ...view, collection: { items: [], total_entries: 0 }, reward: { cards: [], best_value_index: null, best_ducat_index: null } }))
     expect(screen.getByText(/No inventory items yet/i)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'Rewards' }))
     expect(screen.getByText(/No reward choices detected/i)).toBeInTheDocument()
@@ -151,11 +152,14 @@ describe('MVP desktop interface', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Rewards' }))
     const advisor = screen.getByRole('region', { name: 'Reward advisor' })
     expect(within(advisor).getAllByRole('article')).toHaveLength(4)
-    expect(within(advisor).getByRole('article', { name: 'Forma Blueprint' })).toHaveTextContent('Best value')
+    expect(within(advisor).getByRole('article', { name: 'Forma Blueprint' })).toHaveTextContent('Top plat')
     expect(within(advisor).getByRole('article', { name: 'Lex Prime Receiver' })).toHaveTextContent('Owned ×1')
     expect(within(advisor).getByRole('article', { name: 'Lex Prime Receiver' })).toHaveTextContent('Mastery needed')
-    expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).toHaveTextContent('Uncertain recognition')
-    expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).not.toHaveTextContent('Best value')
+    // Paris Prime String carries the most ducats while Forma Blueprint is worth the most platinum:
+    // both have to be callable, because the player picks between them for reasons we cannot see.
+    expect(within(advisor).getByRole('article', { name: 'Paris Prime String' })).toHaveTextContent('Top ducats')
+    expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).toHaveTextContent('Uncertain ·')
+    expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).not.toHaveTextContent('Top plat')
   })
 
   it('keeps risk disclosure and local-first details available from settings', async () => {

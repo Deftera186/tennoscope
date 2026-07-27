@@ -73,6 +73,7 @@ impl<'de> Deserialize<'de> for RewardCandidate {
 pub struct RewardView {
     cards: Vec<RewardCandidate>,
     best_value_index: Option<usize>,
+    best_ducat_index: Option<usize>,
 }
 
 impl RewardView {
@@ -89,23 +90,48 @@ impl RewardView {
             .and_then(|index| self.cards.get(index))
             .map(|candidate| candidate.name.as_str())
     }
+
+    pub fn best_ducat_index(&self) -> Option<usize> {
+        self.best_ducat_index
+    }
 }
 
 pub struct RewardAdvisor;
 
 impl RewardAdvisor {
+    /// Rank the cards twice, because platinum is not the only reason to pick one.
+    ///
+    /// A relic reward can be worth almost nothing on the market and still be the right take for a
+    /// player saving for Baro, and most commons are worth the same 15 ducats so the two orders
+    /// disagree often. Ranking once by platinum with ducats as a tiebreak buried that: the ducat
+    /// answer was only ever visible when the platinum values happened to tie. Both orders are
+    /// published and the choice is left to the player.
+    ///
+    /// The ducat winner is `None` when nothing on offer is worth any ducats -- four Forma would
+    /// otherwise crown one of them for a currency none of them carry.
     pub fn advise(cards: Vec<RewardCandidate>) -> RewardView {
+        let certain = |(_, candidate): &(usize, &RewardCandidate)| candidate.confidence >= 0.80;
         let best_value_index = cards
             .iter()
             .enumerate()
-            .filter(|(_, candidate)| candidate.confidence >= 0.80)
+            .filter(certain)
             .max_by_key(|(index, candidate)| {
                 (candidate.platinum, candidate.ducats, Reverse(*index))
+            })
+            .map(|(index, _)| index);
+        let best_ducat_index = cards
+            .iter()
+            .enumerate()
+            .filter(certain)
+            .filter(|(_, candidate)| candidate.ducats > 0)
+            .max_by_key(|(index, candidate)| {
+                (candidate.ducats, candidate.platinum, Reverse(*index))
             })
             .map(|(index, _)| index);
         RewardView {
             cards,
             best_value_index,
+            best_ducat_index,
         }
     }
 }

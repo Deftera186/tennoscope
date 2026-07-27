@@ -12,7 +12,7 @@ export interface AppView {
     total_entries: number
     snapshot?: { observed_at: string; game_build: string; source: string } | null
   }
-  reward: { cards: RewardCard[]; best_value_index: number | null }
+  reward: { cards: RewardCard[]; best_value_index: number | null; best_ducat_index: number | null }
   health: {
     game_reader: BackendHealth
     log_monitor: BackendHealth

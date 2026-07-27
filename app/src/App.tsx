@@ -269,7 +269,7 @@ function Pagination({ current, total, onChange }: { current: number; total: numb
 
 function RewardPage({ view }: { view: AppView }) {
   return <div className="page"><div className="page-heading"><div><p className="eyebrow">Decision support</p><h1 id="reward-title">Reward advisor</h1><p>TennoScope follows the relic reward lifecycle and places advice below the reward row. OCR remains available as a fallback.</p></div><span className="snapshot-mark">Automatic · click through</span></div>
-    <section className="reward-panel" aria-label="Reward advisor">{view.reward.cards.length ? <RewardCards cards={view.reward.cards} bestValueIndex={view.reward.best_value_index}/> : <EmptyState title="No reward choices detected" detail="The observer is waiting for an English Void Fissure reward screen."/>}</section>
+    <section className="reward-panel" aria-label="Reward advisor">{view.reward.cards.length ? <RewardCards cards={view.reward.cards} bestValueIndex={view.reward.best_value_index} bestDucatIndex={view.reward.best_ducat_index}/> : <EmptyState title="No reward choices detected" detail="The observer is waiting for an English Void Fissure reward screen."/>}</section>
   </div>
 }
 

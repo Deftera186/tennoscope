@@ -24,6 +24,7 @@ const overlayView = {
       { name: 'Uncertain', platinum: 100, ducats: 100, owned: 0, mastery_relevant: false, confidence: 0.7 },
     ],
     best_value_index: 1,
+    best_ducat_index: 1,
   },
   health: {
     game_reader: { state: 'ready', message: 'ready', last_success: null },
@@ -55,14 +56,16 @@ describe('reward overlay route', () => {
     render(<AppRoute pathname="/overlay" />)
     const advisor = await screen.findByRole('main', { name: 'Reward overlay' })
     expect(within(advisor).getAllByRole('article')).toHaveLength(2)
-    expect(within(advisor).getByRole('article', { name: 'Uncertain' })).toHaveTextContent('Uncertain recognition')
-    expect(within(advisor).getByRole('article', { name: 'Uncertain' })).not.toHaveTextContent('Best value')
+    expect(within(advisor).getByRole('article', { name: 'Uncertain' })).toHaveTextContent('Uncertain ·')
+    // It leads on both metrics, but a read we do not trust must not be crowned on either.
+    expect(within(advisor).getByRole('article', { name: 'Uncertain' })).not.toHaveTextContent('Top plat')
+    expect(within(advisor).getByRole('article', { name: 'Uncertain' })).not.toHaveTextContent('Top ducats')
     expect(within(advisor).getByRole('article', { name: 'Certain' })).toHaveTextContent('Mastery needed')
     expect(within(advisor).queryByRole('button')).not.toBeInTheDocument()
   })
 
   it('renders an honest empty overlay', async () => {
-    backend.getView.mockResolvedValue({ ...overlayView, reward: { cards: [], best_value_index: null } })
+    backend.getView.mockResolvedValue({ ...overlayView, reward: { cards: [], best_value_index: null, best_ducat_index: null } })
     render(<AppRoute pathname="/overlay" />)
     expect(await screen.findByText('No reward choices detected')).toBeInTheDocument()
   })

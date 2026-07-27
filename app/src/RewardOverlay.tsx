@@ -38,7 +38,7 @@ export default function RewardOverlay() {
     {error ? <div className="overlay-empty">Reward data is unavailable.</div>
       : !view ? <div className="overlay-empty">Loading reward choices…</div>
         : view.reward.cards.length
-          ? <RewardCards cards={view.reward.cards} bestValueIndex={view.reward.best_value_index} className="overlay-rewards"/>
+          ? <RewardCards cards={view.reward.cards} bestValueIndex={view.reward.best_value_index} bestDucatIndex={view.reward.best_ducat_index} className="overlay-rewards"/>
           : <div className="overlay-empty"><strong>No reward choices detected</strong><span>Watching the active Warframe display.</span></div>}
   </main>
 }

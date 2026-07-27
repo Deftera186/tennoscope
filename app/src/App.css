@@ -132,15 +132,18 @@
 .badge.confidence { color: #d8b982; border-color: #5b482d; }
 
 .reward-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(14rem, 100%), 1fr)); gap: .8rem; }
-.reward-card { position: relative; min-height: 13rem; padding: 1.2rem; overflow: hidden; border: 1px solid var(--border); border-radius: .7rem; background: linear-gradient(145deg, #111d25, #091117); }
-.reward-card.best { border-color: #8e713b; box-shadow: inset 0 0 2rem rgb(190 147 67 / 8%); }
-.best-ribbon { position: absolute; top: .85rem; right: -.15rem; padding: .32rem .7rem; color: #191004; background: var(--gold); font-size: .55rem; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+.reward-card { position: relative; display: flex; flex-direction: column; min-height: 13rem; padding: 1.15rem 1.2rem; overflow: hidden; border: 1px solid var(--border); border-radius: 1rem; background: linear-gradient(160deg, rgb(23 30 29 / 92%), rgb(12 16 16 / 92%)); }
+/* One accent, used only to say "this is the pick". Which pick it is, is said in words. */
+.reward-card.top-plat, .reward-card.top-ducat { border-color: var(--cyan-soft); box-shadow: inset 0 0 0 1px rgb(114 203 182 / 14%); }
+.pick-flag { align-self: flex-start; margin-bottom: .45rem; padding: .2rem .5rem; border-radius: 999px; color: #06110e; background: var(--cyan); font-size: .54rem; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .reward-index { color: var(--subtle); font-size: .6rem; letter-spacing: .1em; text-transform: uppercase; }
-.reward-card h2 { margin-top: 1.4rem; min-height: 2.5rem; font-size: 1rem; }
-.value-row { display: flex; align-items: baseline; gap: .8rem; margin: 1rem 0; }
-.value-row strong { color: var(--cyan); font-size: 1.65rem; }
-.value-row strong small { font-size: .62rem; text-transform: uppercase; }
-.value-row > span { color: var(--gold); font-size: .7rem; }
+.reward-card h2 { margin: .35rem 0 .5rem; min-height: 2.5rem; font-size: 1rem; }
+.value-row { display: flex; align-items: baseline; gap: 1.4rem; margin: auto 0 .7rem; }
+.metric { display: inline-flex; align-items: baseline; gap: .3rem; color: var(--subtle); }
+.metric strong { color: var(--muted); font-size: 1.7rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+.metric small { font-size: .58rem; letter-spacing: .05em; text-transform: uppercase; }
+.metric.lead strong { color: var(--cyan); }
+.metric.lead small { color: var(--cyan-soft); }
 
 .section-title { margin: .25rem 0 .8rem; color: #9db0bb; font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; }
 .section-title:not(:first-child) { margin-top: 1.5rem; }
@@ -179,15 +182,21 @@
 .settings-card .secondary-action { margin-top: .75rem; }
 
 .overlay-shell { min-height: 100vh; padding: 0; overflow: hidden; background: transparent; }
-.overlay-rewards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1.25rem; height: 100vh; }
-.overlay-rewards .reward-card { min-height: 0; padding: .65rem .8rem; border: 1px solid rgb(217 224 215 / 36%); border-radius: 0; background: linear-gradient(90deg, rgb(8 11 10 / 89%), rgb(14 19 17 / 82%)); box-shadow: 0 .45rem 1.4rem rgb(0 0 0 / 42%); clip-path: polygon(.65rem 0, 100% 0, 100% calc(100% - .65rem), calc(100% - .65rem) 100%, 0 100%, 0 .65rem); }
-.overlay-rewards .reward-card h2 { min-height: auto; margin: .3rem 0; font-size: .76rem; }
-.overlay-rewards .value-row { margin: .35rem 0; }
-.overlay-rewards .value-row strong { font-size: 1.15rem; }
-.overlay-rewards .best-ribbon { top: 0; right: 0; padding: .22rem .45rem; }
+/* The overlay window is sized to the game's four-card block, so a column here is a card there.
+   The 0.207% gap is the game's own 2px-in-242 card spacing expressed as a fraction, which keeps
+   the columns aligned at any window size instead of only at 1080p. */
+.overlay-rewards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.207%; height: 100vh; }
+.overlay-rewards .reward-card { min-height: 0; padding: .5rem .7rem; border-radius: .8rem; border-color: rgb(168 188 182 / 20%); background: rgb(10 14 14 / 68%); -webkit-backdrop-filter: blur(16px) saturate(115%); backdrop-filter: blur(16px) saturate(115%); box-shadow: 0 .5rem 1.5rem rgb(0 0 0 / 45%); }
+.overlay-rewards .reward-card.top-plat, .overlay-rewards .reward-card.top-ducat { border-color: rgb(114 203 182 / 55%); background: rgb(12 20 19 / 72%); }
+/* The overlay sits directly under the cards it describes, so the slot number is redundant. */
+.overlay-rewards .reward-index { display: none; }
+.overlay-rewards .reward-card h2 { margin: 0 0 .2rem; min-height: auto; overflow: visible; font-size: .74rem; line-height: 1.25; white-space: normal; }
+.overlay-rewards .pick-flag { margin-bottom: .3rem; padding: .14rem .42rem; font-size: .5rem; }
+.overlay-rewards .value-row { gap: 1rem; margin: auto 0 .3rem; }
+.overlay-rewards .metric strong { font-size: 1.3rem; }
 .overlay-rewards .badges { flex-wrap: nowrap; overflow: hidden; }
-.market-pending { color: #819089 !important; }
-.overlay-empty { display: grid; place-items: center; height: 100vh; align-content: center; color: var(--muted); border: 1px solid rgb(217 224 215 / 25%); background: rgb(8 11 10 / 80%); font-size: .68rem; text-align: center; }
+.market-pending { color: #6d7a75 !important; }
+.overlay-empty { display: grid; place-items: center; height: 100vh; align-content: center; color: var(--muted); border: 1px solid rgb(168 188 182 / 18%); border-radius: .8rem; background: rgb(10 14 14 / 68%); -webkit-backdrop-filter: blur(16px) saturate(115%); backdrop-filter: blur(16px) saturate(115%); font-size: .68rem; text-align: center; }
 .overlay-empty strong { color: #d9e4e8; }
 .overlay-empty span { margin-top: .3rem; color: var(--subtle); }
 .empty-state, .state-card { display: grid; place-items: center; min-height: 16rem; align-content: center; padding: 2rem; color: var(--subtle); text-align: center; }

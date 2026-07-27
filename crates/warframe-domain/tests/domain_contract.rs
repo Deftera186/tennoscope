@@ -105,6 +105,34 @@ fn all_uncertain_rewards_have_no_best_value() {
 
     assert_eq!(view.best_value_index(), None);
     assert_eq!(view.best_value_name(), None);
+    assert_eq!(view.best_ducat_index(), None);
+}
+
+/// The case that ranking on platinum alone hides. A cheap common can carry more ducats than the
+/// card the market values highest, and a player saving for Baro wants that one -- so the two
+/// answers have to be separately visible, not collapsed into a tiebreak.
+#[test]
+fn the_ducat_winner_is_reported_even_when_another_card_is_worth_more_platinum() {
+    let view = RewardAdvisor::advise(vec![
+        RewardCandidate::new("Pricey Prime Blueprint", 45, 15, 0, false, 1.0).unwrap(),
+        RewardCandidate::new("Cheap Prime Barrel", 6, 100, 0, false, 1.0).unwrap(),
+    ]);
+
+    assert_eq!(view.best_value_name(), Some("Pricey Prime Blueprint"));
+    assert_eq!(view.best_ducat_index(), Some(1));
+}
+
+/// Forma carries no ducats at all. A screen of nothing but Forma must not crown one of them for a
+/// currency none of them are worth.
+#[test]
+fn no_ducat_winner_when_nothing_on_offer_is_worth_ducats() {
+    let view = RewardAdvisor::advise(vec![
+        RewardCandidate::new("Forma Blueprint", 12, 0, 0, false, 1.0).unwrap(),
+        RewardCandidate::new("2X Forma Blueprint", 20, 0, 0, false, 1.0).unwrap(),
+    ]);
+
+    assert_eq!(view.best_value_index(), Some(1));
+    assert_eq!(view.best_ducat_index(), None);
 }
 
 #[test]
@@ -242,7 +270,8 @@ fn reward_view_serializes_derived_selection_without_being_mutable() {
                 {"name": "Forma", "platinum": 20, "ducats": 0, "owned": 0, "mastery_relevant": false, "confidence": 0.4_f32},
                 {"name": "Lex", "platinum": 8, "ducats": 25, "owned": 0, "mastery_relevant": true, "confidence": 0.99_f32}
             ],
-            "best_value_index": 1
+            "best_value_index": 1,
+            "best_ducat_index": 1
         })
     );
 }
