@@ -124,9 +124,9 @@ fn in_memory_starts_empty_and_reports_honest_health() {
     assert_eq!(view.reward().best_value_index(), None);
     assert_eq!(view.health().database().state(), HealthState::Ready);
     assert_eq!(view.health().game_reader().state(), HealthState::Degraded);
-    assert_eq!(view.health().capture().state(), HealthState::Degraded);
+    assert_eq!(view.health().capture().state(), HealthState::Idle);
     assert_eq!(view.health().catalog().state(), HealthState::Degraded);
-    assert_eq!(view.health().market().state(), HealthState::Degraded);
+    assert_eq!(view.health().market().state(), HealthState::Idle);
 }
 
 #[test]
@@ -253,10 +253,10 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
     );
     assert!(view.health().game_reader().message().contains("game-log"));
     assert!(!view.health().game_reader().message().contains("fake"));
-    assert_eq!(view.health().capture().state(), HealthState::Degraded);
+    assert_eq!(view.health().capture().state(), HealthState::Idle);
     assert_eq!(
         view.health().capture().message(),
-        "Reward observer waiting for Warframe"
+        "OCR reward observer idle; no reward screen yet"
     );
     assert_eq!(view.health().capture().last_success(), None);
     assert_eq!(view.health().catalog().state(), HealthState::Degraded);
@@ -265,10 +265,10 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
         "Item catalog has not loaded yet"
     );
     assert_eq!(view.health().catalog().last_success(), None);
-    assert_eq!(view.health().market().state(), HealthState::Degraded);
+    assert_eq!(view.health().market().state(), HealthState::Idle);
     assert_eq!(
         view.health().market().message(),
-        "Live market pricing is not enabled"
+        "warframe.market pricing idle; nothing to price yet"
     );
     assert_eq!(view.health().market().last_success(), None);
     assert_eq!(view.health().database().state(), HealthState::Ready);

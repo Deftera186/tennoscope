@@ -443,6 +443,15 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
 #[serde(rename_all = "snake_case")]
 pub enum HealthState {
     Ready,
+    /// Enabled, unimpaired, and with nothing to do yet.
+    ///
+    /// Distinct from `Ready` on purpose. The reward observer shells out to `xwininfo`,
+    /// `magick` and `tesseract`, and none of them are probed until a reward screen
+    /// actually appears -- so before the first read there is nothing to justify a green
+    /// state, and claiming one would be a guess. Distinct from `Degraded` because
+    /// nothing is wrong: reporting "waiting for work" as a fault trains the reader to
+    /// ignore the colour that means a real fault.
+    Idle,
     Degraded,
     Failed,
 }
@@ -476,6 +485,13 @@ impl BackendHealth {
         last_success: Option<String>,
     ) -> Result<Self, AppError> {
         Self::new(HealthState::Ready, message, last_success)
+    }
+
+    pub fn idle(
+        message: impl Into<String>,
+        last_success: Option<String>,
+    ) -> Result<Self, AppError> {
+        Self::new(HealthState::Idle, message, last_success)
     }
 
     pub fn degraded(message: impl Into<String>) -> Result<Self, AppError> {
@@ -524,18 +540,24 @@ impl HealthView {
         Ok(Self {
             game_reader: BackendHealth::degraded("Waiting for a logged-in Warframe process")?,
             log_monitor: BackendHealth::degraded("Waiting for Warframe EE.log")?,
-            capture: BackendHealth::degraded("Reward observer waiting for Warframe")?,
+            capture: BackendHealth::idle("OCR reward observer idle; no reward screen yet", None)?,
             catalog: BackendHealth::degraded("Item catalog has not loaded yet")?,
-            market: BackendHealth::degraded("Live market pricing is not enabled")?,
+            market: BackendHealth::idle("warframe.market pricing idle; nothing to price yet", None)?,
             database: BackendHealth::ready("SQLite database available", None)?,
             acquisition_stages: Vec::new(),
         })
     }
 
     fn reset_phase_one_integrations(&mut self) -> Result<(), AppError> {
-        self.capture = BackendHealth::degraded("Reward observer waiting for Warframe")?;
+        self.capture = BackendHealth::idle(
+            "OCR reward observer idle; no reward screen yet",
+            self.capture.last_success.clone(),
+        )?;
         self.catalog = BackendHealth::degraded("Item catalog has not loaded yet")?;
-        self.market = BackendHealth::degraded("Live market pricing is not enabled")?;
+        self.market = BackendHealth::idle(
+            "warframe.market pricing idle; nothing to price yet",
+            self.market.last_success.clone(),
+        )?;
         Ok(())
     }
 
