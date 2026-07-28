@@ -23,6 +23,10 @@ const view: AppView = {
       { id: 'argon-crystal', name: 'Argon Crystal', category: 'resource', quantity: 4, mastered: false, live: false },
       { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 0, mastered: false, live: false },
       { id: 'bad-baby', name: 'Bad Baby', category: 'vehicle', quantity: 1, mastered: false, live: false },
+      // Priced at exactly 0 -- a real, tradeable price, distinct from an item with no listing at
+      // all. Exercises the `?? -1` sentinel in the value sort: a `?? 0` bug would tie this with
+      // every unpriced item instead of ranking it above all of them.
+      { id: 'zenith-prime-receiver', name: 'Zenith Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 0, live: false },
     ],
     total_entries: 8,
   },
@@ -344,7 +348,8 @@ describe('MVP desktop interface', () => {
     await user.click(await screen.findByRole('button', { name: 'Value' }))
 
     const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
-    expect(names.slice(0, 2)).toEqual(['Lith A1 Relic', 'Lex Prime Receiver'])
+    // Zenith is priced at 0 -- it must rank above every unpriced item, not tie with them.
+    expect(names.slice(0, 3)).toEqual(['Lith A1 Relic', 'Lex Prime Receiver', 'Zenith Prime Receiver'])
     expect(names.at(-1)).toBe('Rhino')
   })
 
@@ -355,7 +360,7 @@ describe('MVP desktop interface', () => {
     await user.click(await screen.findByRole('button', { name: 'Tradeable' }))
 
     const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
-    expect(names).toEqual(['Lex Prime Receiver', 'Lith A1 Relic'])
+    expect(names).toEqual(['Lex Prime Receiver', 'Lith A1 Relic', 'Zenith Prime Receiver'])
   })
 
   // A partial sum shown as a total is a lie the reader cannot detect, so the cell carries its count.
@@ -364,18 +369,31 @@ describe('MVP desktop interface', () => {
     render(<App/>)
     const worth = await screen.findByTestId('band-worth')
     expect(within(worth).getByText('159')).toBeInTheDocument()
-    expect(within(worth).getByText(/2 of 8 items priced/)).toBeInTheDocument()
+    expect(within(worth).getByText(/3 of 9 items priced/)).toBeInTheDocument()
   })
 
   // The page refresh asks about exactly what is on screen, so a filtered view costs only the
-  // requests that view is worth.
+  // requests that view is worth. The fixture is padded past one page of tradeable items so the
+  // visible page and the full filtered set are provably different arrays.
   it('prices the items currently on screen, and only those', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    const filler = Array.from({ length: 50 }, (_, index) => ({
+      id: `filler-${index.toString().padStart(2, '0')}`,
+      name: `Filler ${index.toString().padStart(2, '0')}`,
+      category: 'weapon' as const,
+      quantity: 1,
+      mastered: false,
+      live: false,
+      platinum: 5,
+    }))
+    backend.getView.mockResolvedValue({ ...view, collection: { ...view.collection, items: [...view.collection.items, ...filler] } })
     const user = userEvent.setup()
     render(<App/>)
     await user.click(await screen.findByRole('button', { name: 'Tradeable' }))
+    await user.click(await screen.findByRole('button', { name: 'Go to page 2' }))
     await user.click(screen.getByRole('button', { name: /Refresh prices on this page/ }))
 
-    expect(backend.refreshPrices).toHaveBeenCalledWith(['lex-prime-receiver', 'lith-a1'])
+    // Page 2 of 53 tradeable items (50 filler + 3 named) holds only the last 5, alphabetically.
+    expect(backend.refreshPrices).toHaveBeenCalledWith(['filler-48', 'filler-49', 'lex-prime-receiver', 'lith-a1', 'zenith-prime-receiver'])
   })
 })
