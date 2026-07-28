@@ -1474,7 +1474,7 @@ fn start_collection_prices(shared: SharedRuntime) {
             let priced = table.len();
             let date = table.dump_date().to_owned();
             runtime.core.set_collection_prices(Arc::new(table));
-            let _ = runtime.core.record_market_ready(priced, date);
+            let _ = runtime.core.record_collection_prices_ready(priced, date);
         }
         let Some(source) = RelicsRunHttp::new() else {
             return;
@@ -1489,14 +1489,14 @@ fn start_collection_prices(shared: SharedRuntime) {
                     let priced = table.len();
                     let date = table.dump_date().to_owned();
                     runtime.core.set_collection_prices(Arc::new(table));
-                    let _ = runtime.core.record_market_ready(priced, date);
+                    let _ = runtime.core.record_collection_prices_ready(priced, date);
                 }
             }
             Err(_) => {
                 if let Ok(mut runtime) = shared.lock() {
-                    let _ = runtime
-                        .core
-                        .record_market_degraded("No warframe.market price dump could be read");
+                    let _ = runtime.core.record_collection_prices_degraded(
+                        "No warframe.market price dump could be read",
+                    );
                 }
             }
         }

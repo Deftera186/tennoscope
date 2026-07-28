@@ -46,6 +46,7 @@ const view: AppView = {
     capture: { state: 'degraded', message: 'Capture waiting', last_success: null },
     catalog: { state: 'ready', message: 'Catalog ready', last_success: '1' },
     market: { state: 'degraded', message: 'Market offline', last_success: null },
+    collection_prices: { state: 'ready', message: 'Priced from the 2026-07-27 price dump (3 items)', last_success: '2026-07-27' },
     database: { state: 'ready', message: 'SQLite database available', last_success: null },
     acquisition_stages: [
       { stage: 'process_discovery', state: 'ready', message: 'Game process found' },

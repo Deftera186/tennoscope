@@ -32,6 +32,7 @@ const overlayView = {
     capture: { state: 'degraded', message: 'waiting', last_success: null },
     catalog: { state: 'ready', message: 'ready', last_success: null },
     market: { state: 'degraded', message: 'waiting', last_success: null },
+    collection_prices: { state: 'idle', message: 'Collection price dump has not loaded yet', last_success: null },
     database: { state: 'ready', message: 'ready', last_success: null },
     acquisition_stages: [],
   },

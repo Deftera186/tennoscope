@@ -385,6 +385,35 @@ impl AppCore {
         self.current_view()
     }
 
+    /// The daily dump loaded, and the collection is priced from it.
+    ///
+    /// Kept apart from `record_market_ready` because the two say different things: that one
+    /// reports whether the overlay reached warframe.market seconds ago, this one reports which
+    /// day's dump the collection's numbers are from. Written to one row, whichever ran last
+    /// erased the other, and a reader looking for the dump's date found a unix timestamp.
+    pub fn record_collection_prices_ready(
+        &mut self,
+        priced: usize,
+        dump_date: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        let dump_date = dump_date.into();
+        self.health.collection_prices = BackendHealth::ready(
+            format!("Priced from the {dump_date} price dump ({priced} items)"),
+            Some(dump_date),
+        )?;
+        self.current_view()
+    }
+
+    pub fn record_collection_prices_degraded(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        let last_success = self.health.collection_prices.last_success.clone();
+        self.health.collection_prices =
+            BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.current_view()
+    }
+
     pub fn record_capture_degraded(
         &mut self,
         message: impl Into<String>,
@@ -605,6 +634,11 @@ pub struct HealthView {
     capture: BackendHealth,
     catalog: BackendHealth,
     market: BackendHealth,
+    /// The daily dump behind the collection's valuation. Its own row because it answers a
+    /// different question from `market`: that one says whether the overlay could reach
+    /// warframe.market just now, this one says how old the prices the collection is showing are.
+    /// Sharing one row meant whichever wrote last erased the other's answer.
+    collection_prices: BackendHealth,
     database: BackendHealth,
     acquisition_stages: Vec<AcquisitionStageView>,
 }
@@ -618,6 +652,10 @@ impl HealthView {
             catalog: BackendHealth::degraded("Item catalog has not loaded yet")?,
             market: BackendHealth::idle(
                 "warframe.market pricing idle; nothing to price yet",
+                None,
+            )?,
+            collection_prices: BackendHealth::idle(
+                "Collection price dump has not loaded yet",
                 None,
             )?,
             database: BackendHealth::ready("SQLite database available", None)?,
@@ -656,6 +694,10 @@ impl HealthView {
 
     pub fn market(&self) -> &BackendHealth {
         &self.market
+    }
+
+    pub fn collection_prices(&self) -> &BackendHealth {
+        &self.collection_prices
     }
 
     pub fn database(&self) -> &BackendHealth {

@@ -19,6 +19,7 @@ export interface AppView {
     capture: BackendHealth
     catalog: BackendHealth
     market: BackendHealth
+    collection_prices: BackendHealth
     database: BackendHealth
     acquisition_stages: AcquisitionStageHealth[]
   }

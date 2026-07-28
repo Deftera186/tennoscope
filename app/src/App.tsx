@@ -457,6 +457,7 @@ function DiagnosticsPage({ view }: { view: AppView }) {
     ['Reward observer', view.health.capture],
     ['Catalog', view.health.catalog],
     ['Market data', view.health.market],
+    ['Collection prices', view.health.collection_prices],
     ['Database', view.health.database],
   ] as const
   return <div className="page">
