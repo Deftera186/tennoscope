@@ -18,9 +18,10 @@ use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use warframe_acquisition::{
-    CatalogCache, CatalogIndex, GameProcess, InventoryAcquirer, InventoryHttpTransport, LinuxProc,
-    MarketPriceCache, MemoryReader, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex,
-    RewardCatalogEntry, RewardMemoryScanner, WfcdCatalogHttp, WfcdRelicCatalogHttp,
+    CatalogCache, CatalogIndex, CollectionPriceCache, GameProcess, InventoryAcquirer,
+    InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, ProcessDiscovery,
+    RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner,
+    WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
 
@@ -173,6 +174,7 @@ async fn accept_risk_disclosure(
     .await
     .map_err(|_| "setup task failed".to_owned())?;
     if result.is_ok() {
+        start_collection_prices(Arc::clone(state.inner()));
         start_monitor(Arc::clone(state.inner()), app);
     }
     result
@@ -1408,6 +1410,53 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
     )
 }
 
+/// Price the collection: cached table first so items are priced before any request is made, then
+/// one download for the day's dump.
+///
+/// There is nothing to schedule here. The whole collection is priced by a single file, so this
+/// runs once at start and is done -- no queue, no worker, no rate limiting, because there are no
+/// per-item requests to pace.
+fn start_collection_prices(shared: SharedRuntime) {
+    std::thread::spawn(move || {
+        let Some(app_data) = shared.lock().ok().map(|runtime| runtime.app_data.clone()) else {
+            return;
+        };
+        let cache = CollectionPriceCache::new(&app_data);
+        if let Some(table) = cache.load_cached()
+            && let Ok(mut runtime) = shared.lock()
+        {
+            let priced = table.len();
+            let date = table.dump_date().to_owned();
+            runtime.core.set_collection_prices(Arc::new(table));
+            let _ = runtime.core.record_market_ready(priced, date);
+        }
+        let Some(source) = RelicsRunHttp::new() else {
+            return;
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs())
+            .unwrap_or_default();
+        match cache.refresh(&source, now) {
+            Ok(table) => {
+                if let Ok(mut runtime) = shared.lock() {
+                    let priced = table.len();
+                    let date = table.dump_date().to_owned();
+                    runtime.core.set_collection_prices(Arc::new(table));
+                    let _ = runtime.core.record_market_ready(priced, date);
+                }
+            }
+            Err(_) => {
+                if let Ok(mut runtime) = shared.lock() {
+                    let _ = runtime
+                        .core
+                        .record_market_degraded("No warframe.market price dump could be read");
+                }
+            }
+        }
+    });
+}
+
 fn start_monitor(shared: SharedRuntime, app: AppHandle) {
     let should_start = shared
         .lock()
@@ -1480,6 +1529,7 @@ pub fn run() {
                 .unwrap_or(false);
             app.manage(runtime);
             if should_refresh {
+                start_collection_prices(Arc::clone(app.state::<SharedRuntime>().inner()));
                 start_monitor(
                     Arc::clone(app.state::<SharedRuntime>().inner()),
                     app.handle().clone(),
