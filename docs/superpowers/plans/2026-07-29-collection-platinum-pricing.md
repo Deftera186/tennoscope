@@ -1502,8 +1502,8 @@ it('says nothing rather than zero for an item with no price', async () => {
   expect(within(unpriced).queryByText(/p$/)).not.toBeInTheDocument()
 })
 
-/// A live price and a day-old median are different measurements. Showing them in the same column
-/// with nothing to tell them apart invites a comparison that was never valid.
+// A live price and a day-old median are different measurements. Showing them in the same column
+// with nothing to tell them apart invites a comparison that was never valid.
 it('distinguishes a live price from a dump price', async () => {
   render(<App/>)
   const live = await screen.findByRole('article', { name: 'Lith A1 Relic' })
@@ -1619,7 +1619,7 @@ it('narrows to items that have a price', async () => {
   expect(names).toEqual(['Lex Prime Receiver', 'Lith A1 Relic'])
 })
 
-/// A partial sum shown as a total is a lie the reader cannot detect, so the cell carries its count.
+// A partial sum shown as a total is a lie the reader cannot detect, so the cell carries its count.
 it('sums the priced stacks and says how many it counted', async () => {
   render(<App/>)
   const worth = await screen.findByTestId('band-worth')
@@ -1627,8 +1627,8 @@ it('sums the priced stacks and says how many it counted', async () => {
   expect(within(worth).getByText(/2 of 8 items priced/)).toBeInTheDocument()
 })
 
-/// The page refresh asks about exactly what is on screen, so a filtered view costs only the
-/// requests that view is worth.
+// The page refresh asks about exactly what is on screen, so a filtered view costs only the
+// requests that view is worth.
 it('prices the items currently on screen, and only those', async () => {
   const user = userEvent.setup()
   render(<App/>)
