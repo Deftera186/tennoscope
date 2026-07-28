@@ -246,3 +246,17 @@ fn a_corrupt_cache_file_yields_no_table_rather_than_a_panic() {
             .is_none()
     );
 }
+
+#[test]
+fn a_cache_write_failure_is_not_blamed_on_the_dump() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    // Create a file where the cache directory needs to be, so create_dir_all fails
+    let blocking_file = directory.path().join("collection-prices");
+    std::fs::write(&blocking_file, b"").expect("write blocking file");
+
+    let cache = CollectionPriceCache::new(&blocking_file);
+    let source = FakeDumps::new(&[("2026-07-27", DUMP)]);
+
+    let result = cache.refresh(&source, TODAY);
+    assert!(matches!(result, Err(PriceDumpError::CacheWrite)));
+}

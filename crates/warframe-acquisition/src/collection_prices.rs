@@ -19,6 +19,8 @@ use thiserror::Error;
 pub enum PriceDumpError {
     #[error("the price dump could not be read")]
     Malformed,
+    #[error("collection price cache could not be written")]
+    CacheWrite,
 }
 
 /// Refinement tiers the catalog appends to a relic's name. The market lists one price per relic
@@ -251,10 +253,10 @@ impl CollectionPriceCache {
     }
 
     fn store(&self, table: &PriceTable) -> Result<(), PriceDumpError> {
-        fs::create_dir_all(&self.directory).map_err(|_| PriceDumpError::Malformed)?;
-        let bytes = serde_json::to_vec(table).map_err(|_| PriceDumpError::Malformed)?;
+        fs::create_dir_all(&self.directory).map_err(|_| PriceDumpError::CacheWrite)?;
+        let bytes = serde_json::to_vec(table).map_err(|_| PriceDumpError::CacheWrite)?;
         AtomicFile::new(self.path(), OverwriteBehavior::AllowOverwrite)
             .write(|file| file.write_all(&bytes).and_then(|_| file.sync_all()))
-            .map_err(|_| PriceDumpError::Malformed)
+            .map_err(|_| PriceDumpError::CacheWrite)
     }
 }
