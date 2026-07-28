@@ -105,3 +105,85 @@ fn a_malformed_dump_is_rejected_whole() {
         Err(PriceDumpError::Malformed)
     ));
 }
+
+use std::{cell::RefCell, collections::HashMap as Map};
+use warframe_acquisition::{CollectionPriceSource, PriceFetch, civil_date, latest_dump};
+
+struct FakeDumps {
+    available: Map<String, String>,
+    asked: RefCell<Vec<String>>,
+}
+
+impl FakeDumps {
+    fn new(available: &[(&str, &str)]) -> Self {
+        Self {
+            available: available
+                .iter()
+                .map(|(date, body)| ((*date).to_owned(), (*body).to_owned()))
+                .collect(),
+            asked: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl CollectionPriceSource for FakeDumps {
+    fn fetch(&self, date: &str) -> Result<Vec<u8>, PriceFetch> {
+        self.asked.borrow_mut().push(date.to_owned());
+        self.available
+            .get(date)
+            .map(|body| body.as_bytes().to_vec())
+            .ok_or(PriceFetch::Missing)
+    }
+}
+
+/// 2026-07-29T00:00:00Z. The dumps lag: on that day the newest was dated the 27th.
+const TODAY: u64 = 1_785_283_200;
+
+#[test]
+fn a_unix_time_becomes_the_dump_date_the_url_needs() {
+    assert_eq!(civil_date(0), "1970-01-01");
+    assert_eq!(civil_date(TODAY), "2026-07-29");
+}
+
+/// The dump for today usually does not exist yet, so asking only for today would price nothing.
+#[test]
+fn the_newest_available_dump_is_found_by_walking_back() {
+    let source = FakeDumps::new(&[("2026-07-27", DUMP)]);
+
+    let table = latest_dump(&source, TODAY).expect("an older dump is still a dump");
+
+    assert_eq!(table.dump_date(), "2026-07-27");
+    assert_eq!(
+        source.asked.borrow().as_slice(),
+        ["2026-07-29", "2026-07-28", "2026-07-27"],
+        "each day is tried once, newest first"
+    );
+}
+
+#[test]
+fn the_newest_dump_wins_when_several_exist() {
+    let source = FakeDumps::new(&[("2026-07-28", DUMP), ("2026-07-27", DUMP)]);
+
+    assert_eq!(
+        latest_dump(&source, TODAY).unwrap().dump_date(),
+        "2026-07-28"
+    );
+}
+
+/// Walking back forever would hammer a dead host on every start, and a week-old valuation is not
+/// worth the requests it would cost to find.
+#[test]
+fn the_walk_back_gives_up_rather_than_searching_forever() {
+    let source = FakeDumps::new(&[]);
+
+    assert!(latest_dump(&source, TODAY).is_err());
+    assert_eq!(source.asked.borrow().len(), 6, "today plus five days back");
+}
+
+/// A dump that parses but is empty is a bad dump, not a collection where nothing is worth anything.
+#[test]
+fn a_dump_with_no_prices_is_not_accepted() {
+    let source = FakeDumps::new(&[("2026-07-29", "{}")]);
+
+    assert!(latest_dump(&source, TODAY).is_err());
+}
