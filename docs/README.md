@@ -12,6 +12,7 @@ The design decisions behind the shipped code, written before the code and left a
 | [memory-reward-recognition.md](design/memory-reward-recognition.md) | Recognising the squad's reward choices from game memory, gated on the log's reward lifecycle. |
 | [player-reward-records.md](design/player-reward-records.md) | Resolving rewards from the transient per-player response records. |
 | [persistent-reward-ui.md](design/persistent-reward-ui.md) | Resolving reward order from the persistent reward-screen object graph. |
+| [collection-platinum-pricing.md](design/collection-platinum-pricing.md) | Pricing the whole collection against warframe.market within a 3 requests/second budget. |
 
 The three reward documents are successive attempts at the same problem. All three are kept: the
 memory path is still live code, and the shipped answer — reading the screen — only makes sense
