@@ -128,8 +128,21 @@ fn a_three_card_screen_is_read_where_a_three_card_screen_actually_sits() {
     );
     // A clipped title still lands on the right name through the closed-set match, so the name alone
     // would pass against a crop that is half off the card. The score is what proves the geometry.
+    //
+    // 0.85 is the middle of a measured gap, not a tuned peak. All three cards read exactly here on
+    // tesseract 5.5.2, and every card of every other fixture does too bar the wrapped screen's
+    // speck at 0.954 -- but CI's tesseract 5.3.x differs by one character on `Burston Prime Stock`,
+    // and that name is 17 normalised characters, so one edit is already 0.944 and two are 0.895.
+    // 0.95 had room for neither.
+    //
+    // The other side of the gap is what misplaced geometry actually reads. Sweeping the crop
+    // sideways from the true position: 1.0 out to +-16px, 0.90 at +-32px, 0.71-0.80 at +-48px,
+    // 0.47-0.65 at +-64px, and the half-pitch 121px shift this test exists to catch reads 0.26-0.50
+    // across its three slots. So 0.85 still fails any drift of a fifth of a card width or more, at
+    // 0.35 clear of the failure it guards, while absorbing a two-character difference between OCR
+    // builds. It is also the line `CROP_KEEP_BELOW` already draws around an anomalous read.
     for (name, score) in cards {
-        assert!(score >= 0.95, "{name} read at only {score}");
+        assert!(score >= 0.85, "{name} read at only {score}");
     }
 }
 
@@ -296,7 +309,7 @@ fn concurrent_reads_do_not_corrupt_each_other() {
 /// Exercises the real shell-out chain against a running game: window discovery, PPM capture,
 /// header parsing, cropping and tesseract. Ignored by default because it needs Warframe on screen.
 ///
-/// Run with `cargo test -p warframe-helper --test reward_ocr -- --ignored --nocapture`. Outside a
+/// Run with `cargo test -p tennoscope --test reward_ocr -- --ignored --nocapture`. Outside a
 /// reward screen the cards will not match, which is the correct answer; what is being checked is
 /// that the failure is a match failure and not a broken capture.
 #[test]

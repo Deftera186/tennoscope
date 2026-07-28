@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
-<pkgmetadata>
-  <longdescription lang="en">
-    TennoScope is a local-first Linux desktop companion that reads a
-    logged-in Warframe process without modifying it and stores normalized
-    inventory data locally.
-  </longdescription>
-</pkgmetadata>
