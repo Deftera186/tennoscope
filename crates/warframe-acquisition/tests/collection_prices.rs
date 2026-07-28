@@ -187,3 +187,62 @@ fn a_dump_with_no_prices_is_not_accepted() {
 
     assert!(latest_dump(&source, TODAY).is_err());
 }
+
+use warframe_acquisition::CollectionPriceCache;
+
+#[test]
+fn a_refreshed_table_is_readable_without_the_network() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let cache = CollectionPriceCache::new(directory.path());
+    let source = FakeDumps::new(&[("2026-07-27", DUMP)]);
+
+    cache.refresh(&source, TODAY).expect("refresh stores");
+    let cached = cache.load_cached().expect("a stored table is readable");
+
+    assert_eq!(cached.price_for("Serration"), Some(50));
+    assert_eq!(cached.dump_date(), "2026-07-27");
+}
+
+#[test]
+fn an_empty_cache_directory_yields_no_table() {
+    let directory = tempfile::tempdir().expect("temp dir");
+
+    assert!(
+        CollectionPriceCache::new(directory.path())
+            .load_cached()
+            .is_none()
+    );
+}
+
+/// A failed refresh must leave yesterday's prices alone. Discarding them because a download failed
+/// would turn a network blip into a collection that reads as worthless.
+#[test]
+fn a_failed_refresh_leaves_the_cached_prices_in_place() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let cache = CollectionPriceCache::new(directory.path());
+    cache
+        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY)
+        .expect("first refresh stores");
+
+    assert!(cache.refresh(&FakeDumps::new(&[]), TODAY).is_err());
+
+    let cached = cache.load_cached().expect("the old table survives");
+    assert_eq!(cached.dump_date(), "2026-07-27");
+    assert_eq!(cached.price_for("Serration"), Some(50));
+}
+
+#[test]
+fn a_corrupt_cache_file_yields_no_table_rather_than_a_panic() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    std::fs::write(
+        directory.path().join("collection-prices.json"),
+        b"{not json",
+    )
+    .expect("write corrupt cache");
+
+    assert!(
+        CollectionPriceCache::new(directory.path())
+            .load_cached()
+            .is_none()
+    );
+}

@@ -26,8 +26,9 @@ pub use catalog_cache::{
     WFCD_RELICS_JSON_URL, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 pub use collection_prices::{
-    CollectionPriceSource, DUMP_LOOKBACK_DAYS, MAX_DUMP_BYTES, PriceDumpError, PriceFetch,
-    PriceTable, RELICS_RUN_HISTORY_URL, RelicsRunHttp, civil_date, latest_dump,
+    CollectionPriceCache, CollectionPriceSource, DUMP_LOOKBACK_DAYS, MAX_DUMP_BYTES,
+    PriceDumpError, PriceFetch, PriceTable, RELICS_RUN_HISTORY_URL, RelicsRunHttp, civil_date,
+    latest_dump,
 };
 pub use inventory::{
     INVENTORY_ENDPOINT, InventoryHttpTransport, InventoryJsonDecoder, MAX_INVENTORY_RESPONSE_BYTES,

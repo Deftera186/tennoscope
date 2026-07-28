@@ -5,9 +5,12 @@
 //! gets a different answer: one file a day, every price in it, no per-item requests at all.
 
 use std::collections::HashMap;
-use std::io::Read;
+use std::fs;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::time::Duration;
 
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -208,5 +211,50 @@ impl CollectionPriceSource for RelicsRunHttp {
             return Err(PriceFetch::TooLarge);
         }
         Ok(body)
+    }
+}
+
+/// The parsed table on disk, so a start with no network still prices the collection.
+///
+/// What is stored is the resolved table rather than the download: the 3.9 MB dump reduces to a few
+/// thousand name-and-price pairs, which loads instantly and costs nothing to keep.
+pub struct CollectionPriceCache {
+    directory: PathBuf,
+}
+
+impl CollectionPriceCache {
+    pub fn new(directory: impl Into<PathBuf>) -> Self {
+        Self {
+            directory: directory.into(),
+        }
+    }
+
+    fn path(&self) -> PathBuf {
+        self.directory.join("collection-prices.json")
+    }
+
+    pub fn load_cached(&self) -> Option<PriceTable> {
+        let bytes = fs::read(self.path()).ok()?;
+        let table: PriceTable = serde_json::from_slice(&bytes).ok()?;
+        (!table.is_empty()).then_some(table)
+    }
+
+    /// Fetch the newest dump and store it. On failure the previously stored table is untouched.
+    pub fn refresh(
+        &self,
+        source: &dyn CollectionPriceSource,
+        now_unix: u64,
+    ) -> Result<PriceTable, PriceDumpError> {
+        let table = latest_dump(source, now_unix)?;
+        self.store(&table)?;
+        Ok(table)
+    }
+
+    fn store(&self, table: &PriceTable) -> Result<(), PriceDumpError> {
+        fs::create_dir_all(&self.directory).map_err(|_| PriceDumpError::Malformed)?;
+        let bytes = serde_json::to_vec(table).map_err(|_| PriceDumpError::Malformed)?;
+        AtomicFile::new(self.path(), OverwriteBehavior::AllowOverwrite)
+            .write(|file| file.write_all(&bytes).and_then(|_| file.sync_all()))
+            .map_err(|_| PriceDumpError::Malformed)
     }
 }
