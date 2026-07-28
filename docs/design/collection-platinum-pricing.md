@@ -90,9 +90,13 @@ application data directory.
 
 What is cached is the resolved map, not the download. The 3.9 MB dump reduces to a few thousand
 name-and-price pairs, so the cached file is small, loads instantly at startup, and prices the
-collection before any network call is attempted. The dump date is stored with it. A fetch is
-attempted once per day, and when it fails the cached prices stay and are described by their date
-rather than discarded.
+collection before any network call is attempted. The dump date is stored with it, and when a fetch
+fails the cached prices stay and are described by their date rather than discarded.
+
+The stored date is also what decides whether to fetch at all. The dumps lag -- on 2026-07-29 the
+newest published was dated the 27th -- so "the cache is not dated today" is no evidence a newer file
+exists, and a cached table dated today or yesterday is left alone. Anything older costs one attempt
+per launch, which is the price of not remembering when we last asked.
 
 The response is capped, as every remote read in this codebase is, because the body is streamed into
 memory and an uncapped `read_to_end` against an untrusted host is an out-of-memory waiting for a bad
@@ -127,9 +131,17 @@ would still have put six or nine requests a second on the API. Every request cla
 shared clock before it leaves, so a caller in a hurry (the reward fill, which has fifteen seconds of
 screen and skips its own extra delay) can spend the budget sooner but cannot exceed it.
 
-The valuation stays on the dump. The value sort and the collection worth need every item priced to
-mean anything, and live-pricing hundreds of items to compute a total is exactly the behavior the API
-rules ask clients not to attempt.
+Nothing is *fetched* for the valuation. The value sort and the collection worth need every item
+priced to mean anything, and live-pricing hundreds of items to compute a total is exactly the
+behavior the API rules ask clients not to attempt. But they read the best price already in hand:
+live where the player has priced something, the dump everywhere else.
+
+That was a decision between two defensible answers. Dump-only would make the total one consistent
+measurement, comparable with itself hour to hour. Best-available makes it more accurate -- every
+item the player deliberately priced is a better number than the dump's, and refusing to use it
+would mean showing a total the app knows to be stale. The cost is a figure that moves as the player
+prices things, which is the honest behaviour of a valuation that is being improved in front of you.
+The card still says which measurement each price is, so the mix is visible rather than silent.
 
 The reward overlay is untouched. Its question was always "what is the cheapest online seller asking
 right now", answered live, and it stays that way.
@@ -157,7 +169,11 @@ the cache's fifteen minutes stops being live and the item falls back to the dump
 claims a freshness it has lost.
 
 The frontend already polls the view every 2.5 seconds, so both the dump loading and a live refresh
-landing appear on their own through plumbing that already exists.
+landing appear on their own through plumbing that already exists. That poll must keep running while
+a page refresh is in flight -- it is the only thing that makes sixteen seconds of pricing visible as
+prices arriving rather than as a frozen button -- so the live refresh is deliberately not treated as
+a foreground operation. Ordering is still safe: a view is applied only while its request is the
+newest one started, so an older response can never land on top of a newer one.
 
 ## Presentation
 
@@ -168,19 +184,22 @@ whether the pile is worth clearing.
 Unpriced and untradeable are not distinguished, because with a single dump this design genuinely
 cannot tell them apart -- an item absent from the file may be untradeable or may be one the name
 rules failed to reach. Claiming to know which would be a guess dressed as a fact. Unpriced items say
-only that there is no price, and the market health row carries the dump's date so a collection full
-of dashes is legible as a stale or failed download rather than as a worthless account.
+only that there is no price, and the collection price row in Diagnostics carries the dump's date so
+a collection full of dashes is legible as a stale or failed download rather than as a worthless
+account. That row is separate from the overlay's market row on purpose: one answers "which day are
+these prices from", the other "could we reach warframe.market a moment ago", and while they shared a
+row whichever wrote last erased the other's answer.
 
 Three affordances follow the prices. A `Value` sort orders by stack value with unpriced entries
 sinking to the bottom. A `Tradeable` filter narrows to items that have a price. A fourth cell in the
 assay band sums price times quantity across priced items and carries the count it was computed from,
-because a partial sum presented as a total is a lie the reader cannot detect. All three read dump
-prices, so what they rank and total is one consistent measurement rather than a mix.
+because a partial sum presented as a total is a lie the reader cannot detect. All three read the
+best price in hand for each item, live where there is one and the dump otherwise.
 
 Two more invoke the live path. A card is selectable, and selecting it prices that item live. The
 register carries a refresh control that prices the page on screen, showing its progress, because
 sixteen seconds of silence reads as a broken button. A live price is marked as live on the card;
-everything else is understood to come from the dump, whose date the market health row carries.
+everything else is understood to come from the dump, whose date the collection price row carries.
 
 The interface work is done through the `impeccable` skill.
 
@@ -194,34 +213,39 @@ The interface work is done through the `impeccable` skill.
 ## Failure Handling
 
 An unreachable dump leaves the cached prices in place, dated. A first run with no cache and no
-network shows no prices and a market health row that says why. A malformed dump is rejected whole
+network shows no prices and a collection price row that says why. A malformed dump is rejected whole
 rather than partially applied, so a truncated download cannot silently halve the collection's worth.
 
 A live refresh that fails changes nothing: the item keeps the dump's price and its dump attribution.
 Failing back to a dash would be worse than the day-old number it replaced, and would punish the
 player for asking.
 
-A response over the size cap is reported as its own outcome rather than as an absent price. The same
-correction applies to the overlay's live lookup, where today a `None` conflates four different
-facts -- priced, no online seller, endpoint unreachable, and response over the cap. That last one is
-the dangerous member: it is the failure that arrives the day warframe.market widens its payload, and
-as an `Option` it presents as "every item is worthless" with nothing anywhere saying otherwise.
+A response over the size cap is reported as its own outcome rather than as an absent price, and the
+outcome is counted and returned to whoever asked for the prices, because an outcome nothing reads is
+the same as no outcome. The live lookup's `None` conflated four different facts -- priced, no online
+seller, endpoint unreachable, and response over the cap. The last is the dangerous member: it is the
+failure that arrives the day warframe.market widens its payload, it stops every price at once, and
+as an `Option` it presents as "every item is worthless" with nothing anywhere saying otherwise. It
+now reaches the market health row by name, ahead of the quieter failures.
 
 No pricing failure can affect inventory synchronization.
 
 ## Verification
 
-Automated tests cover each name rule and a name no rule reaches; the market name a rule resolves to,
-since the live path builds its slug from that rather than from the catalog's name; the dump parser
-against a trimmed fixture, including an item whose `sell` record is absent and one whose body is one
-byte over the cap; date walk-back, proving a missing file for today falls through to an older one
-and records the date it used; the cache round-tripping through disk and pricing a collection before
-any network call; malformed input rejected whole; a live price taking precedence over the dump's and
-being marked as such; a live price that has aged out falling back to the dump rather than lingering
-as live; the paced refresh keeping to its gap; and each live-lookup outcome distinctly, including
+Automated tests cover each name rule and a name no rule reaches; that built equipment does *not*
+borrow its blueprint's price, which is the rule this design rejected and the one somebody will
+helpfully re-add; the market name a rule resolves to, since the live path builds its slug from that
+rather than from the catalog's name; the dump parser against a trimmed fixture, including an item
+whose `sell` record is absent and one whose body is one byte over the cap; date walk-back, proving a
+missing file for today falls through to an older one and records the date it used; a cached dump
+dated today or yesterday not being downloaded again while an older one is; the cache round-tripping
+through disk and pricing a collection before any network call; malformed input rejected whole; a
+live price taking precedence over the dump's and being marked as such; a live price that has aged
+out falling back to the dump rather than lingering as live; two concurrent warms unable to put
+requests closer together than the shared floor; and each live-lookup outcome distinctly, including
 oversize reaching the market health row. Frontend tests cover the value sort with unpriced entries
-present, the worth arithmetic and its count, the tradeable filter, and that a live price is visibly
-distinguished from a dump price.
+present, the worth arithmetic and its count, the tradeable filter, that a live price is visibly
+distinguished from a dump price, and that the view poll keeps running through a live page refresh.
 
 ## Out of Scope
 
