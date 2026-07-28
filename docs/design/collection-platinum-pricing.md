@@ -96,8 +96,10 @@ collection labels its prices with the date of the dump they came from.
 
 ## Application View
 
-`CollectionItemView` gains `platinum: Option<u32>` and `tradeable: bool`. `AppCore` holds an
-optional price table -- one cheap `Arc` clone -- that `current_view()` reads while building items.
+`CollectionItemView` gains `platinum: Option<u32>`, and nothing else. A separate `tradeable` flag
+would be a second name for "has a price", since with a single dump those are the same fact; the
+`Tradeable` filter reads the price field directly. `AppCore` holds an optional price table -- one
+cheap `Arc` clone -- that `current_view()` reads while building items.
 
 Nothing else is needed to deliver prices to the interface. The frontend already polls the view every
 2.5 seconds, so prices appear when the table loads, through plumbing that already exists. There is
