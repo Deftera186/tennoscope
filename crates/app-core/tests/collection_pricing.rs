@@ -144,13 +144,19 @@ fn only_the_named_items_are_resolved_for_a_live_lookup() {
 }
 
 /// Four refinements of one relic are one item on warframe.market. Asking about a page holding all
-/// four must cost one request, not four.
+/// four must cost one request, not four. The store returns entries ordered by item id (see
+/// `SqliteStore::load_collection`'s `ORDER BY item_id`), so "/b" sits between the two "/a"/"/c"
+/// refinements of the same relic pre-sort -- the duplicate market names are not adjacent until
+/// `market_names_for` sorts them, which is what makes the following `dedup()` sufficient.
 #[test]
 fn relic_refinements_on_one_page_collapse_to_a_single_request() {
-    let dump = r#"{"Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}]}"#;
+    let dump = r#"{
+        "Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}],
+        "Meso B2 Relic": [{"order_type":"sell","median":15.0,"volume":25}]
+    }"#;
     let mut core = core_with_items(vec![
         item("/a", "Axi A1 Intact", Category::Relic, 2),
-        item("/b", "Axi A1 Radiant", Category::Relic, 1),
+        item("/b", "Meso B2 Radiant", Category::Relic, 1),
         item("/c", "Axi A1 Flawless", Category::Relic, 4),
     ]);
     core.set_collection_prices(Arc::new(
@@ -161,7 +167,10 @@ fn relic_refinements_on_one_page_collapse_to_a_single_request() {
         .market_names_for(&["/a".to_owned(), "/b".to_owned(), "/c".to_owned()])
         .expect("resolves");
 
-    assert_eq!(names, vec!["Axi A1 Relic".to_owned()]);
+    assert_eq!(
+        names,
+        vec!["Axi A1 Relic".to_owned(), "Meso B2 Relic".to_owned()]
+    );
 }
 
 /// An item the dump never listed cannot be asked about either: there is no slug to build.
