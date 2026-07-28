@@ -1,6 +1,8 @@
 use std::time::Duration;
 
-use warframe_acquisition::{MarketPriceCache, MarketPriceSource, lowest_sell_price, market_slug};
+use warframe_acquisition::{
+    MarketPriceCache, MarketPriceSource, PriceLookup, lowest_sell_top, market_slug,
+};
 
 /// Verified against the live warframe.market v2 API for every reward name observed in a real run.
 #[test]
@@ -31,38 +33,46 @@ fn a_name_with_nothing_quotable_produces_no_slug() {
     assert_eq!(market_slug("&&&"), "");
 }
 
-fn orders(body: &str) -> Option<u32> {
-    lowest_sell_price(body.as_bytes())
+/// The shape of `/v2/orders/item/{slug}/top`: top buy and sell orders, already filtered to sellers
+/// who are online, at 4.9 KB against 184 KB for the full order book.
+const TOP: &str = r#"{"apiVersion":"0.25.0","data":{
+    "sell":[
+        {"type":"sell","platinum":19,"visible":true,"user":{"status":"ingame"}},
+        {"type":"sell","platinum":20,"visible":true,"user":{"status":"ingame"}}
+    ],
+    "buy":[{"type":"buy","platinum":12,"visible":true,"user":{"status":"ingame"}}]
+},"error":null}"#;
+
+#[test]
+fn the_cheapest_online_seller_sets_the_price() {
+    assert_eq!(lowest_sell_top(TOP.as_bytes()), PriceLookup::Priced(19));
 }
 
 /// An offline seller's price is a number nobody can trade at. Counting them makes every item look
 /// cheaper than it is, which would push the advisor toward the wrong card.
 #[test]
-fn only_visible_sell_orders_from_sellers_in_game_are_quoted() {
-    let body = r#"{"data":[
-        {"type":"buy","platinum":1,"visible":true,"user":{"status":"ingame"}},
+fn an_offline_or_hidden_seller_is_not_quotable() {
+    let body = r#"{"data":{"sell":[
         {"type":"sell","platinum":2,"visible":true,"user":{"status":"offline"}},
         {"type":"sell","platinum":3,"visible":false,"user":{"status":"ingame"}},
-        {"type":"sell","platinum":25,"visible":true,"user":{"status":"ingame"}},
-        {"type":"sell","platinum":40,"visible":true,"user":{"status":"ingame"}}
-    ]}"#;
-    assert_eq!(orders(body), Some(25));
+        {"type":"sell","platinum":25,"visible":true,"user":{"status":"ingame"}}
+    ],"buy":[]}}"#;
+    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(25));
 }
 
 #[test]
-fn an_item_with_no_live_sellers_has_no_price() {
-    let body = r#"{"data":[
-        {"type":"buy","platinum":1,"visible":true,"user":{"status":"ingame"}},
+fn an_item_with_no_online_seller_is_distinct_from_a_failure() {
+    let body = r#"{"data":{"sell":[
         {"type":"sell","platinum":2,"visible":true,"user":{"status":"offline"}}
-    ]}"#;
-    assert_eq!(orders(body), None);
+    ],"buy":[]}}"#;
+    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::NoSellers);
 }
 
+/// The failure that arrives the day warframe.market widens its payload. As an absent price it
+/// would present as "every item is worthless", with nothing anywhere saying otherwise.
 #[test]
-fn an_unreadable_or_empty_response_has_no_price() {
-    assert_eq!(orders("not json"), None);
-    assert_eq!(orders(r#"{"data":[]}"#), None);
-    assert_eq!(orders(r#"{"error":"not found"}"#), None);
+fn an_unreadable_body_is_reported_rather_than_priced_at_nothing() {
+    assert_eq!(lowest_sell_top(b"{not json"), PriceLookup::Unavailable);
 }
 
 /// A source that records every name it is asked for, so a test can prove the cache stopped a
@@ -89,9 +99,12 @@ impl CountingMarket {
 }
 
 impl MarketPriceSource for CountingMarket {
-    fn lowest_sell(&self, name: &str) -> Option<u32> {
+    fn lowest_sell(&self, name: &str) -> PriceLookup {
         self.asked.lock().unwrap().push(name.to_owned());
-        self.priced.get(name).copied()
+        self.priced
+            .get(name)
+            .copied()
+            .map_or(PriceLookup::NoSellers, PriceLookup::Priced)
     }
 }
 

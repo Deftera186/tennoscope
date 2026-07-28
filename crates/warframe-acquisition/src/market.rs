@@ -18,8 +18,15 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 
 const ORDERS_URL: &str = "https://api.warframe.market/v2/orders/item/";
-const MAX_ORDERS_BYTES: usize = 8 * 1024 * 1024;
-const USER_AGENT: &str = concat!("TennoScope/", env!("CARGO_PKG_VERSION"));
+/// The top orders endpoint returns at most five buy and five sell orders, measured at 4.9 KB
+/// against 184 KB for the same item's full book. The cap is generous against that so a widened
+/// payload does not silently stop every price.
+const MAX_ORDERS_BYTES: usize = 256 * 1024;
+const USER_AGENT: &str = concat!(
+    "TennoScope/",
+    env!("CARGO_PKG_VERSION"),
+    " (+https://github.com/Deftera186/tennoscope)"
+);
 
 /// warframe.market's slug for a reward name: lowercase, non-alphanumerics collapsed to underscore.
 ///
@@ -37,22 +44,44 @@ pub fn market_slug(name: &str) -> String {
     slug.trim_matches('_').to_owned()
 }
 
+/// Why an item has no price, kept distinct because the four reasons want different responses.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PriceLookup {
+    Priced(u32),
+    /// The item is listed, but nobody selling it is online.
+    NoSellers,
+    Unavailable,
+    /// The response exceeded the size cap. Its own outcome so diagnostics can name it.
+    Oversize,
+}
+
+impl PriceLookup {
+    pub fn price(self) -> Option<u32> {
+        match self {
+            Self::Priced(platinum) => Some(platinum),
+            _ => None,
+        }
+    }
+}
+
 pub trait MarketPriceSource {
-    /// Lowest visible sell price from a seller who is in game, or `None` when the item is not
-    /// traded or the API cannot be reached.
-    fn lowest_sell(&self, name: &str) -> Option<u32>;
+    fn lowest_sell(&self, name: &str) -> PriceLookup;
 }
 
 #[derive(Deserialize)]
-struct OrdersResponse {
-    data: Vec<Order>,
+struct TopResponse {
+    data: TopOrders,
+}
+
+#[derive(Deserialize)]
+struct TopOrders {
+    #[serde(default)]
+    sell: Vec<Order>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Order {
-    #[serde(rename = "type")]
-    order_type: String,
     platinum: u32,
     #[serde(default)]
     visible: bool,
@@ -65,18 +94,18 @@ struct OrderUser {
     status: String,
 }
 
-/// Only orders from a seller who is actually in game are quotable. An offline seller's price is a
-/// number nobody can trade at, and including them makes every item look cheaper than it is.
-pub fn lowest_sell_price(body: &[u8]) -> Option<u32> {
-    serde_json::from_slice::<OrdersResponse>(body)
-        .ok()?
+pub fn lowest_sell_top(body: &[u8]) -> PriceLookup {
+    let Ok(response) = serde_json::from_slice::<TopResponse>(body) else {
+        return PriceLookup::Unavailable;
+    };
+    response
         .data
+        .sell
         .into_iter()
-        .filter(|order| {
-            order.order_type == "sell" && order.visible && order.user.status == "ingame"
-        })
+        .filter(|order| order.visible && order.user.status == "ingame")
         .map(|order| order.platinum)
         .min()
+        .map_or(PriceLookup::NoSellers, PriceLookup::Priced)
 }
 
 pub struct WarframeMarketHttp {
@@ -96,27 +125,29 @@ impl WarframeMarketHttp {
 }
 
 impl MarketPriceSource for WarframeMarketHttp {
-    fn lowest_sell(&self, name: &str) -> Option<u32> {
+    fn lowest_sell(&self, name: &str) -> PriceLookup {
         let slug = market_slug(name);
         if slug.is_empty() {
-            return None;
+            return PriceLookup::Unavailable;
         }
-        let response = self
-            .client
-            .get(format!("{ORDERS_URL}{slug}"))
-            .send()
-            .ok()?
-            .error_for_status()
-            .ok()?;
+        let Ok(response) = self.client.get(format!("{ORDERS_URL}{slug}/top")).send() else {
+            return PriceLookup::Unavailable;
+        };
+        let Ok(response) = response.error_for_status() else {
+            return PriceLookup::Unavailable;
+        };
         let mut body = Vec::new();
-        response
+        if response
             .take((MAX_ORDERS_BYTES + 1) as u64)
             .read_to_end(&mut body)
-            .ok()?;
-        if body.len() > MAX_ORDERS_BYTES {
-            return None;
+            .is_err()
+        {
+            return PriceLookup::Unavailable;
         }
-        lowest_sell_price(&body)
+        if body.len() > MAX_ORDERS_BYTES {
+            return PriceLookup::Oversize;
+        }
+        lowest_sell_top(&body)
     }
 }
 
@@ -175,7 +206,7 @@ impl MarketPriceCache {
                 std::thread::sleep(gap);
             }
             requested = true;
-            if let Some(price) = source.lowest_sell(name) {
+            if let PriceLookup::Priced(price) = source.lowest_sell(name) {
                 self.insert(name, price);
                 stored += 1;
             }
