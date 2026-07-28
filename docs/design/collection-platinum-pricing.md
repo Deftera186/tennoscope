@@ -69,9 +69,20 @@ without a fresh price -- to the back. Items already fresh in cache, or already i
 enqueued twice.
 
 Requests go to `/v2/orders/item/{slug}/top` and carry a `User-Agent` naming this project and a
-contact URL, matching the form the API rules ask for. The response cap falls from 8 MB to 64 KB,
-which the measured 4.9 KB response sits comfortably inside. A 429 or 509 backs the worker off
-exponentially rather than killing it.
+contact URL, matching the form the API rules ask for. The response cap falls from 8 MB to 256 KB,
+which the measured 4.9 KB response sits far inside. A 429 or 509 backs the worker off exponentially
+rather than killing it.
+
+A lookup returns a distinct outcome rather than an `Option`, because today's `None` conflates four
+different facts: priced, no online seller, endpoint unavailable, and response over the cap. That
+last one is the dangerous member -- it is the failure that appears only when warframe.market widens
+its payload, and as an `Option` it would present as "this item is worthless" for every item at once,
+with nothing anywhere saying otherwise. Untradeable is no longer among the outcomes: the manifest
+settles that before a request is made.
+
+Distinguishing them costs one enum and pays for itself in the health row, which can then say the
+response was too large instead of reporting nothing. The overlay uses the same lookup and inherits
+the same fix, where it has the identical hole today.
 
 ## Price Cache
 
@@ -128,18 +139,21 @@ The interface work is done through the `impeccable` skill.
 
 An unreachable manifest means no prices: market health reports degraded and the collection renders
 exactly as it does today. An unreachable orders endpoint leaves individual items unpriced and the
-worker continues with the next slug. An untradeable item is not an error anywhere in the pipeline.
-No pricing failure can affect inventory synchronization, and no pricing request is ever made for an
+worker continues with the next slug. A response over the size cap is reported in the market health
+row by name, so the condition that would otherwise make every item silently appear unpriced is
+visible in diagnostics instead. An untradeable item is not an error anywhere in the pipeline. No
+pricing failure can affect inventory synchronization, and no pricing request is ever made for an
 item the manifest does not list.
 
 ## Verification
 
 Automated tests cover slug resolution across all four outcomes (`gameRef` hit, name hit, blueprint
 normalization, untradeable miss); the `/top` parser against a captured fixture containing an offline
-seller whose lower price must not win; queue ordering, proving a prioritized page overtakes a
-backlog; TTL expiry at both bars against a fake clock; and the cache round-tripping through disk.
-Frontend tests cover the value sort with unpriced entries present, the worth arithmetic and its
-count, and the tradeable filter.
+seller whose lower price must not win; each lookup outcome distinctly, including a body one byte
+over the cap yielding oversize rather than an absent price, and that outcome reaching the market
+health row; queue ordering, proving a prioritized page overtakes a backlog; TTL expiry at both bars
+against a fake clock; and the cache round-tripping through disk. Frontend tests cover the value sort
+with unpriced entries present, the worth arithmetic and its count, and the tradeable filter.
 
 ## Out of Scope
 
