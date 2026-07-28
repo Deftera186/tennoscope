@@ -1,6 +1,6 @@
 [package]
 name = "warframe-domain"
-version = "0.1.0"
+version.workspace = true
 description = "Collection and reward domain types with enforced invariants"
 edition.workspace = true
 license.workspace = true

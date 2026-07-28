@@ -24,6 +24,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Cheap and first: four files declare the release version and nothing else makes them agree.
+      - run: ./scripts/check-versions.sh
+
       # Tauri's Linux system libraries, plus tesseract and ImageMagick's `import`. The reward tests
       # skip nothing, so everything they shell out to has to be here.
       - name: Install system dependencies

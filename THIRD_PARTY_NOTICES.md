@@ -16,7 +16,7 @@ The Linux acquisition implementation was written for this project behind its own
 
 - [Sikewyrm/FrameForge](https://github.com/Sikewyrm/FrameForge), GPLv3, demonstrated read-only memory scanning, inventory authorization patterns, strict account-snapshot parsing, and a compatible fallback design.
 - [Sainan/warframe-api-helper](https://github.com/Sainan/warframe-api-helper) demonstrated the cross-platform authorization/API technique. Its MIT-plus-Commons-Clause terms are not treated as GPL-compatible; this project did not copy its source.
-- [WFCD/WFInfo](https://github.com/WFCD/WFInfo) and [soramanew/wfinfo-linux](https://github.com/soramanew/wfinfo-linux) informed research into `EE.log` reward-screen triggers and screenshot/OCR architecture. TennoScope's implementation is independent Rust code using `grim` and Tesseract on its first supported capture path.
+- [WFCD/WFInfo](https://github.com/WFCD/WFInfo) and [soramanew/wfinfo-linux](https://github.com/soramanew/wfinfo-linux) informed research into `EE.log` reward-screen triggers and screenshot/OCR architecture. TennoScope's implementation is independent Rust code using ImageMagick and Tesseract on its first supported capture path.
 - AlecaFrame's readable distribution and public documentation informed behavioral comparison only. AlecaFrame is not open-source software, and its code is not included here.
 
 The detailed source review and pinned references are recorded in [`docs/research/warframe-acquisition-existing-implementations.md`](docs/research/warframe-acquisition-existing-implementations.md).

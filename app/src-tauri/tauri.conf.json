@@ -1,9 +1,9 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "TennoScope",
-  "mainBinaryName": "TennoScope",
+  "mainBinaryName": "tennoscope",
   "version": "0.1.0",
-  "identifier": "org.warframehelper.app",
+  "identifier": "io.github.deftera186.tennoscope",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173",
@@ -18,9 +18,9 @@
         "width": 1180,
         "height": 760,
         "minWidth": 360,
-      "minHeight": 520,
-      "decorations": false,
-      "resizable": true,
+        "minHeight": 520,
+        "decorations": false,
+        "resizable": true,
         "fullscreen": false
       },
       {
@@ -50,9 +50,31 @@
     "category": "Utility",
     "license": "GPL-3.0-only",
     "licenseFile": "../../LICENSE",
+    "homepage": "https://github.com/Deftera186/tennoscope",
+    "publisher": "Deftera186",
+    "shortDescription": "Local-first Warframe collection and relic companion",
+    "longDescription": "TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.",
     "resources": {
       "../../LICENSE": "LICENSE",
       "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"
+    },
+    "linux": {
+      "deb": {
+        "recommends": [
+          "x11-utils",
+          "imagemagick",
+          "tesseract-ocr",
+          "tesseract-ocr-eng"
+        ]
+      },
+      "rpm": {
+        "recommends": [
+          "/usr/bin/xwininfo",
+          "/usr/bin/magick",
+          "/usr/bin/import",
+          "/usr/bin/tesseract"
+        ]
+      }
     },
     "icon": [
       "icons/32x32.png",

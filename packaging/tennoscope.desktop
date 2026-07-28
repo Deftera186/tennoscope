@@ -4,5 +4,9 @@ Name=TennoScope
 Comment=Local-first Warframe collection and relic companion
 Exec=tennoscope
 Icon=tennoscope
+# Same value tauri writes into the desktop entry it generates for the deb and rpm, so the window
+# groups under the launcher icon identically however TennoScope was installed.
+StartupWMClass=tennoscope
 Terminal=false
-Categories=Utility;
+Categories=Utility;Game;
+Keywords=Warframe;Relic;Prime;Void;Ducat;Platinum;

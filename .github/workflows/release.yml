@@ -26,11 +26,26 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             libwebkit2gtk-4.1-dev \
             libgtk-3-dev \
-            libgtk-layer-shell-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
             libxdo-dev \
-            libssl-dev
+            libssl-dev \
+            imagemagick \
+            tesseract-ocr \
+            tesseract-ocr-eng
+
+      # Same as CI: noble's `imagemagick` is 6.9 and has no `magick` binary, which the OCR crop
+      # pipeline is written against. Needed here because the bundle script runs the test suite.
+      - name: Install ImageMagick 7
+        run: |
+          curl -fsSL -o magick.AppImage \
+            https://github.com/ImageMagick/ImageMagick/releases/download/7.1.2-29/ImageMagick-7.1.2-29-gcc-x86_64.AppImage
+          chmod +x magick.AppImage
+          ./magick.AppImage --appimage-extract > /dev/null
+          sudo mv squashfs-root /opt/imagemagick
+          sudo ln -s /opt/imagemagick/AppRun /usr/local/bin/magick
+          rm magick.AppImage
+          magick -version
 
       - uses: Swatinem/rust-cache@v2
 
@@ -47,8 +62,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
         working-directory: app
 
-      - run: pnpm tauri build --bundles appimage deb rpm
-        working-directory: app
+      # Not a bare `pnpm tauri build`. The helper runs the test suite, clippy and `pnpm check`
+      # first, and then asserts that the AppImage it just produced still forces `GDK_BACKEND=x11`
+      # -- the property the reward overlay depends on, and the only check of it that runs against
+      # the artifact users actually download.
+      - run: ./scripts/build-linux-bundles.sh appimage deb rpm
 
       # A draft, not a publish. The release notes are written by hand from CHANGELOG.md and the
       # release goes out when the maintainer says so.

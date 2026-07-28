@@ -11,7 +11,9 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
-Everything below is the initial release, cut when it is ready. Nothing has been tagged yet.
+## [0.1.0] - 2026-07-28
+
+First release.
 
 ### Added
 
@@ -38,7 +40,9 @@ Everything below is the initial release, cut when it is ready. Nothing has been 
   game's own window, so it behaves the same under every window manager and compositor.
 - A one-time first-run disclosure of the read-only process inspection and its account-policy
   uncertainty. Nothing runs until it is accepted.
-- AppImage, Debian and RPM bundles, with Arch and Gentoo recipes.
+- AppImage, Debian and RPM bundles, attached to the release. Gentoo packages in the `deftera`
+  overlay, as `games-util/tennoscope-bin` and `games-util/tennoscope`; an Arch `PKGBUILD` in the
+  repository. All of them install a `tennoscope` command and a desktop entry.
 
 ### Security
 
@@ -47,4 +51,5 @@ Everything below is the initial release, cut when it is ready. Nothing has been 
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/commits/main
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Deftera186/tennoscope/releases/tag/v0.1.0

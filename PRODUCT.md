@@ -131,7 +131,7 @@ Factual limits, not commitments:
 ## Brand Commitments
 
 - Name: **TennoScope**. Window title *TennoScope — Local-first Warframe
-  Companion*. Bundle identifier `org.warframehelper.app`.
+  Companion*. Bundle identifier `io.github.deftera186.tennoscope`.
 - Licensed GNU GPLv3-only. Free and open source. No paid tier exists or is
   planned as a product fact.
 - Unofficial. Not affiliated with or endorsed by Digital Extremes, and must

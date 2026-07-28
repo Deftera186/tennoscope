@@ -56,7 +56,66 @@ TennoScope shows this disclosure on first run and does nothing until you accept 
 
 ## Install
 
-No release is published yet. Build it:
+Every option gives you a `tennoscope` command and a desktop entry, except the AppImage, which is
+a single file you run directly.
+
+### Gentoo
+
+TennoScope is packaged in the [`deftera`](https://github.com/Deftera186/deftera-overlay) overlay,
+which is listed in the official Gentoo overlays database:
+
+```bash
+sudo emerge --ask app-eselect/eselect-repository
+sudo eselect repository enable deftera
+sudo emaint sync --repo deftera
+sudo emerge --ask games-util/tennoscope-bin
+```
+
+`tennoscope-bin` unpacks the released binary and installs in seconds. `games-util/tennoscope`
+builds from source instead; it needs `sys-apps/pnpm-bin` from `::guru` and a one-off
+`FEATURES="-network-sandbox"` because pnpm and cargo resolve their lockfiles during the build.
+
+### Arch
+
+```bash
+curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch/PKGBUILD
+makepkg -si
+```
+
+### Debian, Ubuntu, Fedora
+
+Download the `.deb` or `.rpm` from the [latest release](https://github.com/Deftera186/tennoscope/releases/latest):
+
+```bash
+sudo apt install ./TennoScope_0.1.0_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./TennoScope-0.1.0-1.x86_64.rpm  # Fedora
+```
+
+### Anything else — AppImage
+
+```bash
+chmod +x TennoScope_0.1.0_amd64.AppImage
+./TennoScope_0.1.0_amd64.AppImage
+```
+
+Self-contained, no `tennoscope` command. If you want one:
+`ln -s "$PWD/TennoScope_0.1.0_amd64.AppImage" ~/.local/bin/tennoscope`.
+
+### The overlay's toolchain
+
+The collection browser works on its own. The relic overlay shells out to `xwininfo`, ImageMagick 7
+(`magick` — the v6 `convert` will not do) and `tesseract` with English data. The `.deb` and `.rpm`
+list these as recommended rather than required, so install them if your package manager skipped
+them:
+
+```bash
+sudo apt install x11-utils imagemagick tesseract-ocr tesseract-ocr-eng   # Debian, Ubuntu
+sudo dnf install xorg-x11-utils ImageMagick tesseract tesseract-langpack-eng  # Fedora
+sudo pacman -S xorg-xwininfo imagemagick tesseract tesseract-data-eng    # Arch
+sudo emerge x11-apps/xwininfo media-gfx/imagemagick app-text/tesseract   # Gentoo
+```
+
+### Building it yourself
 
 ```bash
 corepack enable
@@ -64,7 +123,7 @@ cd app && pnpm install --frozen-lockfile
 pnpm tauri build          # AppImage, .deb and .rpm land in target/release/bundle/
 ```
 
-Per-distribution prerequisites, plus Arch and Gentoo recipes, are in
+Per-distribution prerequisites and the packaging recipes are in
 [`packaging/`](packaging/README.md). Building needs Rust 1.85+, Node 20.19+, pnpm 10 and the
 Tauri 2 Linux libraries.
 
@@ -73,8 +132,6 @@ Running needs:
 - Linux, with Warframe running through Wine or Proton and logged in.
 - Permission to inspect your own game process. If acquisition fails, see
   [process permissions](#process-permissions).
-- For the overlay: `xwininfo`, ImageMagick 7 (`magick`, not the v6 `convert`) and `tesseract` with
-  English data.
 - Network access for the inventory request, the item catalog and market prices. The catalog is
   cached for offline use.
 

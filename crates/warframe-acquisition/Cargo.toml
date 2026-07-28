@@ -1,6 +1,6 @@
 [package]
 name = "warframe-acquisition"
-version = "0.1.0"
+version.workspace = true
 description = "Read-only Linux acquisition of Warframe inventory, rewards and market prices"
 edition.workspace = true
 license.workspace = true

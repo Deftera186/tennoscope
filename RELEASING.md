@@ -30,12 +30,13 @@ Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
    cd app && pnpm check
    ```
 
-2. **Set the version in all four places.** They must agree; nothing checks this automatically.
+2. **Set the version in all four places**, then confirm with `./scripts/check-versions.sh` — CI
+   runs it too, so drift fails the build rather than shipping mislabelled bundles.
 
+   - `Cargo.toml` — `[workspace.package] version`, which every crate inherits
    - `app/src-tauri/tauri.conf.json` — `version`
    - `app/package.json` — `version`
-   - every `Cargo.toml` under `crates/` and `app/src-tauri/`
-   - `packaging/arch/PKGBUILD` — `pkgver`, and rename `packaging/gentoo/tennoscope-<version>.ebuild`
+   - `packaging/arch/PKGBUILD` — `pkgver`
 
 3. **Close the changelog section.** Rename `## [Unreleased]` to `## [0.1.0] - YYYY-MM-DD`, open a
    fresh empty `## [Unreleased]` above it, and update the link definitions at the bottom.
@@ -55,12 +56,17 @@ Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
 
 6. **Publish the draft.**
 
+7. **Bump the Gentoo overlay.** `games-util/tennoscope-bin` and `games-util/tennoscope` live in
+   [deftera-overlay](https://github.com/Deftera186/deftera-overlay), not here. Both need a checksum
+   of a published artifact, so this can only happen after step 6. Copy the ebuilds to the new
+   version, regenerate the Manifests, run `pkgcheck scan`, and push.
+
 ## Packaging
 
-The bundles the workflow attaches are built by `pnpm tauri build`. The Arch and Gentoo recipes in
-[`packaging/`](packaging) still consume a local source archive: they need an immutable release URL,
-which the first published tag is what finally provides. Update them after the first release, not
-before.
+The bundles the workflow attaches are built by `scripts/build-linux-bundles.sh`, which runs the
+test suite and asserts the AppImage still forces `GDK_BACKEND=x11` before anything is uploaded.
+The Arch `PKGBUILD` and the overlay ebuilds fetch the tag's own archive, so they only work once
+the tag is pushed.
 
 ## Yanking
 

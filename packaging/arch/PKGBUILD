@@ -3,11 +3,21 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc='Local-first Linux Warframe collection and relic companion'
 arch=('x86_64')
+url='https://github.com/Deftera186/tennoscope'
 license=('GPL-3.0-only')
-depends=('glib2' 'gtk3' 'gtk-layer-shell' 'libsoup3' 'webkit2gtk-4.1' 'grim' 'tesseract' 'tesseract-data-eng')
+depends=('glib2' 'gtk3' 'libsoup3' 'webkit2gtk-4.1')
+# The relic overlay shells out to these; the collection browser works without them.
+optdepends=(
+  'xorg-xwininfo: locate the Warframe window for the relic overlay'
+  'imagemagick: capture and crop the reward screen for the relic overlay'
+  'tesseract: read the reward card titles for the relic overlay'
+  'tesseract-data-eng: English data for reward card recognition'
+)
 makedepends=('cargo' 'nodejs' 'pnpm')
-source=("${WARFRAME_HELPER_SOURCE:-${pkgname}-${pkgver}.tar.gz}")
-sha256sums=("${WARFRAME_HELPER_SHA256:-SKIP}")
+# check() runs the reward-reader tests, which shell out to magick and tesseract for real.
+checkdepends=('imagemagick' 'tesseract' 'tesseract-data-eng')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
 
 prepare() {
   cd "${srcdir}/${pkgname}-${pkgver}"
@@ -18,7 +28,9 @@ build() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   export CARGO_TARGET_DIR="${srcdir}/target"
   pnpm --dir app build
-  cargo build --release --locked -p warframe-helper --features tauri/custom-protocol
+  # tauri/custom-protocol is mandatory: without it generate_context!() bakes in the dev-server
+  # URL and the release binary opens a connection-refused WebView.
+  cargo build --release --locked -p tennoscope --features tauri/custom-protocol
 }
 
 check() {

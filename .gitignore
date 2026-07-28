@@ -12,6 +12,7 @@ app/dist/
 .repo-git/
 .superpowers/
 .worktrees/
+.claude/
 .impeccable/
 __pycache__/
 

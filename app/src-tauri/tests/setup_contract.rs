@@ -37,20 +37,6 @@ fn corrupt_setup_state_fails_closed() {
 }
 
 #[test]
-fn tennoscope_reuses_existing_legacy_setup_and_database() {
-    let directory = tempdir().unwrap();
-    let legacy_setup = directory.path().join("setup.json");
-    let legacy_database = directory.path().join("warframe-helper.sqlite3");
-    fs::write(&legacy_setup, r#"{"risk_accepted":true}"#).unwrap();
-    fs::write(&legacy_database, b"existing database").unwrap();
-
-    let paths = resolve_local_paths(directory.path());
-
-    assert_eq!(paths.setup, legacy_setup);
-    assert_eq!(paths.database, legacy_database);
-}
-
-#[test]
 fn tennoscope_uses_new_names_for_fresh_local_data() {
     let directory = tempdir().unwrap();
 

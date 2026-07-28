@@ -1,23 +1,29 @@
 # Arch Linux package
 
-[`arch/PKGBUILD`](arch/PKGBUILD) builds and installs a native package from a source archive. No AUR package or binary repository is claimed.
-
-Install the build tools:
+[`arch/PKGBUILD`](arch/PKGBUILD) builds and installs a native package from the release tarball. No
+AUR package or binary repository is published.
 
 ```bash
 sudo pacman -S --needed base-devel cargo nodejs pnpm webkit2gtk-4.1
-```
-
-From a clean repository checkout, create the correctly rooted local source archive:
-
-```bash
-git archive --format=tar.gz --prefix=tennoscope-0.1.0/ \
-  --output=packaging/arch/tennoscope-0.1.0.tar.gz HEAD
-cd packaging/arch
-export WARFRAME_HELPER_SHA256="$(sha256sum tennoscope-0.1.0.tar.gz | cut -d ' ' -f 1)"
+curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch/PKGBUILD
 makepkg -si
 ```
 
-The default `source` is that adjacent archive. A release maintainer can instead set `WARFRAME_HELPER_SOURCE` to an immutable release URL or absolute archive path and set `WARFRAME_HELPER_SHA256` to its real digest before invoking `makepkg`. Add the real project homepage to `url` when a public release location exists.
+`source` points at the tag's GitHub archive, so `makepkg` fetches it. `sha256sums` is `SKIP` — this
+recipe is not distributed through a package repository, and the tarball arrives over HTTPS from the
+same place the `PKGBUILD` did. If you are repackaging this for anyone but yourself, replace it with
+a real digest:
 
-The recipe builds the locked Rust workspace and frontend, runs both test suites, and installs `tennoscope`, its desktop entry, icon, GPLv3 license, and third-party notices. Dependency resolution currently needs network access. Before AUR submission, publish immutable source archives and use a literal URL and checksum rather than environment variables or `SKIP`.
+```bash
+updpkgsums
+```
+
+The recipe builds the locked Rust workspace and frontend, runs both test suites, and installs
+`tennoscope`, its desktop entry, icon, GPLv3 license and third-party notices. Dependency resolution
+needs network access, so `makepkg` will not work in an offline chroot without vendored sources.
+
+The relic overlay's toolchain is in `optdepends`, not `depends` — the collection browser runs
+without it. `check()` does need it, so `imagemagick` and `tesseract` are in `checkdepends`; skip
+that step with `makepkg --nocheck` if you would rather not pull them in to build.
+
+Before any AUR submission: use a literal `sha256sums` digest, and add a `.SRCINFO`.

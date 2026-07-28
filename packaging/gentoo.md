@@ -1,28 +1,47 @@
-# Gentoo local ebuild
+# Gentoo
 
-[`gentoo/tennoscope-0.1.0.ebuild`](gentoo/tennoscope-0.1.0.ebuild) is usable in a local overlay. It is not published in the Gentoo repository and intentionally consumes a local source archive from `DISTDIR` until this project has an immutable release URL.
-
-Enable Corepack for Node.js and install the native prerequisites:
-
-```bash
-echo 'net-libs/nodejs corepack' | sudo tee -a /etc/portage/package.use/tennoscope
-sudo emerge --ask virtual/rust net-libs/nodejs net-libs/webkit-gtk:4.1
-```
-
-Create the release-shaped archive from a clean checkout and copy it to the configured distfiles directory (commonly `/var/cache/distfiles`):
+TennoScope is packaged in the [`deftera`](https://github.com/Deftera186/deftera-overlay) overlay,
+which is listed in the [official Gentoo overlays
+database](https://api.gentoo.org/overlays/repositories.xml). The ebuilds live there rather than in
+this repository — one copy, maintained where `pkgcheck` runs against it.
 
 ```bash
-git archive --format=tar.gz --prefix=tennoscope-0.1.0/ \
-  --output=/tmp/tennoscope-0.1.0.tar.gz HEAD
-sha256sum /tmp/tennoscope-0.1.0.tar.gz
-sudo install -m644 /tmp/tennoscope-0.1.0.tar.gz /var/cache/distfiles/
+sudo emerge --ask app-eselect/eselect-repository
+sudo eselect repository enable deftera
+sudo emaint sync --repo deftera
 ```
 
-Copy `packaging/gentoo/` into an initialized local repository as `app-misc/tennoscope/`, generate its Manifest, and install it:
+## Which package
+
+**`games-util/tennoscope-bin`** unpacks the `.deb` from the GitHub release. It installs in seconds,
+needs no Node or Rust toolchain, and is the recommended package.
 
 ```bash
-sudo ebuild /var/db/repos/local/app-misc/tennoscope/tennoscope-0.1.0.ebuild manifest
-sudo FEATURES="-network-sandbox" emerge --ask app-misc/tennoscope
+sudo emerge --ask games-util/tennoscope-bin
 ```
 
-The one-command `FEATURES` override is necessary because this local ebuild resolves the Cargo and pnpm lockfiles during the build; it affects only that invocation. The ebuild installs the canonical binary, desktop entry, icon, GPLv3 license, and third-party notice. Before submitting it to a public overlay, add a real `HOMEPAGE`, replace the local `src_unpack` path with an immutable `SRC_URI`, enumerate/vend all Rust and pnpm sources, and let the Manifest carry the release archive checksum.
+**`games-util/tennoscope`** builds from the release tarball. It needs `sys-apps/pnpm-bin` from
+[`::guru`](https://wiki.gentoo.org/wiki/Project:GURU), and a one-off `FEATURES` override because
+pnpm and cargo both resolve their lockfiles over the network during the build:
+
+```bash
+sudo eselect repository enable guru && sudo emaint sync --repo guru
+sudo FEATURES="-network-sandbox" emerge --ask games-util/tennoscope
+```
+
+The two block each other; emerge one or the other.
+
+## Runtime dependencies
+
+Both pull in the WebKitGTK stack, plus the relic overlay's toolchain: `x11-apps/xwininfo`,
+`media-gfx/imagemagick[X]` — the `X` flag is what provides `import`, and 7.x is what provides
+`magick` — and `app-text/tesseract`, whose English data is installed unconditionally.
+
+## Building an untagged commit
+
+There is no ebuild for this: a local checkout has no immutable `SRC_URI` to point at. Build the
+bundle directly and run it out of `target/`.
+
+```bash
+./scripts/build-linux-bundles.sh appimage
+```

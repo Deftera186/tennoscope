@@ -1,6 +1,6 @@
 [package]
 name = "local-store"
-version = "0.1.0"
+version.workspace = true
 description = "Local SQLite persistence for TennoScope collection snapshots"
 edition.workspace = true
 license.workspace = true

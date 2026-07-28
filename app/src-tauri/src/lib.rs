@@ -82,19 +82,9 @@ pub struct LocalPaths {
 }
 
 pub fn resolve_local_paths(app_data: &Path) -> LocalPaths {
-    let legacy_setup = app_data.join("setup.json");
-    let legacy_database = app_data.join("warframe-helper.sqlite3");
     LocalPaths {
-        setup: if legacy_setup.exists() {
-            legacy_setup
-        } else {
-            app_data.join("tennoscope-setup.json")
-        },
-        database: if legacy_database.exists() {
-            legacy_database
-        } else {
-            app_data.join("tennoscope.sqlite3")
-        },
+        setup: app_data.join("tennoscope-setup.json"),
+        database: app_data.join("tennoscope.sqlite3"),
     }
 }
 
