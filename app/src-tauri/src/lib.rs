@@ -55,14 +55,15 @@ mod reward_source;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
-pub use overlay_window::{
-    OverlayGeometry, WindowRect, reward_overlay_geometry, warframe_window_rect_from_sway_tree,
-};
+pub use overlay_window::{OverlayGeometry, WindowRect, reward_overlay_geometry};
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
-pub use reward_ocr::{ScreenRewardSource, best_match, read_cards};
+pub use reward_ocr::{
+    MAX_CARDS, ScreenRewardSource, best_match, card_block_left, card_block_width, ocr_crop,
+    read_cards, warframe_window_from_xwininfo_tree,
+};
 pub use reward_source::{
     BoundMemoryRewardSource, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSet,
     RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic, RewardSourceResult,
@@ -975,7 +976,11 @@ where
                 ));
             }
             match outcome {
-                Ok(names) if names.len() == 4 => {
+                // However many cards the screen has -- the reader reports the layout it found, and
+                // a squad of three is three cards, not a failed read of four. Requiring four here
+                // is what threw away a good three-card read even after the crops were looking in
+                // the right place. Two is the floor because one reward is not a choice.
+                Ok(names) if names.len() >= 2 => {
                     if !found && let Ok(mut slot) = visual_reads.lock() {
                         *slot = Some(names);
                         found = true;
@@ -1200,7 +1205,7 @@ fn publish_reward_result(
             &transition.choices,
             &BTreeMap::new(),
         );
-        overlay_window::show_reward_overlay(app);
+        overlay_window::show_reward_overlay(app, transition.choices.len());
         let _ = app.emit_to("reward-overlay", "reward-updated", ());
         spawn_market_price_fetch(
             &transition.choices,
@@ -1438,7 +1443,8 @@ fn show_reward_overlay(app: AppHandle, state: State<'_, SharedRuntime>) {
     if let Ok(mut runtime) = state.lock() {
         runtime.overlay_preview_until = Some(Instant::now() + Duration::from_secs(30));
     }
-    overlay_window::show_reward_overlay(&app);
+    // The preview has no screen to measure, so it shows the full-squad strip.
+    overlay_window::show_reward_overlay(&app, reward_ocr::MAX_CARDS);
 }
 
 #[tauri::command]
@@ -1451,6 +1457,23 @@ fn hide_reward_overlay(app: AppHandle, state: State<'_, SharedRuntime>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Run the whole app on X11, including under Wayland. The game is a Wine/Proton client and so is
+    // always an X11 window, and X11 is the only display server that will tell a program where
+    // another application's window is, or let it place a window above that application's fullscreen
+    // surface. Wayland exposes neither by design: `wlr-layer-shell` covers the second half but is
+    // absent on GNOME, and no protocol covers the first. Sharing the game's display server is what
+    // makes the overlay land in the right place on every window manager rather than on some of them.
+    //
+    // Left alone if there is no X server to run on, so a session without one still gets the app
+    // itself; only the overlay degrades.
+    //
+    // ponytail: this puts the *main* window on XWayland too, which a compositor doing fractional
+    // scaling will render blurry. Split the overlay into its own X11 process if that ever matters
+    // more than having one.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_some() {
+        gtk::gdk::set_allowed_backends("x11");
+    }
     tauri::Builder::default()
         .setup(|app| {
             if cfg!(debug_assertions) {

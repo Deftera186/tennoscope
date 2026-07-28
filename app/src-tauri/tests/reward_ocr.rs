@@ -100,6 +100,111 @@ fn the_calibrated_geometry_reads_a_real_reward_screen() {
     );
 }
 
+/// A squad of three opens three relics, and Warframe centres the card block on however many cards
+/// there are -- so every card shifts right by half a card pitch, 121px at 1920. Reading a three-card
+/// screen at the four-card positions puts slot 0's crop across the gutter and the left part of the
+/// first title.
+///
+/// The live run of 2026-07-28 is exactly this. Slot 0 read `"Lavos Prim"` -- the left 98px of a
+/// `Lavos Prime Blueprint` that had moved right -- which scored 0.47 against the 0.6 floor and threw
+/// the whole screen away, on every poll, for the screen's entire life. No cards meant no advisor and
+/// no overlay.
+///
+/// `fixtures/reward-screen-three-cards.png` is the four-card capture's own title strips re-laid at
+/// the three-card positions, so the pixels being read are real ones.
+#[test]
+fn a_three_card_screen_is_read_where_a_three_card_screen_actually_sits() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-three-cards.png");
+    let cards = app_lib::read_cards(&fixture, &pool()).unwrap();
+    assert_eq!(
+        names(cards.clone()),
+        vec![
+            "Braton Prime Blueprint",
+            "2X Forma Blueprint",
+            "Burston Prime Stock",
+        ]
+    );
+    // A clipped title still lands on the right name through the closed-set match, so the name alone
+    // would pass against a crop that is half off the card. The score is what proves the geometry.
+    for (name, score) in cards {
+        assert!(score >= 0.95, "{name} read at only {score}");
+    }
+}
+
+/// The four-card screen must keep reading as four. The layouts overlap -- a two-card block sits
+/// exactly where a four-card block's middle two cards sit -- so a reader that tries counts in the
+/// wrong order would report a four-card screen as two cards and drop half the rewards.
+#[test]
+fn a_four_card_screen_is_not_mistaken_for_a_narrower_one() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-1920x1080.png");
+    assert_eq!(app_lib::read_cards(&fixture, &pool()).unwrap().len(), 4);
+}
+
+/// Trying narrower layouts must not turn a pool gap into a half-answer. A squadmate's relic that
+/// has not finished loading leaves its reward out of the pool, and that has happened live -- so a
+/// four-card screen whose first card is unmatchable still has its middle two sitting exactly on the
+/// two-card positions, where they read perfectly.
+///
+/// Publishing those two as the whole screen would advise on half a screen while looking certain.
+/// No answer is the right answer here, and it is what this did before it had layouts to choose
+/// between.
+#[test]
+fn a_reward_missing_from_the_pool_still_fails_closed() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-1920x1080.png");
+    let gap = pool()
+        .into_iter()
+        .filter(|entry| ["2X Forma Blueprint", "Burston Prime Stock"].contains(&&*entry.name))
+        .collect::<Vec<_>>();
+    assert!(
+        app_lib::read_cards(&fixture, &gap).is_err(),
+        "read two of four cards as a whole two-card screen"
+    );
+}
+
+/// `fixtures/reward-crop-ornament.png` is a real prepared crop kept by the live run of 2026-07-28 --
+/// the exact bytes tesseract was handed, so no reconstruction stands between the test and the bug.
+///
+/// The band reserves room above the title for a second line, and on this one-line title the game
+/// had drawn something in that empty room. Under `--psm 6` tesseract returned the speck *instead of*
+/// the title -- `"| @\nn |\n|"` -- so the card matched nothing and the whole screen was thrown away.
+/// It failed that way on every poll for about nine seconds of a fifteen-second screen, then read
+/// perfectly once the speck went. The overlay was not slow; it was blocked.
+#[test]
+fn an_ornament_above_the_title_does_not_swallow_the_read() {
+    let crop = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-crop-ornament.png");
+    let text = app_lib::ocr_crop(&crop).expect("tesseract is not available");
+    let (name, score) = best_match(&text, &live_pool()).expect("a candidate always scores");
+    assert_eq!(name, "Dual Zoren Prime Handle", "read {text:?}");
+    assert!(score >= 0.95, "read {text:?} scored only {score}");
+}
+
+/// The pool of the run that produced the ornament crop, taken from its own trace. Rewards close
+/// enough to be confusable are in deliberately.
+fn live_pool() -> Vec<RewardCatalogEntry> {
+    [
+        ("Dual Zoren Prime Handle", 15),
+        ("Braton Prime Receiver", 15),
+        ("Gyre Prime Blueprint", 15),
+        ("Valkyr Prime Blueprint", 15),
+        ("Quassus Prime Blade", 45),
+        ("Venato Prime Blueprint", 15),
+        ("Forma Blueprint", 0),
+    ]
+    .into_iter()
+    .map(|(name, ducats)| RewardCatalogEntry {
+        name: name.to_owned(),
+        ducats,
+    })
+    .collect()
+}
+
 /// The relic pool of the host run of 2026-07-27, whose screen is the wrapped-title fixture. The
 /// two Caliban parts are in deliberately: a clipped read of the wrapped card still has to pick the
 /// chassis blueprint over the bare blueprint.
@@ -144,11 +249,16 @@ fn a_title_that_wraps_to_two_lines_is_not_clipped() {
             "Caliban Prime Blueprint",
         ]
     );
-    // Every card on all three captured screens reads exactly once the title is separated from the
-    // card art. 0.95 leaves room for a tesseract build that differs by a character without letting
-    // the old 0.83 back in.
+    // Every card on these screens reads exactly, bar one edit: sparse-text segmentation reports the
+    // speck above this fixture's slot 3 as a leading `a`, which `normalise` cannot drop the way it
+    // drops punctuation, so `Caliban Prime Blueprint` lands at 0.954. Reading the speck is the price
+    // of never losing the title to it -- see `ocr_crop`.
+    //
+    // 0.94 is therefore the floor, not 0.95: it leaves a card room for that speck *and* a tesseract
+    // build that differs by a character, while still sitting far above the 0.83 that the clipped
+    // title box used to produce, which is the failure this assertion exists to catch.
     for (name, score) in cards {
-        assert!(score >= 0.95, "{name} read at only {score}");
+        assert!(score >= 0.94, "{name} read at only {score}");
     }
 }
 

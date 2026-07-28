@@ -34,7 +34,6 @@ warframe-domain = { path = "../../crates/warframe-domain" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
-gtk-layer-shell = { version = "0.8.2", features = ["v0_6"] }
 
 [dev-dependencies]
 tempfile = "3"

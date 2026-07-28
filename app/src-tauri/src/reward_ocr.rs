@@ -19,7 +19,7 @@ use std::{
 
 use warframe_acquisition::RewardCatalogEntry;
 
-use crate::reward_source::VisualRewardSource;
+use crate::{overlay_window::WindowRect, reward_source::VisualRewardSource};
 
 /// Card geometry as fractions of the window, calibrated from a labelled 1920x1080 reward screen:
 /// four cards on a 242px pitch from x=478. Warframe scales its UI with the window, so fractions
@@ -43,9 +43,26 @@ const CARD_WIDTH: f32 = 240.0 / 1920.0;
 /// the usual arrangement, and which these numbers cannot distinguish at 16:9 -- then both the crop
 /// and the overlay drift on an ultrawide display. Fixing that means re-deriving from a non-16:9
 /// capture, and it would be fixed here, once, for both.
-pub const CARD_BLOCK_LEFT: f32 = CARD_LEFT;
-pub const CARD_BLOCK_WIDTH: f32 = CARD_PITCH * 3.0 + CARD_WIDTH;
 pub const CARD_BLOCK_BOTTOM: f32 = 530.0 / 1080.0;
+
+/// A full squad, and the layout the fractions above are calibrated against.
+pub const MAX_CARDS: usize = 4;
+
+/// Left edge of the card block for a squad of `cards`, as a fraction of window width.
+///
+/// Warframe centres the block on however many cards it has, so dropping a card pulls both edges in
+/// by half a pitch. That is not a detail: on a three-card screen every card sits 121px right of
+/// where a four-card reader looks, which is enough for slot 0's crop to straddle the gutter and cut
+/// the first title in half.
+pub fn card_block_left(cards: usize) -> f32 {
+    CARD_LEFT + MAX_CARDS.saturating_sub(cards) as f32 * CARD_PITCH / 2.0
+}
+
+/// Width of the card block for a squad of `cards`, as a fraction of window width.
+pub fn card_block_width(cards: usize) -> f32 {
+    CARD_PITCH * cards.saturating_sub(1) as f32 + CARD_WIDTH
+}
+
 /// The title band, measured against three captured reward screens on 2026-07-27.
 ///
 /// This box was y=418 high 76, which was wrong at both edges. The top clipped the ascenders off
@@ -96,7 +113,7 @@ impl Default for ScreenRewardSource {
 impl ScreenRewardSource {
     pub fn new() -> Self {
         Self {
-            // PPM, not PNG: the capture is thrown away after four crops, and PNG-encoding a
+            // PPM, not PNG: the capture is thrown away after the crops, and PNG-encoding a
             // 1920x1080 frame costs 1.9s against 0.04s for raw pixels. That is the difference
             // between the overlay landing inside the first second of the screen and not.
             capture: scratch_file("reward-screen", "ppm"),
@@ -106,7 +123,7 @@ impl ScreenRewardSource {
 
 impl VisualRewardSource for ScreenRewardSource {
     fn choices(&mut self, candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
-        let window = warframe_window()?;
+        let (window, _) = warframe_window()?;
         capture_window(&window, &self.capture)?;
         let cards = read_cards(&self.capture, candidates);
         let _ = std::fs::remove_file(&self.capture);
@@ -114,12 +131,22 @@ impl VisualRewardSource for ScreenRewardSource {
     }
 }
 
-/// Read the four card titles out of a reward-screen image and match each to the relic pool.
+/// Read the card titles out of a reward-screen image and match each to the relic pool.
 ///
 /// Returns each card with the score it matched at. Callers only need the names, but the score is
 /// what makes the crop geometry testable: a box that clips the title still lands on the right
 /// reward through the closed-set match, so a name-only assertion passes against a misaligned crop
 /// and proves nothing.
+///
+/// How many cards there are is not knowable ahead of time -- it is the squad size, and EE.log only
+/// says so after the screen has already come and gone -- so the layouts are simply tried. Each
+/// wrong one costs a single crop, because the read stops at the first card that will not match.
+///
+/// Widest first, and that ordering is load-bearing: a two-card block sits exactly over a four-card
+/// block's middle two cards, so a four-card screen reads perfectly clean as "two cards" and would
+/// quietly lose half the rewards if two were tried first. A solo run is not tried at all: one card
+/// sits where a three-card screen's middle card sits, and a single reward is not a choice worth
+/// advising on anyway.
 ///
 /// Split out from the capture so it can be exercised against a real labelled screen instead of
 /// only against a live game.
@@ -131,15 +158,58 @@ pub fn read_cards(
         return Err("no reward candidates");
     }
     let (width, height) = image_size(image)?;
-    let mut cards = Vec::with_capacity(4);
-    for slot in 0..4 {
+    // ponytail: up to three layouts per poll rather than one, so a poll off the reward screen costs
+    // three crops instead of one -- about 200ms every two seconds. Narrow it by asking the log for
+    // the squad size if that ever shows up in a profile.
+    let widest = read_cards_at(image, width, height, MAX_CARDS, candidates);
+    if widest.is_ok() {
+        return widest.map_err(|(_, reason)| reason);
+    }
+    // Ordering alone does not settle the four-against-two ambiguity, because it is the same pixels
+    // either way: "two cards" and "four cards whose outer two would not match" are indistinguishable
+    // at the two positions they share. The four-card slot 0 is the tiebreak. Blank means there is
+    // genuinely nothing out there and the block really is narrower; any text at all means a wider
+    // screen with a pool gap, and publishing its middle two as the whole screen would be a confident
+    // half-answer. That case fails closed, exactly as it did before there was anything to guess.
+    let outside_the_block_is_empty = matches!(&widest, Err((0, BLANK_CARD)));
+    for cards in (2..MAX_CARDS).rev() {
+        // Dropping one card shifts the block half a pitch, so a layout two cards narrower is shifted
+        // a whole pitch and its slots land exactly on the widest layout's. Those are the ambiguous
+        // ones, and only those need the tiebreak.
+        let shares_slots_with_the_widest = (MAX_CARDS - cards) % 2 == 0;
+        if shares_slots_with_the_widest && !outside_the_block_is_empty {
+            break;
+        }
+        if let Ok(read) = read_cards_at(image, width, height, cards, candidates) {
+            return Ok(read);
+        }
+    }
+    widest.map_err(|(_, reason)| reason)
+}
+
+const BLANK_CARD: &str = "a reward card read as blank";
+
+/// Reads the `cards` title slots of one layout, stopping at the first that will not match. The
+/// failing slot comes back with the reason because `read_cards` needs to know whether the *first*
+/// slot was the one that failed -- that is what tells a misplaced block apart from a pool gap.
+fn read_cards_at(
+    image: &Path,
+    width: u32,
+    height: u32,
+    cards: usize,
+    candidates: &[RewardCatalogEntry],
+) -> Result<Vec<(String, f32)>, (usize, &'static str)> {
+    let left = card_block_left(cards);
+    let mut read = Vec::with_capacity(cards);
+    for slot in 0..cards {
         let (text, crop) = read_region(
             image,
-            ((CARD_LEFT + CARD_PITCH * slot as f32) * width as f32) as u32,
+            ((left + CARD_PITCH * slot as f32) * width as f32) as u32,
             (TITLE_TOP * height as f32) as u32,
             (CARD_WIDTH * width as f32) as u32,
             (TITLE_HEIGHT * height as f32) as u32,
-        )?;
+        )
+        .map_err(|reason| (slot, reason))?;
         let matched = best_match(&text, candidates);
         // Without the raw text a failed read is unattributable: reading the wrong place, reading a
         // screen that is not the reward screen, and reading a card whose name is not in the pool
@@ -154,7 +224,7 @@ pub fn read_cards(
         let keep_crop = false;
         #[cfg(debug_assertions)]
         warframe_acquisition::append_debug_line(&format!(
-            "[DEBUG-card] slot={slot} raw={text:?} match={matched:?} crop={}",
+            "[DEBUG-card] cards={cards} slot={slot} raw={text:?} match={matched:?} crop={}",
             if keep_crop {
                 crop.display().to_string()
             } else {
@@ -164,42 +234,70 @@ pub fn read_cards(
         if !keep_crop {
             let _ = std::fs::remove_file(&crop);
         }
-        let (name, score) = matched.ok_or("a reward card read as blank")?;
+        let (name, score) = matched.ok_or((slot, BLANK_CARD))?;
         if score < MATCH_FLOOR {
-            return Err("reward card text did not match the relic pool");
+            return Err((slot, "reward card text did not match the relic pool"));
         }
-        cards.push((name, score));
+        read.push((name, score));
     }
-    Ok(cards)
+    Ok(read)
 }
 
-/// The game runs under Proton as an XWayland client, so its window is reachable through plain X11
-/// with no compositor portal. Several 1x1 IME helpers share its class name; only the real window
-/// has a three-or-more digit geometry.
-fn warframe_window() -> Result<String, &'static str> {
+/// The game runs under Wine -- as Proton through Steam, or as plain Wine -- and therefore always
+/// presents an X11 window, reachable through the root window tree with no compositor portal. That
+/// is the one fact that holds under every window manager and compositor alike: under Wayland the
+/// window is an XWayland client, and no Wayland protocol exposes another application's geometry.
+///
+/// The window is matched on its title rather than its class, because the class differs between
+/// launchers (`steam_app_230410` under Steam, `warframe.x64.exe` under bare Wine) while the title
+/// is the game's own and is the same everywhere.
+pub(crate) fn warframe_window() -> Result<(String, WindowRect), &'static str> {
     let tree = Command::new("xwininfo")
         .args(["-root", "-tree"])
         .output()
         .map_err(|_| "xwininfo is not available")?;
-    let tree = String::from_utf8_lossy(&tree.stdout);
-    tree.lines()
-        .find(|line| line.contains("\"Warframe\":") && has_window_geometry(line))
-        .and_then(|line| line.split_whitespace().next())
-        .map(str::to_owned)
+    warframe_window_from_xwininfo_tree(&String::from_utf8_lossy(&tree.stdout))
         .ok_or("no Warframe window found")
 }
 
-fn has_window_geometry(line: &str) -> bool {
-    line.split_whitespace().any(|field| {
-        field.split_once('x').is_some_and(|(left, right)| {
-            left.len() >= 3
-                && left.bytes().all(|byte| byte.is_ascii_digit())
-                && right
-                    .split(['+', '-'])
-                    .next()
-                    .is_some_and(|value| value.len() >= 3)
-        })
-    })
+/// Pick the game's window out of `xwininfo -root -tree` output.
+///
+/// Each line ends with the window's size-and-offset and then its absolute position:
+/// `0x1400003 "Warframe": ("Warframe" "steam_app_230410")  1920x1080+1920+0  +1920+0`
+///
+/// The absolute position is in X root coordinates, which for an XWayland client is the
+/// compositor's own output layout -- a window on a second monitor reports that monitor's offset --
+/// so the rectangle can be handed straight to the overlay.
+///
+/// Wine spawns several 1x1 helper windows that share the game's title, and in virtual-desktop mode
+/// the real window is nested rather than top-level, so the largest match wins rather than the
+/// first one seen.
+pub fn warframe_window_from_xwininfo_tree(tree: &str) -> Option<(String, WindowRect)> {
+    tree.lines()
+        .filter(|line| line.contains("\"Warframe\":"))
+        .filter_map(parse_window_line)
+        .filter(|(_, rect)| rect.width >= 100 && rect.height >= 100)
+        .max_by_key(|(_, rect)| u64::from(rect.width) * u64::from(rect.height))
+}
+
+fn parse_window_line(line: &str) -> Option<(String, WindowRect)> {
+    let id = line.split_whitespace().next()?;
+    let mut tail = line.split_whitespace().rev();
+    let absolute = tail.next()?;
+    let size = tail.next()?;
+    let (width, rest) = size.split_once('x')?;
+    let height: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    // A negative offset prints as `+-100`, so the leading `+` is a separator and not a sign.
+    let (x, y) = absolute.strip_prefix('+')?.split_once('+')?;
+    Some((
+        id.to_owned(),
+        WindowRect {
+            x: x.parse().ok()?,
+            y: y.parse().ok()?,
+            width: width.parse().ok()?,
+            height: height.parse().ok()?,
+        },
+    ))
 }
 
 fn capture_window(window: &str, target: &Path) -> Result<(), &'static str> {
@@ -276,12 +374,33 @@ fn read_region(
         let _ = std::fs::remove_file(&crop);
         return Err("could not crop the reward card");
     }
+    let text = ocr_crop(&crop)?;
+    Ok((text, crop))
+}
+
+/// OCR a crop that `read_region` has already isolated to text.
+///
+/// `--psm 11`, sparse text, rather than the obvious `--psm 6`, one uniform block. The title band
+/// reserves room above the title for a second line, and on a one-line title that room is empty --
+/// so anything the game draws up there arrives as a speck floating above the words. `psm 6` has to
+/// call one of them "the block", and when it picks the speck it does not merely add noise, it
+/// returns the speck *instead of the title*: a real 2026-07-28 crop reading `Dual Zoren Prime
+/// Handle` came back as `"| @\nn |\n|"`. Every poll failed that way until the speck went, which cost
+/// about nine seconds of a fifteen-second screen.
+///
+/// `psm 11` does not have to choose -- it reads every text region it finds. Swept over the twelve
+/// labelled crops from four captured screens plus that live one, `psm 11` and `psm 12` read all
+/// twelve; `psm 3`, `4` and `6` miss the speck case entirely, `psm 7` mangles wrapped titles, and
+/// `psm 13` clips leading letters. `11` over `12` only because `12` adds orientation detection this
+/// does not need. What it costs is a little leading punctuation, which `normalise` drops before the
+/// match ever sees it.
+pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
     let text = Command::new("tesseract")
-        .arg(&crop)
-        .args(["-", "--psm", "6"])
+        .arg(image)
+        .args(["-", "--psm", "11"])
         .output()
         .map_err(|_| "tesseract is not available")?;
-    Ok((String::from_utf8_lossy(&text.stdout).into_owned(), crop))
+    Ok(String::from_utf8_lossy(&text.stdout).into_owned())
 }
 
 /// Compare on alphanumerics only. That is what lets a read of "2 X Forma Blueprint W\:" land on
@@ -329,22 +448,32 @@ fn edit_distance(left: &str, right: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::has_window_geometry;
+    use super::warframe_window_from_xwininfo_tree;
 
     /// Real `xwininfo -root -tree` lines. Warframe's IME helpers carry the same class name as the
-    /// game window, so picking the first match by name alone grabs a 1x1 window and captures
-    /// nothing.
+    /// game window and one of them carries its title too, so picking the first match by name alone
+    /// grabs a 1x1 window and captures nothing.
     #[test]
-    fn only_the_real_game_window_has_a_usable_geometry() {
-        assert!(has_window_geometry(
-            r#"0x2a00001 "Warframe": ("steam_app_warframe" "steam_app_warframe")  1920x1080+1920+0  +1920+0"#
-        ));
-        for helper in [
-            r#"0x2a00002 "Default IME": ("steam_app_warframe" "steam_app_warframe")  1x1+0+0  +0+0"#,
-            r#"0x1e00003 (has no name): ("steam_app_warframe" "steam_app_warframe")  5x5+0+0  +0+0"#,
-            r#"0x1600001 "Input": ("steam_app_warframe" "steam_app_warframe")  111x1+8+34  +8+34"#,
-        ] {
-            assert!(!has_window_geometry(helper), "accepted {helper}");
+    fn only_the_real_game_window_is_picked_up() {
+        let helpers = [
+            r#"0x2a00002 "Warframe": ("steam_app_warframe" "steam_app_warframe")  1x1+0+0  +0+0"#,
+            r#"0x1e00003 "Warframe": ("steam_app_warframe" "steam_app_warframe")  5x5+0+0  +0+0"#,
+            r#"0x1600001 "Warframe": ("steam_app_warframe" "steam_app_warframe")  111x1+8+34  +8+34"#,
+        ];
+        for helper in helpers {
+            assert!(
+                warframe_window_from_xwininfo_tree(helper).is_none(),
+                "accepted {helper}"
+            );
         }
+
+        let game = r#"0x2a00001 "Warframe": ("steam_app_warframe" "steam_app_warframe")  1920x1080+1920+0  +1920+0"#;
+        let tree = format!("{}\n{game}\n", helpers.join("\n"));
+        let (id, rect) = warframe_window_from_xwininfo_tree(&tree).unwrap();
+        assert_eq!(id, "0x2a00001");
+        assert_eq!(
+            (rect.x, rect.y, rect.width, rect.height),
+            (1920, 0, 1920, 1080)
+        );
     }
 }

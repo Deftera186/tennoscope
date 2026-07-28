@@ -92,7 +92,7 @@ cannot explain.
 
 Linux is the platform this is built and tested on. Windows and macOS acquisition adapters are not
 in scope and are not planned; a PR adding one would need to come with someone willing to maintain
-it. Compositor support beyond sway is welcome and undertested — say which compositor you ran on.
+it. The overlay is only exercised on sway — say which window manager or compositor you ran on.
 
 ## Licensing
 

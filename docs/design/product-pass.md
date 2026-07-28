@@ -22,11 +22,11 @@ The immutable application view gains explicit snapshot metadata: observed timest
 
 ## Reward Observer and Overlay
 
-The overlay is a separate, borderless, transparent window aligned over Warframe's reward choices rather than a miniature desktop page. It contains only the four enriched choices and small status affordances. Cards are horizontally aligned to the game's selectable columns, preserve the central game view, and use translucent backing. The best-value marker, ownership, mastery relevance, ducats, price age, and uncertain recognition state remain visible without stealing focus.
+The overlay is a separate, borderless, transparent window aligned over Warframe's reward choices rather than a miniature desktop page. It contains only the enriched choices -- as many as the screen drew -- and small status affordances. Cards are horizontally aligned to the game's selectable columns, preserve the central game view, and use translucent backing. The best-value marker, ownership, mastery relevance, ducats, price age, and uncertain recognition state remain visible without stealing focus.
 
 The Linux observer is built behind a `RewardFrameSource` interface. For the first supported path it captures the active Warframe output on X11 directly and on wlroots through `grim`, then crops the resolution-relative reward-name region and passes it to Tesseract. Recognition normalizes OCR text and resolves it against prime-part catalog names with confidence. The observation state machine requires consecutive matching frames before showing the overlay and consecutive misses before hiding it, preventing flicker. Portal/PipeWire capture remains the portable Wayland adapter boundary for GNOME and KDE; unsupported capture reports a precise diagnostic rather than pretending the overlay works.
 
-On wlroots, GTK layer-shell anchors the overlay above the game and makes it keyboard-transparent. On X11, always-on-top plus input pass-through is used. The app records overlay geometry per display mode and exposes a calibration preview from settings. The normal overlay never has a title bar or close button and never takes keyboard or pointer focus.
+The overlay is an override-redirect X11 window, which the window manager never reparents, restacks or focuses, so it sits above the game's fullscreen surface with input passing through it. The game is a Wine/Proton client and so is an X11 window too, on Wayland as much as on X11, which is why one mechanism covers every desktop. The app records overlay geometry per display mode and exposes a calibration preview from settings. The normal overlay never has a title bar or close button and never takes keyboard or pointer focus.
 
 ## Boundaries
 
@@ -50,5 +50,5 @@ Automated tests cover catalog image extraction, view serialization, timestamp fo
 2. Collection entries display canonical artwork or a polished fallback.
 3. At most 48 collection entries render at once, with stable pagination and one natural page scrollbar.
 4. The latest successful snapshot time is visible and its exact timestamp/source are discoverable.
-5. A detected English relic reward screen automatically shows a non-focusable, click-through four-choice overlay positioned over Warframe and hides it after the screen ends.
+5. A detected English relic reward screen automatically shows a non-focusable, click-through overlay of the screen's choices positioned over Warframe and hides it after the screen ends.
 6. Unsupported capture or OCR states are explicit and do not degrade inventory acquisition.

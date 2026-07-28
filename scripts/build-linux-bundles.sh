@@ -21,30 +21,20 @@ done
 command -v cargo >/dev/null 2>&1 || { echo "cargo is required" >&2; exit 127; }
 command -v pnpm >/dev/null 2>&1 || { echo "pnpm is required" >&2; exit 127; }
 
-repair_appimage_backend() {
+assert_appimage_runs_on_x11() {
   appdir="$repo_root/target/release/bundle/appimage/TennoScope.AppDir"
   hook="$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh"
-  bundle_dir="$repo_root/target/release/bundle/appimage"
-  plugin="${XDG_CACHE_HOME:-$HOME/.cache}/tauri/linuxdeploy-plugin-appimage.AppImage"
 
   [ -f "$hook" ] || { echo "generated AppImage GTK hook was not found" >&2; exit 1; }
-  [ -x "$plugin" ] || { echo "Tauri AppImage plugin was not found at $plugin" >&2; exit 1; }
 
-  # Tauri's GTK plugin currently forces X11, which prevents GTK layer-shell
-  # from attaching the reward overlay on Wayland. Prefer Wayland while keeping
-  # X11 as a fallback for collection-only sessions.
-  sed -i 's/^export GDK_BACKEND=x11 .*/export GDK_BACKEND="${GDK_BACKEND:-wayland,x11}" # TennoScope: layer-shell requires Wayland/' "$hook"
-  grep -q 'GDK_BACKEND="${GDK_BACKEND:-wayland,x11}"' "$hook" || {
-    echo "could not repair the generated AppImage GTK backend hook" >&2
+  # The overlay has to run on X11 to sit above the game, so upstream's own
+  # `GDK_BACKEND=x11` is what we want -- but the env var overrides the request
+  # the app makes for itself, so a future plugin release that drops or changes
+  # it would silently take the overlay with it.
+  grep -q '^export GDK_BACKEND=x11 ' "$hook" || {
+    echo "the AppImage GTK hook no longer forces X11; the reward overlay needs it" >&2
     exit 1
   }
-
-  artifact=$(find "$bundle_dir" -maxdepth 1 -type f -name 'TennoScope_*.AppImage' -print -quit)
-  [ -n "$artifact" ] || { echo "generated AppImage artifact was not found" >&2; exit 1; }
-  replacement=$(mktemp "$bundle_dir/.TennoScope.XXXXXX.AppImage")
-  APPIMAGE_EXTRACT_AND_RUN=1 LDAI_OUTPUT="$replacement" "$plugin" --appdir "$appdir"
-  chmod 755 "$replacement"
-  mv "$replacement" "$artifact"
 }
 
 cd "$repo_root"
@@ -60,7 +50,7 @@ for bundle in "$@"; do
     # emitted by rolling-release distributions. Skipping this optional size
     # optimization keeps the build portable and does not alter the binary.
     NO_STRIP=${NO_STRIP:-true} pnpm tauri build --bundles "$bundle"
-    repair_appimage_backend
+    assert_appimage_runs_on_x11
   else
     pnpm tauri build --bundles "$bundle"
   fi

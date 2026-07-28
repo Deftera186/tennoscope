@@ -490,9 +490,9 @@ function SettingsPage() {
 }
 
 /**
- * Placement is compositor-specific: outside sway the strip falls back to centring on
- * the primary monitor. So a preview earns its place -- but a preview you cannot
- * dismiss does not, which is why this is a toggle and not a one-way button.
+ * The strip is placed against the game's own window, so a preview is the only way
+ * to see it without a fissure running -- but a preview you cannot dismiss does not
+ * earn its place, which is why this is a toggle and not a one-way button.
  */
 function OverlayPreviewToggle() {
   const [shown, setShown] = useState(false)

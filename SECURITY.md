@@ -25,7 +25,7 @@ not apply. What matters instead:
   capabilities. The documented answer to a `ptrace_scope` failure is a user decision, never a
   privilege grab by the application.
 - **Command injection** through the external tools the reward reader shells out to (`xwininfo`,
-  `import`, `magick`, `tesseract`, `swaymsg`).
+  `import`, `magick`, `tesseract`).
 - **Catalog integrity.** The item catalog is fetched over the network and cached. A path that
   accepts an unvalidated or partial generation is in scope.
 

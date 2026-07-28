@@ -29,10 +29,13 @@ Everything below is the initial release, cut when it is ready. Nothing has been 
   a manual refresh, both under a cooldown.
 - Relic reward recognition by reading the reward screen through X11 capture and Tesseract, matched
   against the squad's own relic pool rather than the whole catalog, with consecutive-frame debounce.
+  Squads of two, three or four are all read: the game centres the card block on however many cards
+  it drew, so the layout is identified from the pixels rather than assumed.
 - Live warframe.market platinum prices for recognised rewards, quoted from in-game sellers only,
   alongside ducat values, with the best card by each measure called separately.
-- A non-focusable GTK layer-shell reward strip aligned below the in-game reward row, hidden
-  automatically when recognition ends.
+- A non-focusable, click-through reward strip aligned below the in-game reward row, hidden
+  automatically when recognition ends. It is an override-redirect X11 window placed against the
+  game's own window, so it behaves the same under every window manager and compositor.
 - A one-time first-run disclosure of the read-only process inspection and its account-policy
   uncertainty. Nothing runs until it is accepted.
 - AppImage, Debian and RPM bundles, with Arch and Gentoo recipes.

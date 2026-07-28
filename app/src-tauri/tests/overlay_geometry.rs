@@ -1,4 +1,4 @@
-use app_lib::{reward_overlay_geometry, warframe_window_rect_from_sway_tree};
+use app_lib::{MAX_CARDS, reward_overlay_geometry, warframe_window_from_xwininfo_tree};
 
 /// The overlay has to line up with the game's four reward cards, which on a 1920x1080 screen span
 /// x=478 to x=1444 and bottom out at y=525 under the player-name row. It used to be sized at 75% of
@@ -6,7 +6,7 @@ use app_lib::{reward_overlay_geometry, warframe_window_rect_from_sway_tree};
 /// put it roughly 75px below them.
 #[test]
 fn reward_overlay_sits_under_the_game_reward_cards() {
-    let hd = reward_overlay_geometry(1920, 1080, 0, 0);
+    let hd = reward_overlay_geometry(1920, 1080, 0, 0, MAX_CARDS);
     assert_eq!((hd.x, hd.width), (478, 966), "must span the card block");
     assert_eq!(
         (hd.y, hd.height),
@@ -15,30 +15,75 @@ fn reward_overlay_sits_under_the_game_reward_cards() {
     );
 
     // Same screen, second monitor: the block is offset but keeps its size.
-    let offset = reward_overlay_geometry(1920, 1080, 1920, 0);
+    let offset = reward_overlay_geometry(1920, 1080, 1920, 0, MAX_CARDS);
     assert_eq!((offset.x, offset.y), (2398, 530));
     assert_eq!((offset.width, offset.height), (966, 156));
 
     // Scaling is proportional, with no clamp to break the alignment.
-    let ultrawide = reward_overlay_geometry(3440, 1440, 1920, 0);
+    let ultrawide = reward_overlay_geometry(3440, 1440, 1920, 0, MAX_CARDS);
     assert_eq!((ultrawide.x, ultrawide.width), (2776, 1731));
     assert_eq!((ultrawide.y, ultrawide.height), (707, 208));
 }
 
+/// Warframe centres the card block on the number of cards, so a smaller squad's cards are both
+/// narrower and further right. A strip pinned to the four-card block would hang half a card off the
+/// left of a three-card screen -- and it stays centred on the same point whatever the count, which
+/// is the property worth asserting because it is the one that survives a re-calibration.
 #[test]
-fn sway_tree_locator_targets_the_visible_warframe_window() {
-    let tree = br#"{
-      "nodes":[
-        {"name":"TennoScope","app_id":"TennoScope","visible":true,"rect":{"x":0,"y":0,"width":960,"height":1080},"nodes":[],"floating_nodes":[]},
-        {"name":"Warframe","app_id":null,"visible":true,"window_properties":{"class":"steam_app_warframe"},"rect":{"x":1920,"y":0,"width":1920,"height":1080},"nodes":[],"floating_nodes":[]}
-      ],
-      "floating_nodes":[]
-    }"#;
-    let rect = warframe_window_rect_from_sway_tree(tree).unwrap();
+fn the_overlay_narrows_with_the_squad() {
+    for (cards, expected) in [(4, (478, 966)), (3, (599, 724)), (2, (720, 482))] {
+        let strip = reward_overlay_geometry(1920, 1080, 0, 0, cards);
+        assert_eq!(
+            (strip.x, strip.width),
+            expected,
+            "{cards} cards must span their own block"
+        );
+        assert_eq!(
+            strip.x + strip.width as i32 / 2,
+            961,
+            "{cards} cards must stay centred on the block's centre"
+        );
+    }
+}
+
+/// The locator is what makes the overlay work off sway: `xwininfo` reads the X root window tree,
+/// which every window manager has and which under Wayland holds the game's XWayland window with
+/// the compositor's own layout coordinates.
+///
+/// The tree below is real `xwininfo -root -tree` output shape: XWayland's own 1x1 and 10x10 helper
+/// windows, a Wine helper carrying the game's title, and the game itself on a second monitor.
+#[test]
+fn xwininfo_locator_targets_the_real_warframe_window() {
+    let tree = r#"
+xwininfo: Window id: 0x352 (the root window) (has no name)
+
+  Root window id: 0x352 (the root window) (has no name)
+  Parent window id: 0x0 (none)
+     6 children:
+     0x200005 (has no name): ()  1x1+-100+-100  +-100+-100
+     0x200004 "wlroots wm": ()  10x10+0+0  +0+0
+     0x1400002 "Warframe": ("Warframe" "steam_app_230410")  1x1+0+0  +0+0
+     0x1400003 "Warframe": ("Warframe" "steam_app_230410")  1920x1080+1920+0  +1920+0
+     0x1600001 "TennoScope": ("tennoscope" "TennoScope")  1180x760+100+100  +100+100
+"#;
+    let (id, rect) = warframe_window_from_xwininfo_tree(tree).unwrap();
+    assert_eq!(id, "0x1400003", "the 1x1 helper must not win");
     assert_eq!(
         (rect.x, rect.y, rect.width, rect.height),
-        (1920, 0, 1920, 1080)
+        (1920, 0, 1920, 1080),
+        "must read the absolute position, not the parent-relative one"
     );
-    let overlay = reward_overlay_geometry(rect.width, rect.height, rect.x, rect.y);
+    let overlay = reward_overlay_geometry(rect.width, rect.height, rect.x, rect.y, MAX_CARDS);
     assert_eq!((overlay.x, overlay.y), (2398, 530));
+
+    // A window left of the primary output reports a negative offset, which prints as `+-1920`.
+    let left = r#"     0x1400003 "Warframe": ("Warframe" "warframe.x64.exe")  1920x1080+-1920+0  +-1920+0"#;
+    let (_, rect) = warframe_window_from_xwininfo_tree(left).unwrap();
+    assert_eq!((rect.x, rect.y), (-1920, 0));
+
+    assert!(
+        warframe_window_from_xwininfo_tree("     0x1600001 \"TennoScope\": ()  1180x760+0+0  +0+0")
+            .is_none(),
+        "no game window means no rectangle, not somebody else's"
+    );
 }

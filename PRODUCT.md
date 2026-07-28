@@ -65,11 +65,13 @@ is OCR (see Capabilities).
   glance under a countdown. It is not a window the player looks at deliberately.
 - The desktop application is the opposite scene: a normal 1180×760 window
   (min 360×520), read at leisure, undecorated.
-- Warframe runs under Proton as an XWayland client. Reward capture goes through
-  X11 (`xwininfo`, `import`), `magick` (ImageMagick 7), and `tesseract` with
-  English data. Overlay *placement* reads the game window rectangle via
-  `swaymsg`; on other compositors it falls back to centring on the primary
-  monitor. Layering uses GTK layer-shell and is skipped outside Wayland.
+- Warframe runs under Wine, as Proton or bare, and is therefore always an X11
+  client. Reward capture goes through X11 (`xwininfo`, `import`), `magick`
+  (ImageMagick 7), and `tesseract` with English data. Overlay *placement* reads
+  the game window rectangle from the same `xwininfo` tree, and the strip itself
+  is an override-redirect X11 window, so the app runs on X11 even under Wayland.
+  That is what makes placement and layering behave the same on every window
+  manager instead of only on the ones implementing `wlr-layer-shell`.
 - Refresh is normally automatic: on Warframe start, and when the active prefix's
   `EE.log` reports a completed inventory sync. Manual refresh stays available.
 - Process inspection requires the same Unix user and a permissive
@@ -118,8 +120,9 @@ Factual limits, not commitments:
   unpriced permanently. The UI must never fake a number in place of a dash.
 - Reward card geometry is calibrated against 16:9 captures and scales by window
   width; ultrawide behavior is untested.
-- Capture is exercised only on sway. GNOME, KDE, Hyprland and bare X11 are
-  untested, not unsupported.
+- Capture and overlay are exercised on sway. GNOME, KDE, Hyprland and bare X11
+  go through the same X11 path with nothing compositor-specific left in it, but
+  are untested.
 - The memory technique depends on undocumented game behavior and may need
   maintenance after a Warframe update.
 - Cross-platform acquisition (Windows, macOS) is **not** ruled out. It is simply

@@ -50,7 +50,7 @@ Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
 
 5. **Wait for the release workflow**, then edit the draft it created. Take the release notes from
    the changelog section rather than the generated commit list, and say plainly what is untested —
-   compositors other than sway, ultrawide displays, anything else that has never run outside the
+   window managers other than sway, ultrawide displays, anything else that has never run outside the
    maintainer's machine.
 
 6. **Publish the draft.**

@@ -29,8 +29,6 @@
         "url": "/overlay",
         "width": 1100,
         "height": 190,
-        "minWidth": 720,
-        "minHeight": 170,
         "visible": false,
         "transparent": true,
         "decorations": false,

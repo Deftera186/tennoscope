@@ -74,7 +74,7 @@ Running needs:
 - Permission to inspect your own game process. If acquisition fails, see
   [process permissions](#process-permissions).
 - For the overlay: `xwininfo`, ImageMagick 7 (`magick`, not the v6 `convert`) and `tesseract` with
-  English data. `swaymsg` is used for placement where present.
+  English data.
 - Network access for the inventory request, the item catalog and market prices. The catalog is
   cached for offline use.
 
@@ -82,9 +82,10 @@ Running needs:
 
 - **Linux only, for now.** Acquisition reads `/proc`. Windows and macOS support is the goal, but
   no adapter exists yet.
-- **Overlay placement** reads the game rectangle from `swaymsg`. Everywhere else, Hyprland
-  included, it falls back to centring on the primary monitor. Capture itself works anywhere X11
-  does, and Warframe is an XWayland client under Proton.
+- **Overlay placement** reads the game rectangle from `xwininfo` and draws an override-redirect
+  X11 window over it, which is window-manager independent: Warframe is an X11 client under Wine
+  and Proton alike, and the app joins it there rather than asking the compositor for anything.
+  Verified on sway; other compositors are untested rather than unsupported.
 - **Card geometry** is calibrated on 16:9 and scales by window width. Ultrawide is untested and
   may drift.
 - **English reward names** only.
