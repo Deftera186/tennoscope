@@ -150,9 +150,16 @@ function App() {
     setBusy(false)
   }
 
+  /**
+   * Deliberately outside `runForeground`: a page refresh prices up to forty-eight items at three
+   * requests a second, so it is on the wire for about sixteen seconds, and the whole promise of it
+   * is that prices appear as they land. That only happens if the 2.5s poll keeps running through
+   * it. Ordering is still safe -- `requestView` applies a response only while its request is the
+   * newest one started, so an older view can never land on top of a newer one.
+   */
   async function priceLive(ids: string[]) {
     setPricing(true)
-    await runForeground(() => requestView(() => refreshPrices(ids), 'Live prices could not be fetched.'))
+    await requestView(() => refreshPrices(ids), 'Live prices could not be fetched.')
     setPricing(false)
   }
 

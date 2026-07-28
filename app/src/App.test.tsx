@@ -224,6 +224,21 @@ describe('MVP desktop interface', () => {
     expect(backend.getView).toHaveBeenCalledTimes(2)
   })
 
+  // A page refresh is on the wire for about sixteen seconds, and it is only bearable because the
+  // prices appear as they land. That is the poll's doing, so the poll has to keep running -- unlike
+  // an inventory refresh, which replaces the whole collection and does pause it.
+  it('keeps polling while a live price refresh is in flight, so prices appear as they land', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.getView.mockResolvedValue(view)
+    backend.refreshPrices.mockImplementationOnce(() => new Promise(() => {}))
+    render(<App />)
+    await act(async () => {})
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Refresh prices on this page/ })) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
+    expect(backend.getView).toHaveBeenCalledTimes(3)
+  })
+
   it('stops scheduled polling after unmount', async () => {
     vi.useFakeTimers()
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
