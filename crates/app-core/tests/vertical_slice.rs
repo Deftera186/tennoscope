@@ -342,11 +342,11 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
         json!({
             "collection": {
                 "items": [
-                    {"id": "braton", "name": "Braton", "category": "weapon", "quantity": 3, "mastered": true},
-                    {"id": "lex-prime-receiver", "name": "Lex Prime Receiver", "category": "prime_part", "quantity": 1, "mastered": false},
-                    {"id": "lith-a1", "name": "Lith A1 Relic", "category": "relic", "quantity": 7, "mastered": false},
-                    {"id": "rhino", "name": "Rhino", "category": "frame", "quantity": 1, "mastered": true},
-                    {"id": "saryn-prime-chassis", "name": "Saryn Prime Chassis", "category": "prime_part", "quantity": 2, "mastered": false}
+                    {"id": "braton", "name": "Braton", "category": "weapon", "quantity": 3, "mastered": true, "live": false},
+                    {"id": "lex-prime-receiver", "name": "Lex Prime Receiver", "category": "prime_part", "quantity": 1, "mastered": false, "live": false},
+                    {"id": "lith-a1", "name": "Lith A1 Relic", "category": "relic", "quantity": 7, "mastered": false, "live": false},
+                    {"id": "rhino", "name": "Rhino", "category": "frame", "quantity": 1, "mastered": true, "live": false},
+                    {"id": "saryn-prime-chassis", "name": "Saryn Prime Chassis", "category": "prime_part", "quantity": 2, "mastered": false, "live": false}
                 ],
                 "total_entries": 5,
                 "snapshot": {

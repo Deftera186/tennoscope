@@ -3,13 +3,14 @@
 mod fake_session;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use local_store::{SnapshotMeta, SqliteStore, StoreError};
 use serde::Serialize;
 use thiserror::Error;
 use warframe_acquisition::{
     AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogIndex, CatalogLoadSource,
-    StageState,
+    MarketPriceCache, PriceTable, StageState,
 };
 use warframe_domain::{
     CatalogItem, Category, DomainError, InventoryEntry, InventorySnapshot, RewardAdvisor,
@@ -30,6 +31,8 @@ pub struct AppCore {
     store: SqliteStore,
     reward: RewardView,
     health: HealthView,
+    prices: Option<Arc<PriceTable>>,
+    live: Option<MarketPriceCache>,
 }
 
 pub trait AcquisitionPort {
@@ -84,14 +87,43 @@ impl AppCore {
             store,
             reward: RewardAdvisor::advise(Vec::new()),
             health: HealthView::phase_one()?,
+            prices: None,
+            live: None,
         })
+    }
+
+    /// The daily price table, once it has loaded. Held rather than passed in on every call
+    /// because the view is rebuilt every 2.5 seconds and the table changes once a day.
+    pub fn set_collection_prices(&mut self, prices: Arc<PriceTable>) {
+        self.prices = Some(prices);
+    }
+
+    /// The live price cache, shared with the reward overlay. Cheap to clone and entries expire on
+    /// their own, so the collection reads whatever the player last asked warframe.market about --
+    /// including anything a relic pool warmed during a mission.
+    pub fn set_live_prices(&mut self, live: MarketPriceCache) {
+        self.live = Some(live);
     }
 
     pub fn current_view(&self) -> Result<AppView, AppError> {
         let collection = self.store.load_collection()?;
         let mut items = collection
             .entries()
-            .map(CollectionItemView::from)
+            .map(|entry| {
+                // Both lookups go through the market's own name for the item: the live cache is
+                // keyed by what was asked for, and that is never the catalog's name for a relic.
+                let market_name = self
+                    .prices
+                    .as_ref()
+                    .and_then(|prices| prices.market_name(&entry.item.name));
+                let live = market_name
+                    .zip(self.live.as_ref())
+                    .and_then(|(name, cache)| cache.get(name));
+                let dump = market_name
+                    .zip(self.prices.as_ref())
+                    .and_then(|(name, prices)| prices.price_for(name));
+                CollectionItemView::priced(entry, live.or(dump), live.is_some())
+            })
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));
         let total_entries = items.len();
@@ -394,6 +426,9 @@ pub struct CollectionItemView {
     mastered: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     image_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platinum: Option<u32>,
+    live: bool,
 }
 
 impl CollectionItemView {
@@ -420,6 +455,23 @@ impl CollectionItemView {
     pub fn image_url(&self) -> Option<&str> {
         self.image_url.as_deref()
     }
+
+    pub fn platinum(&self) -> Option<u32> {
+        self.platinum
+    }
+
+    /// Whether this price came from warframe.market just now, rather than from the daily dump.
+    pub fn live(&self) -> bool {
+        self.live
+    }
+
+    fn priced(entry: &warframe_domain::InventoryEntry, platinum: Option<u32>, live: bool) -> Self {
+        Self {
+            platinum,
+            live,
+            ..Self::from(entry)
+        }
+    }
 }
 
 impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
@@ -435,6 +487,8 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
                     "https://raw.githubusercontent.com/WFCD/warframe-items/master/data/img/{name}"
                 )
             }),
+            platinum: None,
+            live: false,
         }
     }
 }
