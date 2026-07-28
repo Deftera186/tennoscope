@@ -182,7 +182,7 @@
 /* The certificate band. One continuous ruled statement, not three stat tiles:
    no boxes, no per-cell accent, hairline verticals only. */
 .assay-band {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   border-block: 1px solid var(--rule);
 }
 .band-cell { padding: var(--course) var(--step) var(--course) 0; }
@@ -222,6 +222,12 @@
   font-family: var(--face-register); font-size: .64rem; letter-spacing: .08em;
 }
 .sort-slot select:hover { border-color: var(--platinum-deep); }
+
+/* Pricing 48 items takes ~16s; a swapped label alone reads as broken over that
+   span, so the same drawn-sample streak used for loading states rides along
+   the stamp until the batch resolves. */
+.refresh-slot { display: flex; align-items: center; gap: var(--tight); }
+.refresh-slot .streak { width: 3rem; }
 
 /* Hallmark cartouches carry the category filters. */
 .shield-strip { display: flex; flex-wrap: wrap; gap: var(--hair); }

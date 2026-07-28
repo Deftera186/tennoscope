@@ -11,6 +11,12 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Added
+
+- Collection items show a platinum price and stack total, seeded from the daily warframe.market price dump.
+- Live pricing on request, for a single item or the page on screen, marked apart from the daily figures.
+- Collection sorting by value, a tradeable filter, and a collection worth summary.
+
 ## [0.1.0] - 2026-07-28
 
 First release.

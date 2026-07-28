@@ -336,4 +336,46 @@ describe('MVP desktop interface', () => {
 
     expect(backend.refreshPrices).toHaveBeenCalledWith(['lex-prime-receiver'])
   })
+
+  it('sorts by stack value and sinks unpriced items to the bottom', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: 'Value' }))
+
+    const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
+    expect(names.slice(0, 2)).toEqual(['Lith A1 Relic', 'Lex Prime Receiver'])
+    expect(names.at(-1)).toBe('Rhino')
+  })
+
+  it('narrows to items that have a price', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: 'Tradeable' }))
+
+    const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
+    expect(names).toEqual(['Lex Prime Receiver', 'Lith A1 Relic'])
+  })
+
+  // A partial sum shown as a total is a lie the reader cannot detect, so the cell carries its count.
+  it('sums the priced stacks and says how many it counted', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    render(<App/>)
+    const worth = await screen.findByTestId('band-worth')
+    expect(within(worth).getByText('159')).toBeInTheDocument()
+    expect(within(worth).getByText(/2 of 8 items priced/)).toBeInTheDocument()
+  })
+
+  // The page refresh asks about exactly what is on screen, so a filtered view costs only the
+  // requests that view is worth.
+  it('prices the items currently on screen, and only those', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: 'Tradeable' }))
+    await user.click(screen.getByRole('button', { name: /Refresh prices on this page/ }))
+
+    expect(backend.refreshPrices).toHaveBeenCalledWith(['lex-prime-receiver', 'lith-a1'])
+  })
 })

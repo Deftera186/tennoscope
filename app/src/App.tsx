@@ -18,8 +18,8 @@ import { clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, sta
 import { snapshotFreshness } from './freshness'
 
 type Page = 'collection' | 'rewards' | 'diagnostics' | 'settings'
-type Ownership = 'all' | 'owned' | 'mastered' | 'missing'
-type Sort = 'name-asc' | 'quantity-desc' | 'category-asc'
+type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
+type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'value-desc'
 
 const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: string }> = [
   { value: 'all', label: 'All categories', tally: '✳' },
@@ -37,6 +37,7 @@ const sortOptions: Array<{ value: Sort; label: string }> = [
   { value: 'name-asc', label: 'Name A–Z' },
   { value: 'quantity-desc', label: 'Quantity' },
   { value: 'category-asc', label: 'Category' },
+  { value: 'value-desc', label: 'Value' },
 ]
 
 const categoryName = Object.fromEntries(categories.map(category => [category.value, category.label])) as Record<ItemCategory | 'all', string>
@@ -69,6 +70,7 @@ function App() {
   const [view, setView] = useState<AppView | null>(null)
   const [page, setPage] = useState<Page>('collection')
   const [busy, setBusy] = useState(false)
+  const [pricing, setPricing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
   const viewGeneration = useRef(0)
@@ -149,7 +151,9 @@ function App() {
   }
 
   async function priceLive(ids: string[]) {
+    setPricing(true)
     await runForeground(() => requestView(() => refreshPrices(ids), 'Live prices could not be fetched.'))
+    setPricing(false)
   }
 
   if (accepted === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
@@ -199,7 +203,7 @@ function App() {
     <main className="sheet">
       {error && <p className="error-banner" role="alert">{error}</p>}
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} onPriceLive={priceLive}/>}
+        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
         {page === 'diagnostics' && <DiagnosticsPage view={view}/>}
         {page === 'settings' && <SettingsPage/>}
@@ -249,7 +253,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, onPriceLive }: { view: AppView; onPriceLive: (ids: string[]) => void }) {
+function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -259,17 +263,25 @@ function CollectionPage({ view, onPriceLive }: { view: AppView; onPriceLive: (id
   const mastered = masteryEligible.filter(item => item.mastered).length
   const owned = view.collection.items.filter(item => item.quantity > 0).length
   const missing = view.collection.items.filter(item => item.quantity === 0).length
+  const priced = view.collection.items.filter(item => item.platinum !== undefined)
+  const worth = priced.reduce((total, item) => total + (stackValue(item) ?? 0), 0)
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase()
     return view.collection.items
       .filter(item => !query || item.name.toLocaleLowerCase().includes(query))
       .filter(item => category === 'all' || item.category === category)
-      .filter(item => ownership === 'all' || (ownership === 'owned' && item.quantity > 0) || (ownership === 'mastered' && item.mastered) || (ownership === 'missing' && item.quantity === 0))
+      .filter(item => ownership === 'all'
+        || (ownership === 'owned' && item.quantity > 0)
+        || (ownership === 'mastered' && item.mastered)
+        || (ownership === 'missing' && item.quantity === 0)
+        || (ownership === 'tradeable' && item.platinum !== undefined))
       .toSorted((left, right) => sort === 'quantity-desc'
         ? right.quantity - left.quantity || left.name.localeCompare(right.name)
         : sort === 'category-asc'
           ? left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
-          : left.name.localeCompare(right.name))
+          : sort === 'value-desc'
+            ? (stackValue(right) ?? -1) - (stackValue(left) ?? -1) || left.name.localeCompare(right.name)
+            : left.name.localeCompare(right.name))
   }, [view.collection.items, search, category, ownership, sort])
   const totalPages = pageCount(filtered.length)
   const currentPage = clampPage(page, filtered.length)
@@ -289,6 +301,7 @@ function CollectionPage({ view, onPriceLive }: { view: AppView; onPriceLive: (id
       <BandCell kind="items" value={view.collection.total_entries} label="Items tracked" note={`${owned} currently owned`}/>
       <BandCell kind="mastered" value={mastered} label="Mastered" note={masteryEligible.length ? `${Math.round(mastered / masteryEligible.length * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
       <BandCell kind="missing" value={missing} label="Missing" note="From known collection data"/>
+      <BandCell kind="worth" value={worth} label="Collection worth" note={`${priced.length} of ${view.collection.items.length} items priced`}/>
     </div>
 
     <div className="register">
@@ -309,6 +322,16 @@ function CollectionPage({ view, onPriceLive }: { view: AppView; onPriceLive: (id
             >{option.label}</button>)}
           </div>
         </div>
+        <div className="refresh-slot">
+          <button
+            type="button"
+            className="stamp"
+            disabled={pricing}
+            aria-label="Refresh prices on this page"
+            onClick={() => onPriceLive(visibleItems.map(item => item.id))}
+          ><span>{pricing ? 'Pricing…' : 'Refresh prices'}</span></button>
+          {pricing && <span className="streak" aria-hidden="true"/>}
+        </div>
       </div>
 
       <div className="shield-strip" role="group" aria-label="Item categories">
@@ -324,7 +347,7 @@ function CollectionPage({ view, onPriceLive }: { view: AppView; onPriceLive: (id
 
       <div className="register-bar">
         <div className="tally" role="group" aria-label="Ownership filters">
-          {(['all', 'owned', 'mastered', 'missing'] as const).map(filter => <button
+          {(['all', 'owned', 'mastered', 'missing', 'tradeable'] as const).map(filter => <button
             type="button"
             key={filter}
             aria-pressed={ownership === filter}
@@ -348,7 +371,7 @@ function CollectionPage({ view, onPriceLive }: { view: AppView; onPriceLive: (id
 }
 
 function BandCell({ kind, value, label, note }: { kind: string; value: number; label: string; note: string }) {
-  return <div className={`band-cell ${kind}`} data-summary={kind}>
+  return <div className={`band-cell ${kind}`} data-summary={kind} data-testid={`band-${kind}`}>
     <span className="band-figure">{value}</span>
     <span className="band-label">{label}</span>
     <p className="band-note">{note}</p>
