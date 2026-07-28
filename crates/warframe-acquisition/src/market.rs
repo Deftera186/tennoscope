@@ -55,15 +55,6 @@ pub enum PriceLookup {
     Oversize,
 }
 
-impl PriceLookup {
-    pub fn price(self) -> Option<u32> {
-        match self {
-            Self::Priced(platinum) => Some(platinum),
-            _ => None,
-        }
-    }
-}
-
 pub trait MarketPriceSource {
     fn lowest_sell(&self, name: &str) -> PriceLookup;
 }
@@ -225,19 +216,63 @@ impl MarketPriceCache {
     /// The gap is what keeps a pool of two dozen names from arriving at warframe.market as a burst.
     /// There is no hurry -- the whole point is that this runs minutes early -- so it is cheap to be
     /// polite. A caller in a hurry may pass `Duration::ZERO` to skip its own extra politeness, but
-    /// `MARKET_MIN_GAP` still applies across every caller. Returns how many new prices were stored.
-    pub fn warm(&self, source: &dyn MarketPriceSource, names: &[String], gap: Duration) -> usize {
-        let mut stored = 0;
+    /// `MARKET_MIN_GAP` still applies across every caller.
+    pub fn warm(
+        &self,
+        source: &dyn MarketPriceSource,
+        names: &[String],
+        gap: Duration,
+    ) -> WarmOutcome {
+        let mut outcome = WarmOutcome::default();
         for name in names {
             if self.get(name).is_some() {
                 continue;
             }
             self.take_request_slot(gap);
-            if let PriceLookup::Priced(price) = source.lowest_sell(name) {
-                self.insert(name, price);
-                stored += 1;
+            match source.lowest_sell(name) {
+                PriceLookup::Priced(price) => {
+                    self.insert(name, price);
+                    outcome.stored += 1;
+                }
+                PriceLookup::NoSellers => outcome.no_sellers += 1,
+                PriceLookup::Unavailable => outcome.unavailable += 1,
+                PriceLookup::Oversize => outcome.oversize += 1,
             }
         }
-        stored
+        outcome
+    }
+}
+
+/// What a warm pass achieved, and what it ran into.
+///
+/// The counts exist so a caller can tell the diagnostics row something true. Without them every
+/// failure arrives as the same absent price, and "warframe.market is sending us more than we will
+/// read" is indistinguishable from "nobody is selling this" -- which is the difference between a
+/// client that needs fixing and an ordinary quiet evening.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct WarmOutcome {
+    pub stored: usize,
+    pub no_sellers: usize,
+    pub unavailable: usize,
+    pub oversize: usize,
+}
+
+impl WarmOutcome {
+    /// What the market health row should say, when there is anything worth saying.
+    ///
+    /// Oversize outranks everything: it does not fix itself, it hits every item at once, and as an
+    /// absent price it presents as "the whole collection is worthless" with nothing saying
+    /// otherwise. A pass that priced something and merely found one item unsold is not news.
+    pub fn failure(self) -> Option<&'static str> {
+        if self.oversize > 0 {
+            return Some("warframe.market responses are over the size cap; no price can be read");
+        }
+        if self.stored > 0 {
+            return None;
+        }
+        if self.unavailable > 0 {
+            return Some("warframe.market could not be reached");
+        }
+        (self.no_sellers > 0).then_some("No live warframe.market sellers for these items")
     }
 }

@@ -125,13 +125,13 @@ fn warming_the_pool_prices_it_before_the_reward_screen_asks() {
         CountingMarket::new(&[("Braton Prime Blueprint", 12), ("Trumna Prime Barrel", 45)]);
     let cache = MarketPriceCache::new();
 
-    let stored = cache.warm(
+    let outcome = cache.warm(
         &market,
         &names(&["Braton Prime Blueprint", "Trumna Prime Barrel"]),
         Duration::ZERO,
     );
 
-    assert_eq!(stored, 2);
+    assert_eq!(outcome.stored, 2);
     assert_eq!(cache.get("Braton Prime Blueprint"), Some(12));
     assert_eq!(cache.get("Trumna Prime Barrel"), Some(45));
 }
@@ -199,6 +199,60 @@ impl MarketPriceSource for StampingMarket {
         self.stamps.lock().unwrap().push(Instant::now());
         PriceLookup::NoSellers
     }
+}
+
+/// A source that answers every name the same way.
+struct FixedMarket(PriceLookup);
+
+impl MarketPriceSource for FixedMarket {
+    fn lowest_sell(&self, _name: &str) -> PriceLookup {
+        self.0
+    }
+}
+
+/// The failure that arrives the day warframe.market widens its payload. It hits every item at
+/// once and it does not fix itself, so it must not arrive at the health row wearing the same
+/// clothes as a quiet evening where nobody happened to be selling.
+#[test]
+fn an_oversize_response_reaches_the_caller_apart_from_an_item_nobody_is_selling() {
+    let oversize = MarketPriceCache::new().warm(
+        &FixedMarket(PriceLookup::Oversize),
+        &names(&["Ash Prime Blueprint"]),
+        Duration::ZERO,
+    );
+    let quiet = MarketPriceCache::new().warm(
+        &FixedMarket(PriceLookup::NoSellers),
+        &names(&["Ash Prime Blueprint"]),
+        Duration::ZERO,
+    );
+
+    assert_eq!(oversize.oversize, 1);
+    assert_eq!(quiet.no_sellers, 1);
+    assert!(
+        oversize
+            .failure()
+            .is_some_and(|say| say.contains("size cap")),
+        "an oversize response must name itself: {:?}",
+        oversize.failure()
+    );
+    assert_ne!(
+        oversize.failure(),
+        quiet.failure(),
+        "the two failures must not read the same"
+    );
+}
+
+/// A pass that priced something and merely found one item unsold is not a health problem.
+#[test]
+fn a_pass_that_priced_something_reports_nothing_to_the_health_row() {
+    let cache = MarketPriceCache::new();
+    let outcome = cache.warm(
+        &FixedMarket(PriceLookup::Priced(12)),
+        &names(&["Ash Prime Blueprint"]),
+        Duration::ZERO,
+    );
+
+    assert_eq!(outcome.failure(), None);
 }
 
 /// Forma is untradeable and an unreachable API looks identical from here. Storing either as a

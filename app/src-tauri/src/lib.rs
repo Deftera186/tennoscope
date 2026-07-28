@@ -21,7 +21,7 @@ use warframe_acquisition::{
     CatalogCache, CatalogIndex, CollectionPriceCache, GameProcess, InventoryAcquirer,
     InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, ProcessDiscovery,
     RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner,
-    WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current,
+    WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current,
 };
 use warframe_domain::RewardCandidate;
 
@@ -212,7 +212,15 @@ async fn refresh_prices(
             )
         };
         if let Some(market) = warframe_acquisition::WarframeMarketHttp::new() {
-            cache.warm(&market, &names, warframe_acquisition::MARKET_MIN_GAP);
+            let outcome = cache.warm(&market, &names, warframe_acquisition::MARKET_MIN_GAP);
+            // The live path shares the overlay's row, since both answer "could we reach
+            // warframe.market just now". The dump's date lives in its own row and is not
+            // disturbed by this.
+            if let Some(failure) = outcome.failure()
+                && let Ok(mut runtime) = shared.lock()
+            {
+                let _ = runtime.core.record_market_degraded(failure);
+            }
         }
         shared
             .lock()
@@ -1305,22 +1313,31 @@ fn spawn_market_price_fetch(
             .filter(|choice| !prices.contains_key(&choice.name))
             .map(|choice| choice.name.clone())
             .collect::<Vec<_>>();
+        let mut outcome = WarmOutcome::default();
         if !missing.is_empty()
             && let Some(market) = warframe_acquisition::WarframeMarketHttp::new()
         {
-            price_cache.warm(&market, &missing, Duration::ZERO);
+            outcome = price_cache.warm(&market, &missing, Duration::ZERO);
             for name in missing {
                 if let Some(price) = price_cache.get(&name) {
                     prices.insert(name, price);
                 }
             }
         }
+        // An oversize response is worth saying even when the cache carried the screen, because it
+        // is the failure that stops every future price and nothing else would report it. An empty
+        // screen with no failure to name means no request was made at all.
+        let failure = outcome.failure().or_else(|| {
+            prices
+                .is_empty()
+                .then_some("warframe.market pricing is unavailable for these rewards")
+        });
+        if let Some(failure) = failure
+            && let Ok(mut runtime) = shared.lock()
+        {
+            let _ = runtime.core.record_market_degraded(failure);
+        }
         if prices.is_empty() {
-            if let Ok(mut runtime) = shared.lock() {
-                let _ = runtime
-                    .core
-                    .record_market_degraded("No live warframe.market sellers for these rewards");
-            }
             return;
         }
         apply_reward_observations(&shared, &reward_catalog, &names, &prices);

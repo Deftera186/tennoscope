@@ -37,7 +37,7 @@ pub use inventory::{
 pub use linux_proc::LinuxProc;
 pub use market::{
     MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, WarframeMarketHttp,
-    lowest_sell_top, market_slug,
+    WarmOutcome, lowest_sell_top, market_slug,
 };
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 pub use relic_catalog::RelicRewardIndex;
