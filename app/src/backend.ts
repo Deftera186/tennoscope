@@ -4,7 +4,7 @@ export type HealthState = 'ready' | 'idle' | 'degraded' | 'failed'
 export interface BackendHealth { state: HealthState; message: string; last_success: string | null }
 export interface AcquisitionStageHealth { stage: string; state: HealthState; message: string }
 export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 'relic' | 'resource' | 'blueprint' | 'vehicle'
-export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string }
+export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; live: boolean }
 export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }
 export interface AppView {
   collection: {
@@ -27,6 +27,7 @@ export interface SetupStatus { risk_accepted: boolean }
 
 export const getView = () => invoke<AppView>('get_view')
 export const refreshInventory = () => invoke<AppView>('refresh_inventory')
+export const refreshPrices = (ids: string[]) => invoke<AppView>('refresh_prices', { itemIds: ids })
 export const loadFakeSession = () => invoke<AppView>('load_fake_session')
 export const getSetupStatus = () => invoke<SetupStatus>('get_setup_status')
 export const acceptRiskDisclosure = () => invoke<SetupStatus>('accept_risk_disclosure')

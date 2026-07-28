@@ -127,3 +127,54 @@ fn an_item_with_no_live_price_falls_back_to_the_dump_unmarked() {
     assert_eq!(view.collection().items()[0].platinum(), Some(50));
     assert!(!view.collection().items()[0].live());
 }
+
+#[test]
+fn only_the_named_items_are_resolved_for_a_live_lookup() {
+    let mut core = core_with_items(vec![
+        item("/a", "Serration", Category::Resource, 1),
+        item("/b", "Mirage Prime Systems", Category::PrimePart, 3),
+    ]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+
+    let names = core.market_names_for(&["/b".to_owned()]).expect("resolves");
+
+    assert_eq!(names, vec!["Mirage Prime Systems Blueprint".to_owned()]);
+}
+
+/// Four refinements of one relic are one item on warframe.market. Asking about a page holding all
+/// four must cost one request, not four.
+#[test]
+fn relic_refinements_on_one_page_collapse_to_a_single_request() {
+    let dump = r#"{"Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}]}"#;
+    let mut core = core_with_items(vec![
+        item("/a", "Axi A1 Intact", Category::Relic, 2),
+        item("/b", "Axi A1 Radiant", Category::Relic, 1),
+        item("/c", "Axi A1 Flawless", Category::Relic, 4),
+    ]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+
+    let names = core
+        .market_names_for(&["/a".to_owned(), "/b".to_owned(), "/c".to_owned()])
+        .expect("resolves");
+
+    assert_eq!(names, vec!["Axi A1 Relic".to_owned()]);
+}
+
+/// An item the dump never listed cannot be asked about either: there is no slug to build.
+#[test]
+fn an_unresolvable_item_is_not_requested() {
+    let mut core = core_with_items(vec![item("/a", "Bottomless Pit", Category::Resource, 1)]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+
+    assert!(
+        core.market_names_for(&["/a".to_owned()])
+            .unwrap()
+            .is_empty()
+    );
+}

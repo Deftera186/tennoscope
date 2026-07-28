@@ -43,9 +43,9 @@ const POLLER_WATCH_INTERVAL: Duration = Duration::from_millis(400);
 const POLLER_GONE_STREAK: u32 = 2;
 /// Upper bound on how long a single fissure mission is worth watching for.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
-/// Pause between warm-up price requests. The relic pool is a few dozen names and the reward screen
-/// is minutes away, so there is no reason to arrive at warframe.market as a burst.
-const MARKET_WARM_GAP: Duration = Duration::from_millis(250);
+/// Pause between live price requests. warframe.market's documented public limit is three per
+/// second; 250ms was four, which was over it.
+const MARKET_WARM_GAP: Duration = Duration::from_millis(334);
 
 mod monitor;
 mod overlay_window;
@@ -130,6 +130,10 @@ struct Runtime {
     refresh_in_flight: bool,
     overlay_preview_until: Option<Instant>,
     monitor_started: bool,
+    // Survives across missions on purpose: the same relic pools recur all evening, so a price
+    // fetched two runs ago is one this run does not have to make. Shared with the collection, so
+    // a pool warmed mid-mission also prices those items in the browser.
+    live_prices: MarketPriceCache,
 }
 type SharedRuntime = Arc<Mutex<Runtime>>;
 
@@ -183,6 +187,45 @@ async fn accept_risk_disclosure(
 #[tauri::command]
 async fn refresh_inventory(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     refresh_shared(Arc::clone(state.inner())).await
+}
+
+/// Price the named items live, because the player asked about them.
+///
+/// Paced at the documented three requests a second, so a full page of forty-eight takes about
+/// sixteen seconds. It runs to completion rather than returning early: the frontend's own poll
+/// surfaces each price as it lands, so the wait is visible as prices appearing rather than as a
+/// button that does nothing.
+#[tauri::command]
+async fn refresh_prices(
+    item_ids: Vec<String>,
+    state: State<'_, SharedRuntime>,
+) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let (names, cache) = {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            (
+                runtime
+                    .core
+                    .market_names_for(&item_ids)
+                    .map_err(|_| "collection items could not be resolved".to_owned())?,
+                runtime.live_prices.clone(),
+            )
+        };
+        if let Some(market) = warframe_acquisition::WarframeMarketHttp::new() {
+            cache.warm(&market, &names, MARKET_WARM_GAP);
+        }
+        shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?
+            .core
+            .current_view()
+            .map_err(|_| "application view is unavailable".to_owned())
+    })
+    .await
+    .map_err(|_| "price refresh task failed".to_owned())?
 }
 
 #[tauri::command]
@@ -314,7 +357,9 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
     fs::create_dir_all(&app_data)?;
     let paths = resolve_local_paths(&app_data);
     let setup = read_setup_status(&paths.setup).map_err(std::io::Error::other)?;
-    let core = AppCore::open(&paths.database)?;
+    let mut core = AppCore::open(&paths.database)?;
+    let live_prices = MarketPriceCache::new();
+    core.set_live_prices(live_prices.clone());
     Ok(Arc::new(Mutex::new(Runtime {
         core,
         app_data,
@@ -324,6 +369,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         refresh_in_flight: false,
         overlay_preview_until: None,
         monitor_started: false,
+        live_prices,
     })))
 }
 
@@ -396,7 +442,10 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let reward_generation = Arc::new(AtomicU64::new(0));
     // Survives across missions on purpose: the same relic pools recur all evening, so a price
     // fetched two runs ago is one this run does not have to make.
-    let price_cache = MarketPriceCache::new();
+    let price_cache = shared
+        .lock()
+        .map(|runtime| runtime.live_prices.clone())
+        .unwrap_or_default();
     let visual_pool: SharedRelicPool = Arc::new(Mutex::new(Vec::new()));
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
@@ -1542,6 +1591,7 @@ pub fn run() {
             get_setup_status,
             accept_risk_disclosure,
             refresh_inventory,
+            refresh_prices,
             load_fake_session,
             show_reward_overlay,
             hide_reward_overlay

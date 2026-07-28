@@ -105,6 +105,26 @@ impl AppCore {
         self.live = Some(live);
     }
 
+    /// warframe.market's names for the given collection items, deduplicated.
+    ///
+    /// Deduplication is not a micro-optimization: a page can hold all four refinements of one
+    /// relic, which are one item on warframe.market, and asking four times would spend four
+    /// requests to learn the same number.
+    pub fn market_names_for(&self, item_ids: &[String]) -> Result<Vec<String>, AppError> {
+        let Some(prices) = self.prices.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let collection = self.store.load_collection()?;
+        let mut names = collection
+            .entries()
+            .filter(|entry| item_ids.iter().any(|id| id == entry.item.id.as_str()))
+            .filter_map(|entry| prices.market_name(&entry.item.name).map(str::to_owned))
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
     pub fn current_view(&self) -> Result<AppView, AppError> {
         let collection = self.store.load_collection()?;
         let mut items = collection
