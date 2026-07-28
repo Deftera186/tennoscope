@@ -125,7 +125,9 @@ fn a_malformed_dump_is_rejected_whole() {
 }
 
 use std::{cell::RefCell, collections::HashMap as Map};
-use warframe_acquisition::{CollectionPriceSource, PriceFetch, civil_date, latest_dump};
+use warframe_acquisition::{
+    CollectionPriceSource, PriceFetch, civil_date, dump_is_current, latest_dump,
+};
 
 struct FakeDumps {
     available: Map<String, String>,
@@ -204,6 +206,24 @@ fn a_dump_with_no_prices_is_not_accepted() {
     let source = FakeDumps::new(&[("2026-07-29", "{}")]);
 
     assert!(latest_dump(&source, TODAY).is_err());
+}
+
+/// A dump older than yesterday is the only one worth 3.9 MB of network on a launch.
+#[test]
+fn a_dump_from_today_or_yesterday_is_not_downloaded_again() {
+    assert!(
+        dump_is_current("2026-07-29", TODAY),
+        "today's dump is as new as it gets"
+    );
+    assert!(
+        dump_is_current("2026-07-28", TODAY),
+        "the feed lagged two days when this was measured, so yesterday's may be the newest there is"
+    );
+    assert!(
+        !dump_is_current("2026-07-27", TODAY),
+        "older than yesterday is worth one request to check"
+    );
+    assert!(!dump_is_current("", TODAY), "no date is not a fresh date");
 }
 
 use warframe_acquisition::CollectionPriceCache;

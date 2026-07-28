@@ -21,7 +21,7 @@ use warframe_acquisition::{
     CatalogCache, CatalogIndex, CollectionPriceCache, GameProcess, InventoryAcquirer,
     InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, ProcessDiscovery,
     RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner,
-    WfcdCatalogHttp, WfcdRelicCatalogHttp,
+    WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current,
 };
 use warframe_domain::RewardCandidate;
 
@@ -1457,32 +1457,40 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
 }
 
 /// Price the collection: cached table first so items are priced before any request is made, then
-/// one download for the day's dump.
+/// at most one download for the day's dump.
 ///
 /// There is nothing to schedule here. The whole collection is priced by a single file, so this
 /// runs once at start and is done -- no queue, no worker, no rate limiting, because there are no
-/// per-item requests to pace.
+/// per-item requests to pace. A cached table that is already as new as anything published skips
+/// the download entirely; the file is 3.9 MB and it changes once a day.
 fn start_collection_prices(shared: SharedRuntime) {
     std::thread::spawn(move || {
         let Some(app_data) = shared.lock().ok().map(|runtime| runtime.app_data.clone()) else {
-            return;
-        };
-        let cache = CollectionPriceCache::new(&app_data);
-        if let Some(table) = cache.load_cached()
-            && let Ok(mut runtime) = shared.lock()
-        {
-            let priced = table.len();
-            let date = table.dump_date().to_owned();
-            runtime.core.set_collection_prices(Arc::new(table));
-            let _ = runtime.core.record_collection_prices_ready(priced, date);
-        }
-        let Some(source) = RelicsRunHttp::new() else {
             return;
         };
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|elapsed| elapsed.as_secs())
             .unwrap_or_default();
+        let cache = CollectionPriceCache::new(&app_data);
+        let mut cached_date = None;
+        if let Some(table) = cache.load_cached()
+            && let Ok(mut runtime) = shared.lock()
+        {
+            let priced = table.len();
+            let date = table.dump_date().to_owned();
+            runtime.core.set_collection_prices(Arc::new(table));
+            let _ = runtime
+                .core
+                .record_collection_prices_ready(priced, date.clone());
+            cached_date = Some(date);
+        }
+        if cached_date.is_some_and(|date| dump_is_current(&date, now)) {
+            return;
+        }
+        let Some(source) = RelicsRunHttp::new() else {
+            return;
+        };
         match cache.refresh(&source, now) {
             Ok(table) => {
                 if let Ok(mut runtime) = shared.lock() {
