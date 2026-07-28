@@ -1,5 +1,10 @@
 export const COLLECTION_PAGE_SIZE = 48
 
+/** What the pile is worth, or null when the item has no price. */
+export function stackValue(item: { quantity: number; platinum?: number }): number | null {
+  return item.platinum === undefined ? null : item.platinum * item.quantity
+}
+
 export function pageCount(itemCount: number): number {
   return Math.max(1, Math.ceil(itemCount / COLLECTION_PAGE_SIZE))
 }

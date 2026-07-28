@@ -5,6 +5,7 @@ import {
   getSetupStatus,
   getView,
   refreshInventory,
+  refreshPrices,
   type AppView,
   type BackendHealth,
   type CollectionItem,
@@ -13,7 +14,7 @@ import {
 } from './backend'
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
 import { RewardCards } from './RewardCards'
-import { clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers } from './collection'
+import { clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, stackValue } from './collection'
 import { snapshotFreshness } from './freshness'
 
 type Page = 'collection' | 'rewards' | 'diagnostics' | 'settings'
@@ -147,6 +148,10 @@ function App() {
     setBusy(false)
   }
 
+  async function priceLive(ids: string[]) {
+    await runForeground(() => requestView(() => refreshPrices(ids), 'Live prices could not be fetched.'))
+  }
+
   if (accepted === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
   if (!accepted) return <SetupScreen busy={busy} error={error} onAccept={accept}/>
 
@@ -194,7 +199,7 @@ function App() {
     <main className="sheet">
       {error && <p className="error-banner" role="alert">{error}</p>}
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view}/>}
+        {page === 'collection' && <CollectionPage view={view} onPriceLive={priceLive}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
         {page === 'diagnostics' && <DiagnosticsPage view={view}/>}
         {page === 'settings' && <SettingsPage/>}
@@ -244,7 +249,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view }: { view: AppView }) {
+function CollectionPage({ view, onPriceLive }: { view: AppView; onPriceLive: (ids: string[]) => void }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -331,7 +336,7 @@ function CollectionPage({ view }: { view: AppView }) {
 
       {filtered.length
         ? <>
-          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item}/></li>)}</ul>
+          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} onPriceLive={id => onPriceLive([id])}/></li>)}</ul>
           <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
         </>
         : <EmptyState
@@ -350,7 +355,7 @@ function BandCell({ kind, value, label, note }: { kind: string; value: number; l
   </div>
 }
 
-function CollectionEntry({ item }: { item: CollectionItem }) {
+function CollectionEntry({ item, onPriceLive }: { item: CollectionItem; onPriceLive: (id: string) => void }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
   return <article className={`entry cat-${item.category}`} aria-label={item.name}>
@@ -367,8 +372,19 @@ function CollectionEntry({ item }: { item: CollectionItem }) {
           ? <span className="hallmark absent">Missing</span>
           : <span className="hallmark owned">Owned ×{item.quantity}</span>}
         {item.mastered && <span className="hallmark mastered">Mastered</span>}
+        {item.platinum !== undefined && <span className={`price${item.live ? ' live' : ''}`}>
+          <b>{item.platinum}p</b>
+          {item.quantity > 1 && <em>{stackValue(item)}p total</em>}
+          {item.live && <span className="hallmark live">Live</span>}
+        </span>}
       </div>
     </div>
+    <button
+      type="button"
+      className="price-check"
+      aria-label={`Price ${item.name} live`}
+      onClick={() => onPriceLive(item.id)}
+    >Check</button>
   </article>
 }
 

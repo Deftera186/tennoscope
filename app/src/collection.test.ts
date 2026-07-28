@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { pageCount, pageItems, pageNumbers } from './collection'
+import { pageCount, pageItems, pageNumbers, stackValue } from './collection'
 
 describe('collection pagination', () => {
   it('renders at most 48 items and returns the expected range', () => {
@@ -16,5 +16,15 @@ describe('collection pagination', () => {
     expect(pageNumbers(1, 21)).toEqual([1, 2, 3, 4, 5, 21])
     expect(pageNumbers(11, 21)).toEqual([1, 9, 10, 11, 12, 13, 21])
     expect(pageNumbers(21, 21)).toEqual([1, 17, 18, 19, 20, 21])
+  })
+})
+
+describe('stackValue', () => {
+  it('values a stack at its unit price times what is owned', () => {
+    expect(stackValue({ quantity: 3, platinum: 19 })).toBe(57)
+  })
+
+  it('has no value for an item with no price', () => {
+    expect(stackValue({ quantity: 3 })).toBeNull()
   })
 })

@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const backend = vi.hoisted(() => ({
-  getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(),
+  getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(), refreshPrices: vi.fn(),
 }))
 const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverlay: vi.fn() }))
 vi.mock('./backend', () => backend)
@@ -15,14 +15,14 @@ import type { AppView } from './backend'
 const view: AppView = {
   collection: {
     items: [
-      { id: 'rhino', name: 'Rhino', category: 'frame', quantity: 1, mastered: true },
-      { id: 'braton', name: 'Braton', category: 'weapon', quantity: 3, mastered: true },
-      { id: 'carrier', name: 'Carrier', category: 'companion', quantity: 1, mastered: false },
-      { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false },
-      { id: 'lith-a1', name: 'Lith A1 Relic', category: 'relic', quantity: 7, mastered: false },
-      { id: 'argon-crystal', name: 'Argon Crystal', category: 'resource', quantity: 4, mastered: false },
-      { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 0, mastered: false },
-      { id: 'bad-baby', name: 'Bad Baby', category: 'vehicle', quantity: 1, mastered: false },
+      { id: 'rhino', name: 'Rhino', category: 'frame', quantity: 1, mastered: true, live: false },
+      { id: 'braton', name: 'Braton', category: 'weapon', quantity: 3, mastered: true, live: false },
+      { id: 'carrier', name: 'Carrier', category: 'companion', quantity: 1, mastered: false, live: false },
+      { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 19, live: false },
+      { id: 'lith-a1', name: 'Lith A1 Relic', category: 'relic', quantity: 7, mastered: false, platinum: 20, live: true },
+      { id: 'argon-crystal', name: 'Argon Crystal', category: 'resource', quantity: 4, mastered: false, live: false },
+      { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 0, mastered: false, live: false },
+      { id: 'bad-baby', name: 'Bad Baby', category: 'vehicle', quantity: 1, mastered: false, live: false },
     ],
     total_entries: 8,
   },
@@ -59,6 +59,7 @@ describe('MVP desktop interface', () => {
     vi.clearAllMocks()
     backend.getView.mockResolvedValue(view)
     backend.refreshInventory.mockResolvedValue(view)
+    backend.refreshPrices.mockResolvedValue(view)
     overlay.showRewardOverlay.mockResolvedValue(undefined)
     overlay.hideRewardOverlay.mockResolvedValue(undefined)
   })
@@ -254,12 +255,12 @@ describe('MVP desktop interface', () => {
       collection: {
         total_entries: 6,
         items: [
-          { id: 'frame', name: 'Frame', category: 'frame', quantity: 1, mastered: true },
-          { id: 'weapon', name: 'Weapon', category: 'weapon', quantity: 1, mastered: false },
-          { id: 'companion', name: 'Companion', category: 'companion', quantity: 1, mastered: false },
-          { id: 'vehicle', name: 'Vehicle', category: 'vehicle', quantity: 1, mastered: true },
-          { id: 'part', name: 'Part', category: 'prime_part', quantity: 1, mastered: false },
-          { id: 'resource', name: 'Resource', category: 'resource', quantity: 1, mastered: false },
+          { id: 'frame', name: 'Frame', category: 'frame', quantity: 1, mastered: true, live: false },
+          { id: 'weapon', name: 'Weapon', category: 'weapon', quantity: 1, mastered: false, live: false },
+          { id: 'companion', name: 'Companion', category: 'companion', quantity: 1, mastered: false, live: false },
+          { id: 'vehicle', name: 'Vehicle', category: 'vehicle', quantity: 1, mastered: true, live: false },
+          { id: 'part', name: 'Part', category: 'prime_part', quantity: 1, mastered: false, live: false },
+          { id: 'resource', name: 'Resource', category: 'resource', quantity: 1, mastered: false, live: false },
         ],
       },
     })
@@ -280,6 +281,7 @@ describe('MVP desktop interface', () => {
           category: 'weapon' as const,
           quantity: 1,
           mastered: false,
+          live: false,
           image_url: index === 0 ? 'https://cdn.warframestat.us/img/Braton.png' : undefined,
         })),
       },
@@ -293,5 +295,45 @@ describe('MVP desktop interface', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Go to page 2' }))
     expect(screen.getByRole('article', { name: 'Item 59' })).toBeInTheDocument()
     expect(screen.queryByRole('article', { name: 'Item 00' })).not.toBeInTheDocument()
+  })
+
+  it('shows the unit price, and the stack total only when more than one is owned', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    render(<App/>)
+    const single = await screen.findByRole('article', { name: 'Lex Prime Receiver' })
+    expect(within(single).getByText('19p')).toBeInTheDocument()
+    expect(within(single).queryByText(/total/)).not.toBeInTheDocument()
+
+    const stack = await screen.findByRole('article', { name: 'Lith A1 Relic' })
+    expect(within(stack).getByText('20p')).toBeInTheDocument()
+    expect(within(stack).getByText('140p total')).toBeInTheDocument()
+  })
+
+  it('says nothing rather than zero for an item with no price', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    render(<App/>)
+    const unpriced = await screen.findByRole('article', { name: 'Rhino' })
+    expect(within(unpriced).queryByText(/p$/)).not.toBeInTheDocument()
+  })
+
+  // A live price and a day-old median are different measurements. Showing them in the same column
+  // with nothing to tell them apart invites a comparison that was never valid.
+  it('distinguishes a live price from a dump price', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    render(<App/>)
+    const live = await screen.findByRole('article', { name: 'Lith A1 Relic' })
+    const dump = await screen.findByRole('article', { name: 'Lex Prime Receiver' })
+
+    expect(within(live).getByText('Live')).toBeInTheDocument()
+    expect(within(dump).queryByText('Live')).not.toBeInTheDocument()
+  })
+
+  it('prices one item live when it is selected', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: /Price Lex Prime Receiver live/ }))
+
+    expect(backend.refreshPrices).toHaveBeenCalledWith(['lex-prime-receiver'])
   })
 })
