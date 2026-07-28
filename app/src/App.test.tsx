@@ -384,7 +384,7 @@ describe('MVP desktop interface', () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App/>)
     const worth = await screen.findByTestId('band-worth')
-    expect(within(worth).getByText('159')).toBeInTheDocument()
+    expect(within(worth).getByText('159p'), 'the worth is platinum, in a row of plain counts').toBeInTheDocument()
     expect(within(worth).getByText(/3 of 9 items priced/)).toBeInTheDocument()
   })
 

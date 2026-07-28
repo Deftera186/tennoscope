@@ -19,9 +19,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CatalogIndex, CollectionPriceCache, GameProcess, InventoryAcquirer,
-    InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, ProcessDiscovery,
-    RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner,
-    WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current,
+    InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, PriceDumpError,
+    ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry,
+    RewardMemoryScanner, WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current,
 };
 use warframe_domain::RewardCandidate;
 
@@ -1517,11 +1517,17 @@ fn start_collection_prices(shared: SharedRuntime) {
                     let _ = runtime.core.record_collection_prices_ready(priced, date);
                 }
             }
-            Err(_) => {
+            Err(error) => {
+                // A dump that could not be read and a disk that could not be written are different
+                // problems with different fixes, and only one of them is warframe.market's.
+                let message = match error {
+                    PriceDumpError::Malformed => "No warframe.market price dump could be read",
+                    PriceDumpError::CacheWrite => {
+                        "Prices loaded but could not be saved for the next start"
+                    }
+                };
                 if let Ok(mut runtime) = shared.lock() {
-                    let _ = runtime.core.record_collection_prices_degraded(
-                        "No warframe.market price dump could be read",
-                    );
+                    let _ = runtime.core.record_collection_prices_degraded(message);
                 }
             }
         }

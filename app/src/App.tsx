@@ -308,7 +308,7 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
       <BandCell kind="items" value={view.collection.total_entries} label="Items tracked" note={`${owned} currently owned`}/>
       <BandCell kind="mastered" value={mastered} label="Mastered" note={masteryEligible.length ? `${Math.round(mastered / masteryEligible.length * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
       <BandCell kind="missing" value={missing} label="Missing" note="From known collection data"/>
-      <BandCell kind="worth" value={worth} label="Collection worth" note={`${priced.length} of ${view.collection.items.length} items priced`}/>
+      <BandCell kind="worth" value={worth} unit="p" label="Collection worth" note={`${priced.length} of ${view.collection.items.length} items priced`}/>
     </div>
 
     <div className="register">
@@ -366,7 +366,7 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
 
       {filtered.length
         ? <>
-          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} onPriceLive={id => onPriceLive([id])}/></li>)}</ul>
+          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} pricing={pricing} onPriceLive={id => onPriceLive([id])}/></li>)}</ul>
           <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
         </>
         : <EmptyState
@@ -377,15 +377,16 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
   </section>
 }
 
-function BandCell({ kind, value, label, note }: { kind: string; value: number; label: string; note: string }) {
+// The worth cell sits in a row of plain counts, where a bare number reads as one more count.
+function BandCell({ kind, value, unit = '', label, note }: { kind: string; value: number; unit?: string; label: string; note: string }) {
   return <div className={`band-cell ${kind}`} data-summary={kind} data-testid={`band-${kind}`}>
-    <span className="band-figure">{value}</span>
+    <span className="band-figure">{value}{unit}</span>
     <span className="band-label">{label}</span>
     <p className="band-note">{note}</p>
   </div>
 }
 
-function CollectionEntry({ item, onPriceLive }: { item: CollectionItem; onPriceLive: (id: string) => void }) {
+function CollectionEntry({ item, pricing, onPriceLive }: { item: CollectionItem; pricing: boolean; onPriceLive: (id: string) => void }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
   return <article className={`entry cat-${item.category}`} aria-label={item.name}>
@@ -412,6 +413,9 @@ function CollectionEntry({ item, onPriceLive }: { item: CollectionItem; onPriceL
     <button
       type="button"
       className="price-check"
+      // A second request while one is in flight would leave `pricing` stuck on when the first
+      // returns, with the button reading "Pricing..." over nothing.
+      disabled={pricing}
       aria-label={`Price ${item.name} live`}
       onClick={() => onPriceLive(item.id)}
     >Check</button>
