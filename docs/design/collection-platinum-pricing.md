@@ -21,7 +21,9 @@ Measured on 2026-07-29, and the source of the constants and rules below.
 | `sell` statistics present | 3,831 of 3,835 items | The field the collection reads |
 | `closed` statistics present | 2,489 of 3,835 items | Rejected as primary: a third of the collection would show nothing |
 | Newest dump on 2026-07-29 | `price_history_2026-07-27.json` | The fetcher walks back from today; the data is a day or two old by construction |
-| Four name rules, no manifest | 3,365 of 3,835 items resolved | Name matching alone is enough |
+| Three name rules, no manifest | 2,940 of 3,835 dump items reachable from the 15,972 catalog names | Name matching alone is enough |
+| A fourth rule appending ` Blueprint` | 25 firings against a real 1,106-item collection, 25 of them wrong, 0 right | Rejected: it prices built equipment at its blueprint's listing |
+| Prime parts in that collection | 75 of 75 resolved by rule 1 | The rejected rule had nothing left to reach |
 | `/v2/items` manifest on top | 257 more, 228 of them sets | Rejected: its entire contribution is items that must not be priced |
 | Mirage Prime Systems, dump median sell | 20p, against 19p live from an online seller | The daily median tracks the live number closely |
 | Mirage Prime Systems, dump minimum sell | 10p | Rejected: the day's cheapest listing includes offline lowballers |
@@ -51,15 +53,22 @@ price two days old is the correct precision for a question about what a collecti
 
 ## Name Resolution
 
-The dump is keyed by warframe.market's English names and the collection by WFCD's. Four rules close
+The dump is keyed by warframe.market's English names and the collection by WFCD's. Three rules close
 the gap, in order, with no network call between them:
 
 1. The name as it stands.
-2. The name with ` Blueprint` appended, reconciling `Zephyr Prime Chassis` with `Zephyr Prime Chassis Blueprint`.
-3. The name with ` Blueprint` removed, for the mirror case.
-4. A relic's refinement suffix -- `Intact`, `Exceptional`, `Flawless`, `Radiant` -- replaced by ` Relic`, reconciling `Axi A1 Radiant` with `Axi A1 Relic`.
+2. The name with ` Blueprint` removed, reconciling `Forma Blueprint` with `Forma`.
+3. A relic's refinement suffix -- `Intact`, `Exceptional`, `Flawless`, `Radiant` -- replaced by ` Relic`, reconciling `Axi A1 Radiant` with `Axi A1 Relic`.
 
-Rule 4 recovers 772 relics that no other rule reaches, at the cost of one known imprecision: the
+There is deliberately no mirror of rule 2 appending ` Blueprint`. It looks symmetrical and it is not:
+the names it reaches are *built* equipment, and a built Warframe is not a thing anybody can sell.
+Measured against a real 1,106-item collection it fired 25 times -- `Ash Prime` at its blueprint's
+14p, `Octavia Prime` at 50p, `Banshee Prime` at 10p on an item the player does not own -- and was
+wrong all 25 times, with no correct firing anywhere in the collection. Every prime part the player
+can actually sell is in the dump under its own name and resolves by rule 1. Dropping the
+rule took the collection from 266 priced items to 241, and all 25 lost were false prices.
+
+Rule 3 recovers 772 relics that no other rule reaches, at the cost of one known imprecision: the
 dump prices a relic without regard to refinement, so all four tiers of `Axi A1` read the same. A
 radiant relic is worth more than an intact one and this design does not say so. That is a real
 loss, accepted because the alternative is pricing no relics at all.

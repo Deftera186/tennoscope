@@ -31,7 +31,12 @@ fn core_with_items(entries: Vec<InventoryEntry>) -> AppCore {
 fn a_priced_item_carries_its_platinum_into_the_view() {
     let mut core = core_with_items(vec![
         item("/a", "Serration", Category::Resource, 1),
-        item("/b", "Mirage Prime Systems", Category::PrimePart, 3),
+        item(
+            "/b",
+            "Mirage Prime Systems Blueprint",
+            Category::PrimePart,
+            3,
+        ),
     ]);
     core.set_collection_prices(Arc::new(
         PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("fixture parses"),
@@ -49,7 +54,7 @@ fn a_priced_item_carries_its_platinum_into_the_view() {
         prices,
         vec![
             ("Serration".to_owned(), Some(50)),
-            ("Mirage Prime Systems".to_owned(), Some(20)),
+            ("Mirage Prime Systems Blueprint".to_owned(), Some(20)),
         ]
     );
 }
@@ -132,7 +137,12 @@ fn an_item_with_no_live_price_falls_back_to_the_dump_unmarked() {
 fn only_the_named_items_are_resolved_for_a_live_lookup() {
     let mut core = core_with_items(vec![
         item("/a", "Serration", Category::Resource, 1),
-        item("/b", "Mirage Prime Systems", Category::PrimePart, 3),
+        item(
+            "/b",
+            "Mirage Prime Systems Blueprint",
+            Category::PrimePart,
+            3,
+        ),
     ]);
     core.set_collection_prices(Arc::new(
         PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("fixture parses"),

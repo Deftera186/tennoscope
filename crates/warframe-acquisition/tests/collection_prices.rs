@@ -30,10 +30,25 @@ fn a_sell_median_becomes_the_price() {
     assert_eq!(table().price_for("Serration"), Some(50));
 }
 
-/// The dump names the blueprint; the catalog names the part. Neither is wrong, so both resolve.
+/// Built equipment must not borrow its blueprint's price. Measured against a real 1,106-item
+/// collection, appending " Blueprint" fired 25 times and was wrong 25 times: a mastered `Ash Prime`
+/// priced at what somebody asks for the blueprint, an item you cannot sell at all. Every prime part
+/// in that collection is in the dump under its own name and resolves by rule 1, so nothing is lost.
 #[test]
-fn a_part_resolves_to_its_blueprint_listing() {
-    assert_eq!(table().price_for("Mirage Prime Systems"), Some(20));
+fn built_equipment_is_not_priced_from_its_blueprint_listing() {
+    let dump = r#"{
+        "Ash Prime Blueprint": [{"order_type":"sell","median":14.0,"volume":22}],
+        "Ash Prime Set": [{"order_type":"sell","median":110.0,"volume":8}]
+    }"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses");
+
+    assert_eq!(table.price_for("Ash Prime"), None);
+    assert_eq!(table.market_name("Ash Prime"), None);
+    assert_eq!(
+        table.price_for("Ash Prime Blueprint"),
+        Some(14),
+        "the part the player can actually sell keeps its price"
+    );
 }
 
 #[test]
@@ -60,7 +75,10 @@ fn every_relic_refinement_resolves_to_the_one_relic_listing() {
 
 #[test]
 fn a_median_is_rounded_to_whole_platinum() {
-    assert_eq!(table().price_for("Zephyr Prime Chassis"), Some(28));
+    assert_eq!(
+        table().price_for("Zephyr Prime Chassis Blueprint"),
+        Some(28)
+    );
 }
 
 /// An item nobody is selling has no sell record. It is unpriced, not free.
@@ -88,7 +106,7 @@ fn resolution_yields_the_market_name_the_live_lookup_needs() {
     let table = table();
     assert_eq!(table.market_name("Axi A1 Radiant"), Some("Axi A1 Relic"));
     assert_eq!(
-        table.market_name("Mirage Prime Systems"),
+        table.market_name("Mirage Prime Systems Blueprint"),
         Some("Mirage Prime Systems Blueprint")
     );
     assert_eq!(table.market_name("Serration"), Some("Serration"));

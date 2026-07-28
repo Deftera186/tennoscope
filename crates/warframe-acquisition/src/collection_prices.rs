@@ -58,13 +58,16 @@ impl PriceTable {
     /// warframe.market's own name for an item the catalog calls `name`.
     ///
     /// The catalog's name and the market's are usually the same string, and where they are not the
-    /// difference is one of three known shapes rather than a fuzzy match. What comes back is what
+    /// difference is one of two known shapes rather than a fuzzy match. What comes back is what
     /// the live lookup builds its slug from, so this is the identity map as much as the price map.
+    ///
+    /// There is deliberately no rule appending ` Blueprint`. Measured against a real 1,106-item
+    /// collection it fired 25 times and was wrong every time: it matches *built* equipment against
+    /// its blueprint's listing, pricing an `Ash Prime` the player has mastered at what somebody
+    /// asks for the blueprint. A built Warframe cannot be sold, only its parts can, and every one
+    /// of that collection's prime parts is in the dump under its own name already.
     pub fn market_name(&self, name: &str) -> Option<&str> {
         if let Some((key, _)) = self.prices.get_key_value(name) {
-            return Some(key);
-        }
-        if let Some((key, _)) = self.prices.get_key_value(&format!("{name} Blueprint")) {
             return Some(key);
         }
         if let Some(base) = name.strip_suffix(" Blueprint")
