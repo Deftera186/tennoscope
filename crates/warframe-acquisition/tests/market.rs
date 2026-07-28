@@ -1,7 +1,10 @@
-use std::time::Duration;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use warframe_acquisition::{
-    MarketPriceCache, MarketPriceSource, PriceLookup, lowest_sell_top, market_slug,
+    MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, lowest_sell_top, market_slug,
 };
 
 /// Verified against the live warframe.market v2 API for every reward name observed in a real run.
@@ -150,6 +153,52 @@ fn a_warmed_price_is_not_requested_again() {
         vec!["Braton Prime Blueprint", "Trumna Prime Barrel"],
         "the cached name must not be requested a second time"
     );
+}
+
+/// Three call paths share one cache -- the relic pool warm, a collection page refresh and the
+/// reward screen's fill -- and any two can run at once. Pacing each caller separately puts twice
+/// the documented rate on the API, so the floor has to belong to the cache, not to the caller.
+/// The reward fill asks for no gap of its own and must still not be able to breach it.
+#[test]
+fn two_concurrent_warms_cannot_out_pace_the_shared_floor() {
+    let market = Arc::new(StampingMarket::default());
+    let cache = MarketPriceCache::new();
+
+    std::thread::scope(|scope| {
+        for names in [
+            names(&["Ash Prime Blueprint", "Nikana Prime Blade"]),
+            names(&["Volt Prime Chassis Blueprint", "Soma Prime Barrel"]),
+        ] {
+            let market = Arc::clone(&market);
+            let cache = cache.clone();
+            scope.spawn(move || {
+                cache.warm(market.as_ref(), &names, Duration::ZERO);
+            });
+        }
+    });
+
+    let stamps = market.stamps.lock().unwrap().clone();
+    assert_eq!(stamps.len(), 4);
+    for pair in stamps.windows(2) {
+        let apart = pair[1].duration_since(pair[0]);
+        assert!(
+            apart >= MARKET_MIN_GAP,
+            "requests {apart:?} apart, under the {MARKET_MIN_GAP:?} floor"
+        );
+    }
+}
+
+/// Records when each request was made, so a test can measure the spacing rather than trust it.
+#[derive(Default)]
+struct StampingMarket {
+    stamps: std::sync::Mutex<Vec<Instant>>,
+}
+
+impl MarketPriceSource for StampingMarket {
+    fn lowest_sell(&self, _name: &str) -> PriceLookup {
+        self.stamps.lock().unwrap().push(Instant::now());
+        PriceLookup::NoSellers
+    }
 }
 
 /// Forma is untradeable and an unreachable API looks identical from here. Storing either as a

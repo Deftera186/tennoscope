@@ -118,8 +118,14 @@ clicked.
 Live prices land in the cache the overlay already keeps, keyed by name with a fifteen-minute life,
 so a relic pool warmed during a mission also prices those items in the collection, and an item
 priced in the collection is already warm if it appears on a reward screen. One live cache, two
-readers. The paced refresh is the `warm` function that cache already has; the only change it needs
-is a gap of 334ms rather than today's 250ms, which is above the documented three per second.
+readers. The paced refresh is the `warm` function that cache already has.
+
+The three requests a second are the *client's* budget, not each caller's, so the pacing lives in
+the cache rather than in any caller. Three call paths share it -- the pool warm, the page refresh
+and the reward screen's fill -- and any two can overlap; each politely waiting 334ms of its own
+would still have put six or nine requests a second on the API. Every request claims a slot from one
+shared clock before it leaves, so a caller in a hurry (the reward fill, which has fifteen seconds of
+screen and skips its own extra delay) can spend the budget sooner but cannot exceed it.
 
 The valuation stays on the dump. The value sort and the collection worth need every item priced to
 mean anything, and live-pricing hundreds of items to compute a total is exactly the behavior the API

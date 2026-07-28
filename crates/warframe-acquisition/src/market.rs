@@ -155,6 +155,14 @@ impl MarketPriceSource for WarframeMarketHttp {
 /// mission, so this only exists to stop a session left running overnight from quoting yesterday.
 const PRICE_TTL: Duration = Duration::from_secs(15 * 60);
 
+/// The closest together two requests may leave this process, whatever the caller asked for.
+///
+/// warframe.market documents three per second for the public API. That is a limit on the client,
+/// not on one caller: the relic pool warm, a collection page refresh and a reward screen fill all
+/// share this cache and can run at once, and three callers each politely pacing themselves at
+/// 334ms is still nine requests a second arriving at the API.
+pub const MARKET_MIN_GAP: Duration = Duration::from_millis(334);
+
 /// Prices already looked up, so the reward screen does not wait on requests that could have been
 /// made minutes earlier.
 ///
@@ -171,6 +179,9 @@ const PRICE_TTL: Duration = Duration::from_secs(15 * 60);
 #[derive(Clone, Default)]
 pub struct MarketPriceCache {
     entries: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
+    /// When the last request left this process, shared by every caller so the rate limit is the
+    /// client's rather than each caller's own.
+    last_request: Arc<Mutex<Option<Instant>>>,
 }
 
 impl MarketPriceCache {
@@ -190,22 +201,38 @@ impl MarketPriceCache {
         }
     }
 
-    /// Price every name not already held, pausing `gap` between requests.
+    /// Block until a request may be sent, then claim that slot.
+    ///
+    /// The claim is made under the lock and before the request is sent, so two threads arriving
+    /// together are spaced rather than both cleared: the second one waits out the first's slot.
+    fn take_request_slot(&self, gap: Duration) {
+        let gap = gap.max(MARKET_MIN_GAP);
+        let Ok(mut last) = self.last_request.lock() else {
+            // A poisoned lock is not a licence to flood the API.
+            std::thread::sleep(gap);
+            return;
+        };
+        if let Some(previous) = *last
+            && let Some(remaining) = gap.checked_sub(previous.elapsed())
+        {
+            std::thread::sleep(remaining);
+        }
+        *last = Some(Instant::now());
+    }
+
+    /// Price every name not already held, keeping requests at least `gap` apart.
     ///
     /// The gap is what keeps a pool of two dozen names from arriving at warframe.market as a burst.
     /// There is no hurry -- the whole point is that this runs minutes early -- so it is cheap to be
-    /// polite. Returns how many new prices were stored.
+    /// polite. A caller in a hurry may pass `Duration::ZERO` to skip its own extra politeness, but
+    /// `MARKET_MIN_GAP` still applies across every caller. Returns how many new prices were stored.
     pub fn warm(&self, source: &dyn MarketPriceSource, names: &[String], gap: Duration) -> usize {
         let mut stored = 0;
-        let mut requested = false;
         for name in names {
             if self.get(name).is_some() {
                 continue;
             }
-            if requested && !gap.is_zero() {
-                std::thread::sleep(gap);
-            }
-            requested = true;
+            self.take_request_slot(gap);
             if let PriceLookup::Priced(price) = source.lowest_sell(name) {
                 self.insert(name, price);
                 stored += 1;

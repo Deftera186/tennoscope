@@ -43,9 +43,6 @@ const POLLER_WATCH_INTERVAL: Duration = Duration::from_millis(400);
 const POLLER_GONE_STREAK: u32 = 2;
 /// Upper bound on how long a single fissure mission is worth watching for.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
-/// Pause between live price requests. warframe.market's documented public limit is three per
-/// second; 250ms was four, which was over it.
-const MARKET_WARM_GAP: Duration = Duration::from_millis(334);
 
 mod monitor;
 mod overlay_window;
@@ -215,7 +212,7 @@ async fn refresh_prices(
             )
         };
         if let Some(market) = warframe_acquisition::WarframeMarketHttp::new() {
-            cache.warm(&market, &names, MARKET_WARM_GAP);
+            cache.warm(&market, &names, warframe_acquisition::MARKET_MIN_GAP);
         }
         shared
             .lock()
@@ -1352,7 +1349,7 @@ fn spawn_market_price_warm(pool: &[RewardCatalogEntry], price_cache: &MarketPric
     let price_cache = price_cache.clone();
     std::thread::spawn(move || {
         if let Some(market) = warframe_acquisition::WarframeMarketHttp::new() {
-            price_cache.warm(&market, &names, MARKET_WARM_GAP);
+            price_cache.warm(&market, &names, warframe_acquisition::MARKET_MIN_GAP);
         }
     });
 }
