@@ -8,6 +8,7 @@ use zeroize::Zeroizing;
 mod authorization;
 mod catalog;
 mod catalog_cache;
+mod collection_prices;
 mod inventory;
 #[cfg(target_os = "linux")]
 mod linux_proc;
@@ -24,6 +25,7 @@ pub use catalog_cache::{
     RelicCatalogCache, RelicCatalogLoad, RelicCatalogSource, WFCD_ALL_JSON_URL,
     WFCD_RELICS_JSON_URL, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
+pub use collection_prices::{PriceDumpError, PriceTable};
 pub use inventory::{
     INVENTORY_ENDPOINT, InventoryHttpTransport, InventoryJsonDecoder, MAX_INVENTORY_RESPONSE_BYTES,
 };
