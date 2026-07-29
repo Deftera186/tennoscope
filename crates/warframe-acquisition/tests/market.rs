@@ -268,3 +268,42 @@ fn an_unpriced_name_is_retried_rather_than_cached_as_a_failure() {
     assert_eq!(cache.get("Forma Blueprint"), None);
     assert_eq!(market.asked().len(), 2, "a miss must not be cached");
 }
+
+/// `platinum` is the price for a whole trade of `perTrade` units, not for one unit. Relic sellers
+/// routinely list six at a time, so comparing a six-pack's total against a single's price ranks
+/// two different quantities as if they were the same thing.
+#[test]
+fn a_bulk_listing_is_quoted_per_unit_not_per_trade() {
+    let body = r#"{"data":{"sell":[
+        {"platinum":20,"perTrade":1,"visible":true,"user":{"status":"ingame"}},
+        {"platinum":18,"perTrade":6,"visible":true,"user":{"status":"ingame"}}
+    ],"buy":[]}}"#;
+    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(3));
+}
+
+/// A listing with no `perTrade` field is a single, not a free item.
+#[test]
+fn a_listing_without_a_per_trade_count_is_one_unit() {
+    let body = r#"{"data":{"sell":[
+        {"platinum":25,"visible":true,"user":{"status":"ingame"}}
+    ],"buy":[]}}"#;
+    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(25));
+}
+
+/// Integer division would report a 5-for-12 listing at 2p and understate every bulk seller.
+#[test]
+fn a_per_unit_price_rounds_rather_than_truncating() {
+    let body = r#"{"data":{"sell":[
+        {"platinum":12,"perTrade":5,"visible":true,"user":{"status":"ingame"}}
+    ],"buy":[]}}"#;
+    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(2));
+}
+
+/// A malformed `perTrade` of zero must not divide by zero or price the item at nothing.
+#[test]
+fn a_zero_per_trade_count_is_treated_as_one() {
+    let body = r#"{"data":{"sell":[
+        {"platinum":30,"perTrade":0,"visible":true,"user":{"status":"ingame"}}
+    ],"buy":[]}}"#;
+    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(30));
+}

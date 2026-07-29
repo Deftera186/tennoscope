@@ -70,6 +70,10 @@ struct TopOrders {
     sell: Vec<Order>,
 }
 
+fn one() -> u32 {
+    1
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Order {
@@ -77,6 +81,10 @@ struct Order {
     #[serde(default)]
     visible: bool,
     user: OrderUser,
+    /// How many units one trade moves. `platinum` is the price of that whole trade, so a seller
+    /// listing six relics for 18p is asking 3p each, not 18p each.
+    #[serde(default = "one")]
+    per_trade: u32,
 }
 
 #[derive(Deserialize)]
@@ -94,7 +102,14 @@ pub fn lowest_sell_top(body: &[u8]) -> PriceLookup {
         .sell
         .into_iter()
         .filter(|order| order.visible && order.user.status == "ingame")
-        .map(|order| order.platinum)
+        .map(|order| {
+            // `platinum` buys `perTrade` units, so the per-unit price is the quotient. Rounded to
+            // nearest rather than truncated: 12p for five is 2.4p each, and truncation would quote
+            // 2p and understate every bulk seller. A malformed count of zero is treated as one
+            // rather than dividing by it.
+            let per_trade = order.per_trade.max(1);
+            (order.platinum + per_trade / 2) / per_trade
+        })
         .min()
         .map_or(PriceLookup::NoSellers, PriceLookup::Priced)
 }

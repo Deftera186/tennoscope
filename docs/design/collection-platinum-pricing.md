@@ -27,6 +27,7 @@ Measured on 2026-07-29, and the source of the constants and rules below.
 | `/v2/items` manifest on top | 257 more, 228 of them sets | Rejected: its entire contribution is items that must not be priced |
 | Mirage Prime Systems, dump median sell | 20p, against 19p live from an online seller | The daily median tracks the live number closely |
 | Mirage Prime Systems, dump minimum sell | 10p | Rejected: the day's cheapest listing includes offline lowballers |
+| Relic sell orders with `perTrade > 1` | 5–29% of orders, typically `perTrade: 6` | Prices are per unit after dividing by trade size |
 
 The rejected manifest is the load-bearing negative result. Its unique contribution is warframe.market
 *sets* -- `Vectis Prime Set`, `Xiphos Set` -- which exist as market listings but never as inventory
@@ -118,6 +119,11 @@ on. Two triggers, both deliberate:
 Neither is a background sweep. Nothing is fetched that the player did not ask about, which is what
 keeps a feature that could have cost hundreds of requests down to the handful somebody deliberately
 clicked.
+
+A quoted price is per unit, derived from the warframe.market order's `platinum` field divided by
+its `perTrade` count. Most sell orders are for a single item, but relic sellers routinely list six
+at a time; quoting a six-pack's total as a single item's price would rank two different quantities
+as though they were the same thing.
 
 Live prices land in the cache the overlay already keeps, keyed by name with a fifteen-minute life,
 so a relic pool warmed during a mission also prices those items in the collection, and an item
