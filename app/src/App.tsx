@@ -307,11 +307,22 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
   const visibleItems = pageItems(filtered, currentPage)
   const firstResult = filtered.length ? (currentPage - 1) * COLLECTION_PAGE_SIZE + 1 : 0
   const lastResult = Math.min(currentPage * COLLECTION_PAGE_SIZE, filtered.length)
-  const pricedVisibleIds = visibleItems.filter(item => item.platinum !== undefined).map(item => item.id)
+  // What the refresh can *attempt*, not what already has a number. Relics carry no daily price by
+  // design, so anything the startup sweep missed -- an outage, a first run, one acquired since --
+  // is unpriced, and excluding unpriced items would close the manual path against exactly the items
+  // that need it. The backend drops whatever it cannot resolve to a market name, so the request
+  // list stays bounded either way. Quantity 0 is not owned and is never priced.
+  const pricableVisibleIds = visibleItems.filter(item => item.quantity > 0).map(item => item.id)
   // Real progress, not a spinner: the page-level price request writes into the live cache as each
   // item lands, and the 2.5s poll already surfaces that -- so "done" is just how many of the
   // requested ids are currently live, not a client-side timer standing in for the real state.
-  const pricingDone = pricingIds.length ? view.collection.items.filter(item => pricingIds.includes(item.id) && item.live).length : 0
+  // Items already live when the click happened are not work this pass did, so neither end of the
+  // readout counts them.
+  const pricedBeforeClick = useRef<string[]>([])
+  const pricingTotal = pricingIds.filter(id => !pricedBeforeClick.current.includes(id)).length
+  const pricingDone = pricingIds.length
+    ? view.collection.items.filter(item => pricingIds.includes(item.id) && item.live && !pricedBeforeClick.current.includes(item.id)).length
+    : 0
   const dumpDate = view.health.collection_prices.last_success
   useEffect(() => setPage(1), [search, category, ownership, sort])
   useEffect(() => setPage(value => clampPage(value, filtered.length)), [filtered.length])
@@ -374,9 +385,12 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
           <button
             type="button"
             className="stamp"
-            disabled={pricing || pricedVisibleIds.length === 0}
-            onClick={() => onPriceLive(pricedVisibleIds)}
-          ><span role={pricing ? 'status' : undefined}>{pricing ? `Pricing ${pricingDone} of ${pricingIds.length}…` : `Price these ${pricedVisibleIds.length}`}</span></button>
+            disabled={pricing || pricableVisibleIds.length === 0}
+            onClick={() => {
+              pricedBeforeClick.current = visibleItems.filter(item => item.live).map(item => item.id)
+              onPriceLive(pricableVisibleIds)
+            }}
+          ><span role={pricing ? 'status' : undefined}>{pricing ? `Pricing ${pricingDone} of ${pricingTotal}…` : `Price these ${pricableVisibleIds.length}`}</span></button>
           <span>{firstResult}–{lastResult} of {filtered.length}</span>
         </div>
       </div>
@@ -425,7 +439,7 @@ function CollectionEntry({ item }: { item: CollectionItem }) {
           {item.quantity > 1 && <em>{stackValue(item)}p total</em>}
         </span>}
       </div>
-      {item.live && <p className="freshness">checked just now</p>}
+      {item.live && <p className="freshness">checked live</p>}
     </div>
   </article>
 }

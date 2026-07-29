@@ -239,6 +239,19 @@ describe('MVP desktop interface', () => {
     expect(backend.getView).toHaveBeenCalledTimes(3)
   })
 
+  // The readout is progress, so it starts at nothing done. Counting items that were already live
+  // before the click made it open partway along and never reach its own total.
+  it('counts only the pricing this click asked for', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.refreshPrices.mockImplementationOnce(() => new Promise(() => {}))
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: /Price these 8/ }))
+
+    // Eight owned items on the page, one of them (Lith A1 Relic) already live.
+    expect(await screen.findByText(/Pricing 0 of 7/)).toBeInTheDocument()
+  })
+
   it('stops scheduled polling after unmount', async () => {
     vi.useFakeTimers()
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
@@ -355,12 +368,26 @@ describe('MVP desktop interface', () => {
   })
 
   // Someone who clicks it should not have to guess whether it prices the page or the collection.
-  // The fixture's visible page carries three priced items: Lex Prime Receiver, Lith A1 Relic, and
-  // Zenith Prime Receiver (priced at 0p, still a real listing).
+  // The fixture's visible page carries eight owned items; only the quantity-0 Forma Blueprint is
+  // left out, because an item the player does not own is never priced.
   it('names how many items the refresh will price', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App/>)
-    expect(await screen.findByRole('button', { name: /Price these 3/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Price these 8/ })).toBeInTheDocument()
+  })
+
+  // Relics have no daily price by design, so a relic the startup sweep missed is unpriced -- and an
+  // unpriced item is precisely the one a manual refresh exists for. Sending only already-priced
+  // items would close the recovery path against the items that need it.
+  it('offers to price an owned item that has no price yet, and never an unowned one', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: /Price these/ }))
+
+    const requested = backend.refreshPrices.mock.calls[0][0]
+    expect(requested).toContain('rhino')             // owned, no price yet
+    expect(requested).not.toContain('forma-blueprint') // quantity 0, not owned
   })
 
   // Sorting by stack value answers "where is my platinum"; sorting by unit price answers "what is
@@ -384,6 +411,7 @@ describe('MVP desktop interface', () => {
     const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
     expect(names[0]).toBe('Ash Prime Blueprint')  // 45p × 1
     expect(names[1]).toBe('Lith A1 Relic')        // 20p × 7 = 140 total, but 20p each
+    expect(names[2]).toBe('Lex Prime Receiver')   // 19p, below the relic it outranks by stack value
     // Zenith is priced at 0 -- it must rank above every unpriced item, not tie with them.
     expect(names[3]).toBe('Zenith Prime Receiver')
     expect(names.at(-1)).toBe('Rhino')
