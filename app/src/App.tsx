@@ -381,7 +381,10 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
           >{filter[0].toUpperCase() + filter.slice(1)}</button>)}
         </div>
         <div className="provenance-row">
-          <span className="register-line">{dumpDate ? `Prices from the ${shortDumpDate(dumpDate)} market summary` : 'No price summary loaded yet'}</span>
+          <div className="register-status">
+            <span className="register-line">{dumpDate ? `Prices from the ${shortDumpDate(dumpDate)} market summary` : 'No price summary loaded yet'}</span>
+            <span className="register-line">{firstResult}–{lastResult} of {filtered.length}</span>
+          </div>
           <button
             type="button"
             className="stamp"
@@ -391,7 +394,6 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
               onPriceLive(pricableVisibleIds)
             }}
           ><span role={pricing ? 'status' : undefined}>{pricing ? `Pricing ${pricingDone} of ${pricingTotal}…` : `Price these ${pricableVisibleIds.length}`}</span></button>
-          <span>{firstResult}–{lastResult} of {filtered.length}</span>
         </div>
       </div>
 

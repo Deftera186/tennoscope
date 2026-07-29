@@ -264,9 +264,16 @@
 .tally button[aria-pressed="true"] { color: var(--platinum); background: var(--raised); box-shadow: var(--strike); }
 
 /* The provenance line states the baseline once, so no card needs a legend to explain a price's
-   date or authority. The refresh control sits beside the range readout, not above it, because
-   both answer "what am I looking at right now" for this one page. */
+   date or authority. It and the range readout are one statement -- which day these prices are
+   from, and which slice of the register is on screen -- so they sit together and the control
+   anchors the end of the row, where an action is expected and where it is still adjacent to the
+   range that scopes it. An action between two status phrases broke a line meant to read as one. */
 .provenance-row { display: flex; align-items: center; justify-content: space-between; gap: var(--step); flex-wrap: wrap; }
+/* The engraved hairline separates the two readings, the same device that sets the masthead's
+   date letter apart, rather than a punctuation mark borrowed from prose. Held on one line: the
+   narrow layout stacks the pair instead, where a hairline would have nothing to divide. */
+.register-status { display: flex; align-items: center; gap: var(--step); flex-wrap: nowrap; white-space: nowrap; }
+.register-status > * + * { padding-left: var(--step); border-left: 1px solid var(--rule); }
 
 /* Entries are separated by the sheet's own rules, not by borders of their own. */
 /* Rules are drawn by the cells, not by a background showing through 1px gaps. A
@@ -631,5 +638,7 @@
   .tally { width: 100%; }
   .tally button { flex: 1; padding-inline: .3rem; }
   .provenance-row { flex-direction: column; align-items: flex-start; }
+  .register-status { flex-direction: column; align-items: flex-start; gap: var(--hair); }
+  .register-status > * + * { padding-left: 0; border-left: 0; }
   .metals { gap: var(--tight); }
 }
