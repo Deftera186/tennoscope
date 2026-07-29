@@ -106,9 +106,10 @@ pub fn lowest_sell_top(body: &[u8]) -> PriceLookup {
             // `platinum` buys `perTrade` units, so the per-unit price is the quotient. Rounded to
             // nearest rather than truncated: 12p for five is 2.4p each, and truncation would quote
             // 2p and understate every bulk seller. A malformed count of zero is treated as one
-            // rather than dividing by it.
+            // rather than dividing by it. Floored at 1p because a bulk listing that rounds to zero
+            // -- 1p for six -- renders as "0p", which reads as free rather than as cheap.
             let per_trade = order.per_trade.max(1);
-            (order.platinum + per_trade / 2) / per_trade
+            ((order.platinum + per_trade / 2) / per_trade).max(1)
         })
         .min()
         .map_or(PriceLookup::NoSellers, PriceLookup::Priced)
@@ -277,16 +278,23 @@ impl WarmOutcome {
     ///
     /// Oversize outranks everything: it does not fix itself, it hits every item at once, and as an
     /// absent price it presents as "the whole collection is worthless" with nothing saying
-    /// otherwise. A pass that priced something and merely found one item unsold is not news.
+    /// otherwise. An unreachable endpoint is reported whether or not the pass priced anything --
+    /// a 65-relic sweep that lost half its prices to an outage is not a healthy pass, and reading
+    /// Ready off it is how a player concludes those relics are simply worthless. A pass that priced
+    /// something and merely found an item unsold is not news.
     pub fn failure(self) -> Option<&'static str> {
         if self.oversize > 0 {
             return Some("warframe.market responses are over the size cap; no price can be read");
         }
+        if self.unavailable > 0 {
+            return Some(if self.stored > 0 {
+                "warframe.market answered for only some items; the rest are unpriced"
+            } else {
+                "warframe.market could not be reached"
+            });
+        }
         if self.stored > 0 {
             return None;
-        }
-        if self.unavailable > 0 {
-            return Some("warframe.market could not be reached");
         }
         (self.no_sellers > 0).then_some("No live warframe.market sellers for these items")
     }

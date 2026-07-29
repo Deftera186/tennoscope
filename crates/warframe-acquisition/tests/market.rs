@@ -4,7 +4,8 @@ use std::{
 };
 
 use warframe_acquisition::{
-    MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, lowest_sell_top, market_slug,
+    MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, WarmOutcome, lowest_sell_top,
+    market_slug,
 };
 
 /// Verified against the live warframe.market v2 API for every reward name observed in a real run.
@@ -255,6 +256,32 @@ fn a_pass_that_priced_something_reports_nothing_to_the_health_row() {
     assert_eq!(outcome.failure(), None);
 }
 
+/// An outage partway through a 65-relic sweep leaves most of the collection priced and the rest
+/// silently unpriced. Reporting Ready because *something* was stored tells the player those relics
+/// are worthless, when the truth is that nobody could ask.
+#[test]
+fn a_pass_that_reached_the_api_for_only_some_items_still_reports_it() {
+    let partial = WarmOutcome {
+        stored: 30,
+        unavailable: 35,
+        ..WarmOutcome::default()
+    };
+
+    assert!(
+        partial.failure().is_some(),
+        "half a sweep lost to an outage is not a healthy pass"
+    );
+    assert_ne!(
+        partial.failure(),
+        WarmOutcome {
+            unavailable: 1,
+            ..WarmOutcome::default()
+        }
+        .failure(),
+        "priced some and priced none must not read the same"
+    );
+}
+
 /// Forma is untradeable and an unreachable API looks identical from here. Storing either as a
 /// price would leave the card permanently unpriced, so a miss stays a miss and is retried.
 #[test]
@@ -306,4 +333,15 @@ fn a_zero_per_trade_count_is_treated_as_one() {
         {"platinum":30,"perTrade":0,"visible":true,"user":{"status":"ingame"}}
     ],"buy":[]}}"#;
     assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(30));
+}
+
+/// The cheapest thing on the market still costs something. 1p for six rounds to nothing, and "0p"
+/// on a card reads as free rather than as cheap -- a price of zero is the one number this app uses
+/// to mean "worthless", so the cheapest real listing must not borrow it.
+#[test]
+fn a_bulk_listing_too_cheap_to_divide_is_still_worth_a_platinum() {
+    let body = r#"{"data":{"sell":[
+        {"platinum":1,"perTrade":6,"visible":true,"user":{"status":"ingame"}}
+    ],"buy":[]}}"#;
+    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(1));
 }
