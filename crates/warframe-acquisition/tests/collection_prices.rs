@@ -25,6 +25,24 @@ fn table() -> PriceTable {
     PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("fixture parses")
 }
 
+/// Download, fold in what has already been checked, store -- the three steps the startup path
+/// takes. It composes them here because these tests have no runtime lock to straddle; production
+/// keeps them apart on purpose, and
+/// `the_startup_refresh_must_adopt_from_the_current_table_not_a_pre_download_snapshot` says why.
+fn refresh(
+    cache: &CollectionPriceCache,
+    source: &dyn CollectionPriceSource,
+    now_unix: u64,
+    previous: Option<&PriceTable>,
+) -> Result<PriceTable, PriceDumpError> {
+    let mut table = latest_dump(source, now_unix)?;
+    if let Some(previous) = previous {
+        table.adopt_checked(previous);
+    }
+    cache.store_table(&table)?;
+    Ok(table)
+}
+
 #[test]
 fn a_sell_median_becomes_the_price() {
     assert_eq!(table().price_for("Serration"), Some(50));
@@ -290,22 +308,26 @@ fn a_dump_from_today_or_yesterday_is_not_downloaded_again() {
 fn checked_prices_survive_a_refresh_of_the_same_dump() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
-    let mut checked = cache
-        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
-        .expect("first refresh stores");
+    let mut checked = refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-27", DUMP)]),
+        TODAY,
+        None,
+    )
+    .expect("first refresh stores");
     checked.insert_checked("Axi A1 Relic", 17);
     // A non-relic too: the page refresh checks whatever is on screen, and `Serration` has a dump
     // price of 50 for the carried-over 42 to keep beating.
     checked.insert_checked("Serration", 42);
 
     // The same lagging dump comes back, as it does on any ordinary day.
-    let refreshed = cache
-        .refresh(
-            &FakeDumps::new(&[("2026-07-27", DUMP)]),
-            TODAY,
-            Some(&checked),
-        )
-        .expect("second refresh stores");
+    let refreshed = refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-27", DUMP)]),
+        TODAY,
+        Some(&checked),
+    )
+    .expect("second refresh stores");
 
     assert_eq!(refreshed.price_for("Axi A1 Radiant"), Some(17));
     assert_eq!(
@@ -326,19 +348,23 @@ fn checked_prices_survive_a_refresh_of_the_same_dump() {
 fn a_newer_dump_discards_the_prices_checked_against_the_old_one() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
-    let mut checked = cache
-        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
-        .expect("first refresh stores");
+    let mut checked = refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-27", DUMP)]),
+        TODAY,
+        None,
+    )
+    .expect("first refresh stores");
     checked.insert_checked("Axi A1 Relic", 17);
     checked.insert_checked("Serration", 42);
 
-    let refreshed = cache
-        .refresh(
-            &FakeDumps::new(&[("2026-07-29", DUMP)]),
-            TODAY,
-            Some(&checked),
-        )
-        .expect("second refresh stores");
+    let refreshed = refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-29", DUMP)]),
+        TODAY,
+        Some(&checked),
+    )
+    .expect("second refresh stores");
 
     assert_eq!(refreshed.dump_date(), "2026-07-29");
     assert_eq!(
@@ -382,14 +408,53 @@ fn a_checked_price_outranks_the_dumps_for_the_same_item() {
     assert_eq!(table.price_for("Serration"), Some(42));
 }
 
-/// The same precedence through the name rules, since that is how the collection asks: a blueprint
-/// resolves to its listing and the checked price for that listing is what comes back.
+/// The same precedence through the name rules, since that is how the collection asks. Both names
+/// here need a rule beyond the literal one: `Forma` is reached by stripping ` Blueprint`, and
+/// `Axi A1 Radiant` by replacing the refinement suffix. A dump key spelled exactly as the catalog
+/// spells it would prove nothing about either rule.
 #[test]
 fn a_checked_price_reaches_an_item_through_the_name_rules() {
-    let mut table = table();
-    table.insert_checked("Mirage Prime Systems Blueprint", 19);
+    let dump = r#"{
+        "Forma": [{"order_type":"sell","median":8.0,"volume":3}],
+        "Axi A1 Relic": [{"order_type":"sell","median":25.0,"volume":30}]
+    }"#;
+    let mut table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("parses");
+    assert_eq!(
+        table.price_for("Forma Blueprint"),
+        Some(8),
+        "the dump's median"
+    );
 
-    assert_eq!(table.price_for("Mirage Prime Systems Blueprint"), Some(19));
+    table.insert_checked("Forma", 6);
+    table.insert_checked("Axi A1 Relic", 17);
+
+    assert_eq!(table.price_for("Forma Blueprint"), Some(6));
+    assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
+}
+
+/// The startup dump refresh spends seconds downloading 3.9 MB, and the relic sweep or a page
+/// refresh can land in that window. Folding into the new table must therefore read the table the
+/// runtime is serving *now*, not the snapshot startup took before the download -- adopting from
+/// the snapshot silently erases a price the player has already paid a request for, from memory and
+/// from disk. `start_collection_prices` keeps the fold under the same lock hold as the store and
+/// the publish for this reason; this is what that ordering is protecting against.
+#[test]
+fn the_startup_refresh_must_adopt_from_the_current_table_not_a_pre_download_snapshot() {
+    let snapshot = table(); // read from disk before the download began
+    let mut current = table();
+    current.insert_checked("Serration", 42); // a page refresh landed during the download
+
+    let mut from_snapshot = table();
+    from_snapshot.adopt_checked(&snapshot);
+    assert_eq!(
+        from_snapshot.price_for("Serration"),
+        Some(50),
+        "adopting from the pre-download snapshot loses the checked price"
+    );
+
+    let mut from_current = table();
+    from_current.adopt_checked(&current);
+    assert_eq!(from_current.price_for("Serration"), Some(42));
 }
 
 use warframe_acquisition::CollectionPriceCache;
@@ -400,7 +465,7 @@ fn a_refreshed_table_is_readable_without_the_network() {
     let cache = CollectionPriceCache::new(directory.path());
     let source = FakeDumps::new(&[("2026-07-27", DUMP)]);
 
-    cache.refresh(&source, TODAY, None).expect("refresh stores");
+    refresh(&cache, &source, TODAY, None).expect("refresh stores");
     let cached = cache.load_cached().expect("a stored table is readable");
 
     assert_eq!(cached.price_for("Serration"), Some(50));
@@ -424,11 +489,15 @@ fn an_empty_cache_directory_yields_no_table() {
 fn a_failed_refresh_leaves_the_cached_prices_in_place() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
-    cache
-        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
-        .expect("first refresh stores");
+    refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-27", DUMP)]),
+        TODAY,
+        None,
+    )
+    .expect("first refresh stores");
 
-    assert!(cache.refresh(&FakeDumps::new(&[]), TODAY, None).is_err());
+    assert!(refresh(&cache, &FakeDumps::new(&[]), TODAY, None).is_err());
 
     let cached = cache.load_cached().expect("the old table survives");
     assert_eq!(cached.dump_date(), "2026-07-27");
@@ -472,9 +541,13 @@ fn a_cache_written_under_the_old_field_name_still_carries_its_prices() {
 fn checked_prices_survive_the_disk_cache() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
-    let mut table = cache
-        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
-        .expect("refresh stores");
+    let mut table = refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-27", DUMP)]),
+        TODAY,
+        None,
+    )
+    .expect("refresh stores");
     table.insert_checked("Axi A1 Relic", 17);
     cache.store_table(&table).expect("store");
 
@@ -492,6 +565,6 @@ fn a_cache_write_failure_is_not_blamed_on_the_dump() {
     let cache = CollectionPriceCache::new(&blocking_file);
     let source = FakeDumps::new(&[("2026-07-27", DUMP)]);
 
-    let result = cache.refresh(&source, TODAY, None);
+    let result = refresh(&cache, &source, TODAY, None);
     assert!(matches!(result, Err(PriceDumpError::CacheWrite)));
 }

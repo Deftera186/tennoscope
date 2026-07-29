@@ -72,9 +72,10 @@ rule took the collection from 266 priced items to 241, and all 25 lost were fals
 Rule 3 recovers 772 relic names that no other rule reaches, but no longer prices them from the
 dump. The dump has no `perTrade` to divide out, sellers list a relic six at a time, and the
 resulting median runs up to 1.5x high -- measured on `Axi A1`, 25p in the dump against 16.67p per
-unit live. A relic's dump key still resolves, because the startup sweep needs that name to build its
-warframe.market slug, but the price comes only from that sweep, persisted back into this same table
-so it survives a restart. Until a relic has been swept it has no price rather than an inflated one.
+unit live. A relic's dump key still resolves, because the live path needs that name to build its
+warframe.market slug, but the price comes only from a live check -- the startup sweep, or a page
+refresh the player asked for -- persisted back into this same table so it survives a restart. Until
+a relic has been checked it has no price rather than an inflated one.
 
 An unresolved name means no price. It is not an error, and it is not evidence that the item is
 untradeable -- the remaining gap is largely non-prime weapon components, which the catalog does not
@@ -164,9 +165,14 @@ offers to re-price what is on screen. That single rule is the whole freshness po
 bound on how stale a stored checked price can get; a second date gate alongside it would only be a
 second thing to keep in step.
 
-Two callers write that table now, so the read-modify-write that folds prices into it happens under
-the runtime lock rather than beside it. The network work stays outside: each caller paces its own
-requests first, at the shared floor, and takes the lock only for a clone and a file write.
+Three callers write that table now -- the relic sweep, the page refresh, and the daily dump
+download that replaces it -- so the read-modify-write that folds prices into it happens under the
+runtime lock rather than beside it, against whatever the runtime is serving at that moment rather
+than against a copy taken earlier. The network work stays outside: each caller does its fetching
+first, paced at the shared floor where it makes per-item requests, and takes the lock only for a
+fold and a file write. The dump download is the one that makes this load-bearing rather than
+tidy -- it takes seconds, and a page refresh completing inside that window would otherwise be
+overwritten by a table read before it started.
 
 The valuation itself fetches nothing of its own. The value sort and the collection worth need every
 item priced to mean anything, and live-pricing hundreds of items to compute a total is exactly the

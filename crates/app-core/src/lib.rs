@@ -159,6 +159,12 @@ impl AppCore {
         self.prices.clone()
     }
 
+    /// The health rows as they stand, so a caller can read what a row already says before
+    /// overwriting it with something less true.
+    pub fn health(&self) -> &HealthView {
+        &self.health
+    }
+
     pub fn current_view(&self) -> Result<AppView, AppError> {
         let collection = self.store.load_collection()?;
         let mut items = collection

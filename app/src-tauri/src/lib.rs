@@ -13,15 +13,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome};
+use app_core::{AcquisitionPort, AppCore, AppView, HealthState, InventoryRefreshOutcome};
 use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CatalogIndex, CollectionPriceCache, GameProcess, InventoryAcquirer,
-    InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, PriceDumpError,
-    ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry,
-    RewardMemoryScanner, WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current,
+    InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, ProcessDiscovery,
+    RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner,
+    WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current, latest_dump,
 };
 use warframe_domain::RewardCandidate;
 
@@ -236,7 +236,14 @@ async fn refresh_prices(
                 // The collection price row is the only one that can report a price which reached
                 // memory but not disk, where it would not survive the next start.
                 match persisted {
-                    Some((priced, date, true)) => {
+                    // Only ever refreshes a row that already reports health. A page refresh knows
+                    // nothing about the dump download, so writing Ready here would clear a startup
+                    // failure -- "No warframe.market price dump could be read" -- and leave the row
+                    // reading healthy over whatever stale table that failure left behind.
+                    Some((priced, date, true))
+                        if runtime.core.health().collection_prices().state()
+                            == HealthState::Ready =>
+                    {
                         let _ = runtime.core.record_collection_prices_ready(priced, date);
                     }
                     Some((_, _, false)) => {
@@ -244,7 +251,7 @@ async fn refresh_prices(
                             .core
                             .record_collection_prices_degraded(CHECKED_PRICES_UNSAVED);
                     }
-                    None => {}
+                    _ => {}
                 }
             }
         }
@@ -1517,8 +1524,15 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
 /// instead, which is where the per-item pacing in `sweep_owned_relics` comes from.
 ///
 /// The dumps lag, so the usual launch re-downloads the same file it already had. The refreshed
-/// table adopts the cached one's swept relic prices when the date matches, or the download would
-/// throw away every price the last sweep spent 22 seconds learning.
+/// table adopts the checked prices held by the table the runtime is *currently* serving when the
+/// date matches, or the download would throw away every price the last sweep spent 22 seconds
+/// learning.
+///
+/// The download and the fold are deliberately separate steps. `latest_dump` spends seconds on the
+/// network, so it runs outside the lock; the fold, the write to disk and the publish then happen
+/// under one hold of it. Folding in a table read *before* the download would silently erase any
+/// price the relic sweep or a page refresh landed while it was in flight -- prices the player has
+/// already paid requests for -- and erase them from disk as well as memory. Do not reorder these.
 fn start_collection_prices(shared: SharedRuntime) {
     std::thread::spawn(move || {
         let Some(app_data) = shared.lock().ok().map(|runtime| runtime.app_data.clone()) else {
@@ -1530,13 +1544,13 @@ fn start_collection_prices(shared: SharedRuntime) {
             .unwrap_or_default();
         let cache = CollectionPriceCache::new(&app_data);
         let cached = cache.load_cached();
-        if let Some(table) = cached.clone()
-            && let Ok(mut runtime) = shared.lock()
-        {
-            let priced = table.len();
-            let date = table.dump_date().to_owned();
-            runtime.core.set_collection_prices(Arc::new(table));
-            let _ = runtime.core.record_collection_prices_ready(priced, date);
+        if let Some(table) = cached.as_ref() {
+            if let Ok(mut runtime) = shared.lock() {
+                let priced = table.len();
+                let date = table.dump_date().to_owned();
+                runtime.core.set_collection_prices(Arc::new(table.clone()));
+                let _ = runtime.core.record_collection_prices_ready(priced, date);
+            }
         }
         if !cached
             .as_ref()
@@ -1545,29 +1559,36 @@ fn start_collection_prices(shared: SharedRuntime) {
             let Some(source) = RelicsRunHttp::new() else {
                 return;
             };
-            match cache.refresh(&source, now, cached.as_ref()) {
-                Ok(table) => {
-                    if let Ok(mut runtime) = shared.lock() {
-                        let priced = table.len();
-                        let date = table.dump_date().to_owned();
-                        runtime.core.set_collection_prices(Arc::new(table));
-                        let _ = runtime.core.record_collection_prices_ready(priced, date);
-                    }
+            // Seconds of network, outside the lock.
+            let Ok(mut table) = latest_dump(&source, now) else {
+                // A dump that could not be read and a disk that could not be written are different
+                // problems with different fixes, and only one of them is warframe.market's.
+                if let Ok(mut runtime) = shared.lock() {
+                    let _ = runtime.core.record_collection_prices_degraded(
+                        "No warframe.market price dump could be read",
+                    );
                 }
-                Err(error) => {
-                    // A dump that could not be read and a disk that could not be written are different
-                    // problems with different fixes, and only one of them is warframe.market's.
-                    let message = match error {
-                        PriceDumpError::Malformed => "No warframe.market price dump could be read",
-                        PriceDumpError::CacheWrite => {
-                            "Prices loaded but could not be saved for the next start"
-                        }
-                    };
-                    if let Ok(mut runtime) = shared.lock() {
-                        let _ = runtime.core.record_collection_prices_degraded(message);
-                    }
-                    return;
-                }
+                return;
+            };
+            let Ok(mut runtime) = shared.lock() else {
+                return;
+            };
+            // The current table, not `cached`: anything checked during the download is in here.
+            if let Some(current) = runtime.core.collection_prices() {
+                table.adopt_checked(&current);
+            }
+            let stored = cache.store_table(&table);
+            let priced = table.len();
+            let date = table.dump_date().to_owned();
+            runtime.core.set_collection_prices(Arc::new(table));
+            let _ = match stored {
+                Ok(()) => runtime.core.record_collection_prices_ready(priced, date),
+                Err(_) => runtime.core.record_collection_prices_degraded(
+                    "Prices loaded but could not be saved for the next start",
+                ),
+            };
+            if stored.is_err() {
+                return;
             }
         }
         spawn_owned_relic_sweep(shared);

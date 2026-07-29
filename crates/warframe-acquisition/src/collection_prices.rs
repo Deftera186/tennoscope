@@ -356,25 +356,13 @@ impl CollectionPriceCache {
         (!table.is_empty()).then_some(table)
     }
 
-    /// Fetch the newest dump and store it, carrying `previous`'s checked prices across when the
-    /// dump that comes back is the one it already described. On failure the previously stored table
-    /// is untouched.
-    pub fn refresh(
-        &self,
-        source: &dyn CollectionPriceSource,
-        now_unix: u64,
-        previous: Option<&PriceTable>,
-    ) -> Result<PriceTable, PriceDumpError> {
-        let mut table = latest_dump(source, now_unix)?;
-        if let Some(previous) = previous {
-            table.adopt_checked(previous);
-        }
-        self.store(&table)?;
-        Ok(table)
-    }
-
-    /// Stores a table outside of `refresh`, so prices checked live after the dump landed -- the
-    /// relic sweep's, the page refresh's -- reach disk too.
+    /// Stores a table: the dump just downloaded, or one that has since gained a checked price.
+    ///
+    /// There is deliberately no `fetch-adopt-store` method here. Fetching takes seconds and must
+    /// happen outside the runtime lock, while adopting and storing must happen inside it against
+    /// the table the runtime is serving at that moment -- a combined call can only take a snapshot
+    /// of the previous table, and any price checked while it was downloading is then lost from
+    /// memory and disk alike. `start_collection_prices` composes the two steps around the lock.
     pub fn store_table(&self, table: &PriceTable) -> Result<(), PriceDumpError> {
         self.store(table)
     }
