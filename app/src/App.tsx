@@ -42,6 +42,15 @@ const sortOptions: Array<{ value: Sort; label: string }> = [
 
 const categoryName = Object.fromEntries(categories.map(category => [category.value, category.label])) as Record<ItemCategory | 'all', string>
 
+const monthAbbr = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** `2026-07-27` -> `27 Jul`. Formatted by hand rather than `Intl`, whose month/day order follows
+ * the runtime locale -- this reading has to look the same on every machine it runs on. */
+function shortDumpDate(isoDate: string): string {
+  const [, month, day] = isoDate.split('-').map(Number)
+  return `${day} ${monthAbbr[month - 1]}`
+}
+
 const pageLabel: Record<Page, string> = {
   collection: 'Collection',
   rewards: 'Rewards',
@@ -71,6 +80,7 @@ function App() {
   const [page, setPage] = useState<Page>('collection')
   const [busy, setBusy] = useState(false)
   const [pricing, setPricing] = useState(false)
+  const [pricingIds, setPricingIds] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
   const viewGeneration = useRef(0)
@@ -159,8 +169,10 @@ function App() {
    */
   async function priceLive(ids: string[]) {
     setPricing(true)
+    setPricingIds(ids)
     await requestView(() => refreshPrices(ids), 'Live prices could not be fetched.')
     setPricing(false)
+    setPricingIds([])
   }
 
   if (accepted === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
@@ -210,7 +222,7 @@ function App() {
     <main className="sheet">
       {error && <p className="error-banner" role="alert">{error}</p>}
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive}/>}
+        {page === 'collection' && <CollectionPage view={view} pricing={pricing} pricingIds={pricingIds} onPriceLive={priceLive}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
         {page === 'diagnostics' && <DiagnosticsPage view={view}/>}
         {page === 'settings' && <SettingsPage/>}
@@ -260,7 +272,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void }) {
+function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppView; pricing: boolean; pricingIds: string[]; onPriceLive: (ids: string[]) => void }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -295,6 +307,12 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
   const visibleItems = pageItems(filtered, currentPage)
   const firstResult = filtered.length ? (currentPage - 1) * COLLECTION_PAGE_SIZE + 1 : 0
   const lastResult = Math.min(currentPage * COLLECTION_PAGE_SIZE, filtered.length)
+  const pricedVisibleIds = visibleItems.filter(item => item.platinum !== undefined).map(item => item.id)
+  // Real progress, not a spinner: the page-level price request writes into the live cache as each
+  // item lands, and the 2.5s poll already surfaces that -- so "done" is just how many of the
+  // requested ids are currently live, not a client-side timer standing in for the real state.
+  const pricingDone = pricingIds.length ? view.collection.items.filter(item => pricingIds.includes(item.id) && item.live).length : 0
+  const dumpDate = view.health.collection_prices.last_success
   useEffect(() => setPage(1), [search, category, ownership, sort])
   useEffect(() => setPage(value => clampPage(value, filtered.length)), [filtered.length])
 
@@ -329,16 +347,6 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
             >{option.label}</button>)}
           </div>
         </div>
-        <div className="refresh-slot">
-          <button
-            type="button"
-            className="stamp"
-            disabled={pricing}
-            aria-label="Refresh prices on this page"
-            onClick={() => onPriceLive(visibleItems.map(item => item.id))}
-          ><span>{pricing ? 'Pricing…' : 'Refresh prices'}</span></button>
-          {pricing && <span className="streak" aria-hidden="true"/>}
-        </div>
       </div>
 
       <div className="shield-strip" role="group" aria-label="Item categories">
@@ -361,7 +369,16 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
             onClick={() => setOwnership(filter)}
           >{filter[0].toUpperCase() + filter.slice(1)}</button>)}
         </div>
-        <span>{firstResult}–{lastResult} of {filtered.length}</span>
+        <div className="provenance-row">
+          <span className="register-line">{dumpDate ? `Prices from the ${shortDumpDate(dumpDate)} market summary` : 'No price summary loaded yet'}</span>
+          <button
+            type="button"
+            className="stamp"
+            disabled={pricing || pricedVisibleIds.length === 0}
+            onClick={() => onPriceLive(pricedVisibleIds)}
+          ><span role={pricing ? 'status' : undefined}>{pricing ? `Pricing ${pricingDone} of ${pricingIds.length}…` : `Price these ${pricedVisibleIds.length}`}</span></button>
+          <span>{firstResult}–{lastResult} of {filtered.length}</span>
+        </div>
       </div>
 
       {filtered.length
@@ -406,9 +423,9 @@ function CollectionEntry({ item }: { item: CollectionItem }) {
         {item.platinum !== undefined && <span className={`price${item.live ? ' live' : ''}`}>
           <b>{item.platinum}p</b>
           {item.quantity > 1 && <em>{stackValue(item)}p total</em>}
-          {item.live && <span className="hallmark live">Live</span>}
         </span>}
       </div>
+      {item.live && <p className="freshness">checked just now</p>}
     </div>
   </article>
 }

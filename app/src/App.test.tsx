@@ -234,7 +234,7 @@ describe('MVP desktop interface', () => {
     backend.refreshPrices.mockImplementationOnce(() => new Promise(() => {}))
     render(<App />)
     await act(async () => {})
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Refresh prices on this page/ })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Price these/ })) })
     await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
     expect(backend.getView).toHaveBeenCalledTimes(3)
   })
@@ -336,16 +336,31 @@ describe('MVP desktop interface', () => {
     expect(within(unpriced).queryByText(/p$/)).not.toBeInTheDocument()
   })
 
-  // A live price and a day-old median are different measurements. Showing them in the same column
-  // with nothing to tell them apart invites a comparison that was never valid.
-  it('distinguishes a live price from a dump price', async () => {
+  // The badge said "LIVE" with nothing on screen to explain it. A date explains itself.
+  it('states where the daily prices came from', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    render(<App/>)
+    expect(await screen.findByText(/27 Jul/)).toBeInTheDocument()
+  })
+
+  it('marks a card checked live with its freshness, not a badge', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App/>)
     const live = await screen.findByRole('article', { name: 'Lith A1 Relic' })
-    const dump = await screen.findByRole('article', { name: 'Lex Prime Receiver' })
+    const daily = await screen.findByRole('article', { name: 'Lex Prime Receiver' })
 
-    expect(within(live).getByText('Live')).toBeInTheDocument()
-    expect(within(dump).queryByText('Live')).not.toBeInTheDocument()
+    expect(within(live).getByText(/checked/i)).toBeInTheDocument()
+    expect(within(live).queryByText('Live')).not.toBeInTheDocument()
+    expect(within(daily).queryByText(/checked/i)).not.toBeInTheDocument()
+  })
+
+  // Someone who clicks it should not have to guess whether it prices the page or the collection.
+  // The fixture's visible page carries three priced items: Lex Prime Receiver, Lith A1 Relic, and
+  // Zenith Prime Receiver (priced at 0p, still a real listing).
+  it('names how many items the refresh will price', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    render(<App/>)
+    expect(await screen.findByRole('button', { name: /Price these 3/ })).toBeInTheDocument()
   })
 
   it('sorts by stack value and sinks unpriced items to the bottom', async () => {
@@ -398,7 +413,7 @@ describe('MVP desktop interface', () => {
     render(<App/>)
     await user.click(await screen.findByRole('button', { name: 'Tradeable' }))
     await user.click(await screen.findByRole('button', { name: 'Go to page 2' }))
-    await user.click(screen.getByRole('button', { name: /Refresh prices on this page/ }))
+    await user.click(screen.getByRole('button', { name: /Price these/ }))
 
     // Page 2 of 53 tradeable items (50 filler + 3 named) holds only the last 5, alphabetically.
     expect(backend.refreshPrices).toHaveBeenCalledWith(['filler-48', 'filler-49', 'lex-prime-receiver', 'lith-a1', 'zenith-prime-receiver'])

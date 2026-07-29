@@ -223,12 +223,6 @@
 }
 .sort-slot select:hover { border-color: var(--platinum-deep); }
 
-/* Pricing 48 items takes ~16s; a swapped label alone reads as broken over that
-   span, so the same drawn-sample streak used for loading states rides along
-   the stamp until the batch resolves. */
-.refresh-slot { display: flex; align-items: center; gap: var(--tight); }
-.refresh-slot .streak { width: 3rem; }
-
 /* Hallmark cartouches carry the category filters. */
 .shield-strip { display: flex; flex-wrap: wrap; gap: var(--hair); }
 .shield {
@@ -254,7 +248,7 @@
 .shield[aria-pressed="true"] .shield-face b { color: var(--gold); opacity: 1; }
 
 .register-bar {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--step);
+  display: grid; gap: var(--tight);
   padding-bottom: var(--step); border-bottom: 1px solid var(--rule);
   font-family: var(--face-register); font-size: .62rem; letter-spacing: .1em; color: var(--platinum-deep);
 }
@@ -268,6 +262,11 @@
 .tally button + button { border-left: 0; }
 .tally button:hover { color: var(--platinum-dim); background: var(--plate); }
 .tally button[aria-pressed="true"] { color: var(--platinum); background: var(--raised); box-shadow: var(--strike); }
+
+/* The provenance line states the baseline once, so no card needs a legend to explain a price's
+   date or authority. The refresh control sits beside the range readout, not above it, because
+   both answer "what am I looking at right now" for this one page. */
+.provenance-row { display: flex; align-items: center; justify-content: space-between; gap: var(--step); flex-wrap: wrap; }
 
 /* Entries are separated by the sheet's own rules, not by borders of their own. */
 /* Rules are drawn by the cells, not by a background showing through 1px gaps. A
@@ -312,12 +311,12 @@
 .hallmark.owned { color: var(--platinum); }
 .hallmark.absent { color: var(--platinum-deep); background: var(--plate); }
 .hallmark.mastered { color: var(--gold); }
-.hallmark.live { color: var(--platinum); }
 .hallmark.doubt { color: var(--oxblood); background: rgb(221 111 96 / 18%); }
 
-/* A dump reading is yesterday's median; a live one was fetched moments ago and is
-   good for 15 minutes. Different measurements, so the live one earns brighter ink
-   and its own struck hallmark -- never sharing a column with nothing to tell them apart. */
+/* A dump reading is yesterday's median; a live one was fetched moments ago and is good for 15
+   minutes. Different measurements, so the live one earns brighter ink -- never sharing a column
+   with nothing to tell them apart -- and its own freshness line below, not a badge with a word
+   nothing else on screen explains. */
 .price { display: inline-flex; align-items: center; gap: .32rem; }
 .price b { font-family: var(--face-mark); font-size: .95rem; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; color: var(--platinum-deep); }
 .price.live b { color: var(--platinum); }
@@ -326,6 +325,10 @@
   letter-spacing: .08em; text-transform: uppercase; color: var(--platinum-deep);
 }
 .price em::before { content: '· '; }
+
+/* The freshness line: same register-line voice as the price annotation above it, so a live
+   reading explains itself in the card's own grammar instead of a badge with a word to learn. */
+.freshness { margin: 0; font-family: var(--face-register); font-size: .52rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--platinum-deep); }
 
 /* Date letters: assay offices stamp a letter per year; pages get the same treatment. */
 .pagination { display: flex; align-items: center; justify-content: center; gap: var(--hair); padding-top: var(--course); border-top: 1px solid var(--rule); }
@@ -624,8 +627,9 @@
   /* flex-basis is the main axis: in a column this would become a 22rem HEIGHT. */
   .search-slot { flex: none; }
   .sort-slot select { flex: 1; }
-  .register-bar { align-items: flex-start; flex-direction: column-reverse; gap: var(--tight); }
+  .register-bar { gap: var(--tight); }
   .tally { width: 100%; }
   .tally button { flex: 1; padding-inline: .3rem; }
+  .provenance-row { flex-direction: column; align-items: flex-start; }
   .metals { gap: var(--tight); }
 }

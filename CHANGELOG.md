@@ -14,8 +14,15 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 ### Added
 
 - Collection items show a platinum price and stack total, seeded from the daily warframe.market price dump.
-- Live pricing on request, for a single item or the page on screen, marked apart from the daily figures.
+- Live pricing on request, for the current page, marked apart from the daily figures with an inline "checked just now" line rather than a badge.
 - Collection sorting by value, a tradeable filter, and a collection worth summary.
+
+### Changed
+
+- Prices are now quoted per unit rather than per trade.
+- Relics are priced live rather than from the daily dump, because the daily summary overstates them.
+- Only owned items are priced.
+- The per-item price-check button is gone; pricing is a single page-level control that names how many priced items it will refresh and shows real progress while it runs.
 
 ## [0.1.0] - 2026-07-28
 
