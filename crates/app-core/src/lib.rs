@@ -181,7 +181,15 @@ impl AppCore {
                 let dump = market_name
                     .zip(self.prices.as_ref())
                     .and_then(|(name, prices)| prices.price_for(name));
-                CollectionItemView::priced(entry, live.or(dump), live.is_some())
+                // A relic's price never comes from the dump -- it comes from the startup sweep,
+                // which asked warframe.market the same question the live cache did and then
+                // persisted the answer so it outlives that cache's fifteen minutes. Presenting it
+                // as a dump price after those fifteen minutes would attribute it to a file that
+                // deliberately does not price relics at all.
+                let swept = market_name
+                    .zip(self.prices.as_ref())
+                    .is_some_and(|(name, prices)| prices.has_swept_price(name));
+                CollectionItemView::priced(entry, live.or(dump), live.is_some() || swept)
             })
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));
@@ -453,19 +461,20 @@ impl AppCore {
         self.current_view()
     }
 
-    /// Progress through the startup relic sweep, on the same row as `record_collection_prices_ready`.
+    /// The startup relic sweep has begun, on the same row as `record_collection_prices_ready`.
     ///
     /// A ~22-second sweep with nothing written to this row until it finishes reads as work that
     /// never started, not work that is running -- Diagnostics is the only place that 22 seconds is
-    /// visible at all, since nothing else in the UI waits on it.
+    /// visible at all, since nothing else in the UI waits on it. It says how many relics it set out
+    /// to check and no more: the sweep skips names the live cache already holds without counting
+    /// them, so anything the pass reports back is not a fraction of this number.
     pub fn record_collection_prices_sweeping(
         &mut self,
-        done: usize,
-        total: usize,
+        relics: usize,
     ) -> Result<AppView, AppError> {
         let last_success = self.health.collection_prices.last_success.clone();
         self.health.collection_prices = BackendHealth::ready(
-            format!("Sweeping live relic prices ({done}/{total})"),
+            format!("Checking live prices for {relics} owned relics"),
             last_success,
         )?;
         self.current_view()

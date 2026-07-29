@@ -125,9 +125,30 @@ impl PriceTable {
     }
 
     /// Whether this relic already carries a price from a previous sweep. What the startup sweep
-    /// uses to skip a relic it has already priced rather than re-spending a request on it.
+    /// uses to skip a relic it has already priced rather than re-spending a request on it, and
+    /// what the view reads to say a relic's price was checked live rather than taken from the dump.
     pub fn has_swept_price(&self, market_name: &str) -> bool {
         self.relic_prices.contains_key(market_name)
+    }
+
+    /// Carry a previous table's swept relic prices across a refresh of the *same* dump.
+    ///
+    /// The dumps lag -- on 2026-07-29 the newest published was dated the 27th -- so an ordinary
+    /// launch re-downloads a file it already has and parses it into a table whose `relic_prices`
+    /// is empty. Without this, every launch would destroy the sweep's work and re-spend 65
+    /// requests re-learning the same numbers. A genuinely newer dump still clears them: a swept
+    /// price belongs to the day it was checked, and the sweep re-runs for the new one.
+    ///
+    /// A price already swept into `self` wins, because it is the newer of the two.
+    pub fn adopt_swept(&mut self, previous: &PriceTable) {
+        if self.dump_date != previous.dump_date {
+            return;
+        }
+        for (market_name, platinum) in &previous.relic_prices {
+            self.relic_prices
+                .entry(market_name.clone())
+                .or_insert(*platinum);
+        }
     }
 
     /// The relic dump keys the sweep needs to work through.
@@ -141,12 +162,15 @@ impl PriceTable {
         &self.dump_date
     }
 
+    /// How many items this table can price, dump prices and swept relic prices together. What the
+    /// collection price health row reports, so it grows as the sweep lands rather than standing
+    /// still at the dump's count while 65 relics gain prices.
     pub fn len(&self) -> usize {
-        self.prices.len()
+        self.prices.len() + self.relic_prices.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.prices.is_empty()
+        self.len() == 0
     }
 }
 
@@ -221,18 +245,6 @@ pub fn dump_is_current(dump_date: &str, now_unix: u64) -> bool {
     [0, 86_400]
         .iter()
         .any(|back| civil_date(now_unix.saturating_sub(*back)) == dump_date)
-}
-
-/// Whether a table's swept relic prices are already fresh enough to skip re-sweeping them.
-///
-/// The sweep runs right after the dump loads and shares its clock: a fresh dump replaces the whole
-/// table (see `latest_dump`), clearing `relic_prices` along with it, so a table that still carries
-/// swept prices is one this same dump day already answered. That makes the sweep's freshness window
-/// the dump's own -- there is no separate cadence to invent, and no separate state to track. Without
-/// this, a restart within the same day would re-spend the ~22 seconds re-fetching prices that had
-/// not gone stale.
-pub fn relic_sweep_is_current(table: &PriceTable, now_unix: u64) -> bool {
-    dump_is_current(&table.dump_date, now_unix)
 }
 
 /// The newest dump on offer, starting at today and walking back.
@@ -323,13 +335,19 @@ impl CollectionPriceCache {
         (!table.is_empty()).then_some(table)
     }
 
-    /// Fetch the newest dump and store it. On failure the previously stored table is untouched.
+    /// Fetch the newest dump and store it, carrying `previous`'s swept relic prices across when the
+    /// dump that comes back is the one it already described. On failure the previously stored table
+    /// is untouched.
     pub fn refresh(
         &self,
         source: &dyn CollectionPriceSource,
         now_unix: u64,
+        previous: Option<&PriceTable>,
     ) -> Result<PriceTable, PriceDumpError> {
-        let table = latest_dump(source, now_unix)?;
+        let mut table = latest_dump(source, now_unix)?;
+        if let Some(previous) = previous {
+            table.adopt_swept(previous);
+        }
         self.store(&table)?;
         Ok(table)
     }

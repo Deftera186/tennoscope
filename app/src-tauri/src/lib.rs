@@ -22,7 +22,6 @@ use warframe_acquisition::{
     InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, PriceDumpError,
     ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry,
     RewardMemoryScanner, WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current,
-    relic_sweep_is_current,
 };
 use warframe_domain::RewardCandidate;
 
@@ -126,6 +125,8 @@ struct Runtime {
     setup: SetupStatus,
     last_refresh_started: Option<Instant>,
     refresh_in_flight: bool,
+    /// One relic sweep at a time; see `spawn_owned_relic_sweep`.
+    relic_sweep_in_flight: bool,
     overlay_preview_until: Option<Instant>,
     monitor_started: bool,
     // Survives across missions on purpose: the same relic pools recur all evening, so a price
@@ -288,6 +289,12 @@ fn refresh_blocking(shared: &SharedRuntime) -> Result<AppView, String> {
     if let Ok(mut runtime) = shared.lock() {
         runtime.refresh_in_flight = false;
     }
+    // A refresh is the only thing that can add a relic to the collection, including the very first
+    // one, which is what turns an empty first-install snapshot into 65 relics the startup sweep
+    // never saw. The lock is released above on purpose: the sweep takes about 22 seconds.
+    if result.is_ok() {
+        spawn_owned_relic_sweep(Arc::clone(shared));
+    }
     result
 }
 
@@ -373,6 +380,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         setup,
         last_refresh_started: None,
         refresh_in_flight: false,
+        relic_sweep_in_flight: false,
         overlay_preview_until: None,
         monitor_started: false,
         live_prices,
@@ -1483,13 +1491,13 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
 /// anything published skips the download entirely; the file is 3.9 MB and it changes once a day.
 /// Relics are the exception: the dump's relic prices run up to 1.5x high, so they are priced live
 /// instead, which is where the per-item pacing in `sweep_owned_relics` comes from.
+///
+/// The dumps lag, so the usual launch re-downloads the same file it already had. The refreshed
+/// table adopts the cached one's swept relic prices when the date matches, or the download would
+/// throw away every price the last sweep spent 22 seconds learning.
 fn start_collection_prices(shared: SharedRuntime) {
     std::thread::spawn(move || {
-        let Some((app_data, live_prices)) = shared
-            .lock()
-            .ok()
-            .map(|runtime| (runtime.app_data.clone(), runtime.live_prices.clone()))
-        else {
+        let Some(app_data) = shared.lock().ok().map(|runtime| runtime.app_data.clone()) else {
             return;
         };
         let now = SystemTime::now()
@@ -1497,23 +1505,23 @@ fn start_collection_prices(shared: SharedRuntime) {
             .map(|elapsed| elapsed.as_secs())
             .unwrap_or_default();
         let cache = CollectionPriceCache::new(&app_data);
-        let mut cached_date = None;
-        if let Some(table) = cache.load_cached()
+        let cached = cache.load_cached();
+        if let Some(table) = cached.clone()
             && let Ok(mut runtime) = shared.lock()
         {
             let priced = table.len();
             let date = table.dump_date().to_owned();
             runtime.core.set_collection_prices(Arc::new(table));
-            let _ = runtime
-                .core
-                .record_collection_prices_ready(priced, date.clone());
-            cached_date = Some(date);
+            let _ = runtime.core.record_collection_prices_ready(priced, date);
         }
-        if !cached_date.is_some_and(|date| dump_is_current(&date, now)) {
+        if !cached
+            .as_ref()
+            .is_some_and(|table| dump_is_current(table.dump_date(), now))
+        {
             let Some(source) = RelicsRunHttp::new() else {
                 return;
             };
-            match cache.refresh(&source, now) {
+            match cache.refresh(&source, now, cached.as_ref()) {
                 Ok(table) => {
                     if let Ok(mut runtime) = shared.lock() {
                         let priced = table.len();
@@ -1538,7 +1546,37 @@ fn start_collection_prices(shared: SharedRuntime) {
                 }
             }
         }
-        sweep_owned_relics(&shared, &cache, &live_prices, now);
+        spawn_owned_relic_sweep(shared);
+    });
+}
+
+/// Sweep whatever relics are not priced yet, off the calling thread.
+///
+/// A first-ever launch prices nothing: the snapshot does not exist yet, so the startup sweep finds
+/// no owned relics and returns having done nothing anybody can fix without a restart. This is what
+/// fires after an inventory refresh has produced a snapshot -- and after any later refresh that
+/// adds a relic the player did not own before. It costs nothing when there is nothing new, because
+/// the sweep's filter is per-relic.
+///
+/// One sweep at a time. Two overlapping sweeps would spend the same requests twice against an API
+/// with a documented rate limit, and a first run is exactly where refreshes and the startup sweep
+/// collide: the sweep takes about 22 seconds and a refresh may be repeated after 15.
+fn spawn_owned_relic_sweep(shared: SharedRuntime) {
+    let Ok(mut runtime) = shared.lock() else {
+        return;
+    };
+    if runtime.relic_sweep_in_flight {
+        return;
+    }
+    runtime.relic_sweep_in_flight = true;
+    let app_data = runtime.app_data.clone();
+    let live_prices = runtime.live_prices.clone();
+    drop(runtime);
+    std::thread::spawn(move || {
+        sweep_owned_relics(&shared, &CollectionPriceCache::new(&app_data), &live_prices);
+        if let Ok(mut runtime) = shared.lock() {
+            runtime.relic_sweep_in_flight = false;
+        }
     });
 }
 
@@ -1551,14 +1589,14 @@ fn start_collection_prices(shared: SharedRuntime) {
 /// paces the requests itself -- is ever called; the table is only written back under a second short
 /// lock once the sweep has finished.
 ///
-/// Bounded by `owned_relic_market_names`, never by every relic the dump lists, and further bounded
-/// to relics the table has not already swept when that sweep is still as fresh as the dump itself
-/// (`relic_sweep_is_current`) -- so a restart within the same day re-sweeps nothing.
+/// Bounded by `owned_relic_market_names`, never by every relic the dump lists, and then by the one
+/// question worth asking per relic: does this one already have a swept price? A swept price lives
+/// exactly as long as the dump it arrived with (see `PriceTable::adopt_swept`), so that single
+/// filter is the whole freshness rule -- there is no second cadence to keep in step with the first.
 fn sweep_owned_relics(
     shared: &SharedRuntime,
     cache: &CollectionPriceCache,
     live_prices: &MarketPriceCache,
-    now: u64,
 ) {
     let Ok((owned, table)) = shared.lock().map(|runtime| {
         (
@@ -1571,14 +1609,10 @@ fn sweep_owned_relics(
     let Some(table) = table else {
         return;
     };
-    let to_sweep: Vec<String> = if relic_sweep_is_current(&table, now) {
-        owned
-            .into_iter()
-            .filter(|name| !table.has_swept_price(name))
-            .collect()
-    } else {
-        owned
-    };
+    let to_sweep: Vec<String> = owned
+        .into_iter()
+        .filter(|name| !table.has_swept_price(name))
+        .collect();
     if to_sweep.is_empty() {
         return;
     }
@@ -1588,9 +1622,12 @@ fn sweep_owned_relics(
     if let Ok(mut runtime) = shared.lock() {
         let _ = runtime
             .core
-            .record_collection_prices_sweeping(0, to_sweep.len());
+            .record_collection_prices_sweeping(to_sweep.len());
     }
     let outcome = live_prices.warm(&market, &to_sweep, warframe_acquisition::MARKET_MIN_GAP);
+    // ponytail: read-modify-write against a table this thread does not hold a lock on. Safe because
+    // this sweep is the only writer of relic prices and `spawn_owned_relic_sweep` admits one at a
+    // time; if a second writer is ever added, move the mutation under the runtime lock.
     let mut updated = (*table).clone();
     for name in &to_sweep {
         if let Some(price) = live_prices.get(name) {
@@ -1598,6 +1635,8 @@ fn sweep_owned_relics(
         }
     }
     let store_result = cache.store_table(&updated);
+    let priced = updated.len();
+    let date = updated.dump_date().to_owned();
     let Ok(mut runtime) = shared.lock() else {
         return;
     };
@@ -1609,9 +1648,7 @@ fn sweep_owned_relics(
             "Swept relic prices could not be saved for the next start",
         );
     } else {
-        let _ = runtime
-            .core
-            .record_collection_prices_sweeping(outcome.stored, to_sweep.len());
+        let _ = runtime.core.record_collection_prices_ready(priced, date);
     }
 }
 

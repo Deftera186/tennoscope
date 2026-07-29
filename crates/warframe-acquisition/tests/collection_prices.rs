@@ -178,7 +178,6 @@ fn a_malformed_dump_is_rejected_whole() {
 use std::{cell::RefCell, collections::HashMap as Map};
 use warframe_acquisition::{
     CollectionPriceSource, PriceFetch, civil_date, dump_is_current, latest_dump,
-    relic_sweep_is_current,
 };
 
 struct FakeDumps {
@@ -278,15 +277,78 @@ fn a_dump_from_today_or_yesterday_is_not_downloaded_again() {
     assert!(!dump_is_current("", TODAY), "no date is not a fresh date");
 }
 
-/// The sweep shares the dump's clock rather than keeping one of its own: a fresh dump replaces the
-/// whole table, so swept prices surviving in a loaded table are only as old as that table's dump.
+/// The sweep shares the dump's clock rather than keeping one of its own: a refresh that brings back
+/// the same dump keeps the prices swept against it, and a genuinely newer dump clears them so the
+/// sweep runs again for the day it describes.
+///
+/// This replaces `a_relic_sweep_is_current_exactly_when_its_dump_is`, which pinned a second date
+/// gate on the sweep. That gate was false on any ordinary day -- the dumps lag, so the cached table
+/// is usually older than yesterday -- and its falseness re-swept all 65 relics on every launch.
+/// Adoption across a same-date refresh is what the gate was trying to express, and it works on the
+/// days the gate did not.
 #[test]
-fn a_relic_sweep_is_current_exactly_when_its_dump_is() {
-    let stale = table(); // dated 2026-07-27, already older than `dump_is_current` accepts at TODAY
-    assert!(!relic_sweep_is_current(&stale, TODAY));
+fn swept_prices_survive_a_refresh_of_the_same_dump() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let cache = CollectionPriceCache::new(directory.path());
+    let mut swept = cache
+        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
+        .expect("first refresh stores");
+    swept.insert_live("Axi A1 Relic", 17);
 
-    let fresh = PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-29").expect("fixture parses");
-    assert!(relic_sweep_is_current(&fresh, TODAY));
+    // The same lagging dump comes back, as it does on any ordinary day.
+    let refreshed = cache
+        .refresh(
+            &FakeDumps::new(&[("2026-07-27", DUMP)]),
+            TODAY,
+            Some(&swept),
+        )
+        .expect("second refresh stores");
+
+    assert_eq!(refreshed.price_for("Axi A1 Radiant"), Some(17));
+    assert_eq!(
+        cache
+            .load_cached()
+            .expect("a stored table is readable")
+            .price_for("Axi A1 Relic"),
+        Some(17),
+        "the adopted price reaches disk, or the next launch re-sweeps"
+    );
+}
+
+#[test]
+fn a_newer_dump_discards_the_prices_swept_against_the_old_one() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let cache = CollectionPriceCache::new(directory.path());
+    let mut swept = cache
+        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
+        .expect("first refresh stores");
+    swept.insert_live("Axi A1 Relic", 17);
+
+    let refreshed = cache
+        .refresh(
+            &FakeDumps::new(&[("2026-07-29", DUMP)]),
+            TODAY,
+            Some(&swept),
+        )
+        .expect("second refresh stores");
+
+    assert_eq!(refreshed.dump_date(), "2026-07-29");
+    assert_eq!(
+        refreshed.price_for("Axi A1 Radiant"),
+        None,
+        "a price checked for another day's table is re-swept, not carried over"
+    );
+}
+
+/// The health row reports what the table can price. Counting only dump prices left it stuck at the
+/// dump's count while 65 relics gained prices underneath it.
+#[test]
+fn the_reported_count_grows_as_relics_are_swept() {
+    let mut table = table();
+    let before = table.len();
+    table.insert_live("Axi A1 Relic", 17);
+
+    assert_eq!(table.len(), before + 1);
 }
 
 use warframe_acquisition::CollectionPriceCache;
@@ -297,7 +359,7 @@ fn a_refreshed_table_is_readable_without_the_network() {
     let cache = CollectionPriceCache::new(directory.path());
     let source = FakeDumps::new(&[("2026-07-27", DUMP)]);
 
-    cache.refresh(&source, TODAY).expect("refresh stores");
+    cache.refresh(&source, TODAY, None).expect("refresh stores");
     let cached = cache.load_cached().expect("a stored table is readable");
 
     assert_eq!(cached.price_for("Serration"), Some(50));
@@ -322,10 +384,10 @@ fn a_failed_refresh_leaves_the_cached_prices_in_place() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
     cache
-        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY)
+        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
         .expect("first refresh stores");
 
-    assert!(cache.refresh(&FakeDumps::new(&[]), TODAY).is_err());
+    assert!(cache.refresh(&FakeDumps::new(&[]), TODAY, None).is_err());
 
     let cached = cache.load_cached().expect("the old table survives");
     assert_eq!(cached.dump_date(), "2026-07-27");
@@ -354,7 +416,7 @@ fn swept_relic_prices_survive_the_disk_cache() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
     let mut table = cache
-        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY)
+        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
         .expect("refresh stores");
     table.insert_live("Axi A1 Relic", 17);
     cache.store_table(&table).expect("store");
@@ -373,6 +435,6 @@ fn a_cache_write_failure_is_not_blamed_on_the_dump() {
     let cache = CollectionPriceCache::new(&blocking_file);
     let source = FakeDumps::new(&[("2026-07-27", DUMP)]);
 
-    let result = cache.refresh(&source, TODAY);
+    let result = cache.refresh(&source, TODAY, None);
     assert!(matches!(result, Err(PriceDumpError::CacheWrite)));
 }
