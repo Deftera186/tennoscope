@@ -75,9 +75,9 @@ fn a_relic_still_resolves_to_its_market_name() {
 }
 
 #[test]
-fn a_swept_relic_price_is_served_like_any_other() {
+fn a_checked_relic_price_is_served_like_any_other() {
     let mut table = table();
-    table.insert_live("Axi A1 Relic", 17);
+    table.insert_checked("Axi A1 Relic", 17);
     assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
     assert_eq!(table.price_for("Axi A1 Relic"), Some(17));
 }
@@ -103,7 +103,7 @@ fn every_refinement_tier_resolves_and_prices_alike() {
     }
 
     let mut table = table();
-    table.insert_live("Axi A1 Relic", 17);
+    table.insert_checked("Axi A1 Relic", 17);
     for name in names {
         assert_eq!(table.price_for(name), Some(17), "for {name}");
     }
@@ -287,48 +287,56 @@ fn a_dump_from_today_or_yesterday_is_not_downloaded_again() {
 /// Adoption across a same-date refresh is what the gate was trying to express, and it works on the
 /// days the gate did not.
 #[test]
-fn swept_prices_survive_a_refresh_of_the_same_dump() {
+fn checked_prices_survive_a_refresh_of_the_same_dump() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
-    let mut swept = cache
+    let mut checked = cache
         .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
         .expect("first refresh stores");
-    swept.insert_live("Axi A1 Relic", 17);
+    checked.insert_checked("Axi A1 Relic", 17);
+    // A non-relic too: the page refresh checks whatever is on screen, and `Serration` has a dump
+    // price of 50 for the carried-over 42 to keep beating.
+    checked.insert_checked("Serration", 42);
 
     // The same lagging dump comes back, as it does on any ordinary day.
     let refreshed = cache
         .refresh(
             &FakeDumps::new(&[("2026-07-27", DUMP)]),
             TODAY,
-            Some(&swept),
+            Some(&checked),
         )
         .expect("second refresh stores");
 
     assert_eq!(refreshed.price_for("Axi A1 Radiant"), Some(17));
     assert_eq!(
-        cache
-            .load_cached()
-            .expect("a stored table is readable")
-            .price_for("Axi A1 Relic"),
+        refreshed.price_for("Serration"),
+        Some(42),
+        "a checked price outlives the refresh that re-parsed its dump"
+    );
+    let reloaded = cache.load_cached().expect("a stored table is readable");
+    assert_eq!(
+        reloaded.price_for("Axi A1 Relic"),
         Some(17),
         "the adopted price reaches disk, or the next launch re-sweeps"
     );
+    assert_eq!(reloaded.price_for("Serration"), Some(42));
 }
 
 #[test]
-fn a_newer_dump_discards_the_prices_swept_against_the_old_one() {
+fn a_newer_dump_discards_the_prices_checked_against_the_old_one() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
-    let mut swept = cache
+    let mut checked = cache
         .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
         .expect("first refresh stores");
-    swept.insert_live("Axi A1 Relic", 17);
+    checked.insert_checked("Axi A1 Relic", 17);
+    checked.insert_checked("Serration", 42);
 
     let refreshed = cache
         .refresh(
             &FakeDumps::new(&[("2026-07-29", DUMP)]),
             TODAY,
-            Some(&swept),
+            Some(&checked),
         )
         .expect("second refresh stores");
 
@@ -338,6 +346,11 @@ fn a_newer_dump_discards_the_prices_swept_against_the_old_one() {
         None,
         "a price checked for another day's table is re-swept, not carried over"
     );
+    assert_eq!(
+        refreshed.price_for("Serration"),
+        Some(50),
+        "an item the new dump prices falls back to the new dump, not to the stale checked number"
+    );
 }
 
 /// The health row reports what the table can price. Counting only dump prices left it stuck at the
@@ -346,9 +359,37 @@ fn a_newer_dump_discards_the_prices_swept_against_the_old_one() {
 fn the_reported_count_grows_as_relics_are_swept() {
     let mut table = table();
     let before = table.len();
-    table.insert_live("Axi A1 Relic", 17);
+    table.insert_checked("Axi A1 Relic", 17);
 
     assert_eq!(table.len(), before + 1);
+
+    // Improving a price the dump already had is not another item priced.
+    table.insert_checked("Serration", 42);
+    assert_eq!(table.len(), before + 1);
+}
+
+/// The point of persisting a checked price: it is the better measurement, so it must win. For a
+/// relic there is no dump price to lose to, which is why the order went unnoticed while only the
+/// relic sweep wrote here -- for everything else the dump would shadow the number the player just
+/// spent a request on.
+#[test]
+fn a_checked_price_outranks_the_dumps_for_the_same_item() {
+    let mut table = table();
+    assert_eq!(table.price_for("Serration"), Some(50), "the dump's median");
+
+    table.insert_checked("Serration", 42);
+
+    assert_eq!(table.price_for("Serration"), Some(42));
+}
+
+/// The same precedence through the name rules, since that is how the collection asks: a blueprint
+/// resolves to its listing and the checked price for that listing is what comes back.
+#[test]
+fn a_checked_price_reaches_an_item_through_the_name_rules() {
+    let mut table = table();
+    table.insert_checked("Mirage Prime Systems Blueprint", 19);
+
+    assert_eq!(table.price_for("Mirage Prime Systems Blueprint"), Some(19));
 }
 
 use warframe_acquisition::CollectionPriceCache;
@@ -410,15 +451,31 @@ fn a_corrupt_cache_file_yields_no_table_rather_than_a_panic() {
     );
 }
 
-/// A swept price survives the cache round-trip, or every restart would cost another sweep.
+/// A cache written before this map was generalised names it `relic_prices`. Reading it under the
+/// old name is one serde attribute against re-spending a whole sweep's requests on the first
+/// launch after an upgrade.
 #[test]
-fn swept_relic_prices_survive_the_disk_cache() {
+fn a_cache_written_under_the_old_field_name_still_carries_its_prices() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let stored = r#"{"prices":{"Serration":50},"relic_names":["Axi A1 Relic"],"relic_prices":{"Axi A1 Relic":17},"dump_date":"2026-07-27"}"#;
+    std::fs::write(directory.path().join("collection-prices.json"), stored).expect("write cache");
+
+    let table = CollectionPriceCache::new(directory.path())
+        .load_cached()
+        .expect("a stored table is readable");
+
+    assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
+}
+
+/// A checked price survives the cache round-trip, or every restart would cost another sweep.
+#[test]
+fn checked_prices_survive_the_disk_cache() {
     let directory = tempfile::tempdir().expect("temp dir");
     let cache = CollectionPriceCache::new(directory.path());
     let mut table = cache
         .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY, None)
         .expect("refresh stores");
-    table.insert_live("Axi A1 Relic", 17);
+    table.insert_checked("Axi A1 Relic", 17);
     cache.store_table(&table).expect("store");
 
     let reloaded = cache.load_cached().expect("a stored table is readable");

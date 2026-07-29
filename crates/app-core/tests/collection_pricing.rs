@@ -133,15 +133,15 @@ fn an_item_with_no_live_price_falls_back_to_the_dump_unmarked() {
     assert!(!view.collection().items()[0].live());
 }
 
-/// A swept relic price is a live price that was persisted, and it must keep saying so once the
-/// fifteen-minute live cache has dropped it. The alternative is a relic silently presenting as a
-/// dump price under a line reading "prices from the 27 Jul market summary" -- which is false about
-/// every relic on screen, because the dump deliberately prices no relics at all.
+/// A persisted checked price is a live price that outlived its cache entry, and it must keep
+/// saying so. The alternative is a relic silently presenting as a dump price under a line reading
+/// "prices from the 27 Jul market summary" -- which is false about every relic on screen, because
+/// the dump deliberately prices no relics at all.
 #[test]
 fn a_swept_relic_price_stays_marked_live_after_the_cache_expires() {
     let dump = r#"{"Axi A1 Relic": [{"order_type":"sell","median":25.0,"volume":30}]}"#;
     let mut table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("parses");
-    table.insert_live("Axi A1 Relic", 17);
+    table.insert_checked("Axi A1 Relic", 17);
     let mut core = core_with_items(vec![item("/a", "Axi A1 Radiant", Category::Relic, 2)]);
     core.set_collection_prices(Arc::new(table));
     // An empty live cache is what a swept price outlives: the entry has aged out.
@@ -152,6 +152,30 @@ fn a_swept_relic_price_stays_marked_live_after_the_cache_expires() {
     assert!(
         view.collection().items()[0].live(),
         "a swept price was checked live, whatever the live cache still remembers"
+    );
+}
+
+/// The same for an item the dump *does* price. A page refresh checks whatever is on screen, and
+/// once its answer is persisted the card must show that number and say it was checked live --
+/// otherwise the better measurement is presented as the day-old one it replaced.
+#[test]
+fn a_persisted_checked_price_reads_as_live_for_a_non_relic() {
+    let mut table = PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("parses");
+    table.insert_checked("Serration", 42);
+    let mut core = core_with_items(vec![item("/a", "Serration", Category::Resource, 1)]);
+    core.set_collection_prices(Arc::new(table));
+    // The fifteen-minute cache entry has aged out; only the persisted price remains.
+    core.set_live_prices(MarketPriceCache::new());
+
+    let view = core.current_view().expect("view builds");
+    assert_eq!(
+        view.collection().items()[0].platinum(),
+        Some(42),
+        "the checked price, not the dump's 50"
+    );
+    assert!(
+        view.collection().items()[0].live(),
+        "a persisted checked price was checked live, whatever the live cache still remembers"
     );
 }
 

@@ -102,8 +102,8 @@ exists, and a cached table dated today or yesterday is left alone. Anything olde
 per launch, which is the price of not remembering when we last asked.
 
 That attempt usually returns the file we already had, so the refreshed table adopts the cached one's
-swept relic prices whenever the two dates match. Without that, the ordinary launch would overwrite
-the cache with a table whose relic prices are empty and then re-spend 22 seconds learning the same
+checked prices whenever the two dates match. Without that, the ordinary launch would overwrite the
+cache with a table whose checked prices are empty and then re-spend 22 seconds learning the same
 numbers -- every launch, on the days the lag makes ordinary.
 
 The response is capped, as every remote read in this codebase is, because the body is streamed into
@@ -120,7 +120,7 @@ somebody goes looking.
 So the dump seeds everything and warframe.market answers for the rest. Two triggers, both bounded:
 
 - The startup relic sweep. Relics have no usable dump price at all -- the median is inflated by bulk listings the dump gives no way to divide out -- so the relics the player *owns* are priced live once, at start, and the results are written back into the price table. Bounded by ownership rather than by the catalog: 65 relics in the measured collection against the 772 the dump lists, which is 22 seconds at three requests a second rather than four minutes. It re-runs after an inventory refresh, because a refresh is the only thing that can add a relic, including the first snapshot a fresh install ever takes.
-- The page refresh. It prices what is on screen, at most forty-eight items, paced at the same three requests a second, so a full page takes about sixteen seconds. It offers every item the player owns rather than only the ones already priced: an item with no price is exactly the one somebody would want to ask about, and unresolvable names are dropped by the backend before any request is made.
+- The page refresh. It prices what is on screen, at most forty-eight items, paced at the same three requests a second, so a full page takes about sixteen seconds. It offers every item the player owns rather than only the ones already priced: an item with no price is exactly the one somebody would want to ask about, and unresolvable names are dropped by the backend before any request is made. Its results are written into the price table exactly as the sweep's are, for the reason below.
 
 Neither is a sweep of the collection. Nothing is fetched for an item the player does not own, and
 nothing outside the relic sweep is fetched without a click, which is what keeps a feature that could
@@ -146,14 +146,27 @@ fill, which has fifteen seconds of screen and skips its own extra delay) can spe
 but cannot exceed it. One relic sweep runs at a time for the same reason: two overlapping sweeps
 would spend the same requests twice.
 
-A swept relic price outlives that cache. It is persisted into the price table beside the dump's own
-prices, because a fifteen-minute cache would mean a relic showing a dash for most of a session, and
-because re-spending 22 seconds of requests to learn a number we already had is the behaviour the
-API rules ask clients not to have. It lives exactly as long as the dump it was checked against: a
-refresh that brings back the same dump -- which is the ordinary case, since the dumps lag two days
--- carries the swept prices across, and a genuinely newer dump clears them and the sweep runs again.
-That single rule is the whole freshness policy; a second date gate alongside it would only be a
+A checked price outlives that cache. Whichever trigger obtained it, it is written into the price
+table beside the dump's own prices, because a fifteen-minute cache would mean a relic showing a dash
+for most of a session, because re-spending 22 seconds of requests to learn a number we already had
+is the behaviour the API rules ask clients not to have, and because a price the player deliberately
+asked for is the best number the app has about that item -- letting it expire back to a day-old
+figure discards a request they spent. The table therefore holds two maps: the dump's medians, and
+whatever warframe.market has answered directly since. The second wins wherever both exist. That
+precedence is invisible while only relics are checked, since the dump prices no relic at all, and
+load-bearing the moment a prime part is: consulting the dump first would shadow the live number
+with the one it was fetched to replace.
+
+A checked price lives exactly as long as the dump it was checked against: a refresh that brings back
+the same dump -- which is the ordinary case, since the dumps lag two days -- carries the checked
+prices across, and a genuinely newer dump clears them, after which the sweep runs again and the page
+offers to re-price what is on screen. That single rule is the whole freshness policy and the only
+bound on how stale a stored checked price can get; a second date gate alongside it would only be a
 second thing to keep in step.
+
+Two callers write that table now, so the read-modify-write that folds prices into it happens under
+the runtime lock rather than beside it. The network work stays outside: each caller paces its own
+requests first, at the shared floor, and takes the lock only for a clone and a file write.
 
 The valuation itself fetches nothing of its own. The value sort and the collection worth need every
 item priced to mean anything, and live-pricing hundreds of items to compute a total is exactly the
@@ -182,10 +195,10 @@ pool, or the startup sweep persisted into the table -- says it was checked live.
 on the card, not in a tooltip, because the whole reason the live path exists is that the difference
 matters.
 
-"Checked live" covers both the fifteen-minute cache and a persisted swept price, deliberately.
-Those are one measurement made at two different times, and the alternative -- a relic that reads as
-live for fifteen minutes and then quietly becomes a dump price -- would attribute it to a file that
-prices no relics at all.
+"Checked live" covers both the fifteen-minute cache and a persisted checked price, deliberately.
+Those are one measurement made at two different times, and the alternative -- an item that reads as
+live for fifteen minutes and then quietly reverts to a dump price, or to a dash where the dump
+prices nothing -- would attribute it to a file it did not come from.
 
 ## Application View
 
@@ -194,10 +207,10 @@ would be a second name for "has a price", since those are the same fact here; th
 reads the price field directly. `live` is not that -- it says which of two different measurements
 the number is, and nothing else in the view carries it.
 
-`AppCore` holds the dump's price table and the live cache, both cheap `Arc` clones, and
-`current_view()` reads the live cache first and the table second. `live` is true for a price from
-that cache and for a relic price the sweep persisted, because both were checked against
-warframe.market; it is false only for a number the dump supplied.
+`AppCore` holds the price table and the live cache, both cheap `Arc` clones, and `current_view()`
+reads the live cache first and the table second. `live` is true for a price from that cache and for
+any price persisted into the table's checked map -- swept relic or refreshed prime part alike --
+because both were checked against warframe.market; it is false only for a number the dump supplied.
 
 The frontend already polls the view every 2.5 seconds, so both the dump loading and a live refresh
 landing appear on their own through plumbing that already exists. That poll must keep running while
@@ -234,7 +247,9 @@ each item.
 
 One control invokes the live path: the register's refresh, which names its scope and how many items
 it will price -- everything owned on the page, whether or not it has a number yet -- and shows its
-progress, because sixteen seconds of silence reads as a broken button. There is no per-item control.
+progress, because sixteen seconds of silence reads as a broken button. It sits at the end of the
+register bar, after the provenance line and the range readout: those two are one statement about
+what is on screen, and an action set between them broke a line meant to read as one. There is no per-item control.
 It was one click for one request, in a register where the row-level answer is the same request; the
 page control subsumes it and one affordance is easier to understand than two.
 
@@ -276,11 +291,13 @@ rather than from the catalog's name, for all four refinement suffixes; the dump 
 trimmed fixture, including an item whose `sell` record is absent and one whose body is one byte over
 the cap; date walk-back, proving a missing file for today falls through to an older one and records
 the date it used; a cached dump dated today or yesterday not being downloaded again while an older
-one is; a refresh of the same dump keeping the prices swept against it and a newer dump discarding
-them; the cache round-tripping through disk and pricing a collection before any network call;
-malformed input rejected whole; a live price taking precedence over the dump's and being marked as
-such; a swept relic price still reading as checked live once the fifteen-minute cache has dropped
-it; an item at quantity 0 carrying no price; the sweep bounded to owned relics and collapsing
+one is; a refresh of the same dump keeping the prices checked against it -- relic and dump-priced
+item alike -- and a newer dump discarding them, the dump-priced one falling back to the new dump
+rather than to the stale number; a cache written under the map's former name still carrying its
+prices; the cache round-tripping through disk and pricing a collection before any network call;
+malformed input rejected whole; a checked price taking precedence over the dump's for the same item
+and being marked as such; a persisted checked price still reading as checked live once the
+fifteen-minute cache has dropped it, for a relic and for an item the dump prices; an item at quantity 0 carrying no price; the sweep bounded to owned relics and collapsing
 refinement tiers; two concurrent warms unable to put requests closer together than the shared floor;
 and each live-lookup outcome distinctly, including oversize reaching the market health row, a
 part-finished pass reporting itself, and a bulk listing too cheap to divide still quoting 1p.

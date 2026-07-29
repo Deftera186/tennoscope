@@ -39,18 +39,25 @@ const RELIC_SUFFIX: &str = " Relic";
 
 /// Every priceable item, keyed by the dump's own English name.
 ///
-/// Relics are excluded from `prices`: the dump has no `perTrade` to divide out, sellers list them
-/// six at a time, and the resulting median runs up to 1.5x high (measured: Axi A1 at 25p in the
-/// dump against 16.67p per unit live). A relic's dump key still lives in `relic_names` so
-/// `market_name` keeps resolving it -- the live sweep (a later task) needs that name to build its
-/// warframe.market slug -- and its price, once swept, lands in `relic_prices` instead.
+/// Two maps, because there are two measurements. `prices` is the daily dump's median sell price.
+/// `checked_prices` is what warframe.market answered when somebody asked it directly -- the startup
+/// relic sweep or a page refresh -- and it wins wherever it exists, because a price checked against
+/// the market minutes ago is better than the middle of a day-old file.
+///
+/// Relics are excluded from `prices` entirely: the dump has no `perTrade` to divide out, sellers
+/// list them six at a time, and the resulting median runs up to 1.5x high (measured: Axi A1 at 25p
+/// in the dump against 16.67p per unit live). A relic's dump key still lives in `relic_names` so
+/// `market_name` keeps resolving it -- the live path needs that name to build its warframe.market
+/// slug -- and its price can only ever come from `checked_prices`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PriceTable {
     prices: HashMap<String, u32>,
     #[serde(default)]
     relic_names: std::collections::HashSet<String>,
-    #[serde(default)]
-    relic_prices: HashMap<String, u32>,
+    // The alias reads a cache written before this map held anything but swept relic prices, so an
+    // upgrade does not throw away a sweep and re-spend its requests learning the same numbers.
+    #[serde(default, alias = "relic_prices")]
+    checked_prices: HashMap<String, u32>,
     dump_date: String,
 }
 
@@ -70,7 +77,7 @@ impl PriceTable {
         Ok(Self {
             prices,
             relic_names,
-            relic_prices: HashMap::new(),
+            checked_prices: HashMap::new(),
             dump_date: dump_date.to_owned(),
         })
     }
@@ -110,42 +117,50 @@ impl PriceTable {
         self.relic_names.get(name).map(String::as_str)
     }
 
+    /// The best price in hand: what warframe.market last answered directly, and the dump's median
+    /// only where nothing has been checked.
+    ///
+    /// The order matters for every item that is *not* a relic. A relic has no dump price to shadow
+    /// a checked one, but a prime part has, and consulting the dump first would quietly discard the
+    /// price the player just spent a request on.
     pub fn price_for(&self, name: &str) -> Option<u32> {
         let key = self.market_name(name)?;
-        self.prices
+        self.checked_prices
             .get(key)
-            .or_else(|| self.relic_prices.get(key))
+            .or_else(|| self.prices.get(key))
             .copied()
     }
 
-    /// Records a relic's price from the live sweep (a later task), keyed by the same market name
-    /// `market_name` resolves to.
-    pub fn insert_live(&mut self, market_name: &str, platinum: u32) {
-        self.relic_prices.insert(market_name.to_owned(), platinum);
+    /// Records what warframe.market answered for this item, keyed by the same market name
+    /// `market_name` resolves to. Written by the startup relic sweep and by the page refresh.
+    pub fn insert_checked(&mut self, market_name: &str, platinum: u32) {
+        self.checked_prices.insert(market_name.to_owned(), platinum);
     }
 
-    /// Whether this relic already carries a price from a previous sweep. What the startup sweep
-    /// uses to skip a relic it has already priced rather than re-spending a request on it, and
-    /// what the view reads to say a relic's price was checked live rather than taken from the dump.
-    pub fn has_swept_price(&self, market_name: &str) -> bool {
-        self.relic_prices.contains_key(market_name)
+    /// Whether this item already carries a price checked against warframe.market. What the startup
+    /// sweep uses to skip a relic it has already priced rather than re-spending a request on it,
+    /// and what the view reads to say a price was checked live rather than taken from the dump.
+    pub fn has_checked_price(&self, market_name: &str) -> bool {
+        self.checked_prices.contains_key(market_name)
     }
 
-    /// Carry a previous table's swept relic prices across a refresh of the *same* dump.
+    /// Carry a previous table's checked prices across a refresh of the *same* dump.
     ///
     /// The dumps lag -- on 2026-07-29 the newest published was dated the 27th -- so an ordinary
-    /// launch re-downloads a file it already has and parses it into a table whose `relic_prices`
+    /// launch re-downloads a file it already has and parses it into a table whose `checked_prices`
     /// is empty. Without this, every launch would destroy the sweep's work and re-spend 65
-    /// requests re-learning the same numbers. A genuinely newer dump still clears them: a swept
-    /// price belongs to the day it was checked, and the sweep re-runs for the new one.
+    /// requests re-learning the same numbers. A genuinely newer dump still clears them: a checked
+    /// price belongs to the day it was made, and the sweep re-runs for the new one. That single
+    /// rule is the whole freshness policy, and it is what bounds how stale a stored checked price
+    /// can get.
     ///
-    /// A price already swept into `self` wins, because it is the newer of the two.
-    pub fn adopt_swept(&mut self, previous: &PriceTable) {
+    /// A price already checked into `self` wins, because it is the newer of the two.
+    pub fn adopt_checked(&mut self, previous: &PriceTable) {
         if self.dump_date != previous.dump_date {
             return;
         }
-        for (market_name, platinum) in &previous.relic_prices {
-            self.relic_prices
+        for (market_name, platinum) in &previous.checked_prices {
+            self.checked_prices
                 .entry(market_name.clone())
                 .or_insert(*platinum);
         }
@@ -162,11 +177,17 @@ impl PriceTable {
         &self.dump_date
     }
 
-    /// How many items this table can price, dump prices and swept relic prices together. What the
+    /// How many items this table can price, dump prices and checked prices together. What the
     /// collection price health row reports, so it grows as the sweep lands rather than standing
-    /// still at the dump's count while 65 relics gain prices.
+    /// still at the dump's count while 65 relics gain prices. An item the dump prices and a live
+    /// check has since improved is one item, not two.
     pub fn len(&self) -> usize {
-        self.prices.len() + self.relic_prices.len()
+        self.prices.len()
+            + self
+                .checked_prices
+                .keys()
+                .filter(|name| !self.prices.contains_key(*name))
+                .count()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -335,7 +356,7 @@ impl CollectionPriceCache {
         (!table.is_empty()).then_some(table)
     }
 
-    /// Fetch the newest dump and store it, carrying `previous`'s swept relic prices across when the
+    /// Fetch the newest dump and store it, carrying `previous`'s checked prices across when the
     /// dump that comes back is the one it already described. On failure the previously stored table
     /// is untouched.
     pub fn refresh(
@@ -346,13 +367,14 @@ impl CollectionPriceCache {
     ) -> Result<PriceTable, PriceDumpError> {
         let mut table = latest_dump(source, now_unix)?;
         if let Some(previous) = previous {
-            table.adopt_swept(previous);
+            table.adopt_checked(previous);
         }
         self.store(&table)?;
         Ok(table)
     }
 
-    /// Stores a table outside of `refresh`, so a live sweep's swept relic prices reach disk too.
+    /// Stores a table outside of `refresh`, so prices checked live after the dump landed -- the
+    /// relic sweep's, the page refresh's -- reach disk too.
     pub fn store_table(&self, table: &PriceTable) -> Result<(), PriceDumpError> {
         self.store(table)
     }

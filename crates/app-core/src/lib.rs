@@ -178,18 +178,18 @@ impl AppCore {
                 let live = market_name
                     .zip(self.live.as_ref())
                     .and_then(|(name, cache)| cache.get(name));
-                let dump = market_name
+                let stored = market_name
                     .zip(self.prices.as_ref())
                     .and_then(|(name, prices)| prices.price_for(name));
-                // A relic's price never comes from the dump -- it comes from the startup sweep,
-                // which asked warframe.market the same question the live cache did and then
-                // persisted the answer so it outlives that cache's fifteen minutes. Presenting it
-                // as a dump price after those fifteen minutes would attribute it to a file that
-                // deliberately does not price relics at all.
-                let swept = market_name
+                // A price the player checked against warframe.market is persisted into the price
+                // table so it outlives that cache's fifteen minutes: a relic has no dump price at
+                // all, and for everything else the checked number is the better of the two.
+                // Presenting either as a dump price once the cache has dropped it would attribute
+                // it to a file it did not come from.
+                let checked = market_name
                     .zip(self.prices.as_ref())
-                    .is_some_and(|(name, prices)| prices.has_swept_price(name));
-                CollectionItemView::priced(entry, live.or(dump), live.is_some() || swept)
+                    .is_some_and(|(name, prices)| prices.has_checked_price(name));
+                CollectionItemView::priced(entry, live.or(stored), live.is_some() || checked)
             })
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));

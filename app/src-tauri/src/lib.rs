@@ -194,6 +194,10 @@ async fn refresh_inventory(state: State<'_, SharedRuntime>) -> Result<AppView, S
 /// sixteen seconds. It runs to completion rather than returning early: the frontend's own poll
 /// surfaces each price as it lands, so the wait is visible as prices appearing rather than as a
 /// button that does nothing.
+///
+/// What comes back is written into the persisted price table, not left in the 15-minute live
+/// cache. A price the player deliberately asked for is the best number the app has for that item,
+/// and letting it expire back to a day-old figure would discard a request they spent.
 #[tauri::command]
 async fn refresh_prices(
     item_ids: Vec<String>,
@@ -201,7 +205,7 @@ async fn refresh_prices(
 ) -> Result<AppView, String> {
     let shared = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let (names, cache) = {
+        let (names, cache, app_data) = {
             let runtime = shared
                 .lock()
                 .map_err(|_| "application state is unavailable".to_owned())?;
@@ -211,17 +215,37 @@ async fn refresh_prices(
                     .market_names_for(&item_ids)
                     .map_err(|_| "collection items could not be resolved".to_owned())?,
                 runtime.live_prices.clone(),
+                runtime.app_data.clone(),
             )
         };
         if let Some(market) = warframe_acquisition::WarframeMarketHttp::new() {
             let outcome = cache.warm(&market, &names, warframe_acquisition::MARKET_MIN_GAP);
-            // The live path shares the overlay's row, since both answer "could we reach
-            // warframe.market just now". The dump's date lives in its own row and is not
-            // disturbed by this.
-            if let Some(failure) = outcome.failure()
-                && let Ok(mut runtime) = shared.lock()
-            {
-                let _ = runtime.core.record_market_degraded(failure);
+            let persisted = store_checked_prices(
+                &shared,
+                &CollectionPriceCache::new(&app_data),
+                &names,
+                &cache,
+            );
+            if let Ok(mut runtime) = shared.lock() {
+                // The live path shares the overlay's row, since both answer "could we reach
+                // warframe.market just now". The dump's date lives in its own row and is not
+                // disturbed by this.
+                if let Some(failure) = outcome.failure() {
+                    let _ = runtime.core.record_market_degraded(failure);
+                }
+                // The collection price row is the only one that can report a price which reached
+                // memory but not disk, where it would not survive the next start.
+                match persisted {
+                    Some((priced, date, true)) => {
+                        let _ = runtime.core.record_collection_prices_ready(priced, date);
+                    }
+                    Some((_, _, false)) => {
+                        let _ = runtime
+                            .core
+                            .record_collection_prices_degraded(CHECKED_PRICES_UNSAVED);
+                    }
+                    None => {}
+                }
             }
         }
         shared
@@ -1590,9 +1614,9 @@ fn spawn_owned_relic_sweep(shared: SharedRuntime) {
 /// lock once the sweep has finished.
 ///
 /// Bounded by `owned_relic_market_names`, never by every relic the dump lists, and then by the one
-/// question worth asking per relic: does this one already have a swept price? A swept price lives
-/// exactly as long as the dump it arrived with (see `PriceTable::adopt_swept`), so that single
-/// filter is the whole freshness rule -- there is no second cadence to keep in step with the first.
+/// question worth asking per relic: does this one already have a checked price? A checked price
+/// lives exactly as long as the dump it arrived with (see `PriceTable::adopt_checked`), so that
+/// single filter is the whole freshness rule -- there is no second cadence to keep in step.
 fn sweep_owned_relics(
     shared: &SharedRuntime,
     cache: &CollectionPriceCache,
@@ -1611,7 +1635,7 @@ fn sweep_owned_relics(
     };
     let to_sweep: Vec<String> = owned
         .into_iter()
-        .filter(|name| !table.has_swept_price(name))
+        .filter(|name| !table.has_checked_price(name))
         .collect();
     if to_sweep.is_empty() {
         return;
@@ -1625,31 +1649,58 @@ fn sweep_owned_relics(
             .record_collection_prices_sweeping(to_sweep.len());
     }
     let outcome = live_prices.warm(&market, &to_sweep, warframe_acquisition::MARKET_MIN_GAP);
-    // ponytail: read-modify-write against a table this thread does not hold a lock on. Safe because
-    // this sweep is the only writer of relic prices and `spawn_owned_relic_sweep` admits one at a
-    // time; if a second writer is ever added, move the mutation under the runtime lock.
-    let mut updated = (*table).clone();
-    for name in &to_sweep {
-        if let Some(price) = live_prices.get(name) {
-            updated.insert_live(name, price);
-        }
-    }
-    let store_result = cache.store_table(&updated);
-    let priced = updated.len();
-    let date = updated.dump_date().to_owned();
+    let Some((priced, date, stored)) = store_checked_prices(shared, cache, &to_sweep, live_prices)
+    else {
+        return;
+    };
     let Ok(mut runtime) = shared.lock() else {
         return;
     };
-    runtime.core.set_collection_prices(Arc::new(updated));
     if let Some(failure) = outcome.failure() {
         let _ = runtime.core.record_collection_prices_degraded(failure);
-    } else if store_result.is_err() {
-        let _ = runtime.core.record_collection_prices_degraded(
-            "Swept relic prices could not be saved for the next start",
-        );
+    } else if !stored {
+        let _ = runtime
+            .core
+            .record_collection_prices_degraded(CHECKED_PRICES_UNSAVED);
     } else {
         let _ = runtime.core.record_collection_prices_ready(priced, date);
     }
+}
+
+/// What the collection price row says when a checked price reached memory but not disk.
+const CHECKED_PRICES_UNSAVED: &str = "Checked prices could not be saved for the next start";
+
+/// Folds prices just checked against warframe.market into the persisted price table, so they
+/// outlive the 15-minute live cache and survive a restart.
+///
+/// The whole read-modify-write-persist runs under one hold of the runtime lock. There are two
+/// writers now -- the startup relic sweep and the page refresh -- and either could otherwise
+/// clone the table, be overtaken, and then write its stale copy over the other's prices on disk.
+/// The network work is deliberately *not* in here: callers pace their own requests first and call
+/// this with the answers, so the lock the 2.5-second view poll needs is held for a clone and a
+/// file write rather than for twenty seconds of HTTP.
+///
+/// Returns how many items the table can now price, the dump date it belongs to, and whether the
+/// write to disk succeeded.
+fn store_checked_prices(
+    shared: &SharedRuntime,
+    cache: &CollectionPriceCache,
+    names: &[String],
+    live_prices: &MarketPriceCache,
+) -> Option<(usize, String, bool)> {
+    let mut runtime = shared.lock().ok()?;
+    let table = runtime.core.collection_prices()?;
+    let mut updated = (*table).clone();
+    for name in names {
+        if let Some(price) = live_prices.get(name) {
+            updated.insert_checked(name, price);
+        }
+    }
+    let stored = cache.store_table(&updated).is_ok();
+    let priced = updated.len();
+    let date = updated.dump_date().to_owned();
+    runtime.core.set_collection_prices(Arc::new(updated));
+    Some((priced, date, stored))
 }
 
 fn start_monitor(shared: SharedRuntime, app: AppHandle) {
