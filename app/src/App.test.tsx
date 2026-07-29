@@ -348,15 +348,6 @@ describe('MVP desktop interface', () => {
     expect(within(dump).queryByText('Live')).not.toBeInTheDocument()
   })
 
-  it('prices one item live when it is selected', async () => {
-    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
-    const user = userEvent.setup()
-    render(<App/>)
-    await user.click(await screen.findByRole('button', { name: /Price Lex Prime Receiver live/ }))
-
-    expect(backend.refreshPrices).toHaveBeenCalledWith(['lex-prime-receiver'])
-  })
-
   it('sorts by stack value and sinks unpriced items to the bottom', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     const user = userEvent.setup()

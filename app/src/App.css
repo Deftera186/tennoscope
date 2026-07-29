@@ -280,7 +280,6 @@
 }
 .collection-grid > li { display: grid; }
 .entry {
-  position: relative;
   display: grid; grid-template-columns: 5.5rem minmax(0, 1fr); min-height: 6.5rem;
   background: var(--touchstone); transition: background .12s ease;
   box-shadow: inset -1px 0 0 var(--rule), inset 0 -1px 0 var(--rule);
@@ -327,18 +326,6 @@
   letter-spacing: .08em; text-transform: uppercase; color: var(--platinum-deep);
 }
 .price em::before { content: '· '; }
-
-/* A corner action, not a fourth mark in the row: pricing an item is something
-   the player does, not a fact about it, so it stays out of the read-only marks. */
-.price-check {
-  position: absolute; top: var(--tight); right: var(--tight);
-  padding: .3rem .55rem .5rem; border: 1px solid var(--rule-control); border-radius: 0; background: var(--touchstone);
-  font-family: var(--face-register); font-size: .52rem; font-weight: 600; letter-spacing: .12em;
-  text-transform: uppercase; color: var(--platinum-deep); cursor: pointer;
-  transition: color .12s ease, border-color .12s ease, background .12s ease;
-}
-.price-check:hover { color: var(--platinum); border-color: var(--rule-bright); background: var(--raised); }
-.price-check:focus-visible { outline: 2px solid var(--platinum); outline-offset: 1px; }
 
 /* Date letters: assay offices stamp a letter per year; pages get the same treatment. */
 .pagination { display: flex; align-items: center; justify-content: center; gap: var(--hair); padding-top: var(--course); border-top: 1px solid var(--rule); }

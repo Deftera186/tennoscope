@@ -366,7 +366,7 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
 
       {filtered.length
         ? <>
-          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} pricing={pricing} onPriceLive={id => onPriceLive([id])}/></li>)}</ul>
+          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item}/></li>)}</ul>
           <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
         </>
         : <EmptyState
@@ -386,7 +386,7 @@ function BandCell({ kind, value, unit = '', label, note }: { kind: string; value
   </div>
 }
 
-function CollectionEntry({ item, pricing, onPriceLive }: { item: CollectionItem; pricing: boolean; onPriceLive: (id: string) => void }) {
+function CollectionEntry({ item }: { item: CollectionItem }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
   return <article className={`entry cat-${item.category}`} aria-label={item.name}>
@@ -410,15 +410,6 @@ function CollectionEntry({ item, pricing, onPriceLive }: { item: CollectionItem;
         </span>}
       </div>
     </div>
-    <button
-      type="button"
-      className="price-check"
-      // A second request while one is in flight would leave `pricing` stuck on when the first
-      // returns, with the button reading "Pricing..." over nothing.
-      disabled={pricing}
-      aria-label={`Price ${item.name} live`}
-      onClick={() => onPriceLive(item.id)}
-    >Check</button>
   </article>
 }
 
