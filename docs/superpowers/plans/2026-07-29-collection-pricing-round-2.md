@@ -110,21 +110,22 @@ In `crates/warframe-acquisition/src/market.rs`, add the field to `Order`:
     per_trade: u32,
 ```
 
-with `fn one() -> u32 { 1 }`, and change the price computation in `lowest_sell_top` to divide,
-rounding to nearest, and guarding a zero count:
+with `fn one() -> u32 { 1 }`, and change the price computation in `lowest_sell_top` to divide by the
+trade size, rounding to nearest:
 
 ```rust
         .map(|order| {
+            // `platinum` buys `perTrade` units, so the per-unit price is the quotient. Rounded to
+            // nearest rather than truncated: 12p for five is 2.4p each, and truncation would quote
+            // 2p and understate every bulk seller. A malformed count of zero is treated as one
+            // rather than dividing by it.
             let per_trade = order.per_trade.max(1);
-            order.platinum.div_ceil(per_trade).min(
-                (f64::from(order.platinum) / f64::from(per_trade)).round() as u32,
-            )
+            (order.platinum + per_trade / 2) / per_trade
         })
 ```
 
-That expression is deliberately not the obvious one — write whatever computes round-half-away-from-zero
-on `platinum / per_trade` and makes all four tests pass, with a comment naming the rule. Prefer the
-simplest correct form over the sketch above.
+Check the arithmetic against the tests: `12 + 5/2 = 14`, `14 / 5 = 2`; `18 + 6/2 = 21`, `21 / 6 = 3`;
+`25 + 0 = 25`, `25 / 1 = 25`. All integer arithmetic, no floats, no overflow at realistic prices.
 
 - [ ] **Step 4: Run the tests**
 
