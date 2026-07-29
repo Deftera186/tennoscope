@@ -124,6 +124,12 @@ impl PriceTable {
         self.relic_prices.insert(market_name.to_owned(), platinum);
     }
 
+    /// Whether this relic already carries a price from a previous sweep. What the startup sweep
+    /// uses to skip a relic it has already priced rather than re-spending a request on it.
+    pub fn has_swept_price(&self, market_name: &str) -> bool {
+        self.relic_prices.contains_key(market_name)
+    }
+
     /// The relic dump keys the sweep needs to work through.
     pub fn relic_market_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.relic_names.iter().cloned().collect();
@@ -215,6 +221,18 @@ pub fn dump_is_current(dump_date: &str, now_unix: u64) -> bool {
     [0, 86_400]
         .iter()
         .any(|back| civil_date(now_unix.saturating_sub(*back)) == dump_date)
+}
+
+/// Whether a table's swept relic prices are already fresh enough to skip re-sweeping them.
+///
+/// The sweep runs right after the dump loads and shares its clock: a fresh dump replaces the whole
+/// table (see `latest_dump`), clearing `relic_prices` along with it, so a table that still carries
+/// swept prices is one this same dump day already answered. That makes the sweep's freshness window
+/// the dump's own -- there is no separate cadence to invent, and no separate state to track. Without
+/// this, a restart within the same day would re-spend the ~22 seconds re-fetching prices that had
+/// not gone stale.
+pub fn relic_sweep_is_current(table: &PriceTable, now_unix: u64) -> bool {
+    dump_is_current(&table.dump_date, now_unix)
 }
 
 /// The newest dump on offer, starting at today and walking back.

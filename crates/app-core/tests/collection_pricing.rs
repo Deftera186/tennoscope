@@ -197,3 +197,43 @@ fn an_unresolvable_item_is_not_requested() {
             .is_empty()
     );
 }
+
+/// The sweep is bounded by what the player owns, not by what exists. Measured against a real
+/// collection that is 65 relics and about 22 seconds; the dump lists 772.
+#[test]
+fn only_owned_relics_are_swept() {
+    let dump = r#"{
+        "Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}],
+        "Meso B2 Relic": [{"order_type":"sell","median":9.0,"volume":12}],
+        "Serration": [{"order_type":"sell","median":50.0,"volume":12}]
+    }"#;
+    let mut core = core_with_items(vec![
+        item("/a", "Axi A1 Radiant", Category::Relic, 2),
+        item("/b", "Meso B2 Intact", Category::Relic, 0),
+        item("/c", "Serration", Category::Resource, 1),
+    ]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+
+    assert_eq!(
+        core.owned_relic_market_names().expect("resolves"),
+        vec!["Axi A1 Relic".to_owned()],
+        "a relic at quantity 0 is not owned, and a resource is not a relic"
+    );
+}
+
+/// Four refinement tiers of one relic are one request.
+#[test]
+fn relic_refinements_collapse_before_the_sweep() {
+    let dump = r#"{"Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}]}"#;
+    let mut core = core_with_items(vec![
+        item("/a", "Axi A1 Intact", Category::Relic, 1),
+        item("/b", "Axi A1 Radiant", Category::Relic, 3),
+    ]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+
+    assert_eq!(core.owned_relic_market_names().unwrap().len(), 1);
+}

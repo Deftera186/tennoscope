@@ -125,6 +125,40 @@ impl AppCore {
         Ok(names)
     }
 
+    /// warframe.market's names for the relics the player owns, deduplicated across refinement
+    /// tiers.
+    ///
+    /// Bounded by ownership rather than by the dump: the dump lists every relic the game has (772
+    /// measured), while the sweep this feeds spends one request per name at 3/second, and a real
+    /// collection owns a few dozen of them -- 65 versus 772 is the difference between 22 seconds
+    /// and four minutes.
+    pub fn owned_relic_market_names(&self) -> Result<Vec<String>, AppError> {
+        let Some(prices) = self.prices.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let relic_names: std::collections::HashSet<String> =
+            prices.relic_market_names().into_iter().collect();
+        let collection = self.store.load_collection()?;
+        let mut names = collection
+            .entries()
+            .filter(|entry| entry.quantity >= 1)
+            .filter_map(|entry| prices.market_name(&entry.item.name).map(str::to_owned))
+            .filter(|name| relic_names.contains(name))
+            .collect::<Vec<_>>();
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    /// The daily price table currently backing the collection view, if it has loaded.
+    ///
+    /// Returned by value (an `Arc` clone) rather than borrowed, so a caller can read it, drop the
+    /// runtime lock, and spend a long time (the relic sweep, ~22 seconds) working from the copy
+    /// without holding the lock the 2.5-second view poll also needs.
+    pub fn collection_prices(&self) -> Option<Arc<PriceTable>> {
+        self.prices.clone()
+    }
+
     pub fn current_view(&self) -> Result<AppView, AppError> {
         let collection = self.store.load_collection()?;
         let mut items = collection
@@ -411,6 +445,24 @@ impl AppCore {
         let last_success = self.health.collection_prices.last_success.clone();
         self.health.collection_prices =
             BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.current_view()
+    }
+
+    /// Progress through the startup relic sweep, on the same row as `record_collection_prices_ready`.
+    ///
+    /// A ~22-second sweep with nothing written to this row until it finishes reads as work that
+    /// never started, not work that is running -- Diagnostics is the only place that 22 seconds is
+    /// visible at all, since nothing else in the UI waits on it.
+    pub fn record_collection_prices_sweeping(
+        &mut self,
+        done: usize,
+        total: usize,
+    ) -> Result<AppView, AppError> {
+        let last_success = self.health.collection_prices.last_success.clone();
+        self.health.collection_prices = BackendHealth::ready(
+            format!("Sweeping live relic prices ({done}/{total})"),
+            last_success,
+        )?;
         self.current_view()
     }
 

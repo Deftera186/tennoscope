@@ -178,6 +178,7 @@ fn a_malformed_dump_is_rejected_whole() {
 use std::{cell::RefCell, collections::HashMap as Map};
 use warframe_acquisition::{
     CollectionPriceSource, PriceFetch, civil_date, dump_is_current, latest_dump,
+    relic_sweep_is_current,
 };
 
 struct FakeDumps {
@@ -275,6 +276,17 @@ fn a_dump_from_today_or_yesterday_is_not_downloaded_again() {
         "older than yesterday is worth one request to check"
     );
     assert!(!dump_is_current("", TODAY), "no date is not a fresh date");
+}
+
+/// The sweep shares the dump's clock rather than keeping one of its own: a fresh dump replaces the
+/// whole table, so swept prices surviving in a loaded table are only as old as that table's dump.
+#[test]
+fn a_relic_sweep_is_current_exactly_when_its_dump_is() {
+    let stale = table(); // dated 2026-07-27, already older than `dump_is_current` accepts at TODAY
+    assert!(!relic_sweep_is_current(&stale, TODAY));
+
+    let fresh = PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-29").expect("fixture parses");
+    assert!(relic_sweep_is_current(&fresh, TODAY));
 }
 
 use warframe_acquisition::CollectionPriceCache;
