@@ -69,10 +69,13 @@ wrong all 25 times, with no correct firing anywhere in the collection. Every pri
 can actually sell is in the dump under its own name and resolves by rule 1. Dropping the
 rule took the collection from 266 priced items to 241, and all 25 lost were false prices.
 
-Rule 3 recovers 772 relics that no other rule reaches, at the cost of one known imprecision: the
-dump prices a relic without regard to refinement, so all four tiers of `Axi A1` read the same. A
-radiant relic is worth more than an intact one and this design does not say so. That is a real
-loss, accepted because the alternative is pricing no relics at all.
+Rule 3 recovers 772 relic names that no other rule reaches, but no longer prices them from the
+dump. The dump has no `perTrade` to divide out, sellers list a relic six at a time, and the
+resulting median runs up to 1.5x high -- measured on `Axi A1`, 25p in the dump against 16.67p per
+unit live. A relic's dump key still resolves, because the live sweep (a later task) needs that name
+to build its warframe.market slug, but the price comes only from that sweep, persisted back into
+this same table so it survives a restart. Until a relic has been swept it has no price rather than
+an inflated one.
 
 An unresolved name means no price. It is not an error, and it is not evidence that the item is
 untradeable -- the remaining gap is largely non-prime weapon components, which the catalog does not

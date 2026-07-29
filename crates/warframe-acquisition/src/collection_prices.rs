@@ -34,10 +34,23 @@ struct DumpRecord {
     median: Option<f64>,
 }
 
+/// A dump key is a relic listing if it ends in this suffix, e.g. `Axi A1 Relic`.
+const RELIC_SUFFIX: &str = " Relic";
+
 /// Every priceable item, keyed by the dump's own English name.
+///
+/// Relics are excluded from `prices`: the dump has no `perTrade` to divide out, sellers list them
+/// six at a time, and the resulting median runs up to 1.5x high (measured: Axi A1 at 25p in the
+/// dump against 16.67p per unit live). A relic's dump key still lives in `relic_names` so
+/// `market_name` keeps resolving it -- the live sweep (a later task) needs that name to build its
+/// warframe.market slug -- and its price, once swept, lands in `relic_prices` instead.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct PriceTable {
     prices: HashMap<String, u32>,
+    #[serde(default)]
+    relic_names: std::collections::HashSet<String>,
+    #[serde(default)]
+    relic_prices: HashMap<String, u32>,
     dump_date: String,
 }
 
@@ -45,12 +58,19 @@ impl PriceTable {
     pub fn from_dump_json(bytes: &[u8], dump_date: &str) -> Result<Self, PriceDumpError> {
         let raw: HashMap<String, Vec<DumpRecord>> =
             serde_json::from_slice(bytes).map_err(|_| PriceDumpError::Malformed)?;
-        let prices = raw
-            .into_iter()
-            .filter_map(|(name, records)| Some((name, sell_median(&records)?)))
-            .collect();
+        let mut prices = HashMap::new();
+        let mut relic_names = std::collections::HashSet::new();
+        for (name, records) in raw {
+            if name.ends_with(RELIC_SUFFIX) {
+                relic_names.insert(name);
+            } else if let Some(price) = sell_median(&records) {
+                prices.insert(name, price);
+            }
+        }
         Ok(Self {
             prices,
+            relic_names,
+            relic_prices: HashMap::new(),
             dump_date: dump_date.to_owned(),
         })
     }
@@ -67,23 +87,48 @@ impl PriceTable {
     /// asks for the blueprint. A built Warframe cannot be sold, only its parts can, and every one
     /// of that collection's prime parts is in the dump under its own name already.
     pub fn market_name(&self, name: &str) -> Option<&str> {
-        if let Some((key, _)) = self.prices.get_key_value(name) {
+        if let Some(key) = self.resolve(name) {
             return Some(key);
         }
         if let Some(base) = name.strip_suffix(" Blueprint")
-            && let Some((key, _)) = self.prices.get_key_value(base)
+            && let Some(key) = self.resolve(base)
         {
             return Some(key);
         }
         REFINEMENTS
             .iter()
             .find_map(|suffix| name.strip_suffix(suffix))
-            .and_then(|base| self.prices.get_key_value(&format!("{base} Relic")))
-            .map(|(key, _)| key.as_str())
+            .and_then(|base| self.resolve(&format!("{base} Relic")))
+    }
+
+    /// A dump key by its own name, whether or not it carries a dump price: a relic resolves here
+    /// even though its price comes from the sweep instead.
+    fn resolve(&self, name: &str) -> Option<&str> {
+        if let Some((key, _)) = self.prices.get_key_value(name) {
+            return Some(key);
+        }
+        self.relic_names.get(name).map(String::as_str)
     }
 
     pub fn price_for(&self, name: &str) -> Option<u32> {
-        self.prices.get(self.market_name(name)?).copied()
+        let key = self.market_name(name)?;
+        self.prices
+            .get(key)
+            .or_else(|| self.relic_prices.get(key))
+            .copied()
+    }
+
+    /// Records a relic's price from the live sweep (a later task), keyed by the same market name
+    /// `market_name` resolves to.
+    pub fn insert_live(&mut self, market_name: &str, platinum: u32) {
+        self.relic_prices.insert(market_name.to_owned(), platinum);
+    }
+
+    /// The relic dump keys the sweep needs to work through.
+    pub fn relic_market_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.relic_names.iter().cloned().collect();
+        names.sort();
+        names
     }
 
     pub fn dump_date(&self) -> &str {
@@ -269,6 +314,11 @@ impl CollectionPriceCache {
         let table = latest_dump(source, now_unix)?;
         self.store(&table)?;
         Ok(table)
+    }
+
+    /// Stores a table outside of `refresh`, so a live sweep's swept relic prices reach disk too.
+    pub fn store_table(&self, table: &PriceTable) -> Result<(), PriceDumpError> {
+        self.store(table)
     }
 
     fn store(&self, table: &PriceTable) -> Result<(), PriceDumpError> {

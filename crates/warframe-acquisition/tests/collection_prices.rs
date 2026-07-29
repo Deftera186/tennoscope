@@ -58,19 +58,39 @@ fn a_blueprint_resolves_to_a_listing_without_the_suffix() {
     assert_eq!(table.price_for("Forma Blueprint"), Some(8));
 }
 
-/// The catalog names a relic by refinement, the market by relic. All four tiers share one price,
-/// which understates a radiant relic and is the accepted cost of pricing relics at all.
+/// The dump cannot be corrected for bulk listings, so a relic's daily median runs high — measured
+/// at 1.5x on Axi A1. Relics are priced from a live sweep instead, and until that lands they have
+/// no price rather than an inflated one.
 #[test]
-fn every_relic_refinement_resolves_to_the_one_relic_listing() {
+fn a_relic_is_not_priced_from_the_dump() {
     let table = table();
-    for name in [
-        "Axi A1 Intact",
-        "Axi A1 Exceptional",
-        "Axi A1 Flawless",
-        "Axi A1 Radiant",
-    ] {
-        assert_eq!(table.price_for(name), Some(20), "for {name}");
-    }
+    assert_eq!(table.price_for("Axi A1 Radiant"), None);
+    assert_eq!(table.price_for("Axi A1 Relic"), None);
+}
+
+/// Resolution still works, because the live sweep needs the market name to build its slug.
+#[test]
+fn a_relic_still_resolves_to_its_market_name() {
+    assert_eq!(table().market_name("Axi A1 Radiant"), Some("Axi A1 Relic"));
+}
+
+#[test]
+fn a_swept_relic_price_is_served_like_any_other() {
+    let mut table = table();
+    table.insert_live("Axi A1 Relic", 17);
+    assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
+    assert_eq!(table.price_for("Axi A1 Relic"), Some(17));
+}
+
+#[test]
+fn the_relics_needing_a_sweep_are_the_ones_the_dump_lists() {
+    let names = table().relic_market_names();
+    assert_eq!(names, vec!["Axi A1 Relic".to_owned()]);
+}
+
+#[test]
+fn a_non_relic_is_still_priced_from_the_dump() {
+    assert_eq!(table().price_for("Serration"), Some(50));
 }
 
 #[test]
@@ -96,7 +116,11 @@ fn an_unknown_name_has_no_price() {
 fn the_table_reports_what_it_parsed() {
     let table = table();
     assert_eq!(table.dump_date(), "2026-07-27");
-    assert_eq!(table.len(), 4, "the buy-only item is not a price");
+    assert_eq!(
+        table.len(),
+        3,
+        "the buy-only item is not a price, and the relic is priced separately"
+    );
 }
 
 /// The live path needs warframe.market's own name to build a slug from. No derivation from the
@@ -283,6 +307,21 @@ fn a_corrupt_cache_file_yields_no_table_rather_than_a_panic() {
             .load_cached()
             .is_none()
     );
+}
+
+/// A swept price survives the cache round-trip, or every restart would cost another sweep.
+#[test]
+fn swept_relic_prices_survive_the_disk_cache() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let cache = CollectionPriceCache::new(directory.path());
+    let mut table = cache
+        .refresh(&FakeDumps::new(&[("2026-07-27", DUMP)]), TODAY)
+        .expect("refresh stores");
+    table.insert_live("Axi A1 Relic", 17);
+    cache.store_table(&table).expect("store");
+
+    let reloaded = cache.load_cached().expect("a stored table is readable");
+    assert_eq!(reloaded.price_for("Axi A1 Radiant"), Some(17));
 }
 
 #[test]
