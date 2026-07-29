@@ -299,7 +299,7 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
         : sort === 'category-asc'
           ? left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
           : sort === 'value-desc'
-            ? (stackValue(right) ?? -1) - (stackValue(left) ?? -1) || left.name.localeCompare(right.name)
+            ? (right.platinum ?? -1) - (left.platinum ?? -1) || left.name.localeCompare(right.name)
             : left.name.localeCompare(right.name))
   }, [view.collection.items, search, category, ownership, sort])
   const totalPages = pageCount(filtered.length)

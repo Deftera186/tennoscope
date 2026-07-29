@@ -363,15 +363,29 @@ describe('MVP desktop interface', () => {
     expect(await screen.findByRole('button', { name: /Price these 3/ })).toBeInTheDocument()
   })
 
-  it('sorts by stack value and sinks unpriced items to the bottom', async () => {
+  // Sorting by stack value answers "where is my platinum"; sorting by unit price answers "what is
+  // worth the most". The sort is for the second question, and the card still shows the first.
+  it('sorts by unit price, not by what the stack is worth', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.getView.mockResolvedValue({
+      ...view,
+      collection: {
+        ...view.collection,
+        items: [
+          ...view.collection.items,
+          { id: 'ash-prime-blueprint', name: 'Ash Prime Blueprint', category: 'blueprint', quantity: 1, mastered: false, platinum: 45, live: false },
+        ],
+      },
+    })
     const user = userEvent.setup()
     render(<App/>)
     await user.click(await screen.findByRole('button', { name: 'Value' }))
 
     const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
+    expect(names[0]).toBe('Ash Prime Blueprint')  // 45p × 1
+    expect(names[1]).toBe('Lith A1 Relic')        // 20p × 7 = 140 total, but 20p each
     // Zenith is priced at 0 -- it must rank above every unpriced item, not tie with them.
-    expect(names.slice(0, 3)).toEqual(['Lith A1 Relic', 'Lex Prime Receiver', 'Zenith Prime Receiver'])
+    expect(names[3]).toBe('Zenith Prime Receiver')
     expect(names.at(-1)).toBe('Rhino')
   })
 
