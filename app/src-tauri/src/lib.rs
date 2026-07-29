@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use app_core::{AcquisitionPort, AppCore, AppView, HealthState, InventoryRefreshOutcome};
+use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome};
 use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -239,11 +239,24 @@ async fn refresh_prices(
                     // Only ever refreshes a row that already reports health. A page refresh knows
                     // nothing about the dump download, so writing Ready here would clear a startup
                     // failure -- "No warframe.market price dump could be read" -- and leave the row
-                    // reading healthy over whatever stale table that failure left behind.
+                    // reading healthy over whatever stale table that failure left behind. But if the
+                    // row is Degraded from a transient failure (a market blip or failed disk write),
+                    // we need to clear it with a successful refresh. The discriminator is last_success:
+                    // None means "no successful startup price load ever happened", sticky across
+                    // refreshes; Some(_) means "there was once a working price table", clearable on
+                    // transient failures. Only clear Degraded if there was prior success.
                     Some((priced, date, true))
-                        if runtime.core.health().collection_prices().state()
-                            == HealthState::Ready =>
+                        if runtime
+                            .core
+                            .health()
+                            .collection_prices()
+                            .last_success()
+                            .is_some() =>
                     {
+                        let _ = runtime.core.record_collection_prices_ready(priced, date);
+                    }
+                    Some((priced, date, true)) => {
+                        // Ready with no prior success: keep it as is (likely Just cached from startup)
                         let _ = runtime.core.record_collection_prices_ready(priced, date);
                     }
                     Some((_, _, false)) => {
