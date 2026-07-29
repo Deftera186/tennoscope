@@ -198,6 +198,29 @@ fn an_unresolvable_item_is_not_requested() {
     );
 }
 
+/// Mastery is not ownership. An item at quantity 0 is not in the inventory and must not carry a
+/// price, appear under the tradeable filter, or contribute to the collection's worth.
+#[test]
+fn an_item_the_player_does_not_own_is_not_priced() {
+    let mut core = core_with_items(vec![
+        item("/a", "Serration", Category::Resource, 0).with_mastered(true),
+        item(
+            "/b",
+            "Mirage Prime Systems Blueprint",
+            Category::PrimePart,
+            2,
+        ),
+    ]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+
+    let view = core.current_view().expect("view builds");
+    let items = view.collection().items();
+    assert_eq!(items[0].platinum(), None, "quantity 0 is not owned");
+    assert_eq!(items[1].platinum(), Some(20));
+}
+
 /// The sweep is bounded by what the player owns, not by what exists. Measured against a real
 /// collection that is 65 relics and about 22 seconds; the dump lists 772.
 #[test]

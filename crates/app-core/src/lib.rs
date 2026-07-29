@@ -164,6 +164,11 @@ impl AppCore {
         let mut items = collection
             .entries()
             .map(|entry| {
+                // Mastery is not ownership. An item at quantity 0 is not in the inventory
+                // and must not carry a price or contribute to the collection's worth.
+                if entry.quantity == 0 {
+                    return CollectionItemView::from(entry);
+                }
                 // Both lookups go through the market's own name for the item: the live cache is
                 // keyed by what was asked for, and that is never the catalog's name for a relic.
                 let market_name = self
