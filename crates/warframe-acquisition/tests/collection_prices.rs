@@ -82,6 +82,33 @@ fn a_swept_relic_price_is_served_like_any_other() {
     assert_eq!(table.price_for("Axi A1 Relic"), Some(17));
 }
 
+/// `REFINEMENTS` is a hand-written list of four suffixes; a test that only ever tries `Radiant`
+/// cannot catch a typo or reordering in `Intact`, `Exceptional`, or `Flawless`. Resolution must
+/// keep working for all four, because the live sweep builds its warframe.market slug from it, and
+/// a swept price must reach all four the same way a dump price used to.
+#[test]
+fn every_refinement_tier_resolves_and_prices_alike() {
+    let names = [
+        "Axi A1 Intact",
+        "Axi A1 Exceptional",
+        "Axi A1 Flawless",
+        "Axi A1 Radiant",
+    ];
+    for name in names {
+        assert_eq!(
+            table().market_name(name),
+            Some("Axi A1 Relic"),
+            "for {name}"
+        );
+    }
+
+    let mut table = table();
+    table.insert_live("Axi A1 Relic", 17);
+    for name in names {
+        assert_eq!(table.price_for(name), Some(17), "for {name}");
+    }
+}
+
 #[test]
 fn the_relics_needing_a_sweep_are_the_ones_the_dump_lists() {
     let names = table().relic_market_names();
