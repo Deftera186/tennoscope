@@ -11,18 +11,41 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-29
+
 ### Added
 
-- Collection items show a platinum price and stack total, seeded from the daily warframe.market price dump.
-- Live pricing on request, for the current page, marked apart from the daily figures with an inline "checked just now" line rather than a badge.
-- Collection sorting by value, a tradeable filter, and a collection worth summary.
+- Collection items show a platinum price and stack total, seeded from the daily warframe.market
+  price dump — one request a day for the whole collection rather than one per item.
+- Live pricing on request for the current page, marked apart from the daily figures with an inline
+  "checked live" line rather than a badge. A live price now updates the stored prices, so it
+  outlives its cache entry instead of expiring back to the daily figure.
+- Owned relics are priced by a bounded live sweep at startup, and again after an inventory refresh
+  picks up new ones.
+- Collection sorting by unit value, a tradeable filter, and a collection worth summary that carries
+  the count it was computed from.
+- Collection pricing reports its own diagnostics row, separate from the reward overlay's.
 
 ### Changed
 
-- Prices are now quoted per unit rather than per trade.
-- Relics are priced live rather than from the daily dump, because the daily summary overstates them.
-- Only owned items are priced.
-- The per-item price-check button is gone; pricing is a single page-level control that names how many priced items it will refresh and shows real progress while it runs.
+- Prices are quoted per unit rather than per trade. A warframe.market listing's platinum is the
+  price of a whole trade, and relics are routinely listed six at a time, so comparing a six-pack's
+  total against a single item's price ranked two different quantities as one.
+- Relics are priced live rather than from the daily dump. The dump is pre-aggregated with no
+  per-trade count to divide out, which overstated relic medians by up to half.
+- Only items the player actually owns are priced. Mastered-but-unowned equipment no longer carries
+  a platinum figure, appears under the tradeable filter, or inflates the collection worth.
+- The per-item price-check button is gone. Pricing is a single page-level control naming how many
+  items it will price, with real progress while it runs.
+- The reward overlay's price lookup uses warframe.market's top-orders endpoint, which returns the
+  same answer in a fraction of the bytes, and paces every caller behind one shared 3-requests-per-
+  second floor.
+
+### Fixed
+
+- An oversize price response is reported as its own outcome instead of being indistinguishable from
+  an item nobody is selling, an unreachable endpoint, and an untradeable item.
+- A cache write failure is no longer reported as an unreadable price dump.
 
 ## [0.1.0] - 2026-07-28
 
@@ -64,5 +87,6 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Deftera186/tennoscope/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Deftera186/tennoscope/releases/tag/v0.1.0
