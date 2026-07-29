@@ -72,10 +72,9 @@ rule took the collection from 266 priced items to 241, and all 25 lost were fals
 Rule 3 recovers 772 relic names that no other rule reaches, but no longer prices them from the
 dump. The dump has no `perTrade` to divide out, sellers list a relic six at a time, and the
 resulting median runs up to 1.5x high -- measured on `Axi A1`, 25p in the dump against 16.67p per
-unit live. A relic's dump key still resolves, because the live sweep (a later task) needs that name
-to build its warframe.market slug, but the price comes only from that sweep, persisted back into
-this same table so it survives a restart. Until a relic has been swept it has no price rather than
-an inflated one.
+unit live. A relic's dump key still resolves, because the startup sweep needs that name to build its
+warframe.market slug, but the price comes only from that sweep, persisted back into this same table
+so it survives a restart. Until a relic has been swept it has no price rather than an inflated one.
 
 An unresolved name means no price. It is not an error, and it is not evidence that the item is
 untradeable -- the remaining gap is largely non-prime weapon components, which the catalog does not
@@ -102,6 +101,11 @@ newest published was dated the 27th -- so "the cache is not dated today" is no e
 exists, and a cached table dated today or yesterday is left alone. Anything older costs one attempt
 per launch, which is the price of not remembering when we last asked.
 
+That attempt usually returns the file we already had, so the refreshed table adopts the cached one's
+swept relic prices whenever the two dates match. Without that, the ordinary launch would overwrite
+the cache with a table whose relic prices are empty and then re-spend 22 seconds learning the same
+numbers -- every launch, on the days the lag makes ordinary.
+
 The response is capped, as every remote read in this codebase is, because the body is streamed into
 memory and an uncapped `read_to_end` against an untrusted host is an out-of-memory waiting for a bad
 day. The measured file is 3.9 MB and the cap is 32 MB.
@@ -113,20 +117,20 @@ the player has stopped valuing the collection and started trading out of it. The
 unvaulted its price moves faster than a daily file can follow, and that is precisely the week
 somebody goes looking.
 
-So the dump seeds everything and warframe.market answers for whatever the player is actually acting
-on. Two triggers, both deliberate:
+So the dump seeds everything and warframe.market answers for the rest. Two triggers, both bounded:
 
-- Selecting a single item prices that one item live.
-- Refreshing the current page prices the items on screen, at most forty-eight, paced at three requests a second, which takes about sixteen seconds.
+- The startup relic sweep. Relics have no usable dump price at all -- the median is inflated by bulk listings the dump gives no way to divide out -- so the relics the player *owns* are priced live once, at start, and the results are written back into the price table. Bounded by ownership rather than by the catalog: 65 relics in the measured collection against the 772 the dump lists, which is 22 seconds at three requests a second rather than four minutes. It re-runs after an inventory refresh, because a refresh is the only thing that can add a relic, including the first snapshot a fresh install ever takes.
+- The page refresh. It prices what is on screen, at most forty-eight items, paced at the same three requests a second, so a full page takes about sixteen seconds. It offers every item the player owns rather than only the ones already priced: an item with no price is exactly the one somebody would want to ask about, and unresolvable names are dropped by the backend before any request is made.
 
-Neither is a background sweep. Nothing is fetched that the player did not ask about, which is what
-keeps a feature that could have cost hundreds of requests down to the handful somebody deliberately
-clicked.
+Neither is a sweep of the collection. Nothing is fetched for an item the player does not own, and
+nothing outside the relic sweep is fetched without a click, which is what keeps a feature that could
+have cost a thousand requests down to a bounded startup pass and the page somebody is looking at.
 
 A quoted price is per unit, derived from the warframe.market order's `platinum` field divided by
-its `perTrade` count. Most sell orders are for a single item, but relic sellers routinely list six
-at a time; quoting a six-pack's total as a single item's price would rank two different quantities
-as though they were the same thing.
+its `perTrade` count, floored at 1p. Most sell orders are for a single item, but relic sellers
+routinely list six at a time; quoting a six-pack's total as a single item's price would rank two
+different quantities as though they were the same thing, and a 1p-for-six listing that divided to
+zero would render as "0p", which reads as free rather than as cheap.
 
 Live prices land in the cache the overlay already keeps, keyed by name with a fifteen-minute life,
 so a relic pool warmed during a mission also prices those items in the collection, and an item
@@ -134,36 +138,54 @@ priced in the collection is already warm if it appears on a reward screen. One l
 readers. The paced refresh is the `warm` function that cache already has.
 
 The three requests a second are the *client's* budget, not each caller's, so the pacing lives in
-the cache rather than in any caller. Three call paths share it -- the pool warm, the page refresh
-and the reward screen's fill -- and any two can overlap; each politely waiting 334ms of its own
-would still have put six or nine requests a second on the API. Every request claims a slot from one
-shared clock before it leaves, so a caller in a hurry (the reward fill, which has fifteen seconds of
-screen and skips its own extra delay) can spend the budget sooner but cannot exceed it.
+the cache rather than in any caller. Four call paths share it -- the pool warm, the startup relic
+sweep, the page refresh and the reward screen's fill -- and any two can overlap; each politely
+waiting 334ms of its own would still have put six or nine requests a second on the API. Every
+request claims a slot from one shared clock before it leaves, so a caller in a hurry (the reward
+fill, which has fifteen seconds of screen and skips its own extra delay) can spend the budget sooner
+but cannot exceed it. One relic sweep runs at a time for the same reason: two overlapping sweeps
+would spend the same requests twice.
 
-Nothing is *fetched* for the valuation. The value sort and the collection worth need every item
-priced to mean anything, and live-pricing hundreds of items to compute a total is exactly the
-behavior the API rules ask clients not to attempt. But they read the best price already in hand:
-live where the player has priced something, the dump everywhere else.
+A swept relic price outlives that cache. It is persisted into the price table beside the dump's own
+prices, because a fifteen-minute cache would mean a relic showing a dash for most of a session, and
+because re-spending 22 seconds of requests to learn a number we already had is the behaviour the
+API rules ask clients not to have. It lives exactly as long as the dump it was checked against: a
+refresh that brings back the same dump -- which is the ordinary case, since the dumps lag two days
+-- carries the swept prices across, and a genuinely newer dump clears them and the sweep runs again.
+That single rule is the whole freshness policy; a second date gate alongside it would only be a
+second thing to keep in step.
+
+The valuation itself fetches nothing of its own. The value sort and the collection worth need every
+item priced to mean anything, and live-pricing hundreds of items to compute a total is exactly the
+behavior the API rules ask clients not to attempt. They read the best price already in hand: live
+where something has been checked, the dump everywhere else.
 
 That was a decision between two defensible answers. Dump-only would make the total one consistent
 measurement, comparable with itself hour to hour. Best-available makes it more accurate -- every
-item the player deliberately priced is a better number than the dump's, and refusing to use it
-would mean showing a total the app knows to be stale. The cost is a figure that moves as the player
-prices things, which is the honest behaviour of a valuation that is being improved in front of you.
-The card still says which measurement each price is, so the mix is visible rather than silent.
+item that has been priced live is a better number than the dump's, and refusing to use it would
+mean showing a total the app knows to be stale. The cost is a figure that moves as prices land,
+which is the honest behaviour of a valuation that is being improved in front of you. The card still
+says which measurement each price is, so the mix is visible rather than silent.
 
 The reward overlay is untouched. Its question was always "what is the cheapest online seller asking
 right now", answered live, and it stays that way.
 
 ## Two Numbers, Never Silently Mixed
 
-A live price and a dump price are different measurements: the cheapest online seller right now
-against the middle of yesterday's listings. Showing 19p beside 20p with nothing to say which is
-which invites the reader to compare two numbers that were never comparable.
+A checked price and a dump price are different measurements: the cheapest online seller against the
+middle of a day's listings. Showing 19p beside 20p with nothing to say which is which invites the
+reader to compare two numbers that were never comparable.
 
-So every price carries its provenance. Dump prices are attributed to the dump and its date; a price
-fetched live is marked as live. The distinction is visible on the card, not buried in a tooltip,
-because the whole reason the live path exists is that the difference matters.
+So every price carries its provenance. The register states which day's dump the collection is
+priced from, and a card whose number came from a live check -- the page refresh, a warmed relic
+pool, or the startup sweep persisted into the table -- says it was checked live. The distinction is
+on the card, not in a tooltip, because the whole reason the live path exists is that the difference
+matters.
+
+"Checked live" covers both the fifteen-minute cache and a persisted swept price, deliberately.
+Those are one measurement made at two different times, and the alternative -- a relic that reads as
+live for fifteen minutes and then quietly becomes a dump price -- would attribute it to a file that
+prices no relics at all.
 
 ## Application View
 
@@ -173,9 +195,9 @@ reads the price field directly. `live` is not that -- it says which of two diffe
 the number is, and nothing else in the view carries it.
 
 `AppCore` holds the dump's price table and the live cache, both cheap `Arc` clones, and
-`current_view()` reads the live cache first and the table second. A live price that has aged past
-the cache's fifteen minutes stops being live and the item falls back to the dump, so a price never
-claims a freshness it has lost.
+`current_view()` reads the live cache first and the table second. `live` is true for a price from
+that cache and for a relic price the sweep persisted, because both were checked against
+warframe.market; it is false only for a number the dump supplied.
 
 The frontend already polls the view every 2.5 seconds, so both the dump loading and a live refresh
 landing appear on their own through plumbing that already exists. That poll must keep running while
@@ -186,9 +208,12 @@ newest one started, so an older response can never land on top of a newer one.
 
 ## Presentation
 
-A priced card shows `20p`, and `20p · 60p total` once more than one is owned. Both numbers earn
+A priced card shows `20p`, and `20p · 140p total` once more than one is owned. Both numbers earn
 their place: the unit price is what gets quoted in trade chat, the stack total is what decides
 whether the pile is worth clearing.
+
+An item at quantity 0 is mastered, not owned, and carries no price at all. Pricing something the
+player does not have inflates the collection's worth with platinum nobody could realise.
 
 Unpriced and untradeable are not distinguished, because with a single dump this design genuinely
 cannot tell them apart -- an item absent from the file may be untradeable or may be one the name
@@ -199,16 +224,19 @@ account. That row is separate from the overlay's market row on purpose: one answ
 these prices from", the other "could we reach warframe.market a moment ago", and while they shared a
 row whichever wrote last erased the other's answer.
 
-Three affordances follow the prices. A `Value` sort orders by stack value with unpriced entries
-sinking to the bottom. A `Tradeable` filter narrows to items that have a price. A fourth cell in the
-assay band sums price times quantity across priced items and carries the count it was computed from,
-because a partial sum presented as a total is a lie the reader cannot detect. All three read the
-best price in hand for each item, live where there is one and the dump otherwise.
+Three affordances follow the prices. A `Value` sort orders by unit price with unpriced entries
+sinking to the bottom: stack value answers "where is my platinum", unit price answers "what is worth
+the most", and the sort is for the second question while the card still shows the first. A
+`Tradeable` filter narrows to items that have a price. A fourth cell in the assay band sums price
+times quantity across priced items and carries the count it was computed from, because a partial sum
+presented as a total is a lie the reader cannot detect. All three read the best price in hand for
+each item.
 
-Two more invoke the live path. A card is selectable, and selecting it prices that item live. The
-register carries a refresh control that prices the page on screen, showing its progress, because
-sixteen seconds of silence reads as a broken button. A live price is marked as live on the card;
-everything else is understood to come from the dump, whose date the collection price row carries.
+One control invokes the live path: the register's refresh, which names its scope and how many items
+it will price -- everything owned on the page, whether or not it has a number yet -- and shows its
+progress, because sixteen seconds of silence reads as a broken button. There is no per-item control.
+It was one click for one request, in a register where the row-level answer is the same request; the
+page control subsumes it and one affordance is easier to understand than two.
 
 The interface work is done through the `impeccable` skill.
 
@@ -244,17 +272,24 @@ No pricing failure can affect inventory synchronization.
 Automated tests cover each name rule and a name no rule reaches; that built equipment does *not*
 borrow its blueprint's price, which is the rule this design rejected and the one somebody will
 helpfully re-add; the market name a rule resolves to, since the live path builds its slug from that
-rather than from the catalog's name; the dump parser against a trimmed fixture, including an item
-whose `sell` record is absent and one whose body is one byte over the cap; date walk-back, proving a
-missing file for today falls through to an older one and records the date it used; a cached dump
-dated today or yesterday not being downloaded again while an older one is; the cache round-tripping
-through disk and pricing a collection before any network call; malformed input rejected whole; a
-live price taking precedence over the dump's and being marked as such; a live price that has aged
-out falling back to the dump rather than lingering as live; two concurrent warms unable to put
-requests closer together than the shared floor; and each live-lookup outcome distinctly, including
-oversize reaching the market health row. Frontend tests cover the value sort with unpriced entries
-present, the worth arithmetic and its count, the tradeable filter, that a live price is visibly
-distinguished from a dump price, and that the view poll keeps running through a live page refresh.
+rather than from the catalog's name, for all four refinement suffixes; the dump parser against a
+trimmed fixture, including an item whose `sell` record is absent and one whose body is one byte over
+the cap; date walk-back, proving a missing file for today falls through to an older one and records
+the date it used; a cached dump dated today or yesterday not being downloaded again while an older
+one is; a refresh of the same dump keeping the prices swept against it and a newer dump discarding
+them; the cache round-tripping through disk and pricing a collection before any network call;
+malformed input rejected whole; a live price taking precedence over the dump's and being marked as
+such; a swept relic price still reading as checked live once the fifteen-minute cache has dropped
+it; an item at quantity 0 carrying no price; the sweep bounded to owned relics and collapsing
+refinement tiers; two concurrent warms unable to put requests closer together than the shared floor;
+and each live-lookup outcome distinctly, including oversize reaching the market health row, a
+part-finished pass reporting itself, and a bulk listing too cheap to divide still quoting 1p.
+Frontend tests cover the value sort by unit price with unpriced and zero-priced entries present, the
+worth arithmetic and its count, the tradeable filter, the dump's date on the register, that a
+checked price is visibly distinguished from a dump price, that the refresh control offers every
+owned item on the page including ones with no price yet and no unowned one, that its progress counts
+only the work that click asked for, and that the view poll keeps running through a live page
+refresh.
 
 ## Out of Scope
 
