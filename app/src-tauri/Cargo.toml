@@ -27,6 +27,7 @@ app-core = { path = "../../crates/app-core" }
 local-store = { path = "../../crates/local-store" }
 warframe-acquisition = { path = "../../crates/warframe-acquisition" }
 warframe-domain = { path = "../../crates/warframe-domain" }
+tauri-plugin-single-instance = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

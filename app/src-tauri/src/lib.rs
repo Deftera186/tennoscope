@@ -1868,6 +1868,27 @@ pub fn run() {
         gtk::gdk::set_allowed_backends("x11");
     }
     tauri::Builder::default()
+        // Raise the window that is already open rather than starting a rival process. Two instances
+        // tail the same EE.log, write the same database and draw two override-redirect overlays at
+        // the same coordinates over the game, where whichever raised last wins -- so the strip on
+        // screen need not be the build you just started.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        // `reward-overlay` is only ever hidden, never destroyed, so Tauri still holds a live window
+        // once the main window closes and the app stays up: tailing the log and drawing the overlay
+        // over the game with no UI left to close it by.
+        .on_window_event(|window, event| {
+            if window.label() == "main"
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                window.app_handle().exit(0);
+            }
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
