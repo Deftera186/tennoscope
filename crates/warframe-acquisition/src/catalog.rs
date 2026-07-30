@@ -295,7 +295,14 @@ fn is_prime_parent(name: &str) -> bool {
 }
 
 fn validated_name(name: &str) -> Result<String, CatalogError> {
-    let trimmed = name.trim();
+    // The Archon shards carry the game's own inline icon tag in their name --
+    // "<Shard_red_simple> Crimson Archon Shard". Only the game's own text renderer draws that tag;
+    // everywhere else it survives as literal angle brackets.
+    let trimmed = name
+        .strip_prefix('<')
+        .and_then(|rest| rest.split_once('>'))
+        .map_or(name, |(_, rest)| rest)
+        .trim();
     if trimmed.is_empty() || trimmed.len() > 256 {
         return Err(CatalogError::InvalidMetadata);
     }
@@ -312,8 +319,23 @@ fn validated_image_name(image_name: Option<&str>) -> Result<Option<String>, Cata
             && value.bytes().all(|byte| {
                 byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b' ')
             }))
-        .then(|| value.to_owned())
+        .then(|| base_shard_art(value))
     }))
+}
+
+/// WFCD publishes a Tauforged shard's art as the glow layer alone -- the halo the game composites
+/// over the plain crystal -- so on its own it renders as a coloured smudge. Dropping the `Mythic`
+/// and `Glow` tokens names the base shard art, the same crystal without the halo, which every
+/// colour ships. The two spellings WFCD uses, `ArchonShardBorealMythicGlow` and
+/// `ArchonShardMythicGreenGlow`, both reduce correctly.
+fn base_shard_art(image_name: &str) -> String {
+    if image_name.starts_with("ArchonShard")
+        && image_name.ends_with("Glow.png")
+        && image_name.contains("Mythic")
+    {
+        return image_name.replace("Mythic", "").replace("Glow", "");
+    }
+    image_name.to_owned()
 }
 
 fn valid_unique_name(path: &str) -> bool {

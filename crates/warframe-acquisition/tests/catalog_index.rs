@@ -258,3 +258,37 @@ fn warframe_part_blueprints_find_their_ducat_value() {
     assert_eq!(ducats("Lavos Prime Blueprint"), Some(45));
     assert_eq!(ducats("Ayatan Amber Star"), None);
 }
+
+/// WFCD names an Archon shard with the game's inline icon tag and gives a Tauforged shard only the
+/// glow layer of its art, which renders alone as a coloured smudge.
+#[test]
+fn archon_shards_lose_the_icon_tag_and_keep_the_crystal_in_view() {
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[
+          {"uniqueName":"/Lotus/Types/Gameplay/NarmerSorties/ArchonCrystalAmar","name":"<Shard_red_simple> Crimson Archon Shard","type":"Misc","category":"Misc","imageName":"ArchonShardAmar.png"},
+          {"uniqueName":"/Lotus/Types/Gameplay/NarmerSorties/ArchonCrystalAmarMythic","name":"<Shard_red_simple> Tauforged Crimson Archon Shard","type":"Misc","category":"Misc","imageName":"ArchonShardAmarMythicGlow.png"},
+          {"uniqueName":"/Lotus/Types/Gameplay/NarmerSorties/ArchonCrystalGreenMythic","name":"<Shard_green_simple> Tauforged Emerald Archon Shard","type":"Misc","category":"Misc","imageName":"ArchonShardMythicGreenGlow.png"}
+        ]"#,
+    )
+    .unwrap();
+
+    let plain = catalog
+        .resolve("/Lotus/Types/Gameplay/NarmerSorties/ArchonCrystalAmar")
+        .unwrap();
+    assert_eq!(plain.name(), "Crimson Archon Shard");
+    assert_eq!(plain.image_name(), Some("ArchonShardAmar.png"));
+
+    let tauforged = catalog
+        .resolve("/Lotus/Types/Gameplay/NarmerSorties/ArchonCrystalAmarMythic")
+        .unwrap();
+    assert_eq!(tauforged.name(), "Tauforged Crimson Archon Shard");
+    assert_eq!(tauforged.image_name(), Some("ArchonShardAmar.png"));
+
+    assert_eq!(
+        catalog
+            .resolve("/Lotus/Types/Gameplay/NarmerSorties/ArchonCrystalGreenMythic")
+            .unwrap()
+            .image_name(),
+        Some("ArchonShardGreen.png")
+    );
+}
