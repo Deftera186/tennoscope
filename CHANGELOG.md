@@ -11,6 +11,36 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-30
+
+### Added
+
+- Platinum and ducat figures carry the game's own icon, on the reward slips and throughout the
+  collection. The two currencies were told apart by hue and a tracked 8px word, over a bright
+  moving game, under a countdown.
+- Live pricing reports the pass that is running — sweep or page refresh alike, since both spend one
+  budget — as a count beside the provenance line and a rule that fills as it advances.
+
+### Changed
+
+- Closing the main window quits the application. The reward overlay is a hidden window that is
+  never destroyed, so the process used to survive the only window a person can close, and went on
+  tailing the log and drawing the overlay with nothing left to close it by.
+- A second launch raises the window already open instead of starting a rival process. Two instances
+  place an override-redirect overlay at the same coordinates over the game and write the same
+  database. A development build shares the bundle identifier, so `tauri dev` now stands down for an
+  installed copy rather than running beside it.
+
+### Fixed
+
+- Warframe parts are priced in ducats and counted as owned. The reward screen names a part by the
+  blueprint the player picks up, "Voruna Prime Chassis Blueprint", where the item catalogue names
+  the component it builds — 153 of the 596 names a relic can drop read as 0 ducats and as not
+  owned. Weapon parts, whose two spellings agree, were always right. Platinum was never affected.
+- A relic nobody is selling no longer costs a request on every inventory sync. The absence of an
+  order book is now recorded as an answer and carried across a refresh, while an outage still
+  retries.
+
 ## [0.2.0] - 2026-07-29
 
 ### Added
@@ -87,6 +117,7 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Deftera186/tennoscope/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Deftera186/tennoscope/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Deftera186/tennoscope/releases/tag/v0.1.0
