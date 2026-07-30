@@ -1124,7 +1124,9 @@ fn relic_pool_entries(
             name: needle.choice_name().to_owned(),
             ducats: reward_catalog
                 .iter()
-                .find(|entry| entry.name == needle.choice_name())
+                .find(|entry| {
+                    warframe_acquisition::reward_name_matches(&entry.name, needle.choice_name())
+                })
                 .map_or(0, |entry| entry.ducats),
         })
         .collect()
@@ -1442,13 +1444,17 @@ fn apply_reward_observations(
         .filter_map(|observation| {
             let ducats = catalog
                 .iter()
-                .find(|entry| entry.name == observation.name)
+                .find(|entry| {
+                    warframe_acquisition::reward_name_matches(&entry.name, &observation.name)
+                })
                 .map_or(0, |entry| entry.ducats);
             let owned = view
                 .collection()
                 .items()
                 .iter()
-                .find(|item| item.name() == observation.name)
+                .find(|item| {
+                    warframe_acquisition::reward_name_matches(item.name(), &observation.name)
+                })
                 .map_or(0, |item| item.quantity());
             RewardCandidate::new(
                 &observation.name,

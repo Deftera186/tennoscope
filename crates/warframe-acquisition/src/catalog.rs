@@ -59,6 +59,22 @@ pub struct RewardCatalogEntry {
     pub ducats: u32,
 }
 
+/// Does this catalog entry name the item the reward screen is offering?
+///
+/// The reward screen, the relic drop tables and warframe.market all name a Warframe part by the
+/// blueprint the player picks up -- "Lavos Prime Chassis Blueprint". WFCD's item catalog names the
+/// component that blueprint builds, "Lavos Prime Chassis", because the suffix lives in the parent's
+/// component list rather than in the component's own name. Nothing else separates the two spellings.
+///
+/// Matching on the exact string priced 153 of the 596 names a relic can drop -- every Warframe
+/// part -- at zero ducats and reported them as not owned, while weapon parts, whose two spellings
+/// agree, were right. The trim only ever runs after an exact match fails, so items that really are
+/// named "... Blueprint" in both vocabularies (every prime's own blueprint, Forma) still match
+/// themselves first.
+pub fn reward_name_matches(catalog_name: &str, reward_name: &str) -> bool {
+    catalog_name == reward_name || reward_name.strip_suffix(" Blueprint") == Some(catalog_name)
+}
+
 impl CatalogIndex {
     pub fn from_wfcd_json(bytes: &[u8]) -> Result<Self, CatalogError> {
         let raw: Vec<WfcdItem> =

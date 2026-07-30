@@ -19,7 +19,9 @@ mod reward_memory;
 mod reward_ui_memory;
 
 pub use authorization::AuthorizationScanner;
-pub use catalog::{CatalogError, CatalogIndex, CatalogMetadata, RewardCatalogEntry};
+pub use catalog::{
+    CatalogError, CatalogIndex, CatalogMetadata, RewardCatalogEntry, reward_name_matches,
+};
 pub use catalog_cache::{
     CatalogCache, CatalogCacheError, CatalogFetch, CatalogLoad, CatalogLoadSource, CatalogSource,
     RelicCatalogCache, RelicCatalogLoad, RelicCatalogSource, WFCD_ALL_JSON_URL,

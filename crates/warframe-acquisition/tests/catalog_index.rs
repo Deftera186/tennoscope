@@ -1,4 +1,6 @@
-use warframe_acquisition::{CatalogIndex, InventoryJsonDecoder, SnapshotDecoder};
+use warframe_acquisition::{
+    CatalogIndex, InventoryJsonDecoder, SnapshotDecoder, reward_name_matches,
+};
 use warframe_domain::Category;
 
 fn wfcd_fixture() -> Vec<u8> {
@@ -222,4 +224,37 @@ fn unsafe_artwork_names_are_omitted_without_discarding_the_catalog() {
             .image_name(),
         None
     );
+}
+
+/// The reward screen offers "Lavos Prime Chassis Blueprint"; the catalog names the component that
+/// blueprint builds. Comparing the two spellings with `==` priced every Warframe part on the reward
+/// screen at zero ducats and reported it as not owned, while weapon parts, which are spelled the
+/// same either way, were right -- which is what made it look like a market problem rather than a
+/// naming one.
+#[test]
+fn warframe_part_blueprints_find_their_ducat_value() {
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[{
+          "uniqueName":"/Lotus/Powersuits/Lavos/LavosPrime","name":"Lavos Prime",
+          "type":"Warframe","category":"Warframes","masterable":true,
+          "components":[
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeChassisBlueprint","name":"Chassis","tradable":true,"ducats":15,"primeSellingPrice":15},
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeBlueprint","name":"Blueprint","tradable":true,"ducats":45,"primeSellingPrice":45}
+          ]
+        }]"#,
+    )
+    .unwrap();
+    let entries = catalog.reward_entries();
+    let ducats = |reward: &str| {
+        entries
+            .iter()
+            .find(|entry| reward_name_matches(&entry.name, reward))
+            .map(|entry| entry.ducats)
+    };
+
+    assert_eq!(ducats("Lavos Prime Chassis Blueprint"), Some(15));
+    // The frame's own blueprint is spelled the same in both vocabularies: the exact match has to
+    // win before the suffix is ever trimmed, or it would look for a "Lavos Prime" part.
+    assert_eq!(ducats("Lavos Prime Blueprint"), Some(45));
+    assert_eq!(ducats("Ayatan Amber Star"), None);
 }
