@@ -352,6 +352,19 @@
   letter-spacing: .08em; text-transform: uppercase; color: var(--platinum-deep);
 }
 .price em::before { content: '· '; }
+/* One mark leading the group, not one per figure: the unit price and the stack total are the same
+   currency, so a second copy of the icon between them is repetition rather than information.
+   Held to about the figure's own cap height. Larger than that and it outweighs the item name above
+   it -- the register is a dense sheet, and the mark is here to say which currency, not to be the
+   loudest thing in the row. Below it the canister loses its dark chip and reads as a grey lozenge.
+   A dump reading keeps the mark dimmer along with its figure, so the freshness signal above is not
+   diluted by an icon that stays equally bright either way. */
+.price .metal-mark { height: 1.15rem; width: auto; opacity: .68; }
+.price.live .metal-mark { opacity: 1; }
+
+/* The worth figure is the one number on this page standing in a row of plain counts, so it is the
+   one that has to say it is money rather than a tally. Room enough for the real icon. */
+.band-figure .metal-mark { height: .5em; width: auto; margin-left: .18em; vertical-align: baseline; }
 
 /* The freshness line: same register-line voice as the price annotation above it, so a live
    reading explains itself in the card's own grammar instead of a badge with a word to learn. */
@@ -404,7 +417,16 @@
 }
 .metal.plat .metal-figure { color: var(--platinum); }
 .metal.ducat .metal-figure { color: var(--gold); }
-.metal-label { font-family: var(--face-register); font-size: .55rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; }
+/* The game's own icon rides the label, not the figure. Beside the figure it competed with it for a
+   column barely wider than three digits, and a 220p reading pushed the ducat column off the card.
+   Here the figure keeps the whole column and the mark cannot collide with anything. */
+.metal-label { display: flex; align-items: center; gap: .42rem; font-family: var(--face-register); font-size: .55rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; }
+/* Sized in `rem` and not `em`: a rendered object loses its dark chip and turns to a grey lozenge
+   below about 18px where a flat mark would still read, so the legibility floor has to hold even
+   where the figure beside it has scaled down. Height-normalised with `width: auto`, because the
+   canister is a wide object and the sigil a tall one -- a shared square box renders the canister
+   visibly smaller than the sigil beside it. */
+.metal-mark { flex: none; height: 1.7rem; width: auto; user-select: none; }
 .metal.plat .metal-label { color: var(--platinum-deep); }
 .metal.ducat .metal-label { color: var(--gold-dim); }
 /* An unknown price is dimmer than a real one, but never below AA: the player
@@ -581,6 +603,7 @@
 .overlay-rewards .slip-name { font-size: .82rem; line-height: 1.12; white-space: normal; }
 .overlay-rewards .metals { gap: .5rem; padding-top: .35rem; }
 .overlay-rewards .metal-figure { font-size: 1.75rem; }
+.overlay-rewards .metal-mark { height: 1.45rem; }
 .overlay-rewards .metal-label { font-size: .5rem; letter-spacing: .12em; }
 .overlay-rewards .metal-hallmark { margin-top: .15rem; padding: .18rem .34rem .38rem; font-size: .46rem; }
 .overlay-rewards .marks { flex-wrap: nowrap; overflow: hidden; }

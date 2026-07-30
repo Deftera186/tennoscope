@@ -169,6 +169,12 @@ describe('MVP desktop interface', () => {
     expect(within(advisor).getByRole('article', { name: 'Paris Prime String' })).toHaveTextContent('Top ducats')
     expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).toHaveTextContent('Uncertain ·')
     expect(within(advisor).getByRole('article', { name: 'Rare Prime Set' })).not.toHaveTextContent('Top plat')
+
+    // Each reading carries the game's own currency icon beside it, so the two columns are told
+    // apart by the shape the player already knows and not only by a hue and a 9px word.
+    const card = within(advisor).getByRole('article', { name: 'Forma Blueprint' })
+    expect(card.querySelectorAll('[data-metal="plat"]')).toHaveLength(1)
+    expect(card.querySelectorAll('[data-metal="ducat"]')).toHaveLength(1)
   })
 
   it('keeps risk disclosure and local-first details available from settings', async () => {
@@ -345,12 +351,17 @@ describe('MVP desktop interface', () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App/>)
     const single = await screen.findByRole('article', { name: 'Lex Prime Receiver' })
-    expect(within(single).getByText('19p')).toBeInTheDocument()
+    expect(within(single).getByText('19')).toBeInTheDocument()
+    // The currency is the game's own icon rather than a trailing letter, so it has to still say
+    // "platinum" to a reader who cannot see it.
+    expect(within(single).getByAltText(/platinum/i)).toBeInTheDocument()
     expect(within(single).queryByText(/total/)).not.toBeInTheDocument()
 
     const stack = await screen.findByRole('article', { name: 'Lith A1 Relic' })
-    expect(within(stack).getByText('20p')).toBeInTheDocument()
-    expect(within(stack).getByText('140p total')).toBeInTheDocument()
+    expect(within(stack).getByText('20')).toBeInTheDocument()
+    expect(within(stack).getByText('140 total')).toBeInTheDocument()
+    // One mark leads the pair: the unit price and the stack total are the same currency.
+    expect(within(stack).getAllByAltText(/platinum/i)).toHaveLength(1)
   })
 
   it('says nothing rather than zero for an item with no price', async () => {
@@ -445,7 +456,8 @@ describe('MVP desktop interface', () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App/>)
     const worth = await screen.findByTestId('band-worth')
-    expect(within(worth).getByText('159p'), 'the worth is platinum, in a row of plain counts').toBeInTheDocument()
+    expect(within(worth).getByText('159'), 'the worth is a figure, in a row of plain counts').toBeInTheDocument()
+    expect(within(worth).getByAltText(/platinum/i), 'and the game\'s own icon says which currency it is').toBeInTheDocument()
     expect(within(worth).getByText(/3 of 9 items priced/)).toBeInTheDocument()
   })
 

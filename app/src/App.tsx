@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import './App.css'
 import {
   acceptRiskDisclosure,
@@ -14,6 +14,7 @@ import {
 } from './backend'
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
 import { RewardCards } from './RewardCards'
+import { MetalMark } from './MetalMark'
 import { clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, stackValue } from './collection'
 import { snapshotFreshness } from './freshness'
 
@@ -338,7 +339,7 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
       {/* The worth figure climbs the whole time a pass is running, so its own note is where the
           reason belongs -- a total that moves with nothing saying why is a moving target, not a
           valuation. */}
-      <BandCell kind="worth" value={worth} unit="p" label="Collection worth" note={inProgress
+      <BandCell kind="worth" value={worth} unit={<MetalMark metal="plat" alt=" platinum"/>} label="Collection worth" note={inProgress
         ? `${priced.length} of ${view.collection.items.length} items priced · checking ${inProgress.done} of ${inProgress.total}`
         : `${priced.length} of ${view.collection.items.length} items priced`}/>
     </div>
@@ -418,7 +419,7 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
 }
 
 // The worth cell sits in a row of plain counts, where a bare number reads as one more count.
-function BandCell({ kind, value, unit = '', label, note }: { kind: string; value: number; unit?: string; label: string; note: string }) {
+function BandCell({ kind, value, unit, label, note }: { kind: string; value: number; unit?: ReactNode; label: string; note: string }) {
   return <div className={`band-cell ${kind}`} data-summary={kind} data-testid={`band-${kind}`}>
     <span className="band-figure">{value}{unit}</span>
     <span className="band-label">{label}</span>
@@ -444,8 +445,9 @@ function CollectionEntry({ item }: { item: CollectionItem }) {
           : <span className="hallmark owned">Owned ×{item.quantity}</span>}
         {item.mastered && <span className="hallmark mastered">Mastered</span>}
         {item.platinum !== undefined && <span className={`price${item.live ? ' live' : ''}`}>
-          <b>{item.platinum}p</b>
-          {item.quantity > 1 && <em>{stackValue(item)}p total</em>}
+          <MetalMark metal="plat" alt="platinum "/>
+          <b>{item.platinum}</b>
+          {item.quantity > 1 && <em>{stackValue(item)} total</em>}
         </span>}
       </div>
       {item.live && <p className="freshness">checked live</p>}

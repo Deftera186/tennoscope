@@ -188,6 +188,10 @@ Explicitly banned: `box-shadow` with a blur radius, `filter: drop-shadow`, glow 
 `backdrop-filter` outside the overlay window (where it is a legibility requirement over live game
 imagery, not an effect), and any gradient used to fake a light source.
 
+The bans govern what this interface *draws*. They do not govern the two bundled game icons, which
+are quoted artwork and carry their own gloss and glow — see **Currency mark** under Components.
+Nothing else may borrow that exemption.
+
 ## Shapes
 
 - **Radius is `0`.** The one exception is `seat: 2px` on an image well.
@@ -210,6 +214,22 @@ imagery, not an effect), and any gradient used to fake a light source.
   the figures land at the same y across all four columns. Each metal reserves its hallmark row too,
   so a card that wins nothing stays level with a card that wins both. A player scans this row
   sideways under a countdown; ragged baselines make that scan impossible.
+- **Currency mark** — the one deliberate foreign body in this world. Digital Extremes' own platinum
+  canister and Orokin ducat sigil, bundled as bitmaps, riding the tracked label under each figure.
+  They are rendered 3D objects with a cyan glow, which every other rule here forbids, and that is
+  accepted on purpose: recognition on this surface is not a design problem to solve but a memory the
+  player already has from the game running behind the overlay. Marks drawn in the house grammar were
+  built and rejected — six flattenings of the canister read as a battery, a SIM card, or a media
+  control, which is a *third* shape to learn and a wrong one.
+  They ride the label, never the figure: beside a figure they competed for a column barely three
+  digits wide and a 220p reading pushed the ducat column off the card. They are sized in `rem`, not
+  `em`, and held between two walls found by rendering them: below about 18px the canister loses its
+  dark chip and reads as a grey lozenge, and much above the figure's own cap height it outweighs the
+  name it sits under. So the register's price row runs its mark at `1.15rem` against a `.95rem`
+  figure — sized to it, never scaling with it. Where a row carries two figures in one currency it
+  takes one leading mark, not one per figure.
+  Every figure they mark is also named in text beside it, so they are decorative to a screen reader
+  and removable by a distributor who cannot carry game art.
 - **Register entry** (collection item) — artwork in a recessed platinum well, name struck, quantity
   and mastery as punch shields. No card border; the rule grid does the separating.
 - **Ruled grid** — cells draw their own right and bottom rule with an inset shadow; the container

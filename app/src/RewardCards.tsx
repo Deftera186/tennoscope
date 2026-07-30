@@ -1,4 +1,5 @@
 import type { RewardCard } from './backend'
+import { MetalMark } from './MetalMark'
 
 /**
  * Platinum and ducats are two different answers to "which one do I take", and the player picks
@@ -37,12 +38,12 @@ export function RewardCards({
           {card.platinum > 0
             ? <span className="metal-figure">{card.platinum}</span>
             : <span className="metal-figure market-pending"><span aria-hidden="true">—</span><span className="sr-only">No platinum price</span></span>}
-          <span className="metal-label">plat</span>
+          <span className="metal-label"><MetalMark metal="plat"/>plat</span>
           {topPlat && <span className="metal-hallmark">Top plat</span>}
         </span>
         <span className="metal ducat">
           <span className="metal-figure">{card.ducats}</span>
-          <span className="metal-label">ducats</span>
+          <span className="metal-label"><MetalMark metal="ducat"/>ducats</span>
           {topDucat && <span className="metal-hallmark">Top ducats</span>}
         </span>
       </div>

@@ -10,6 +10,12 @@ The pinned upstream revision is published under the MIT License (Copyright 2017 
 
 Warframe names, artwork, and game data are associated with Digital Extremes. This project is unofficial and does not claim ownership of them.
 
+## Bundled currency icons
+
+`app/src/assets/platinum.png` and `app/src/assets/ducats.png` are Digital Extremes' own in-game icons for Platinum and Orokin Ducats, retrieved from the Warframe Wiki (`PlatinumLarge.png`, `OrokinDucats.png`) and rescaled. They are bundled rather than fetched because they label which currency a figure is quoted in, and that must not depend on the network.
+
+They are used unaltered in form, for identification of the currency they depict, in a tool that reads prices in those currencies. Digital Extremes retains all rights in them; they are not covered by this project's GPL-3.0-only license and are not the project's to relicense. A distributor that cannot carry third-party game art should replace or remove them — nothing else in the interface depends on them, and every figure they mark is also named in text beside it.
+
 ## Acquisition research and prior art
 
 The Linux acquisition implementation was written for this project behind its own bounded process-reader and decoder interfaces. The following projects informed the feasibility study and algorithm design:
