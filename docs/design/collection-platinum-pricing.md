@@ -318,8 +318,6 @@ carries no number while a pass runs: it is disabled, because both passes spend t
 rate-limited budget, and a second copy of the same figures on the disabled thing reads as a
 different pass.
 
-The interface work is done through the `impeccable` skill.
-
 ## Boundaries
 
 - `warframe-acquisition` owns the download, the name rules, the cache and the price table. It knows nothing about collections or presentation.

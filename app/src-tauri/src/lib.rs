@@ -1860,7 +1860,7 @@ pub fn run() {
     // Left alone if there is no X server to run on, so a session without one still gets the app
     // itself; only the overlay degrades.
     //
-    // ponytail: this puts the *main* window on XWayland too, which a compositor doing fractional
+    // This puts the *main* window on XWayland too, which a compositor doing fractional
     // scaling will render blurry. Split the overlay into its own X11 process if that ever matters
     // more than having one.
     #[cfg(target_os = "linux")]

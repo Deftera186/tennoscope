@@ -158,7 +158,7 @@ pub fn read_cards(
         return Err("no reward candidates");
     }
     let (width, height) = image_size(image)?;
-    // ponytail: up to three layouts per poll rather than one, so a poll off the reward screen costs
+    // Up to three layouts per poll rather than one, so a poll off the reward screen costs
     // three crops instead of one -- about 200ms every two seconds. Narrow it by asking the log for
     // the squad size if that ever shows up in a profile.
     let widest = read_cards_at(image, width, height, MAX_CARDS, candidates);
