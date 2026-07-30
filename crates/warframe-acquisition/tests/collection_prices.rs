@@ -48,6 +48,22 @@ fn a_sell_median_becomes_the_price() {
     assert_eq!(table().price_for("Serration"), Some(50));
 }
 
+/// Sixty dump items carry one `sell` record per `subtype`, and thirty-nine of those are fish, whose
+/// subtype is a size the inventory does not record: a `Tromyzon` is a `Tromyzon` whether it is the
+/// 2p `basic` or the 10p `magnificent`. Taking whichever record the file happened to list first
+/// valued an unknown at its best case. The lowest is the least the player is certainly holding.
+#[test]
+fn an_item_priced_once_per_subtype_takes_the_cheapest() {
+    let dump = r#"{"Tromyzon": [
+        {"order_type":"sell","median":10.0,"volume":30},
+        {"order_type":"buy","median":1.0,"volume":4},
+        {"order_type":"sell","median":2.0,"volume":18}
+    ]}"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses");
+
+    assert_eq!(table.price_for("Tromyzon"), Some(2));
+}
+
 /// Built equipment must not borrow its blueprint's price. Measured against a real 1,106-item
 /// collection, appending " Blueprint" fired 25 times and was wrong 25 times: a mastered `Ash Prime`
 /// priced at what somebody asks for the blueprint, an item you cannot sell at all. Every prime part
@@ -76,9 +92,10 @@ fn a_blueprint_resolves_to_a_listing_without_the_suffix() {
     assert_eq!(table.price_for("Forma Blueprint"), Some(8));
 }
 
-/// The dump cannot be corrected for bulk listings, so a relic's daily median runs high — measured
-/// at 1.5x on Axi A1. Relics are priced from a live sweep instead, and until that lands they have
-/// no price rather than an inflated one.
+/// warframe.market's statistics quote a bulk listing's whole lot, and the dump mirrors them
+/// unmodified, so a relic's daily median runs high — measured up to 6x, and heavy-tailed enough
+/// that no constant corrects it. Relics are priced from a live sweep instead, which has `perTrade`
+/// to divide by, and until that lands they have no price rather than an inflated one.
 #[test]
 fn a_relic_is_not_priced_from_the_dump() {
     let table = table();
@@ -89,41 +106,68 @@ fn a_relic_is_not_priced_from_the_dump() {
 /// Resolution still works, because the live sweep needs the market name to build its slug.
 #[test]
 fn a_relic_still_resolves_to_its_market_name() {
-    assert_eq!(table().market_name("Axi A1 Radiant"), Some("Axi A1 Relic"));
+    assert_eq!(
+        table().market_name("Axi A1 Radiant"),
+        Some("Axi A1 Relic (Radiant)".to_owned())
+    );
 }
 
 #[test]
 fn a_checked_relic_price_is_served_like_any_other() {
     let mut table = table();
-    table.insert_checked("Axi A1 Relic", 17);
+    table.insert_checked("Axi A1 Relic (Radiant)", 17);
     assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
-    assert_eq!(table.price_for("Axi A1 Relic"), Some(17));
+    assert_eq!(table.price_for("Axi A1 Relic (Radiant)"), Some(17));
 }
 
 /// `REFINEMENTS` is a hand-written list of four suffixes; a test that only ever tries `Radiant`
-/// cannot catch a typo or reordering in `Intact`, `Exceptional`, or `Flawless`. Resolution must
-/// keep working for all four, because the live sweep builds its warframe.market slug from it, and
-/// a swept price must reach all four the same way a dump price used to.
+/// cannot catch a typo or reordering in `Intact`, `Exceptional`, or `Flawless`. Each tier is its
+/// own warframe.market subtype and its own key, and intact keeps the bare listing name -- the tier
+/// the market means by default, and the key every price checked before the tiers were told apart
+/// was stored under.
 #[test]
-fn every_refinement_tier_resolves_and_prices_alike() {
-    let names = [
-        "Axi A1 Intact",
-        "Axi A1 Exceptional",
-        "Axi A1 Flawless",
-        "Axi A1 Radiant",
-    ];
-    for name in names {
+fn every_refinement_tier_resolves_to_its_own_subtype() {
+    for (name, expected) in [
+        ("Axi A1 Intact", "Axi A1 Relic"),
+        ("Axi A1 Exceptional", "Axi A1 Relic (Exceptional)"),
+        ("Axi A1 Flawless", "Axi A1 Relic (Flawless)"),
+        ("Axi A1 Radiant", "Axi A1 Relic (Radiant)"),
+    ] {
         assert_eq!(
             table().market_name(name),
-            Some("Axi A1 Relic"),
+            Some(expected.to_owned()),
             "for {name}"
         );
     }
+}
 
+/// The tiers are separately priced -- a radiant sells for a median 1.46x its intact tier and up to
+/// 17x -- so a price checked for one must not be served as another's.
+#[test]
+fn a_checked_tier_does_not_price_a_different_tier() {
     let mut table = table();
-    table.insert_checked("Axi A1 Relic", 17);
-    for name in names {
-        assert_eq!(table.price_for(name), Some(17), "for {name}");
+    table.insert_checked("Axi A1 Relic (Radiant)", 17);
+    assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
+    assert_eq!(table.price_for("Axi A1 Intact"), None);
+}
+
+/// Nobody at all sells the `exceptional` or `flawless` tiers, and 61% of radiants have no online
+/// seller either, so a refined relic falls back to the intact listing rather than showing nothing.
+/// Its own checked price still wins where it has one, which the test above holds.
+#[test]
+fn a_refined_relic_falls_back_to_the_intact_listing() {
+    let mut table = table();
+    table.insert_checked("Axi A1 Relic", 11);
+    for name in ["Axi A1 Exceptional", "Axi A1 Flawless", "Axi A1 Radiant"] {
+        assert_eq!(table.price_for(name), Some(11), "for {name}");
+        assert!(
+            table.has_checked_price(&table.market_name(name).expect("resolves")),
+            "a borrowed intact price is still a checked price, not a dump price, for {name}"
+        );
+        assert!(
+            !table.has_been_checked(&table.market_name(name).expect("resolves")),
+            "the sweep must still ask about {name} itself"
+        );
     }
 }
 
@@ -173,12 +217,15 @@ fn the_table_reports_what_it_parsed() {
 #[test]
 fn resolution_yields_the_market_name_the_live_lookup_needs() {
     let table = table();
-    assert_eq!(table.market_name("Axi A1 Radiant"), Some("Axi A1 Relic"));
+    assert_eq!(
+        table.market_name("Axi A1 Radiant"),
+        Some("Axi A1 Relic (Radiant)".to_owned())
+    );
     assert_eq!(
         table.market_name("Mirage Prime Systems Blueprint"),
-        Some("Mirage Prime Systems Blueprint")
+        Some("Mirage Prime Systems Blueprint".to_owned())
     );
-    assert_eq!(table.market_name("Serration"), Some("Serration"));
+    assert_eq!(table.market_name("Serration"), Some("Serration".to_owned()));
     assert_eq!(table.market_name("Not An Item"), None);
 }
 

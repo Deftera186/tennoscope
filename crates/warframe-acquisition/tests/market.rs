@@ -5,7 +5,7 @@ use std::{
 
 use warframe_acquisition::{
     MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, WarmOutcome, lowest_sell_top,
-    market_slug,
+    market_slug, slug_and_subtype,
 };
 
 /// Verified against the live warframe.market v2 API for every reward name observed in a real run.
@@ -49,7 +49,10 @@ const TOP: &str = r#"{"apiVersion":"0.25.0","data":{
 
 #[test]
 fn the_cheapest_online_seller_sets_the_price() {
-    assert_eq!(lowest_sell_top(TOP.as_bytes()), PriceLookup::Priced(19));
+    assert_eq!(
+        lowest_sell_top(TOP.as_bytes(), None),
+        PriceLookup::Priced(19)
+    );
 }
 
 /// An offline seller's price is a number nobody can trade at. Counting them makes every item look
@@ -61,7 +64,10 @@ fn an_offline_or_hidden_seller_is_not_quotable() {
         {"type":"sell","platinum":3,"visible":false,"user":{"status":"ingame"}},
         {"type":"sell","platinum":25,"visible":true,"user":{"status":"ingame"}}
     ],"buy":[]}}"#;
-    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(25));
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), None),
+        PriceLookup::Priced(25)
+    );
 }
 
 #[test]
@@ -69,14 +75,73 @@ fn an_item_with_no_online_seller_is_distinct_from_a_failure() {
     let body = r#"{"data":{"sell":[
         {"type":"sell","platinum":2,"visible":true,"user":{"status":"offline"}}
     ],"buy":[]}}"#;
-    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::NoSellers);
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), None),
+        PriceLookup::NoSellers
+    );
 }
 
 /// The failure that arrives the day warframe.market widens its payload. As an absent price it
 /// would present as "every item is worthless", with nothing anywhere saying otherwise.
 #[test]
 fn an_unreadable_body_is_reported_rather_than_priced_at_nothing() {
-    assert_eq!(lowest_sell_top(b"{not json"), PriceLookup::Unavailable);
+    assert_eq!(
+        lowest_sell_top(b"{not json", None),
+        PriceLookup::Unavailable
+    );
+}
+
+/// A relic is one listing with four separately-priced refinement subtypes, so the request has to
+/// name the tier. A bare relic name means intact -- the tier warframe.market shows by default, and
+/// the one the refined tiers fall back to. Nothing else asks about a subtype at all.
+#[test]
+fn a_relic_asks_about_its_refinement_and_everything_else_asks_about_none() {
+    for (name, slug, subtype) in [
+        ("Axi A1 Relic", "axi_a1_relic", Some("intact")),
+        ("Axi A1 Relic (Radiant)", "axi_a1_relic", Some("radiant")),
+        (
+            "Meso B2 Relic (Exceptional)",
+            "meso_b2_relic",
+            Some("exceptional"),
+        ),
+        ("Braton Prime Blueprint", "braton_prime_blueprint", None),
+        // Brackets that are not a refinement belong to the name, not to a subtype.
+        ("Rifle Riven Mod (Veiled)", "rifle_riven_mod_veiled", None),
+    ] {
+        let (built_slug, built_subtype) = slug_and_subtype(name);
+        assert_eq!(built_slug, slug, "slug for {name}");
+        assert_eq!(built_subtype.as_deref(), subtype, "subtype for {name}");
+    }
+}
+
+/// The subtype is filtered client-side as well as in the query string, because warframe.market
+/// answers a `/top` request carrying an unrecognised parameter by ignoring it. Trusting the server
+/// alone would serve the cheap intact order under a radiant relic's name -- silently, and it is
+/// the exact number the whole distinction exists to stop showing.
+#[test]
+fn a_subtype_the_server_did_not_filter_is_filtered_here() {
+    let body = r#"{"data":{"sell":[
+        {"type":"sell","platinum":5,"subtype":"intact","visible":true,"user":{"status":"ingame"}},
+        {"type":"sell","platinum":90,"perTrade":6,"subtype":"radiant","visible":true,"user":{"status":"ingame"}}
+    ],"buy":[]}}"#;
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), Some("radiant")),
+        PriceLookup::Priced(15),
+        "90p for six radiants is 15p each, and the 5p intact order is a different item"
+    );
+}
+
+/// A tier nobody is selling is not a failure and not the intact price: it is the absent answer the
+/// price table's fallback is there to notice.
+#[test]
+fn a_tier_with_no_seller_of_its_own_reports_no_sellers() {
+    let body = r#"{"data":{"sell":[
+        {"type":"sell","platinum":5,"subtype":"intact","visible":true,"user":{"status":"ingame"}}
+    ],"buy":[]}}"#;
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), Some("flawless")),
+        PriceLookup::NoSellers
+    );
 }
 
 /// A source that records every name it is asked for, so a test can prove the cache stopped a
@@ -305,7 +370,10 @@ fn a_bulk_listing_is_quoted_per_unit_not_per_trade() {
         {"platinum":20,"perTrade":1,"visible":true,"user":{"status":"ingame"}},
         {"platinum":18,"perTrade":6,"visible":true,"user":{"status":"ingame"}}
     ],"buy":[]}}"#;
-    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(3));
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), None),
+        PriceLookup::Priced(3)
+    );
 }
 
 /// A listing with no `perTrade` field is a single, not a free item.
@@ -314,7 +382,10 @@ fn a_listing_without_a_per_trade_count_is_one_unit() {
     let body = r#"{"data":{"sell":[
         {"platinum":25,"visible":true,"user":{"status":"ingame"}}
     ],"buy":[]}}"#;
-    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(25));
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), None),
+        PriceLookup::Priced(25)
+    );
 }
 
 /// Integer division would report a 5-for-12 listing at 2p and understate every bulk seller.
@@ -323,7 +394,10 @@ fn a_per_unit_price_rounds_rather_than_truncating() {
     let body = r#"{"data":{"sell":[
         {"platinum":12,"perTrade":5,"visible":true,"user":{"status":"ingame"}}
     ],"buy":[]}}"#;
-    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(2));
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), None),
+        PriceLookup::Priced(2)
+    );
 }
 
 /// A malformed `perTrade` of zero must not divide by zero or price the item at nothing.
@@ -332,7 +406,10 @@ fn a_zero_per_trade_count_is_treated_as_one() {
     let body = r#"{"data":{"sell":[
         {"platinum":30,"perTrade":0,"visible":true,"user":{"status":"ingame"}}
     ],"buy":[]}}"#;
-    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(30));
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), None),
+        PriceLookup::Priced(30)
+    );
 }
 
 /// The cheapest thing on the market still costs something. 1p for six rounds to nothing, and "0p"
@@ -343,7 +420,10 @@ fn a_bulk_listing_too_cheap_to_divide_is_still_worth_a_platinum() {
     let body = r#"{"data":{"sell":[
         {"platinum":1,"perTrade":6,"visible":true,"user":{"status":"ingame"}}
     ],"buy":[]}}"#;
-    assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(1));
+    assert_eq!(
+        lowest_sell_top(body.as_bytes(), None),
+        PriceLookup::Priced(1)
+    );
 }
 
 /// A source that answers each name differently, so a per-name pass can be checked for attributing

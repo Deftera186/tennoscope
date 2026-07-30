@@ -111,7 +111,7 @@ fn a_live_price_is_found_through_the_market_name() {
         PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
     ));
     let live = MarketPriceCache::new();
-    live.insert("Axi A1 Relic", 31);
+    live.insert("Axi A1 Relic (Radiant)", 31);
     core.set_live_prices(live);
 
     let view = core.current_view().expect("view builds");
@@ -199,13 +199,14 @@ fn only_the_named_items_are_resolved_for_a_live_lookup() {
     assert_eq!(names, vec!["Mirage Prime Systems Blueprint".to_owned()]);
 }
 
-/// Four refinements of one relic are one item on warframe.market. Asking about a page holding all
-/// four must cost one request, not four. The store returns entries ordered by item id (see
-/// `SqliteStore::load_collection`'s `ORDER BY item_id`), so "/b" sits between the two "/a"/"/c"
-/// refinements of the same relic pre-sort -- the duplicate market names are not adjacent until
-/// `market_names_for` sorts them, which is what makes the following `dedup()` sufficient.
+/// Two refinements of one relic are two prices on warframe.market -- separate subtypes of one
+/// listing, and a radiant sells for a median 1.46x its intact tier -- so a page holding both costs
+/// two requests, not one. Repeats of the *same* tier still collapse. The store returns entries
+/// ordered by item id (see `SqliteStore::load_collection`'s `ORDER BY item_id`), so "/b" sits
+/// between the two "/a"/"/c" entries of the same relic pre-sort -- the duplicate market names are
+/// not adjacent until `market_names_for` sorts them, which is what makes the `dedup()` sufficient.
 #[test]
-fn relic_refinements_on_one_page_collapse_to_a_single_request() {
+fn one_relic_tier_asked_for_twice_collapses_to_a_single_request() {
     let dump = r#"{
         "Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}],
         "Meso B2 Relic": [{"order_type":"sell","median":15.0,"volume":25}]
@@ -213,7 +214,7 @@ fn relic_refinements_on_one_page_collapse_to_a_single_request() {
     let mut core = core_with_items(vec![
         item("/a", "Axi A1 Intact", Category::Relic, 2),
         item("/b", "Meso B2 Radiant", Category::Relic, 1),
-        item("/c", "Axi A1 Flawless", Category::Relic, 4),
+        item("/c", "Axi A1 Intact", Category::Relic, 4),
     ]);
     core.set_collection_prices(Arc::new(
         PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
@@ -225,7 +226,10 @@ fn relic_refinements_on_one_page_collapse_to_a_single_request() {
 
     assert_eq!(
         names,
-        vec!["Axi A1 Relic".to_owned(), "Meso B2 Relic".to_owned()]
+        vec![
+            "Axi A1 Relic".to_owned(),
+            "Meso B2 Relic (Radiant)".to_owned()
+        ]
     );
 }
 
@@ -287,14 +291,38 @@ fn only_owned_relics_are_swept() {
 
     assert_eq!(
         core.owned_relic_market_names().expect("resolves"),
-        vec!["Axi A1 Relic".to_owned()],
+        vec![
+            "Axi A1 Relic".to_owned(),
+            "Axi A1 Relic (Radiant)".to_owned()
+        ],
         "a relic at quantity 0 is not owned, and a resource is not a relic"
     );
 }
 
-/// Four refinement tiers of one relic are one request.
+/// A radiant relic drags its intact listing into the sweep, because that listing is what its price
+/// falls back to when nobody is selling the refined tier -- which measured over 80 relics is 61% of
+/// radiants, and every single `exceptional` and `flawless`.
 #[test]
-fn relic_refinements_collapse_before_the_sweep() {
+fn a_refined_relic_sweeps_the_intact_listing_it_falls_back_to() {
+    let dump = r#"{"Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}]}"#;
+    let mut core = core_with_items(vec![item("/a", "Axi A1 Radiant", Category::Relic, 3)]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+
+    assert_eq!(
+        core.owned_relic_market_names().unwrap(),
+        vec![
+            "Axi A1 Relic".to_owned(),
+            "Axi A1 Relic (Radiant)".to_owned()
+        ]
+    );
+}
+
+/// Owning the intact copy as well costs nothing extra: it is the same name the refined tier
+/// already pulled in, and the dedup folds them.
+#[test]
+fn owning_a_tier_and_its_intact_fallback_is_one_request_each() {
     let dump = r#"{"Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}]}"#;
     let mut core = core_with_items(vec![
         item("/a", "Axi A1 Intact", Category::Relic, 1),
@@ -304,7 +332,7 @@ fn relic_refinements_collapse_before_the_sweep() {
         PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
     ));
 
-    assert_eq!(core.owned_relic_market_names().unwrap().len(), 1);
+    assert_eq!(core.owned_relic_market_names().unwrap().len(), 2);
 }
 
 /// The page control promised prices for items it was never going to send. It counted everything

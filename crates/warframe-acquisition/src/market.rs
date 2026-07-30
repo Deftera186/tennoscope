@@ -44,6 +44,23 @@ pub fn market_slug(name: &str) -> String {
     slug.trim_matches('_').to_owned()
 }
 
+/// The slug to ask warframe.market for, and the `subtype` to ask it about.
+///
+/// A relic is one listing with four refinement subtypes, and they are separately priced, so the
+/// request has to name the tier: `Axi A1 Relic (Radiant)` asks `axi_a1_relic` about `radiant`. A
+/// bare relic name means intact, which is both the tier warframe.market shows by default and the
+/// one the refined tiers fall back to. Everything else asks about no subtype at all.
+pub fn slug_and_subtype(name: &str) -> (String, Option<String>) {
+    if let Some(base) = crate::relic_base(name) {
+        let refinement = name[base.len() + 2..name.len() - 1].to_lowercase();
+        return (market_slug(base), Some(refinement));
+    }
+    if name.ends_with(" Relic") {
+        return (market_slug(name), Some("intact".to_owned()));
+    }
+    (market_slug(name), None)
+}
+
 /// Why an item has no price, kept distinct because the four reasons want different responses.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PriceLookup {
@@ -85,6 +102,9 @@ struct Order {
     /// listing six relics for 18p is asking 3p each, not 18p each.
     #[serde(default = "one")]
     per_trade: u32,
+    /// Which variant of the listing this order is for -- a relic's refinement, a fish's size.
+    #[serde(default)]
+    subtype: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -93,7 +113,13 @@ struct OrderUser {
     status: String,
 }
 
-pub fn lowest_sell_top(body: &[u8]) -> PriceLookup {
+/// The cheapest per-unit price an in-game seller is asking, among orders for `subtype`.
+///
+/// The subtype is filtered here as well as in the query string. warframe.market answers a `/top`
+/// request with an unrecognised query parameter by ignoring it, so trusting the server alone would
+/// turn a mistyped refinement into the intact price served silently under a radiant relic's name --
+/// which is the exact wrong number this distinction exists to stop showing.
+pub fn lowest_sell_top(body: &[u8], subtype: Option<&str>) -> PriceLookup {
     let Ok(response) = serde_json::from_slice::<TopResponse>(body) else {
         return PriceLookup::Unavailable;
     };
@@ -102,6 +128,7 @@ pub fn lowest_sell_top(body: &[u8]) -> PriceLookup {
         .sell
         .into_iter()
         .filter(|order| order.visible && order.user.status == "ingame")
+        .filter(|order| subtype.is_none_or(|wanted| order.subtype.as_deref() == Some(wanted)))
         .map(|order| {
             // `platinum` buys `perTrade` units, so the per-unit price is the quotient. Rounded to
             // nearest rather than truncated: 12p for five is 2.4p each, and truncation would quote
@@ -133,11 +160,15 @@ impl WarframeMarketHttp {
 
 impl MarketPriceSource for WarframeMarketHttp {
     fn lowest_sell(&self, name: &str) -> PriceLookup {
-        let slug = market_slug(name);
+        let (slug, subtype) = slug_and_subtype(name);
         if slug.is_empty() {
             return PriceLookup::Unavailable;
         }
-        let Ok(response) = self.client.get(format!("{ORDERS_URL}{slug}/top")).send() else {
+        let url = match &subtype {
+            Some(subtype) => format!("{ORDERS_URL}{slug}/top?subtype={subtype}"),
+            None => format!("{ORDERS_URL}{slug}/top"),
+        };
+        let Ok(response) = self.client.get(url).send() else {
             return PriceLookup::Unavailable;
         };
         let Ok(response) = response.error_for_status() else {
@@ -154,7 +185,7 @@ impl MarketPriceSource for WarframeMarketHttp {
         if body.len() > MAX_ORDERS_BYTES {
             return PriceLookup::Oversize;
         }
-        lowest_sell_top(&body)
+        lowest_sell_top(&body, subtype.as_deref())
     }
 }
 

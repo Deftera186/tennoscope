@@ -10,7 +10,7 @@ use serde::Serialize;
 use thiserror::Error;
 use warframe_acquisition::{
     AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogIndex, CatalogLoadSource,
-    MarketPriceCache, PriceTable, StageState,
+    MarketPriceCache, PriceTable, StageState, relic_base,
 };
 use warframe_domain::{
     CatalogItem, Category, DomainError, InventoryEntry, InventorySnapshot, RewardAdvisor,
@@ -130,20 +130,26 @@ impl AppCore {
         let mut names = collection
             .entries()
             .filter(|entry| item_ids.iter().any(|id| id == entry.item.id.as_str()))
-            .filter_map(|entry| prices.market_name(&entry.item.name).map(str::to_owned))
+            .filter_map(|entry| prices.market_name(&entry.item.name))
             .collect::<Vec<_>>();
         names.sort();
         names.dedup();
         Ok(names)
     }
 
-    /// warframe.market's names for the relics the player owns, deduplicated across refinement
-    /// tiers.
+    /// warframe.market's names for the relics the player owns, one per refinement tier owned.
     ///
     /// Bounded by ownership rather than by the dump: the dump lists every relic the game has (772
     /// measured), while the sweep this feeds spends one request per name at 3/second, and a real
     /// collection owns a few dozen of them -- 65 versus 772 is the difference between 22 seconds
     /// and four minutes.
+    ///
+    /// A refined relic drags its intact listing into the sweep alongside it. That listing is what
+    /// `price_for` falls back to, and it has to be asked about for the fallback to hold anything:
+    /// measured over 80 relics, no `exceptional` or `flawless` tier had a single online seller and
+    /// 61% of `radiant` tiers had none either, so without the intact price those relics would go
+    /// from showing an approximate number to showing nothing. It costs no extra request for the
+    /// ordinary case, where the player owns the intact copy too and the dedup below folds them.
     pub fn owned_relic_market_names(&self) -> Result<Vec<String>, AppError> {
         let Some(prices) = self.prices.as_ref() else {
             return Ok(Vec::new());
@@ -154,8 +160,14 @@ impl AppCore {
         let mut names = collection
             .entries()
             .filter(|entry| entry.quantity >= 1)
-            .filter_map(|entry| prices.market_name(&entry.item.name).map(str::to_owned))
-            .filter(|name| relic_names.contains(name))
+            .filter_map(|entry| prices.market_name(&entry.item.name))
+            .filter(|name| relic_names.contains(relic_base(name).unwrap_or(name)))
+            .flat_map(|name| {
+                relic_base(&name)
+                    .map(str::to_owned)
+                    .into_iter()
+                    .chain(std::iter::once(name))
+            })
             .collect::<Vec<_>>();
         names.sort();
         names.dedup();
@@ -194,9 +206,11 @@ impl AppCore {
                     .as_ref()
                     .and_then(|prices| prices.market_name(&entry.item.name));
                 let live = market_name
+                    .as_deref()
                     .zip(self.live.as_ref())
                     .and_then(|(name, cache)| cache.get(name));
                 let stored = market_name
+                    .as_deref()
                     .zip(self.prices.as_ref())
                     .and_then(|(name, prices)| prices.price_for(name));
                 // A price the player checked against warframe.market is persisted into the price
@@ -205,6 +219,7 @@ impl AppCore {
                 // Presenting either as a dump price once the cache has dropped it would attribute
                 // it to a file it did not come from.
                 let checked = market_name
+                    .as_deref()
                     .zip(self.prices.as_ref())
                     .is_some_and(|(name, prices)| prices.has_checked_price(name));
                 // Resolving to a market name is the whole test for whether this item can be

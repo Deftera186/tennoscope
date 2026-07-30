@@ -28,6 +28,11 @@ Measured on 2026-07-29, and the source of the constants and rules below.
 | Mirage Prime Systems, dump median sell | 20p, against 19p live from an online seller | The daily median tracks the live number closely |
 | Mirage Prime Systems, dump minimum sell | 10p | Rejected: the day's cheapest listing includes offline lowballers |
 | Relic sell orders with `perTrade > 1` | 5–29% of orders, typically `perTrade: 6` | Prices are per unit after dividing by trade size |
+| `lith_t11_relic` intact, all 4 online sellers listing 6-packs at 28–30p (4.67–5.00p/unit), `statistics_live` for that hour | min 28, max 30, median 29.5, volume 330 | warframe.market's statistics quote the lot, not the unit, so the dump cannot price a relic (measured 2026-07-30, `volume` matching `sum(quantity)` on single-seller cases confirms the same order set) |
+| Relic subtypes with ≥3 online sellers, `median(lot) / median(unit)` | 16 of 31 unaffected, 13 at ≥1.5x, 5 at ≥4x, worst 6.0x | The inflation is heavy-tailed, not a constant that could be divided back out |
+| Dump items with more than one `sell` record | 60, of which 39 are fish, 13 crafted blueprints, 8 riven veils | The extra records are `subtype`s; the cheapest is taken, because a fish's size is not in the inventory |
+| Refinement tiers with an ingame seller, over 80 relics | intact 85%, radiant 39%, exceptional 0%, flawless 0% | A tier is priced from its own subtype where anyone is selling it, and from intact where nobody is |
+| Radiant against intact where both are quotable | median 1.46x, worst 17x (Requiem I–IV, 1p intact against 17p radiant) | Pricing every tier at intact is not a rounding error |
 
 The rejected manifest is the load-bearing negative result. Its unique contribution is warframe.market
 *sets* -- `Vectis Prime Set`, `Xiphos Set` -- which exist as market listings but never as inventory
@@ -48,6 +53,13 @@ number nobody could trade at and 19p on one they could. `closed` prices describe
 and would be the most honest number of all if they existed, but they cover only 2,489 items, and a
 collection where a third of the entries have no price is not a valuation.
 
+Sixty items carry more than one `sell` record, one per `subtype`, and the cheapest is taken. Thirty-
+nine of them are fish, whose subtype is a size the inventory does not record: a `Tromyzon` is a
+`Tromyzon` whether it is `basic` at 2p or `magnificent` at 10p. Taking whichever record the file
+listed first meant valuing an unknown at its best case; taking the lowest states the least the
+player is certainly holding. The rest are relic tiers, which the dump does not price at all, and
+riven veils and crafted blueprints, which no catalog name reaches.
+
 Dumps are daily and lag: on 2026-07-29 the newest was dated the 27th. The fetcher asks for today's
 file and walks backwards up to five days until one answers, recording the date it actually got. A
 price two days old is the correct precision for a question about what a collection is worth.
@@ -59,7 +71,7 @@ the gap, in order, with no network call between them:
 
 1. The name as it stands.
 2. The name with ` Blueprint` removed, reconciling `Forma Blueprint` with `Forma`.
-3. A relic's refinement suffix -- `Intact`, `Exceptional`, `Flawless`, `Radiant` -- replaced by ` Relic`, reconciling `Axi A1 Radiant` with `Axi A1 Relic`.
+3. A relic's refinement suffix -- `Intact`, `Exceptional`, `Flawless`, `Radiant` -- replaced by warframe.market's own name for that tier: `Axi A1 Intact` becomes `Axi A1 Relic`, and `Axi A1 Radiant` becomes `Axi A1 Relic (Radiant)`.
 
 There is deliberately no mirror of rule 2 appending ` Blueprint`. It looks symmetrical and it is not:
 the names it reaches are *built* equipment, and a built Warframe is not a thing anybody can sell.
@@ -70,21 +82,35 @@ can actually sell is in the dump under its own name and resolves by rule 1. Drop
 rule took the collection from 266 priced items to 241, and all 25 lost were false prices.
 
 Rule 3 recovers 772 relic names that no other rule reaches, but no longer prices them from the
-dump. The dump has no `perTrade` to divide out, sellers list a relic six at a time, and the
-resulting median runs up to 1.5x high -- measured on `Axi A1`, 25p in the dump against 16.67p per
-unit live. A relic's dump key still resolves, because the live path needs that name to build its
+dump. Sellers list a relic six at a time, and warframe.market's `statistics` endpoint -- which the
+dump mirrors verbatim -- reports the price of the whole lot, so a six-pack enters the day's median
+at six times what one relic costs. This is not something `relics.run` does to the data; the
+statistics themselves carry no `perTrade`, and `/v2/orders` is the only place the divisor exists,
+which is why the live path can correct for it and the dump cannot. A relic's dump key still
+resolves, because the live path needs that name to build its
 warframe.market slug, but the price comes only from a live check -- the startup sweep, or a page
 refresh the player asked for -- persisted back into this same table so it survives a restart. Until
 a relic has been checked it has no price rather than an inflated one.
+
+The four refinement tiers are four prices, not one. They are separate `subtype`s of a single
+warframe.market listing, quoted separately, and a radiant sells for a median 1.46x its intact tier
+and as much as 17x it. So each tier resolves to its own name, is asked about with its own
+`?subtype=` query, and is stored under that name. Where nobody is selling the refined tier the
+price falls back to the intact listing -- which is what the previous behaviour did for every tier
+unconditionally, so coverage cannot regress. It is a real fallback and not a formality: over 80
+relics, 85% of intact tiers had an ingame seller against 39% of radiants and none at all of
+`exceptional` or `flawless`. The fallback is silent on the card; a borrowed intact price reads as
+checked live, because it was.
 
 An unresolved name means no price. It is not an error, and it is not evidence that the item is
 untradeable -- the remaining gap is largely non-prime weapon components, which the catalog does not
 index today. Extending that index is a separate change.
 
 These rules do double duty. What they return is warframe.market's own English name for the item,
-which is exactly what a live lookup needs in order to build a slug: `Axi A1 Radiant` resolves to
-`Axi A1 Relic` and from there to `axi_a1_relic`, which no derivation from the catalog name would
-have produced. The dump is therefore both the price source and the identity map, which is the second
+which is exactly what a live lookup needs in order to build a slug and, for a relic, the subtype
+beside it: `Axi A1 Radiant` resolves to `Axi A1 Relic (Radiant)` and from there to `axi_a1_relic`
+plus `subtype=radiant`, which no derivation from the catalog name would have produced. The dump is
+therefore both the price source and the identity map, which is the second
 reason the `/v2/items` manifest is not needed.
 
 ## Cache And Refresh
@@ -120,7 +146,7 @@ somebody goes looking.
 
 So the dump seeds everything and warframe.market answers for the rest. Two triggers, both bounded:
 
-- The startup relic sweep. Relics have no usable dump price at all -- the median is inflated by bulk listings the dump gives no way to divide out -- so the relics the player *owns* are priced live once, at start, and the results are written back into the price table. Bounded by ownership rather than by the catalog: 65 relics in the measured collection against the 772 the dump lists, which is 22 seconds at three requests a second rather than four minutes. It re-runs after an inventory refresh, because a refresh is the only thing that can add a relic, including the first snapshot a fresh install ever takes.
+- The startup relic sweep. Relics have no usable dump price at all -- the median is inflated by bulk listings the dump gives no way to divide out -- so the relics the player *owns* are priced live once, at start, and the results are written back into the price table. It sweeps each owned refinement tier and the intact listing that tier falls back to, so a collection of radiants costs two requests per relic rather than one; the intact name is shared by every tier of the same relic and folds away in the dedup. Bounded by ownership rather than by the catalog: 65 relics in the measured collection against the 772 the dump lists, which is 22 seconds at three requests a second rather than four minutes. It re-runs after an inventory refresh, because a refresh is the only thing that can add a relic, including the first snapshot a fresh install ever takes.
 - The page refresh. It prices what is on screen, at most forty-eight items, paced at the same three requests a second, so a full page takes about sixteen seconds. It offers every item the player owns rather than only the ones already priced: an item with no price is exactly the one somebody would want to ask about, and unresolvable names are dropped by the backend before any request is made. Its results are written into the price table exactly as the sweep's are, for the reason below.
 
 Neither is a sweep of the collection. Nothing is fetched for an item the player does not own, and

@@ -23,8 +23,12 @@ pub enum PriceDumpError {
     CacheWrite,
 }
 
-/// Refinement tiers the catalog appends to a relic's name. The market lists one price per relic
-/// regardless of refinement, so all four resolve to the same listing.
+/// Refinement tiers the catalog appends to a relic's name.
+///
+/// warframe.market lists one relic per slug and separates the tiers by `subtype`, and they are not
+/// one price: measured 2026-07-30 over 80 relics, a radiant sells for a median 1.46x its intact
+/// tier and up to 17x (`Requiem II`, 1p intact against 17p radiant). Pricing all four at the one
+/// listing quoted every radiant relic at what the cheapest intact copy was going for.
 const REFINEMENTS: [&str; 4] = [" Intact", " Exceptional", " Flawless", " Radiant"];
 
 #[derive(Deserialize)]
@@ -37,6 +41,16 @@ struct DumpRecord {
 /// A dump key is a relic listing if it ends in this suffix, e.g. `Axi A1 Relic`.
 const RELIC_SUFFIX: &str = " Relic";
 
+/// The intact listing behind a refined relic's market name: `Axi A1 Relic (Radiant)` to
+/// `Axi A1 Relic`, and `None` for anything that is not a refined relic.
+///
+/// The parenthetical is only read off a name already ending in ` Relic`, so it cannot mistake a
+/// market name that carries brackets of its own -- `Rifle Riven Mod (Veiled)` -- for a refinement.
+pub fn relic_base(market_name: &str) -> Option<&str> {
+    let (base, refinement) = market_name.split_once(" (")?;
+    (base.ends_with(RELIC_SUFFIX) && refinement.ends_with(')')).then_some(base)
+}
+
 /// Every priceable item, keyed by the dump's own English name.
 ///
 /// Two maps, because there are two measurements. `prices` is the daily dump's median sell price.
@@ -46,9 +60,12 @@ const RELIC_SUFFIX: &str = " Relic";
 /// remembers the names the market answered about with nothing for sale, so that answer is not
 /// mistaken for an unasked question.
 ///
-/// Relics are excluded from `prices` entirely: the dump has no `perTrade` to divide out, sellers
-/// list them six at a time, and the resulting median runs up to 1.5x high (measured: Axi A1 at 25p
-/// in the dump against 16.67p per unit live). A relic's dump key still lives in `relic_names` so
+/// Relics are excluded from `prices` entirely: sellers list them six at a time, and
+/// warframe.market's `statistics` endpoint -- which the dump mirrors unmodified -- quotes the price
+/// of the whole lot. Measured 2026-07-30 on `lith_t11_relic` intact, where all four online sellers
+/// listed 6-packs at 28-30p: the statistics read min 28, max 30, median 29.5, against 4.67-5.00p
+/// per unit. Only `/v2/orders` carries `perTrade`, so the live path can divide it out and the dump
+/// cannot. A relic's dump key still lives in `relic_names` so
 /// `market_name` keeps resolving it -- the live path needs that name to build its warframe.market
 /// slug -- and its price can only ever come from `checked_prices`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -105,19 +122,35 @@ impl PriceTable {
     /// its blueprint's listing, pricing an `Ash Prime` the player has mastered at what somebody
     /// asks for the blueprint. A built Warframe cannot be sold, only its parts can, and every one
     /// of that collection's prime parts is in the dump under its own name already.
-    pub fn market_name(&self, name: &str) -> Option<&str> {
+    /// A relic carries its refinement, because warframe.market prices the tiers separately: an
+    /// `Axi A1 Radiant` resolves to `Axi A1 Relic (Radiant)`. Intact keeps the bare listing name,
+    /// which is both the tier the market means by default and the key every price checked before
+    /// this distinction existed was stored under.
+    pub fn market_name(&self, name: &str) -> Option<String> {
         if let Some(key) = self.resolve(name) {
-            return Some(key);
+            return Some(key.to_owned());
+        }
+        // A refined relic's own market name maps to itself. Both `price_for` and the view are
+        // called with a market name as often as with the catalog's, and without this the name this
+        // very function produced would fail to resolve on the way back in.
+        if let Some(base) = relic_base(name)
+            && self.relic_names.contains(base)
+        {
+            return Some(name.to_owned());
         }
         if let Some(base) = name.strip_suffix(" Blueprint")
             && let Some(key) = self.resolve(base)
         {
-            return Some(key);
+            return Some(key.to_owned());
         }
-        REFINEMENTS
+        let (base, refinement) = REFINEMENTS
             .iter()
-            .find_map(|suffix| name.strip_suffix(suffix))
-            .and_then(|base| self.resolve(&format!("{base} Relic")))
+            .find_map(|suffix| Some((name.strip_suffix(suffix)?, suffix.trim_start())))?;
+        let relic = self.resolve(&format!("{base}{RELIC_SUFFIX}"))?;
+        Some(match refinement {
+            "Intact" => relic.to_owned(),
+            other => format!("{relic} ({other})"),
+        })
     }
 
     /// A dump key by its own name, whether or not it carries a dump price: a relic resolves here
@@ -138,8 +171,14 @@ impl PriceTable {
     pub fn price_for(&self, name: &str) -> Option<u32> {
         let key = self.market_name(name)?;
         self.checked_prices
-            .get(key)
-            .or_else(|| self.prices.get(key))
+            .get(&key)
+            .or_else(|| self.prices.get(&key))
+            // A refined relic falls back to the intact listing, which is the tier that is actually
+            // traded: measured over 80 relics, nobody at all was selling `exceptional` or
+            // `flawless`, and 61% of radiants had no online seller either. Without the fallback
+            // those tiers would read as a dash forever, which is a worse answer than the intact
+            // floor they already showed before the tiers were told apart.
+            .or_else(|| self.checked_prices.get(relic_base(&key)?))
             .copied()
     }
 
@@ -162,8 +201,12 @@ impl PriceTable {
 
     /// Whether this item already carries a price checked against warframe.market. What the view
     /// reads to say a price was checked live rather than taken from the dump.
+    ///
+    /// Follows the same fallback `price_for` does, so a radiant relic showing its intact tier's
+    /// checked price is not labelled as having come from the dump, which prices no relic at all.
     pub fn has_checked_price(&self, market_name: &str) -> bool {
         self.checked_prices.contains_key(market_name)
+            || relic_base(market_name).is_some_and(|base| self.checked_prices.contains_key(base))
     }
 
     /// Whether warframe.market has already answered about this item at all, price or no price.
@@ -171,8 +214,12 @@ impl PriceTable {
     /// What the startup sweep filters on, and the whole reason the sweep goes quiet. Filtering on
     /// `has_checked_price` instead meant every relic nobody happened to be selling failed the test
     /// forever, so each inventory sync re-spent the same requests to be told the same thing.
+    ///
+    /// Deliberately exact where `has_checked_price` falls back: a radiant relic borrowing the
+    /// intact price has still never been asked about, and sharing the fallback here would mean the
+    /// sweep never asked.
     pub fn has_been_checked(&self, market_name: &str) -> bool {
-        self.has_checked_price(market_name) || self.checked_unpriced.contains(market_name)
+        self.checked_prices.contains_key(market_name) || self.checked_unpriced.contains(market_name)
     }
 
     /// Carry a previous table's checked prices across a refresh of the *same* dump.
@@ -234,12 +281,22 @@ impl PriceTable {
 
 /// The middle of the day's sell listings. `min_price` is the day's cheapest listing and counts
 /// sellers who are offline, which reads 10p on an item an online seller wanted 19p for.
+///
+/// An item can carry a sell record per `subtype`, and 39 of the ones a collection can reach do --
+/// every one of them a fish, priced by size (`small`/`medium`/`large`) or by quality
+/// (`basic`/`adorned`/`magnificent`). The inventory names a fish `Tromyzon` and nothing more, so
+/// which record describes the one in the tank is not knowable, and the lowest is the only honest
+/// pick: taking whichever record came first in the file valued a `Tromyzon` at its `magnificent`
+/// median of 10p when its `basic` median was 2p. Every other multi-subtype dump key -- riven
+/// veils, blueprint-versus-crafted -- is unreachable by name from the catalog and never priced.
 fn sell_median(records: &[DumpRecord]) -> Option<u32> {
-    let median = records
+    records
         .iter()
-        .find(|record| record.order_type == "sell")?
-        .median?;
-    (median.is_finite() && median >= 0.0).then(|| median.round() as u32)
+        .filter(|record| record.order_type == "sell")
+        .filter_map(|record| record.median)
+        .filter(|median| median.is_finite() && *median >= 0.0)
+        .map(|median| median.round() as u32)
+        .min()
 }
 
 pub const RELICS_RUN_HISTORY_URL: &str = "https://relics.run/history/";
