@@ -15,18 +15,20 @@ import type { AppView } from './backend'
 const view: AppView = {
   collection: {
     items: [
-      { id: 'rhino', name: 'Rhino', category: 'frame', quantity: 1, mastered: true, live: false },
-      { id: 'braton', name: 'Braton', category: 'weapon', quantity: 3, mastered: true, live: false },
-      { id: 'carrier', name: 'Carrier', category: 'companion', quantity: 1, mastered: false, live: false },
-      { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 19, live: false },
-      { id: 'lith-a1', name: 'Lith A1 Relic', category: 'relic', quantity: 7, mastered: false, platinum: 20, live: true },
-      { id: 'argon-crystal', name: 'Argon Crystal', category: 'resource', quantity: 4, mastered: false, live: false },
-      { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 0, mastered: false, live: false },
-      { id: 'bad-baby', name: 'Bad Baby', category: 'vehicle', quantity: 1, mastered: false, live: false },
+      { id: 'rhino', name: 'Rhino', category: 'frame', quantity: 1, mastered: true, live: false, priceable: true },
+      { id: 'braton', name: 'Braton', category: 'weapon', quantity: 3, mastered: true, live: false, priceable: true },
+      { id: 'carrier', name: 'Carrier', category: 'companion', quantity: 1, mastered: false, live: false, priceable: true },
+      { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 19, live: false, priceable: true },
+      { id: 'lith-a1', name: 'Lith A1 Relic', category: 'relic', quantity: 7, mastered: false, platinum: 20, live: true, priceable: true },
+      { id: 'argon-crystal', name: 'Argon Crystal', category: 'resource', quantity: 4, mastered: false, live: false, priceable: true },
+      { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 0, mastered: false, live: false, priceable: false },
+      // Owned, and no name rule reaches a warframe.market listing for it. The page control must
+      // leave it out: counting it promised a price for an item no request is ever made about.
+      { id: 'bad-baby', name: 'Bad Baby', category: 'vehicle', quantity: 1, mastered: false, live: false, priceable: false },
       // Priced at exactly 0 -- a real, tradeable price, distinct from an item with no listing at
       // all. Exercises the `?? -1` sentinel in the value sort: a `?? 0` bug would tie this with
       // every unpriced item instead of ranking it above all of them.
-      { id: 'zenith-prime-receiver', name: 'Zenith Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 0, live: false },
+      { id: 'zenith-prime-receiver', name: 'Zenith Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 0, live: false, priceable: true },
     ],
     total_entries: 8,
   },
@@ -239,17 +241,26 @@ describe('MVP desktop interface', () => {
     expect(backend.getView).toHaveBeenCalledTimes(3)
   })
 
-  // The readout is progress, so it starts at nothing done. Counting items that were already live
-  // before the click made it open partway along and never reach its own total.
-  it('counts only the pricing this click asked for', async () => {
+  // The readout belongs to the backend now, because the background relic sweep spends requests
+  // nobody clicked for and only the backend knows that pass's total. One line covers both.
+  it('reports a live pricing pass from the backend, whoever asked for it', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
-    backend.refreshPrices.mockImplementationOnce(() => new Promise(() => {}))
-    const user = userEvent.setup()
+    backend.getView.mockResolvedValue({ ...view, collection: { ...view.collection, pricing: { done: 12, total: 65 } } })
     render(<App/>)
-    await user.click(await screen.findByRole('button', { name: /Price these 8/ }))
 
-    // Eight owned items on the page, one of them (Lith A1 Relic) already live.
-    expect(await screen.findByText(/Pricing 0 of 7/)).toBeInTheDocument()
+    expect(await screen.findByText(/Checking live prices · 12 of 65/)).toBeInTheDocument()
+    // The worth figure climbs while that runs, so its own note has to say why.
+    expect(within(screen.getByTestId('band-worth')).getByText(/checking 12 of 65/)).toBeInTheDocument()
+  })
+
+  // Both passes come out of one three-requests-a-second budget, so letting a click overlap the
+  // sweep only makes each slower and leaves the one readout describing two queues.
+  it('refuses a page refresh while a background pass is already spending requests', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.getView.mockResolvedValue({ ...view, collection: { ...view.collection, pricing: { done: 3, total: 65 } } })
+    render(<App/>)
+
+    expect(await screen.findByRole('button', { name: /Pricing/ })).toBeDisabled()
   })
 
   it('stops scheduled polling after unmount', async () => {
@@ -367,13 +378,14 @@ describe('MVP desktop interface', () => {
     expect(within(daily).queryByText(/checked/i)).not.toBeInTheDocument()
   })
 
-  // Someone who clicks it should not have to guess whether it prices the page or the collection.
-  // The fixture's visible page carries eight owned items; only the quantity-0 Forma Blueprint is
-  // left out, because an item the player does not own is never priced.
-  it('names how many items the refresh will price', async () => {
+  // Someone who clicks it should not have to guess whether it prices the page or the collection --
+  // or find that two of the items it counted were never going to be asked about. The fixture's
+  // visible page carries eight owned items; the quantity-0 Forma Blueprint and the unresolvable
+  // Bad Baby are both left out, leaving seven the backend will actually send.
+  it('names how many items the refresh will price, and counts only ones it can price', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App/>)
-    expect(await screen.findByRole('button', { name: /Price these 8/ })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: /Price these 7/ })).toBeInTheDocument()
   })
 
   // Relics have no daily price by design, so a relic the startup sweep missed is unpriced -- and an
@@ -388,6 +400,7 @@ describe('MVP desktop interface', () => {
     const requested = backend.refreshPrices.mock.calls[0][0]
     expect(requested).toContain('rhino')             // owned, no price yet
     expect(requested).not.toContain('forma-blueprint') // quantity 0, not owned
+    expect(requested).not.toContain('bad-baby')        // owned, but no listing to ask about
   })
 
   // Sorting by stack value answers "where is my platinum"; sorting by unit price answers "what is
@@ -448,6 +461,7 @@ describe('MVP desktop interface', () => {
       quantity: 1,
       mastered: false,
       live: false,
+      priceable: true,
       platinum: 5,
     }))
     backend.getView.mockResolvedValue({ ...view, collection: { ...view.collection, items: [...view.collection.items, ...filler] } })

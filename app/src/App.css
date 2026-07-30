@@ -248,10 +248,30 @@
 .shield[aria-pressed="true"] .shield-face b { color: var(--gold); opacity: 1; }
 
 .register-bar {
+  position: relative;
   display: grid; gap: var(--tight);
   padding-bottom: var(--step); border-bottom: 1px solid var(--rule);
   font-family: var(--face-register); font-size: .62rem; letter-spacing: .1em; color: var(--platinum-deep);
 }
+/* The assay gauge. Live pricing takes about twenty-two seconds and moves the collection's worth
+   the whole time, so the bar's own bottom rule fills with platinum as the pass advances -- the
+   engraved hairline that already divides this sheet, struck into a reading. No spinner, no track,
+   no second element: the rule under it is the track. Absent entirely when nothing is running,
+   because `--assay-progress` is only set while a pass is in flight. Scaled rather than sized: a
+   width transition is laid out every frame, a transform is not. */
+.register-bar::after {
+  content: ""; position: absolute; left: 0; bottom: -1px; width: 100%; height: 1px;
+  background: var(--platinum);
+  transform: scaleX(var(--assay-progress, 0)); transform-origin: left;
+  transition: transform .3s linear;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The fill is the reading, so it stays; only its travel is removed. */
+  .register-bar::after { transition: none; }
+}
+/* The pass's own readout, last in the row so the two standing statements -- which day, which
+   slice -- keep their order and the transient one appends rather than displaces. */
+.register-line.pricing { color: var(--platinum-dim); }
 .tally { display: flex; gap: 0; }
 .tally button {
   padding: .55rem .85rem; border: 1px solid var(--rule-control); border-radius: 0; background: transparent;

@@ -13,7 +13,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome};
+use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome, PricingProgress};
 use local_store::SnapshotMeta;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -219,12 +219,13 @@ async fn refresh_prices(
             )
         };
         if let Some(market) = warframe_acquisition::WarframeMarketHttp::new() {
-            let outcome = cache.warm(&market, &names, warframe_acquisition::MARKET_MIN_GAP);
+            let (outcome, unpriced) = warm_with_progress(&shared, &market, &names, &cache);
             let persisted = store_checked_prices(
                 &shared,
                 &CollectionPriceCache::new(&app_data),
                 &names,
                 &cache,
+                &unpriced,
             );
             if let Ok(mut runtime) = shared.lock() {
                 // The live path shares the overlay's row, since both answer "could we reach
@@ -1648,9 +1649,12 @@ fn spawn_owned_relic_sweep(shared: SharedRuntime) {
 /// lock once the sweep has finished.
 ///
 /// Bounded by `owned_relic_market_names`, never by every relic the dump lists, and then by the one
-/// question worth asking per relic: does this one already have a checked price? A checked price
-/// lives exactly as long as the dump it arrived with (see `PriceTable::adopt_checked`), so that
-/// single filter is the whole freshness rule -- there is no second cadence to keep in step.
+/// question worth asking per relic: has warframe.market already answered about this one? Answered
+/// means answered, price or no price -- a relic nobody happens to be selling gave a real answer,
+/// and asking only "does it have a price" put that relic back in the queue on every inventory sync
+/// for the rest of the session. Either answer lives exactly as long as the dump it arrived with
+/// (see `PriceTable::adopt_checked`), so that single filter is the whole freshness rule -- there is
+/// no second cadence to keep in step.
 fn sweep_owned_relics(
     shared: &SharedRuntime,
     cache: &CollectionPriceCache,
@@ -1669,7 +1673,7 @@ fn sweep_owned_relics(
     };
     let to_sweep: Vec<String> = owned
         .into_iter()
-        .filter(|name| !table.has_checked_price(name))
+        .filter(|name| !table.has_been_checked(name))
         .collect();
     if to_sweep.is_empty() {
         return;
@@ -1682,8 +1686,9 @@ fn sweep_owned_relics(
             .core
             .record_collection_prices_sweeping(to_sweep.len());
     }
-    let outcome = live_prices.warm(&market, &to_sweep, warframe_acquisition::MARKET_MIN_GAP);
-    let Some((priced, date, stored)) = store_checked_prices(shared, cache, &to_sweep, live_prices)
+    let (outcome, unpriced) = warm_with_progress(shared, &market, &to_sweep, live_prices);
+    let Some((priced, date, stored)) =
+        store_checked_prices(shared, cache, &to_sweep, live_prices, &unpriced)
     else {
         return;
     };
@@ -1704,6 +1709,61 @@ fn sweep_owned_relics(
 /// What the collection price row says when a checked price reached memory but not disk.
 const CHECKED_PRICES_UNSAVED: &str = "Checked prices could not be saved for the next start";
 
+/// Price each name in turn, publishing how far along the pass is and collecting the names nobody
+/// is selling.
+///
+/// Both things this does beyond `MarketPriceCache::warm` need the loop opened up. Progress has to
+/// be published *during* the pass -- twenty-two seconds of silence on a figure that moves the whole
+/// time is the complaint this answers -- and a `NoSellers` verdict has to be attributed to the name
+/// that produced it, which a summed `WarmOutcome` cannot do.
+///
+/// Each name still goes through `warm`, so every request claims a slot from the same shared clock
+/// the reward fill and the pool warm claim from; a one-element slice is paced exactly as a
+/// sixty-five-element one. That is why this is a loop around the existing call rather than a second
+/// implementation of it beside the rate limiter.
+///
+/// `Unavailable` is deliberately not collected. An unreachable endpoint is a reason to try again,
+/// and recording it as an answer would blacklist a relic until tomorrow's dump over a router that
+/// rebooted mid-sweep.
+fn warm_with_progress(
+    shared: &SharedRuntime,
+    market: &dyn warframe_acquisition::MarketPriceSource,
+    names: &[String],
+    live_prices: &MarketPriceCache,
+) -> (WarmOutcome, Vec<String>) {
+    let mut total = WarmOutcome::default();
+    let mut unpriced = Vec::new();
+    for (done, name) in names.iter().enumerate() {
+        publish_pricing_progress(
+            shared,
+            Some(PricingProgress {
+                done,
+                total: names.len(),
+            }),
+        );
+        let one = live_prices.warm(
+            market,
+            std::slice::from_ref(name),
+            warframe_acquisition::MARKET_MIN_GAP,
+        );
+        if one.no_sellers > 0 {
+            unpriced.push(name.clone());
+        }
+        total.stored += one.stored;
+        total.no_sellers += one.no_sellers;
+        total.unavailable += one.unavailable;
+        total.oversize += one.oversize;
+    }
+    publish_pricing_progress(shared, None);
+    (total, unpriced)
+}
+
+fn publish_pricing_progress(shared: &SharedRuntime, pricing: Option<PricingProgress>) {
+    if let Ok(mut runtime) = shared.lock() {
+        runtime.core.set_pricing_progress(pricing);
+    }
+}
+
 /// Folds prices just checked against warframe.market into the persisted price table, so they
 /// outlive the 15-minute live cache and survive a restart.
 ///
@@ -1714,6 +1774,10 @@ const CHECKED_PRICES_UNSAVED: &str = "Checked prices could not be saved for the 
 /// this with the answers, so the lock the 2.5-second view poll needs is held for a clone and a
 /// file write rather than for twenty seconds of HTTP.
 ///
+/// `unpriced` are the names the market answered about with nothing for sale. They are folded in
+/// the same hold and persisted by the same write, because a no-seller answer that only reached
+/// memory would put those relics back in the next sweep's queue after a restart.
+///
 /// Returns how many items the table can now price, the dump date it belongs to, and whether the
 /// write to disk succeeded.
 fn store_checked_prices(
@@ -1721,6 +1785,7 @@ fn store_checked_prices(
     cache: &CollectionPriceCache,
     names: &[String],
     live_prices: &MarketPriceCache,
+    unpriced: &[String],
 ) -> Option<(usize, String, bool)> {
     let mut runtime = shared.lock().ok()?;
     let table = runtime.core.collection_prices()?;
@@ -1729,6 +1794,9 @@ fn store_checked_prices(
         if let Some(price) = live_prices.get(name) {
             updated.insert_checked(name, price);
         }
+    }
+    for name in unpriced {
+        updated.mark_checked_unpriced(name);
     }
     let stored = cache.store_table(&updated).is_ok();
     let priced = updated.len();

@@ -568,3 +568,94 @@ fn a_cache_write_failure_is_not_blamed_on_the_dump() {
     let result = refresh(&cache, &source, TODAY, None);
     assert!(matches!(result, Err(PriceDumpError::CacheWrite)));
 }
+
+/// "Nobody is selling this" is an answer, and the table has to be able to hold one.
+///
+/// Without somewhere to put it the startup sweep filtered on "has a price", so every relic the
+/// market answered about with an empty book failed that test again on the next inventory sync, and
+/// again on the one after -- the same requests, the same answer, for the rest of the session. The
+/// two facts stay distinct: the item is checked, and it still has no price to show.
+#[test]
+fn a_relic_nobody_is_selling_counts_as_answered() {
+    let mut table = table();
+    table.mark_checked_unpriced("Axi A1 Relic");
+
+    assert!(table.has_been_checked("Axi A1 Relic"));
+    assert!(!table.has_checked_price("Axi A1 Relic"));
+    assert_eq!(table.price_for("Axi A1 Radiant"), None);
+}
+
+/// A seller appearing later must win. The mark says only that the book was empty when we looked.
+#[test]
+fn a_price_replaces_the_mark_that_said_there_was_none() {
+    let mut table = table();
+    table.mark_checked_unpriced("Axi A1 Relic");
+    table.insert_checked("Axi A1 Relic", 17);
+
+    assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
+
+    // And the reverse cannot undo it: a later empty-book reading does not erase a real price.
+    table.mark_checked_unpriced("Axi A1 Relic");
+    assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
+    assert!(table.has_checked_price("Axi A1 Relic"));
+}
+
+/// The whole freshness policy, applied to the other kind of answer. A no-seller reading belongs to
+/// the day it was made exactly as a price does, so it rides the same refresh and dies to the same
+/// newer dump. Carrying prices across but not these would have left the sweep re-asking about
+/// every unsold relic on every launch -- the bug, restored by the fix for the bug.
+#[test]
+fn a_no_seller_answer_survives_the_same_dump_and_dies_to_a_newer_one() {
+    let directory = tempfile::tempdir().expect("temp dir");
+    let cache = CollectionPriceCache::new(directory.path());
+    let mut checked = refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-27", DUMP)]),
+        TODAY,
+        None,
+    )
+    .expect("first refresh stores");
+    checked.mark_checked_unpriced("Axi A1 Relic");
+
+    let same_day = refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-27", DUMP)]),
+        TODAY,
+        Some(&checked),
+    )
+    .expect("second refresh stores");
+    assert!(
+        same_day.has_been_checked("Axi A1 Relic"),
+        "the same dump came back, so the sweep must not re-ask about a relic it already asked about"
+    );
+    assert!(
+        cache
+            .load_cached()
+            .expect("a stored table is readable")
+            .has_been_checked("Axi A1 Relic"),
+        "the answer reaches disk, or a restart re-spends the request"
+    );
+
+    let newer = refresh(
+        &cache,
+        &FakeDumps::new(&[("2026-07-29", DUMP)]),
+        TODAY,
+        Some(&checked),
+    )
+    .expect("third refresh stores");
+    assert!(
+        !newer.has_been_checked("Axi A1 Relic"),
+        "a new day's dump is a new day's question"
+    );
+}
+
+/// A no-seller mark is not a price, so it must not inflate what the health row claims the table
+/// can price.
+#[test]
+fn a_no_seller_answer_is_not_counted_as_a_priced_item() {
+    let mut table = table();
+    let before = table.len();
+    table.mark_checked_unpriced("Axi A1 Relic");
+
+    assert_eq!(table.len(), before);
+}

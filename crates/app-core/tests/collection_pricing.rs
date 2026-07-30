@@ -306,3 +306,96 @@ fn relic_refinements_collapse_before_the_sweep() {
 
     assert_eq!(core.owned_relic_market_names().unwrap().len(), 1);
 }
+
+/// The page control promised prices for items it was never going to send. It counted everything
+/// owned on screen, while the backend drops every name the price table cannot resolve -- so a
+/// register full of untradeable resources read "Price these 48" and priced a handful. `priceable`
+/// is the same question `market_names_for` already answers, asked per item so the control can
+/// count what it is actually about to do.
+///
+/// It is deliberately not "has a price": a relic the sweep has not reached is priceable, unpriced,
+/// and precisely the item somebody clicks that control for.
+#[test]
+fn only_items_the_backend_can_ask_about_are_offered_for_pricing() {
+    let mut core = core_with_items(vec![
+        item("/a", "Serration", Category::Resource, 1),
+        item("/b", "Bottomless Pit", Category::Resource, 1),
+        item("/c", "Axi A1 Radiant", Category::Relic, 3),
+        item("/d", "Serration", Category::Resource, 0).with_mastered(true),
+    ]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(
+            br#"{
+                "Serration": [{"order_type":"sell","median":50.0,"volume":12}],
+                "Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}]
+            }"#,
+            "2026-07-27",
+        )
+        .expect("fixture parses"),
+    ));
+
+    let view = core.current_view().expect("view builds");
+    let items = view.collection().items();
+    assert!(items[0].priceable(), "owned and listed");
+    assert!(
+        !items[1].priceable(),
+        "owned, but no rule reaches a listing"
+    );
+    assert!(
+        items[2].priceable() && items[2].platinum().is_none(),
+        "an unswept relic is priceable and unpriced -- the case the control exists for"
+    );
+    assert!(!items[3].priceable(), "quantity 0 is not owned");
+
+    // The count the control shows and the work the backend does are the same set.
+    let offered: Vec<String> = items
+        .iter()
+        .filter(|item| item.priceable())
+        .map(|item| item.id().to_owned())
+        .collect();
+    assert_eq!(
+        offered.len(),
+        core.market_names_for(&offered).unwrap().len()
+    );
+}
+
+/// The sweep runs for about twenty-two seconds and the collection's worth climbs the whole time.
+/// Nothing on the page said so, so the figure moved with no account of itself. Both passes that
+/// spend requests publish into this one cell, because they share one rate-limited budget and two
+/// counters would be describing one queue twice.
+#[test]
+fn a_live_pricing_pass_reports_its_own_progress() {
+    let mut core = core_with_items(vec![item("/a", "Serration", Category::Resource, 1)]);
+
+    assert_eq!(
+        core.current_view()
+            .expect("view builds")
+            .collection()
+            .pricing(),
+        None,
+        "no pass running is not a pass at zero"
+    );
+
+    core.set_pricing_progress(Some(app_core::PricingProgress {
+        done: 12,
+        total: 65,
+    }));
+    let running = core.current_view().expect("view builds");
+    assert_eq!(
+        running.collection().pricing(),
+        Some(app_core::PricingProgress {
+            done: 12,
+            total: 65
+        })
+    );
+
+    core.set_pricing_progress(None);
+    assert_eq!(
+        core.current_view()
+            .expect("view builds")
+            .collection()
+            .pricing(),
+        None,
+        "the readout has to clear, or the control stays disabled forever"
+    );
+}

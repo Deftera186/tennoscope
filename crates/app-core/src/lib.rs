@@ -33,6 +33,7 @@ pub struct AppCore {
     health: HealthView,
     prices: Option<Arc<PriceTable>>,
     live: Option<MarketPriceCache>,
+    pricing: Option<PricingProgress>,
 }
 
 pub trait AcquisitionPort {
@@ -89,6 +90,7 @@ impl AppCore {
             health: HealthView::phase_one()?,
             prices: None,
             live: None,
+            pricing: None,
         })
     }
 
@@ -103,6 +105,16 @@ impl AppCore {
     /// including anything a relic pool warmed during a mission.
     pub fn set_live_prices(&mut self, live: MarketPriceCache) {
         self.live = Some(live);
+    }
+
+    /// How far through a live pricing pass we are, or `None` when none is running.
+    ///
+    /// Published rather than inferred because both passes that spend requests -- the background
+    /// relic sweep and the page refresh -- are the only things that know their own total, and the
+    /// collection's worth figure moves the whole time either is running. A reader watching a
+    /// number climb with nothing to explain it has been given a moving target, not a valuation.
+    pub fn set_pricing_progress(&mut self, pricing: Option<PricingProgress>) {
+        self.pricing = pricing;
     }
 
     /// warframe.market's names for the given collection items, deduplicated.
@@ -195,7 +207,17 @@ impl AppCore {
                 let checked = market_name
                     .zip(self.prices.as_ref())
                     .is_some_and(|(name, prices)| prices.has_checked_price(name));
-                CollectionItemView::priced(entry, live.or(stored), live.is_some() || checked)
+                // Resolving to a market name is the whole test for whether this item can be
+                // priced at all, and it is a different fact from having a price: an unswept relic
+                // resolves and shows a dash. The page control counts these, because counting
+                // everything owned promised prices for items the backend drops before it makes a
+                // single request.
+                CollectionItemView::priced(
+                    entry,
+                    live.or(stored),
+                    live.is_some() || checked,
+                    market_name.is_some(),
+                )
             })
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));
@@ -208,6 +230,7 @@ impl AppCore {
                 items,
                 total_entries,
                 snapshot,
+                pricing: self.pricing,
             },
             reward: self.reward.clone(),
             health,
@@ -522,6 +545,16 @@ pub struct CollectionView {
     items: Vec<CollectionItemView>,
     total_entries: usize,
     snapshot: Option<SnapshotMeta>,
+    /// A live pricing pass in flight, background sweep or page refresh alike.
+    pricing: Option<PricingProgress>,
+}
+
+/// How far a live pricing pass has got. One statement for the whole page, whoever asked for it:
+/// the requests come out of one shared budget, so two counters would describe one queue twice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+pub struct PricingProgress {
+    pub done: usize,
+    pub total: usize,
 }
 
 impl CollectionView {
@@ -535,6 +568,10 @@ impl CollectionView {
 
     pub fn snapshot(&self) -> Option<&SnapshotMeta> {
         self.snapshot.as_ref()
+    }
+
+    pub fn pricing(&self) -> Option<PricingProgress> {
+        self.pricing
     }
 }
 
@@ -550,6 +587,8 @@ pub struct CollectionItemView {
     #[serde(skip_serializing_if = "Option::is_none")]
     platinum: Option<u32>,
     live: bool,
+    /// Whether warframe.market can be asked about this item at all.
+    priceable: bool,
 }
 
 impl CollectionItemView {
@@ -586,10 +625,22 @@ impl CollectionItemView {
         self.live
     }
 
-    fn priced(entry: &warframe_domain::InventoryEntry, platinum: Option<u32>, live: bool) -> Self {
+    /// Whether warframe.market has a listing this item's name resolves to. Not the same as having
+    /// a price: a relic the sweep has not reached yet is priceable and shows a dash.
+    pub fn priceable(&self) -> bool {
+        self.priceable
+    }
+
+    fn priced(
+        entry: &warframe_domain::InventoryEntry,
+        platinum: Option<u32>,
+        live: bool,
+        priceable: bool,
+    ) -> Self {
         Self {
             platinum,
             live,
+            priceable,
             ..Self::from(entry)
         }
     }
@@ -610,6 +661,7 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
             }),
             platinum: None,
             live: false,
+            priceable: false,
         }
     }
 }

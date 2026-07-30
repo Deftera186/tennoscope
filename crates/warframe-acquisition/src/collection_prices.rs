@@ -42,7 +42,9 @@ const RELIC_SUFFIX: &str = " Relic";
 /// Two maps, because there are two measurements. `prices` is the daily dump's median sell price.
 /// `checked_prices` is what warframe.market answered when somebody asked it directly -- the startup
 /// relic sweep or a page refresh -- and it wins wherever it exists, because a price checked against
-/// the market minutes ago is better than the middle of a day-old file.
+/// the market minutes ago is better than the middle of a day-old file. A third set, `checked_unpriced`,
+/// remembers the names the market answered about with nothing for sale, so that answer is not
+/// mistaken for an unasked question.
 ///
 /// Relics are excluded from `prices` entirely: the dump has no `perTrade` to divide out, sellers
 /// list them six at a time, and the resulting median runs up to 1.5x high (measured: Axi A1 at 25p
@@ -58,6 +60,15 @@ pub struct PriceTable {
     // upgrade does not throw away a sweep and re-spend its requests learning the same numbers.
     #[serde(default, alias = "relic_prices")]
     checked_prices: HashMap<String, u32>,
+    /// Names warframe.market answered about with no online seller.
+    ///
+    /// "Nobody is selling this" is an answer, not a failed request, and without somewhere to put it
+    /// the sweep re-asks the same relics on every inventory sync for the rest of the session. It
+    /// keeps the company of `checked_prices` rather than living on its own clock: both are things
+    /// the market told us, both belong to the dump they were told against, and both are dropped
+    /// together when a genuinely newer dump lands.
+    #[serde(default)]
+    checked_unpriced: std::collections::HashSet<String>,
     dump_date: String,
 }
 
@@ -78,6 +89,7 @@ impl PriceTable {
             prices,
             relic_names,
             checked_prices: HashMap::new(),
+            checked_unpriced: std::collections::HashSet::new(),
             dump_date: dump_date.to_owned(),
         })
     }
@@ -134,14 +146,33 @@ impl PriceTable {
     /// Records what warframe.market answered for this item, keyed by the same market name
     /// `market_name` resolves to. Written by the startup relic sweep and by the page refresh.
     pub fn insert_checked(&mut self, market_name: &str, platinum: u32) {
+        self.checked_unpriced.remove(market_name);
         self.checked_prices.insert(market_name.to_owned(), platinum);
     }
 
-    /// Whether this item already carries a price checked against warframe.market. What the startup
-    /// sweep uses to skip a relic it has already priced rather than re-spending a request on it,
-    /// and what the view reads to say a price was checked live rather than taken from the dump.
+    /// Records that warframe.market was asked about this item and had nobody selling it.
+    ///
+    /// Only for `PriceLookup::NoSellers`. An unreachable endpoint must keep retrying -- recording
+    /// an outage here would blacklist a relic until tomorrow's dump over a router that rebooted.
+    pub fn mark_checked_unpriced(&mut self, market_name: &str) {
+        if !self.checked_prices.contains_key(market_name) {
+            self.checked_unpriced.insert(market_name.to_owned());
+        }
+    }
+
+    /// Whether this item already carries a price checked against warframe.market. What the view
+    /// reads to say a price was checked live rather than taken from the dump.
     pub fn has_checked_price(&self, market_name: &str) -> bool {
         self.checked_prices.contains_key(market_name)
+    }
+
+    /// Whether warframe.market has already answered about this item at all, price or no price.
+    ///
+    /// What the startup sweep filters on, and the whole reason the sweep goes quiet. Filtering on
+    /// `has_checked_price` instead meant every relic nobody happened to be selling failed the test
+    /// forever, so each inventory sync re-spent the same requests to be told the same thing.
+    pub fn has_been_checked(&self, market_name: &str) -> bool {
+        self.has_checked_price(market_name) || self.checked_unpriced.contains(market_name)
     }
 
     /// Carry a previous table's checked prices across a refresh of the *same* dump.
@@ -154,7 +185,10 @@ impl PriceTable {
     /// rule is the whole freshness policy, and it is what bounds how stale a stored checked price
     /// can get.
     ///
-    /// A price already checked into `self` wins, because it is the newer of the two.
+    /// A price already checked into `self` wins, because it is the newer of the two. The
+    /// no-seller marks ride along on the same rule: they are answers from the same day, and
+    /// dropping them while keeping the prices would put the sweep back to re-asking about every
+    /// relic nobody is selling.
     pub fn adopt_checked(&mut self, previous: &PriceTable) {
         if self.dump_date != previous.dump_date {
             return;
@@ -163,6 +197,9 @@ impl PriceTable {
             self.checked_prices
                 .entry(market_name.clone())
                 .or_insert(*platinum);
+        }
+        for market_name in &previous.checked_unpriced {
+            self.mark_checked_unpriced(market_name);
         }
     }
 

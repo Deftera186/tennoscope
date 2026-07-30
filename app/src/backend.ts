@@ -4,13 +4,16 @@ export type HealthState = 'ready' | 'idle' | 'degraded' | 'failed'
 export interface BackendHealth { state: HealthState; message: string; last_success: string | null }
 export interface AcquisitionStageHealth { stage: string; state: HealthState; message: string }
 export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 'relic' | 'resource' | 'blueprint' | 'vehicle'
-export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; live: boolean }
+export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; live: boolean; priceable: boolean }
+/** How far a live pricing pass has got, background sweep or clicked refresh alike. */
+export interface PricingProgress { done: number; total: number }
 export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }
 export interface AppView {
   collection: {
     items: CollectionItem[]
     total_entries: number
     snapshot?: { observed_at: string; game_build: string; source: string } | null
+    pricing?: PricingProgress | null
   }
   reward: { cards: RewardCard[]; best_value_index: number | null; best_ducat_index: number | null }
   health: {

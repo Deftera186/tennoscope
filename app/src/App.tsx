@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import './App.css'
 import {
   acceptRiskDisclosure,
@@ -80,7 +80,6 @@ function App() {
   const [page, setPage] = useState<Page>('collection')
   const [busy, setBusy] = useState(false)
   const [pricing, setPricing] = useState(false)
-  const [pricingIds, setPricingIds] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
   const viewGeneration = useRef(0)
@@ -166,13 +165,15 @@ function App() {
    * is that prices appear as they land. That only happens if the 2.5s poll keeps running through
    * it. Ordering is still safe -- `requestView` applies a response only while its request is the
    * newest one started, so an older view can never land on top of a newer one.
+   *
+   * The local flag exists only to hold the control down for the up-to-2.5s gap before the poll
+   * carries the backend's own progress. The counting is the backend's: it is the only party that
+   * knows the total, and it runs the background sweep the same way.
    */
   async function priceLive(ids: string[]) {
     setPricing(true)
-    setPricingIds(ids)
     await requestView(() => refreshPrices(ids), 'Live prices could not be fetched.')
     setPricing(false)
-    setPricingIds([])
   }
 
   if (accepted === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
@@ -222,7 +223,7 @@ function App() {
     <main className="sheet">
       {error && <p className="error-banner" role="alert">{error}</p>}
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} pricing={pricing} pricingIds={pricingIds} onPriceLive={priceLive}/>}
+        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
         {page === 'diagnostics' && <DiagnosticsPage view={view}/>}
         {page === 'settings' && <SettingsPage/>}
@@ -272,7 +273,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppView; pricing: boolean; pricingIds: string[]; onPriceLive: (ids: string[]) => void }) {
+function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -310,19 +311,16 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
   // What the refresh can *attempt*, not what already has a number. Relics carry no daily price by
   // design, so anything the startup sweep missed -- an outage, a first run, one acquired since --
   // is unpriced, and excluding unpriced items would close the manual path against exactly the items
-  // that need it. The backend drops whatever it cannot resolve to a market name, so the request
-  // list stays bounded either way. Quantity 0 is not owned and is never priced.
-  const pricableVisibleIds = visibleItems.filter(item => item.quantity > 0).map(item => item.id)
-  // Real progress, not a spinner: the page-level price request writes into the live cache as each
-  // item lands, and the 2.5s poll already surfaces that -- so "done" is just how many of the
-  // requested ids are currently live, not a client-side timer standing in for the real state.
-  // Items already live when the click happened are not work this pass did, so neither end of the
-  // readout counts them.
-  const pricedBeforeClick = useRef<string[]>([])
-  const pricingTotal = pricingIds.filter(id => !pricedBeforeClick.current.includes(id)).length
-  const pricingDone = pricingIds.length
-    ? view.collection.items.filter(item => pricingIds.includes(item.id) && item.live && !pricedBeforeClick.current.includes(item.id)).length
-    : 0
+  // that need it. `priceable` is the backend's own answer to "can warframe.market be asked about
+  // this": it drops every name the price table cannot resolve, so counting owned items instead
+  // promised prices for items no request was ever going to be made for. Quantity 0 is not owned and
+  // is never priceable.
+  const pricableVisibleIds = visibleItems.filter(item => item.priceable).map(item => item.id)
+  // One readout for the whole page, published by whichever pass is spending requests -- the startup
+  // relic sweep or this button. They come out of one rate-limited budget, so two counters would be
+  // describing one queue twice, and the sweep is the one that used to run for twenty-two seconds
+  // with nothing on this page admitting it.
+  const inProgress = view.collection.pricing ?? null
   const dumpDate = view.health.collection_prices.last_success
   useEffect(() => setPage(1), [search, category, ownership, sort])
   useEffect(() => setPage(value => clampPage(value, filtered.length)), [filtered.length])
@@ -337,7 +335,12 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
       <BandCell kind="items" value={view.collection.total_entries} label="Items tracked" note={`${owned} currently owned`}/>
       <BandCell kind="mastered" value={mastered} label="Mastered" note={masteryEligible.length ? `${Math.round(mastered / masteryEligible.length * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
       <BandCell kind="missing" value={missing} label="Missing" note="From known collection data"/>
-      <BandCell kind="worth" value={worth} unit="p" label="Collection worth" note={`${priced.length} of ${view.collection.items.length} items priced`}/>
+      {/* The worth figure climbs the whole time a pass is running, so its own note is where the
+          reason belongs -- a total that moves with nothing saying why is a moving target, not a
+          valuation. */}
+      <BandCell kind="worth" value={worth} unit="p" label="Collection worth" note={inProgress
+        ? `${priced.length} of ${view.collection.items.length} items priced · checking ${inProgress.done} of ${inProgress.total}`
+        : `${priced.length} of ${view.collection.items.length} items priced`}/>
     </div>
 
     <div className="register">
@@ -371,7 +374,10 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
         ><span className="shield-face"><b aria-hidden="true">{item.tally}</b>{item.label}</span></button>)}
       </div>
 
-      <div className="register-bar">
+      {/* The bar's own bottom rule doubles as the gauge: while a pass runs it fills with platinum
+          from the left. An engraved hairline is what this system already uses to divide the sheet,
+          so a reading struck into one needs no new component and nothing that spins. */}
+      <div className="register-bar" style={inProgress ? { '--assay-progress': inProgress.done / Math.max(inProgress.total, 1) } as CSSProperties : undefined}>
         <div className="tally" role="group" aria-label="Ownership filters">
           {(['all', 'owned', 'mastered', 'missing', 'tradeable'] as const).map(filter => <button
             type="button"
@@ -384,16 +390,17 @@ function CollectionPage({ view, pricing, pricingIds, onPriceLive }: { view: AppV
           <div className="register-status">
             <span className="register-line">{dumpDate ? `Prices from the ${shortDumpDate(dumpDate)} market summary` : 'No price summary loaded yet'}</span>
             <span className="register-line">{firstResult}–{lastResult} of {filtered.length}</span>
+            {inProgress && <span className="register-line pricing" role="status">Checking live prices · {inProgress.done} of {inProgress.total}</span>}
           </div>
+          {/* No count on the control while a pass runs: the register line beside it carries the one
+              readout, and a second copy of the same numbers on the thing that is disabled reads as
+              a different pass. The label only has to say the control is spoken for. */}
           <button
             type="button"
             className="stamp"
-            disabled={pricing || pricableVisibleIds.length === 0}
-            onClick={() => {
-              pricedBeforeClick.current = visibleItems.filter(item => item.live).map(item => item.id)
-              onPriceLive(pricableVisibleIds)
-            }}
-          ><span role={pricing ? 'status' : undefined}>{pricing ? `Pricing ${pricingDone} of ${pricingTotal}…` : `Price these ${pricableVisibleIds.length}`}</span></button>
+            disabled={pricing || inProgress !== null || pricableVisibleIds.length === 0}
+            onClick={() => onPriceLive(pricableVisibleIds)}
+          ><span>{pricing || inProgress ? 'Pricing…' : `Price these ${pricableVisibleIds.length}`}</span></button>
         </div>
       </div>
 

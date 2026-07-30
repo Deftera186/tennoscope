@@ -345,3 +345,46 @@ fn a_bulk_listing_too_cheap_to_divide_is_still_worth_a_platinum() {
     ],"buy":[]}}"#;
     assert_eq!(lowest_sell_top(body.as_bytes()), PriceLookup::Priced(1));
 }
+
+/// A source that answers each name differently, so a per-name pass can be checked for attributing
+/// each verdict to the name that produced it.
+struct PerName;
+
+impl MarketPriceSource for PerName {
+    fn lowest_sell(&self, name: &str) -> PriceLookup {
+        match name {
+            "Sold" => PriceLookup::Priced(19),
+            "Quiet" => PriceLookup::NoSellers,
+            _ => PriceLookup::Unavailable,
+        }
+    }
+}
+
+/// The startup sweep walks its names one at a time so it can record *which* one nobody was
+/// selling: that answer is what stops the sweep re-asking about the same relic on every inventory
+/// sync. A summed outcome cannot do it, so this pins the per-name accounting the loop reads.
+///
+/// The `Unavailable` half is the one that matters most. An unreachable endpoint must stay
+/// distinguishable from an empty order book, because recording an outage as an answer would
+/// blacklist a relic until the next day's dump over a router that rebooted mid-sweep.
+#[test]
+fn a_per_name_pass_can_tell_an_empty_order_book_from_an_unreachable_one() {
+    let cache = MarketPriceCache::new();
+    let verdicts: Vec<(&str, WarmOutcome)> = ["Sold", "Quiet", "Offline"]
+        .into_iter()
+        .map(|name| (name, cache.warm(&PerName, &names(&[name]), Duration::ZERO)))
+        .collect();
+
+    assert_eq!(verdicts[0].1.stored, 1);
+    assert_eq!(verdicts[0].1.no_sellers, 0);
+    assert_eq!(
+        verdicts[1].1.no_sellers, 1,
+        "the empty book is attributed to Quiet"
+    );
+    assert_eq!(verdicts[1].1.unavailable, 0);
+    assert_eq!(
+        verdicts[2].1.unavailable, 1,
+        "an outage is its own verdict, and must not be recorded as an answer"
+    );
+    assert_eq!(verdicts[2].1.no_sellers, 0);
+}

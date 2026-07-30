@@ -165,6 +165,14 @@ offers to re-price what is on screen. That single rule is the whole freshness po
 bound on how stale a stored checked price can get; a second date gate alongside it would only be a
 second thing to keep in step.
 
+"Nobody is selling this" travels the same road, because it is an answer and not a failed request.
+The table records it beside the prices and the sweep skips it on the same terms, which is what makes
+the sweep terminate. Filtering on "has a price" instead meant every relic with an empty order book
+failed the test again on the next inventory sync, and the one after -- the same requests, the same
+answer, all evening, for a set of relics a real collection is never short of. An *unreachable*
+endpoint is deliberately not recorded: an outage is a reason to try again, and treating it as an
+answer would blacklist a relic until tomorrow's dump over a router that rebooted mid-sweep.
+
 Three callers write that table now -- the relic sweep, the page refresh, and the daily dump
 download that replaces it -- so the read-modify-write that folds prices into it happens under the
 runtime lock rather than beside it, against whatever the runtime is serving at that moment rather
@@ -208,10 +216,18 @@ prices nothing -- would attribute it to a file it did not come from.
 
 ## Application View
 
-`CollectionItemView` gains `platinum: Option<u32>` and `live: bool`. A separate `tradeable` flag
-would be a second name for "has a price", since those are the same fact here; the `Tradeable` filter
-reads the price field directly. `live` is not that -- it says which of two different measurements
-the number is, and nothing else in the view carries it.
+`CollectionItemView` gains `platinum: Option<u32>`, `live: bool` and `priceable: bool`. A separate
+`tradeable` flag would be a second name for "has a price", since those are the same fact here; the
+`Tradeable` filter reads the price field directly. The other two are not that. `live` says which of
+two different measurements the number is. `priceable` says whether warframe.market can be asked
+about the item at all -- the same question `market_names_for` answers when it drops every name the
+price table cannot resolve -- and it is what the page control counts. It is deliberately not "has a
+price": an unswept relic is priceable, unpriced, and exactly the item somebody clicks that control
+for.
+
+`CollectionView` gains `pricing: Option<PricingProgress>`: how far along the live pass in flight is,
+or nothing when none is. One cell for both passes, because the requests come out of one
+three-per-second budget and two counters would describe one queue twice.
 
 `AppCore` holds the price table and the live cache, both cheap `Arc` clones, and `current_view()`
 reads the live cache first and the table second. `live` is true for a price from that cache and for
@@ -252,12 +268,29 @@ presented as a total is a lie the reader cannot detect. All three read the best 
 each item.
 
 One control invokes the live path: the register's refresh, which names its scope and how many items
-it will price -- everything owned on the page, whether or not it has a number yet -- and shows its
-progress, because sixteen seconds of silence reads as a broken button. It sits at the end of the
+it will price -- everything on the page the backend can actually ask about, whether or not it has a
+number yet. It counts `priceable` rather than everything owned, because counting items the backend
+drops before it makes a request promised prices that were never coming. It sits at the end of the
 register bar, after the provenance line and the range readout: those two are one statement about
-what is on screen, and an action set between them broke a line meant to read as one. There is no per-item control.
-It was one click for one request, in a register where the row-level answer is the same request; the
-page control subsumes it and one affordance is easier to understand than two.
+what is on screen, and an action set between them broke a line meant to read as one. There is no
+per-item control. It was one click for one request, in a register where the row-level answer is the
+same request; the page control subsumes it and one affordance is easier to understand than two.
+
+A pass in flight is visible, because sixteen or twenty-two seconds of silence reads as a broken
+button -- and because the background sweep, which nobody clicked, moves the collection's worth the
+whole time it runs. Three things say so, and they say it once each. The register bar's own bottom
+rule fills with platinum as the pass advances: an engraved hairline is already this interface's
+device for dividing the sheet, so a reading struck into one needs no progress bar, no spinner and no
+new component. Beside it, in the same voice as the provenance line, sits the count. And the worth
+cell's note carries it too, because that is the figure that moves, and a total climbing with nothing
+to account for it is a moving target rather than a valuation.
+
+The count is the backend's, not the page's. Reconstructing it in the client -- which of the
+requested ids have gone live since the click -- could only ever describe the pass the client
+started, and the sweep is the one that runs for twenty-two seconds unasked. The control itself
+carries no number while a pass runs: it is disabled, because both passes spend the same
+rate-limited budget, and a second copy of the same figures on the disabled thing reads as a
+different pass.
 
 The interface work is done through the `impeccable` skill.
 
@@ -306,13 +339,19 @@ and being marked as such; a persisted checked price still reading as checked liv
 fifteen-minute cache has dropped it, for a relic and for an item the dump prices; an item at quantity 0 carrying no price; the sweep bounded to owned relics and collapsing
 refinement tiers; two concurrent warms unable to put requests closer together than the shared floor;
 and each live-lookup outcome distinctly, including oversize reaching the market health row, a
-part-finished pass reporting itself, and a bulk listing too cheap to divide still quoting 1p.
+part-finished pass reporting itself, and a bulk listing too cheap to divide still quoting 1p. The
+sweep's termination has its own set: a no-seller answer reading as checked but not as priced and not
+counting toward what the table can price, a later real price replacing it and a later empty book not
+undoing one, that answer surviving a same-dump refresh and dying to a newer one, and -- the one that
+guards against blacklisting a relic over an outage -- a per-name pass keeping `NoSellers` and
+`Unavailable` distinct.
 Frontend tests cover the value sort by unit price with unpriced and zero-priced entries present, the
 worth arithmetic and its count, the tradeable filter, the dump's date on the register, that a
 checked price is visibly distinguished from a dump price, that the refresh control offers every
-owned item on the page including ones with no price yet and no unowned one, that its progress counts
-only the work that click asked for, and that the view poll keeps running through a live page
-refresh.
+priceable item on the page including ones with no price yet and neither an unowned one nor one no
+name rule reaches, that a pass reported by the backend appears on the register and in the worth
+cell's note, that the control is refused while a background pass is spending requests, and that the
+view poll keeps running through a live page refresh.
 
 ## Out of Scope
 
