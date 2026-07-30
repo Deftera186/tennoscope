@@ -11,6 +11,25 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-30
+
+### Fixed
+
+- Relics are priced for the refinement tier the player holds. warframe.market quotes the four tiers
+  as four subtypes of one listing, and all four resolved to the bare listing name, so a Radiant was
+  priced at whatever an Intact was going for — a median 1.46x understatement across the 80 relics
+  measured, and 1p against 17p on Requiem I-IV. Refined tiers are thinly traded, so a tier nobody is
+  selling still falls back to the Intact listing, which is what every tier fell back to before.
+- An item the daily dump quotes more than once is priced at the lowest of them rather than whichever
+  record the file happened to list first. Thirty-nine of the sixty are fish, whose subtype is a size
+  the inventory does not record — a Tromyzon is a Tromyzon whether it is the 2p basic or the 10p
+  magnificent — so an unknown was being valued at its best case.
+- Archon shards are listed under their own names and drawn as the shard. The catalogue publishes the
+  twelve with the game's inline icon tag, `<Shard_red_simple> Crimson Archon Shard`, which only
+  Warframe's text renderer draws, and publishes the six Tauforged as the glow layer alone — a
+  coloured smudge with no crystal in it. Neither needs a re-download; the cached catalogue is parsed
+  again at launch.
+
 ## [0.3.0] - 2026-07-30
 
 ### Added
@@ -117,7 +136,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Deftera186/tennoscope/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Deftera186/tennoscope/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Deftera186/tennoscope/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Deftera186/tennoscope/releases/tag/v0.1.0
