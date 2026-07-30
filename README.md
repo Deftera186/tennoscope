@@ -87,19 +87,19 @@ makepkg -si
 Download the `.deb` or `.rpm` from the [latest release](https://github.com/Deftera186/tennoscope/releases/latest):
 
 ```bash
-sudo apt install ./TennoScope_0.1.0_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./TennoScope-0.1.0-1.x86_64.rpm  # Fedora
+sudo apt install ./TennoScope_*_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./TennoScope-*.x86_64.rpm    # Fedora
 ```
 
 ### Anything else — AppImage
 
 ```bash
-chmod +x TennoScope_0.1.0_amd64.AppImage
-./TennoScope_0.1.0_amd64.AppImage
+chmod +x TennoScope_*_amd64.AppImage
+./TennoScope_*_amd64.AppImage
 ```
 
 Self-contained, no `tennoscope` command. If you want one:
-`ln -s "$PWD/TennoScope_0.1.0_amd64.AppImage" ~/.local/bin/tennoscope`.
+`ln -s "$PWD"/TennoScope_*_amd64.AppImage ~/.local/bin/tennoscope`.
 
 ### The overlay's toolchain
 
