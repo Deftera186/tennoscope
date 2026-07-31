@@ -4,8 +4,8 @@ use std::{
 };
 
 use warframe_acquisition::{
-    MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, WarmOutcome, lowest_sell_top,
-    market_slug, slug_and_subtype,
+    MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, RequestPacer, WarmOutcome,
+    lowest_sell_top, market_slug, slug_and_subtype,
 };
 
 /// Verified against the live warframe.market v2 API for every reward name observed in a real run.
@@ -467,4 +467,41 @@ fn a_per_name_pass_can_tell_an_empty_order_book_from_an_unreachable_one() {
         "an outage is its own verdict, and must not be recorded as an answer"
     );
     assert_eq!(verdicts[2].1.no_sellers, 0);
+}
+
+/// Two callers sharing a pacer are spaced against each other, not each against its own clock.
+///
+/// This is the whole reason the pacer is extracted: an authenticated client with a private limiter
+/// and the anonymous price cache with another would each keep to three per second and jointly send
+/// six, which is the number warframe.market answers with 429.
+#[test]
+fn a_shared_pacer_spaces_two_independent_callers() {
+    let pacer = RequestPacer::new();
+    let other = pacer.clone();
+    let gap = Duration::from_millis(80);
+
+    let started = Instant::now();
+    pacer.take_slot(gap);
+    other.take_slot(gap);
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed >= gap,
+        "second caller was not spaced against the first: {elapsed:?}"
+    );
+}
+
+/// A cache built with a pacer hands back that same pacer, so the wiring layer can give one clock
+/// to every caller it constructs.
+#[test]
+fn a_cache_shares_the_pacer_it_was_built_with() {
+    let pacer = RequestPacer::new();
+    let cache = MarketPriceCache::with_pacer(pacer.clone());
+    let gap = Duration::from_millis(80);
+
+    let started = Instant::now();
+    pacer.take_slot(gap);
+    cache.pacer().take_slot(gap);
+
+    assert!(started.elapsed() >= gap, "cache did not share the pacer");
 }
