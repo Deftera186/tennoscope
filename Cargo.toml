@@ -22,3 +22,9 @@ zeroize = "1"
 
 [profile.dev]
 opt-level = 2
+# Off because `opt-level` is on. Incremental reuses a codegen unit while its neighbours are
+# regenerated, and an optimised build gives the private symbols they share names that change with
+# the unit -- so the reused object links against an `anon.<hash>.llvm.<id>` nobody emits any more and
+# the binary fails to link. Little is lost: at `opt-level = 2` most of a rebuild is optimisation
+# work incremental cannot skip anyway, and a clean build of the whole workspace takes 22s.
+incremental = false
