@@ -87,11 +87,12 @@ const MATCH_FLOOR: f32 = 0.6;
 #[cfg(debug_assertions)]
 const CROP_KEEP_BELOW: f32 = 0.85;
 
-/// Distinguishes the temp files of concurrent readers.
+/// Distinguishes the crop files of concurrent readers.
 ///
 /// Two readers are live at once whenever the log-triggered retry overlaps the poller, which is
-/// exactly during the reward screen. Sharing one capture path and one crop path means each deletes
-/// the other's file mid-read, so the reads fail precisely when they are needed.
+/// exactly during the reward screen. Sharing one crop path means each deletes the other's file
+/// mid-read, so the reads fail precisely when they are needed. Only the crop still touches the
+/// disk -- it is what tesseract is handed -- because the capture itself now stays in memory.
 static SCRATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn scratch_file(kind: &str, extension: &str) -> PathBuf {
@@ -102,9 +103,7 @@ fn scratch_file(kind: &str, extension: &str) -> PathBuf {
     ))
 }
 
-pub struct ScreenRewardSource {
-    capture: PathBuf,
-}
+pub struct ScreenRewardSource;
 
 impl Default for ScreenRewardSource {
     fn default() -> Self {
@@ -114,22 +113,15 @@ impl Default for ScreenRewardSource {
 
 impl ScreenRewardSource {
     pub fn new() -> Self {
-        Self {
-            // PPM, not PNG: the capture is thrown away after the crops, and PNG-encoding a
-            // 1920x1080 frame costs 1.9s against 0.04s for raw pixels. That is the difference
-            // between the overlay landing inside the first second of the screen and not.
-            capture: scratch_file("reward-screen", "ppm"),
-        }
+        Self
     }
 }
 
 impl VisualRewardSource for ScreenRewardSource {
     fn choices(&mut self, candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
-        let (window, _) = warframe_window()?;
-        capture_window(&window, &self.capture)?;
-        let cards = read_cards(&self.capture, candidates);
-        let _ = std::fs::remove_file(&self.capture);
-        cards.map(|cards| cards.into_iter().map(|(name, _)| name).collect())
+        let (_, frame) = capture_game_window()?;
+        read_cards_in(&frame, candidates)
+            .map(|cards| cards.into_iter().map(|(name, _)| name).collect())
     }
 }
 
@@ -156,10 +148,20 @@ pub fn read_cards(
     image: &Path,
     candidates: &[RewardCatalogEntry],
 ) -> Result<Vec<(String, f32)>, &'static str> {
+    let frame = image::open(image).map_err(|_| "capture could not be decoded")?;
+    read_cards_in(&frame, candidates)
+}
+
+/// The same read against an already-decoded frame, which is what the live path has -- the capture
+/// never touches the disk now that xcap hands back pixels.
+pub fn read_cards_in(
+    image: &DynamicImage,
+    candidates: &[RewardCatalogEntry],
+) -> Result<Vec<(String, f32)>, &'static str> {
     if candidates.is_empty() {
         return Err("no reward candidates");
     }
-    let (width, height) = image_size(image)?;
+    let (width, height) = image.dimensions();
     // Up to three layouts per poll rather than one, so a poll off the reward screen costs
     // three crops instead of one -- about 200ms every two seconds. Narrow it by asking the log for
     // the squad size if that ever shows up in a profile.
@@ -195,7 +197,7 @@ const BLANK_CARD: &str = "a reward card read as blank";
 /// failing slot comes back with the reason because `read_cards` needs to know whether the *first*
 /// slot was the one that failed -- that is what tells a misplaced block apart from a pool gap.
 fn read_cards_at(
-    image: &Path,
+    image: &DynamicImage,
     width: u32,
     height: u32,
     cards: usize,
@@ -245,21 +247,91 @@ fn read_cards_at(
     Ok(read)
 }
 
-/// The game runs under Wine -- as Proton through Steam, or as plain Wine -- and therefore always
-/// presents an X11 window, reachable through the root window tree with no compositor portal. That
-/// is the one fact that holds under every window manager and compositor alike: under Wayland the
-/// window is an XWayland client, and no Wayland protocol exposes another application's geometry.
+/// The game's window title. Warframe titles its window the same on every platform and under every
+/// launcher, which its window *class* does not do -- that is `steam_app_230410` under Steam and
+/// `warframe.x64.exe` under bare Wine.
+const WINDOW_TITLE: &str = "Warframe";
+
+/// Locate the game window and capture it.
 ///
-/// The window is matched on its title rather than its class, because the class differs between
-/// launchers (`steam_app_230410` under Steam, `warframe.x64.exe` under bare Wine) while the title
-/// is the game's own and is the same everywhere.
-pub(crate) fn warframe_window() -> Result<(String, WindowRect), &'static str> {
-    let tree = Command::new("xwininfo")
+/// This used to shell out to `xwininfo -root -tree` and then `import`, which meant a Linux install
+/// needed x11-utils and ImageMagick and a Windows one could not work at all. xcap does both, in
+/// process, on both platforms -- on Windows through Windows Graphics Capture, which is the only
+/// path that can read a D3D swapchain at all; GDI's `BitBlt` returns a black frame.
+///
+/// The monitor is captured and cropped rather than the window captured directly: xcap's
+/// `Window::capture_image` returns a stale frame for game windows on Windows (xcap#131), and a
+/// reward screen read from a stale frame is a reward screen read from whatever was on screen a
+/// moment ago.
+pub(crate) fn capture_game_window() -> Result<(WindowRect, image::DynamicImage), &'static str> {
+    let rect = warframe_window_rect()?;
+    let monitor = xcap::Monitor::from_point(rect.x, rect.y)
+        .map_err(|_| "the game window is not on any monitor")?;
+    let (origin_x, origin_y) = (
+        monitor.x().map_err(|_| "could not read the monitor")?,
+        monitor.y().map_err(|_| "could not read the monitor")?,
+    );
+    let frame = monitor
+        .capture_region(
+            rect.x.saturating_sub(origin_x).max(0) as u32,
+            rect.y.saturating_sub(origin_y).max(0) as u32,
+            rect.width,
+            rect.height,
+        )
+        .map_err(|_| "could not capture the game window")?;
+    Ok((rect, image::DynamicImage::ImageRgba8(frame)))
+}
+
+/// Where the game's window is, in the desktop's own coordinates.
+pub(crate) fn warframe_window_rect() -> Result<WindowRect, &'static str> {
+    let windows = xcap::Window::all().map_err(|_| "could not enumerate windows")?;
+    let found = largest_warframe_window(windows.iter().filter_map(|window| {
+        Some((
+            window.title().ok()?,
+            WindowRect {
+                x: window.x().ok()?,
+                y: window.y().ok()?,
+                width: window.width().ok()?,
+                height: window.height().ok()?,
+            },
+        ))
+    }));
+    if let Some(rect) = found {
+        return Ok(rect);
+    }
+    // In Wine's virtual-desktop mode the game window is nested inside the desktop window rather
+    // than being a top-level client, and xcap enumerates via `_NET_CLIENT_LIST_STACKING`, which
+    // lists only top-level managed clients. Walking the whole root tree is what finds it, and that
+    // is what this fallback is for -- it is the configuration the tree walk was written for.
+    #[cfg(target_os = "linux")]
+    if let Some((_, rect)) = warframe_window_from_xwininfo_tree(&xwininfo_tree()) {
+        return Ok(rect);
+    }
+    Err("no Warframe window found")
+}
+
+/// Pick the game's window out of a list of candidates.
+///
+/// Wine spawns several 1x1 helper windows that share the game's title, and on Windows the launcher
+/// briefly holds a window of its own, so the first match is routinely not the game. The largest
+/// exact-title match is. The 100px floor drops the helpers before size even matters.
+pub fn largest_warframe_window(
+    candidates: impl Iterator<Item = (String, WindowRect)>,
+) -> Option<WindowRect> {
+    candidates
+        .filter(|(title, _)| title == WINDOW_TITLE)
+        .map(|(_, rect)| rect)
+        .filter(|rect| rect.width >= 100 && rect.height >= 100)
+        .max_by_key(|rect| u64::from(rect.width) * u64::from(rect.height))
+}
+
+#[cfg(target_os = "linux")]
+fn xwininfo_tree() -> String {
+    Command::new("xwininfo")
         .args(["-root", "-tree"])
         .output()
-        .map_err(|_| "xwininfo is not available")?;
-    warframe_window_from_xwininfo_tree(&String::from_utf8_lossy(&tree.stdout))
-        .ok_or("no Warframe window found")
+        .map(|tree| String::from_utf8_lossy(&tree.stdout).into_owned())
+        .unwrap_or_default()
 }
 
 /// Pick the game's window out of `xwininfo -root -tree` output.
@@ -302,44 +374,6 @@ fn parse_window_line(line: &str) -> Option<(String, WindowRect)> {
     ))
 }
 
-fn capture_window(window: &str, target: &Path) -> Result<(), &'static str> {
-    let status = Command::new("import")
-        .args(["-window", window])
-        .arg(target)
-        .status()
-        .map_err(|_| "import is not available")?;
-    status
-        .success()
-        .then_some(())
-        .ok_or("could not capture the game window")
-}
-
-/// Pixel dimensions of the capture. The live path writes PPM for speed; the fixtures the tests read
-/// are PNG.
-fn image_size(path: &Path) -> Result<(u32, u32), &'static str> {
-    let bytes = std::fs::read(path).map_err(|_| "capture could not be read")?;
-    if bytes.starts_with(b"\x89PNG") {
-        let header = bytes.get(16..24).ok_or("capture was truncated")?;
-        let read = |at: usize| {
-            u32::from_be_bytes([header[at], header[at + 1], header[at + 2], header[at + 3]])
-        };
-        return Ok((read(0), read(4)));
-    }
-    if !bytes.starts_with(b"P6") {
-        return Err("capture was not a PNG or PPM");
-    }
-    // "P6" then width, height, maxval as whitespace-separated tokens, with '#' comments allowed.
-    let header = String::from_utf8_lossy(bytes.get(..128).unwrap_or(&bytes));
-    let mut fields = header
-        .lines()
-        .skip(1)
-        .filter(|line| !line.starts_with('#'))
-        .flat_map(str::split_whitespace);
-    let width = fields.next().and_then(|f| f.parse().ok());
-    let height = fields.next().and_then(|f| f.parse().ok());
-    width.zip(height).ok_or("capture header was unreadable")
-}
-
 /// Crop one region and OCR it. Returns the text and the crop, which the caller deletes -- it is
 /// kept only when the read was poor enough to be worth looking at.
 ///
@@ -358,15 +392,14 @@ fn image_size(path: &Path) -> Result<(u32, u32), &'static str> {
 /// `Caliban Prime Chassis Blueprint` to 0.96 and 82% drops `Bronco Prime Receiver` to 0.89. So the
 /// usable band is 70-78% and 74% sits in it with room on both sides.
 fn read_region(
-    image: &Path,
+    image: &DynamicImage,
     x: u32,
     y: u32,
     width: u32,
     height: u32,
 ) -> Result<(String, PathBuf), &'static str> {
-    let source = image::open(image).map_err(|_| "capture could not be decoded")?;
     let crop = scratch_file("reward-crop", "png");
-    prepare_crop(&source, x, y, width, height)
+    prepare_crop(image, x, y, width, height)
         .save(&crop)
         .map_err(|_| "could not write the reward card crop")?;
     let text = ocr_crop(&crop)?;

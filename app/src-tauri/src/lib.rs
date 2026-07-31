@@ -66,9 +66,9 @@ pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
 pub use reward_ocr::{
-    MAX_CARDS, ScreenRewardSource, best_match, card_block_left, card_block_width, luma,
-    normalize_contrast, ocr_crop, prepare_crop, read_cards, threshold_inverted,
-    warframe_window_from_xwininfo_tree,
+    MAX_CARDS, ScreenRewardSource, best_match, card_block_left, card_block_width,
+    largest_warframe_window, luma, normalize_contrast, ocr_crop, prepare_crop, read_cards,
+    read_cards_in, threshold_inverted, warframe_window_from_xwininfo_tree,
 };
 pub use reward_source::{
     BoundMemoryRewardSource, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSet,

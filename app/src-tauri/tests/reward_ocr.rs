@@ -306,8 +306,8 @@ fn concurrent_reads_do_not_corrupt_each_other() {
     }
 }
 
-/// Exercises the real shell-out chain against a running game: window discovery, PPM capture,
-/// header parsing, cropping and tesseract. Ignored by default because it needs Warframe on screen.
+/// Exercises the real chain against a running game: window discovery, screen capture, cropping and
+/// tesseract. Ignored by default because it needs Warframe on screen.
 ///
 /// Run with `cargo test -p tennoscope --test reward_ocr -- --ignored --nocapture`. Outside a
 /// reward screen the cards will not match, which is the correct answer; what is being checked is
@@ -324,14 +324,19 @@ fn live_capture_reaches_the_game_window() {
         Err("no Warframe window found"),
         "window discovery failed"
     );
-    assert_ne!(outcome, Err("import is not available"));
     assert_ne!(outcome, Err("tesseract is not available"));
-    assert_ne!(outcome, Err("capture could not be decoded"));
     assert_ne!(
         outcome,
-        Err("capture was not a PNG or PPM"),
-        "PPM header parsing failed"
+        Err("could not enumerate windows"),
+        "xcap found nothing"
     );
+    assert_ne!(
+        outcome,
+        Err("the game window is not on any monitor"),
+        "the window rectangle did not map to a monitor"
+    );
+    // The one that matters on Windows: GDI capture of a D3D swapchain returns a black frame rather
+    // than an error, so a capture that "succeeds" and reads nothing is the failure to look for.
     assert_ne!(outcome, Err("could not capture the game window"));
 }
 

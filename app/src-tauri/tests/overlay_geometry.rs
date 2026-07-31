@@ -87,3 +87,79 @@ xwininfo: Window id: 0x352 (the root window) (has no name)
         "no game window means no rectangle, not somebody else's"
     );
 }
+
+/// xcap replaced `xwininfo` and `import`, and its window list is a flat list of candidates rather
+/// than a tree of lines -- but the selection problem is the same one, so it is the same function.
+///
+/// Wine spawns 1x1 helper windows carrying the game's own title, and on Windows the launcher and
+/// the game share a process family, so "the first window called Warframe" is not the game. The
+/// largest match is.
+#[test]
+fn the_game_window_is_chosen_by_size_not_by_order() {
+    let candidates = [
+        // A Wine helper, and on Windows a minimized window, both report as tiny.
+        ("Warframe", 1, 1, 0, 0),
+        ("Warframe", 1920, 1080, 1920, 0),
+        ("TennoScope", 1180, 760, 100, 100),
+    ];
+    let chosen =
+        app_lib::largest_warframe_window(candidates.iter().map(|&(title, width, height, x, y)| {
+            (
+                title.to_owned(),
+                app_lib::WindowRect {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+            )
+        }))
+        .expect("the game window is in the list");
+    assert_eq!(
+        (chosen.x, chosen.y, chosen.width, chosen.height),
+        (1920, 0, 1920, 1080)
+    );
+}
+
+/// A window list with no game in it must come back empty rather than picking the largest of
+/// whatever else is open -- the overlay would otherwise land on the user's browser.
+#[test]
+fn a_desktop_without_the_game_yields_no_window() {
+    let candidates = [("TennoScope", 1180, 760), ("Firefox", 1920, 1080)];
+    assert!(
+        app_lib::largest_warframe_window(candidates.iter().map(|&(title, width, height)| {
+            (
+                title.to_owned(),
+                app_lib::WindowRect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                },
+            )
+        }))
+        .is_none()
+    );
+}
+
+/// The title match has to survive the launcher, which titles its own window "Warframe" too but at
+/// a size no game window ever has, and it must not match a browser tab that merely mentions the
+/// game. Exact title, largest window.
+#[test]
+fn only_an_exact_title_match_counts_as_the_game() {
+    for title in ["Warframe - Google Chrome", "warframe", "Warframe Launcher"] {
+        assert!(
+            app_lib::largest_warframe_window(std::iter::once((
+                title.to_owned(),
+                app_lib::WindowRect {
+                    x: 0,
+                    y: 0,
+                    width: 1920,
+                    height: 1080,
+                },
+            )))
+            .is_none(),
+            "{title:?} is not the game window"
+        );
+    }
+}

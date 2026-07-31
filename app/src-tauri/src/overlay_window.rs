@@ -100,9 +100,7 @@ pub fn configure_reward_overlay(window: &WebviewWindow) -> tauri::Result<()> {
 }
 
 pub(crate) fn warframe_window_rect() -> Option<WindowRect> {
-    crate::reward_ocr::warframe_window()
-        .ok()
-        .map(|(_, rect)| rect)
+    crate::reward_ocr::warframe_window_rect().ok()
 }
 
 /// Put the overlay above the game on any window manager or compositor.
