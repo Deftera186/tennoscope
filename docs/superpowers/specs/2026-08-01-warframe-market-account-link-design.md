@@ -94,7 +94,13 @@ must be diagnosed apart.
 and hides the token from its callers.
 
 **`orders`** owns `list_mine` against `GET /v2/orders/my`, which returns every order on the
-account, visible and hidden, in one request. Phase 2 adds `create`, `update` and `delete` here.
+account, visible and hidden, in one request. It also owns the two writes the fixes below need:
+`delete` against `DELETE /v2/order/{id}`, and `set_quantity` against `PATCH /v2/order/{id}`.
+
+Phase 1 is therefore not read-only, and the distinction that matters is not reads against writes.
+It is that every write here *reduces* an existing listing -- taking one down, or lowering it to what
+is owned -- and each is one button the player presses on one row. Phase 2 adds `create`, which
+publishes something new.
 
 **`credential_store`** owns the keyring-or-database decision behind `load` and `store`, and reports
 which backend answered.
@@ -118,7 +124,8 @@ collection, and gains none.
 ### Presentation
 
 Five commands: `market_status`, `market_sign_in`, `market_link_token`, `market_sign_out`,
-`refresh_orders`. None returns the token.
+`refresh_orders`, plus the two the fixes need: `remove_order` and `set_order_quantity`. None
+returns the token.
 
 ## Reconciliation
 
@@ -240,7 +247,10 @@ the existing vitest setup.
 
 **Live,** ignored by default alongside the existing `live_*` tests. It is read-only: `GET /v2/me`
 and `GET /v2/orders/my`. It creates, modifies and deletes nothing, and a maintainer running it
-against a real account changes nothing on that account.
+against a real account changes nothing on that account. The two writes this phase adds are
+deliberately excluded, because there is no way to exercise a real deletion against a real account
+without destroying something the account holder wanted. They are covered against a fake transport
+instead.
 
 What no test covers is whether the v1 signin route works on a given day. It is undocumented and
 outside this project's control, which is the reason the paste-token path exists as an equal.
@@ -258,9 +268,8 @@ outside this project's control, which is the reason the paste-token path exists 
 
 ## Phases to follow
 
-**Phase 2** posts, edits and deletes sell orders, reached by selecting an item in the collection.
-The ownership check specified here gates it: the application does not list what the player does not
-hold.
+**Phase 2** posts new sell orders, reached by selecting an item in the collection. The ownership
+check specified here gates it: the application does not list what the player does not hold.
 
 **Phase 3** marks an order sold from an observed in-game trade. Trades are visible in `EE.log`, so
 this extends the log machine that already drives reward detection rather than adding a capture
