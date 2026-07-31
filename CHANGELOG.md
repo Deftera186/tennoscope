@@ -16,54 +16,45 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 ### Added
 
 - **Mods, arcanes and rivens are in the collection**, as two new categories. They were never read
-  at all, which on one account meant 1,011 rows worth 156,015p showing up as nothing.
+  at all, so for most players this is the largest thing in the collection finally showing up.
 - **Each rank is its own row.** warframe.market only quotes a card at rank 0 and at its ceiling —
-  Serration is 3p unranked and 48p at rank 10 — so a part-ranked copy shows both ends rather than
-  picking one, and every card carries its rank. Rivens are ranked but never maxed; their published
-  ceiling is a placeholder, not a rank.
+  Serration is a few platinum unranked and a good deal more maxed — so a part-ranked copy shows
+  both ends rather than picking one. Rivens are ranked but never maxed; their published ceiling is
+  a placeholder, not a rank.
 - **Ayatan sculptures and stars, and built Railjack armaments**, are tracked too. Kubrow imprints
   are not: the snapshot has no section for them.
-- **What the market would actually take**, as a second figure under the collection's worth. The
-  unit prices were right and the total still wasn't reachable — trades happen one at a time between
-  two players, and nobody buys your 182 Quickdraws. Each stack now also counts at no more copies
-  than the whole game trades in a month. On one account that reads 24,086p under a market rate of
-  30,817p.
-- **A price floor in Settings**, 0 to 20 platinum, for the part no measurement settles. 14,936p of
-  that sellable total is 1–5p items the market really does trade, an evening of haggling at a time.
-  Whether those count is your call, not ours. It only affects the sellable figure, never the
-  market rate.
+- **What the market would actually take**, beside the collection's worth. Trades happen one at a
+  time between two players, and nobody is buying your two hundredth spare mod, so a stack now
+  counts at no more copies than the game trades in a month.
+- **A price floor in Settings**, 0 to 20 platinum. A lot of any collection is 1–5p items that do
+  trade, an evening of haggling at a time; whether they count is your call. It only moves the
+  sellable figure, never the market rate.
 
 ### Changed
 
-- **The worth cell is two figures and a clause** instead of five numbers. It had been showing the
-  market rate, the trades it would take, how many items were priced, and a copy of the counter on
-  the line below — an argument about the collection rather than a valuation of it.
+- **The worth cell is two figures and a clause** instead of five numbers.
 - **Settings and About are separate pages.** Settings has the price floor and the overlay preview;
   About has the licence and the disclosures, including what the overlay does to read your screen.
-- **Relics are no longer priced live at every launch.** That pass existed because the daily dump's
-  relic prices were unusable, and they aren't any more. Keeping each day's relic prices for thirty
-  days instead of discarding them took one account's coverage from 45% to 96% — for no extra
-  request, since the dump was already being downloaded. It saves about seventy requests and
-  twenty-two seconds off every launch. Live pricing is now only ever the refresh button.
+- **Relics are no longer priced live at every launch.** Keeping each day's relic prices for a month
+  instead of discarding them covers nearly all of them for no extra request, and takes twenty-odd
+  seconds off startup. Live pricing is the refresh button now.
 
 ### Fixed
 
 - **Prices come from completed trades, not asking prices.** An asking price covers a bulk seller's
-  whole lot, so anything sold in stacks read high — a Lith T11 relic at 30p against the 4.5p it
-  traded at, and the same for gems, fish and fragments. Completed trades have the opposite problem
-  when they're thin: Vitality closed at 115p on four trades against a 1p ask backed by 3,186
-  listings. Taking the lower of the two fixes both directions, and trades with fewer than three
-  sales are ignored. 1,442 of 3,059 items moved, and 139 relics gained a price they never had.
-- **A stale price cache is re-downloaded rather than trusted.** This is why 0.3.1's subtype fix
+  whole lot, so anything sold in stacks read high — a Lith relic at 30p against the 4.5p it
+  actually traded at, and the same for gems, fish and fragments. Thin trade data has the opposite
+  problem, so the lower of the two wins and anything with fewer than three sales is ignored. Most
+  of the collection moved, and relics that never had a price now have one.
+- **A stale price cache is re-downloaded rather than trusted.** This is why 0.3.1's relic fix
   reached the code but not the file already on your disk. Costs 3.9 MB, once.
 - **A mod is filed as a mod**, not as the thing it fits. Warframe stores an augment under its
-  Warframe and a precept under the pet, so twenty-one mod stacks were showing up as companions.
-- **An unranked card is no longer priced from a maxed one's quote.** A few listings are only ever
-  quoted at their ceiling, which had a 0/3 Scan Matter valued at the 240p a rank 3 one sells for.
-  Those now show no unranked price until you ask for one, which is the honest answer.
+  Warframe and a precept under the pet, so mods were turning up under companions.
+- **An unranked card is no longer priced from a maxed one's quote.** Some listings are only ever
+  quoted at their ceiling, which had unranked copies valued at what a maxed one sells for. Those
+  show no price until you ask for one, which is the honest answer.
 - **Development builds link again.** `opt-level = 2` and incremental compilation together produced
-  a binary that couldn't be linked. Incremental is off for that profile now; a clean build of the
-  workspace is 22 seconds.
+  a binary that couldn't be linked.
 
 ## [0.3.1] - 2026-07-30
 

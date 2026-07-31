@@ -45,10 +45,10 @@ per item. Mods and arcanes are priced by rank, because the market sells them tha
 3p unranked and 48p at rank 10, so each rank you hold is its own row, and a half-ranked copy shows
 the two ends rather than inventing a number between them.
 
-Under the market-rate total is what the market would actually take. Nobody buys 182 Quickdraws, so
-each stack is also counted at no more copies than the whole game trades in a month. Settings has a
-price floor for the rest of it — the 2p mods that do sell, if you will sit down and arrange every
-one of those trades by hand.
+Under the market-rate total is what the market would actually take. Nobody buys your two hundredth
+spare mod, so each stack is also counted at no more copies than the whole game trades in a month.
+Settings has a price floor for the rest of it — the 2p mods that do sell, if you will sit down and
+arrange every one of those trades by hand.
 
 ---
 
