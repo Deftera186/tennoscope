@@ -1,0 +1,23 @@
+[package]
+name = "warframe-market"
+version.workspace = true
+description = "Authenticated warframe.market account access: credentials and orders"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+# Internal workspace crate: the shipped artifact is the TennoScope bundle, not a crates.io release.
+publish = false
+
+[dependencies]
+keyring = "4.1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = "1"
+thiserror.workspace = true
+warframe-acquisition = { path = "../warframe-acquisition" }
+warframe-domain = { path = "../warframe-domain" }
+zeroize.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
