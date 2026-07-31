@@ -88,6 +88,10 @@ jobs:
             libssl-dev \
             libpipewire-0.3-dev \
             libclang-dev \
+            libgbm-dev \
+            libegl-dev \
+            libwayland-dev \
+            libxcb1-dev \
             tesseract-ocr \
             tesseract-ocr-eng
 
