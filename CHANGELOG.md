@@ -11,6 +11,16 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-31
+
+### Fixed
+
+- **The AppImage opens to a window you can see.** It carried its build machine's copy of a Wayland
+  library, and the graphics driver on a newer distribution refuses to load against it, so the
+  browser view gave up before drawing anything. That library now comes from your system, which is
+  where every other package was already getting it. The `.deb`, `.rpm` and Gentoo packages were
+  never affected.
+
 ## [0.4.0] - 2026-07-31
 
 ### Added
@@ -181,7 +191,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Deftera186/tennoscope/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Deftera186/tennoscope/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Deftera186/tennoscope/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Deftera186/tennoscope/compare/v0.2.0...v0.3.0

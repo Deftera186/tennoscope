@@ -37,6 +37,33 @@ assert_appimage_runs_on_x11() {
   }
 }
 
+# linuxdeploy bundles whatever the build host linked against, filtered by an
+# excludelist compiled into it. Tauri pins a 2024 linuxdeploy, and upstream
+# added libwayland-client.so.0 to that list after it was built:
+#
+#   /usr/lib64/libEGL_mesa.so.0: undefined symbol: wl_fixes_interface (fatal)
+#
+# The host's Mesa EGL vendor is loaded against our older bundled copy, fails
+# that lookup, leaves libglvnd with no vendor, and WebKit aborts on
+# EGL_BAD_PARAMETER with a blank window. Drop the library so the host supplies
+# it -- every system that can run a GTK application already has one -- and
+# repack the AppDir the plugin left behind.
+drop_bundled_wayland_client() {
+  bundle_dir="$repo_root/target/release/bundle/appimage"
+  appdir="$bundle_dir/TennoScope.AppDir"
+  cache="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+  packer="$cache/linuxdeploy-plugin-appimage.AppImage"
+
+  [ -f "$appdir/usr/lib/libwayland-client.so.0" ] || return 0
+  [ -x "$packer" ] || { echo "linuxdeploy's AppImage plugin was not found in $cache" >&2; exit 1; }
+
+  built=$(ls -t "$bundle_dir"/*.AppImage 2>/dev/null | head -1)
+  [ -n "$built" ] || { echo "no AppImage was produced to repack" >&2; exit 1; }
+
+  rm -f "$appdir/usr/lib/libwayland-client.so.0"
+  ( cd "$bundle_dir" && APPIMAGE_EXTRACT_AND_RUN=1 OUTPUT="$built" "$packer" --appdir "$appdir" )
+}
+
 cd "$repo_root"
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
@@ -51,6 +78,7 @@ for bundle in "$@"; do
     # optimization keeps the build portable and does not alter the binary.
     NO_STRIP=${NO_STRIP:-true} pnpm tauri build --bundles "$bundle"
     assert_appimage_runs_on_x11
+    drop_bundled_wayland_client
   else
     pnpm tauri build --bundles "$bundle"
   fi
