@@ -41,6 +41,10 @@ Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
 3. **Close the changelog section.** Rename `## [Unreleased]` to `## [0.1.0] - YYYY-MM-DD`, open a
    fresh empty `## [Unreleased]` above it, and update the link definitions at the bottom.
 
+   The changelog is what a player reads to decide whether to update, so write it for one: what
+   changed, and what it was getting wrong before, in as few words as that takes. The reasoning
+   behind a change belongs in its commit message and the design docs, not here.
+
 4. **Commit and tag.**
 
    ```bash
@@ -49,10 +53,10 @@ Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
    git push origin main --follow-tags
    ```
 
-5. **Wait for the release workflow**, then edit the draft it created. Take the release notes from
-   the changelog section rather than the generated commit list, and say plainly what is untested —
-   window managers other than sway, ultrawide displays, anything else that has never run outside the
-   maintainer's machine.
+5. **Wait for the release workflow**, then edit the draft it created. **The release notes are the
+   changelog section and nothing else** — not the generated commit list, and nothing written fresh
+   for the occasion. Add the install commands for this version, and a line on anything untested
+   only if the changelog does not already say it.
 
 6. **Publish the draft.**
 
