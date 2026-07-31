@@ -66,7 +66,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "app-core"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "local-store",
  "serde",
@@ -2051,7 +2051,7 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 
 [[package]]
 name = "local-store"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "rusqlite",
  "serde",
@@ -3955,7 +3955,7 @@ dependencies = [
 
 [[package]]
 name = "tennoscope"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "app-core",
  "gtk",
@@ -4514,7 +4514,7 @@ dependencies = [
 
 [[package]]
 name = "warframe-acquisition"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "aho-corasick",
  "atomicwrites",
@@ -4535,7 +4535,7 @@ dependencies = [
 
 [[package]]
 name = "warframe-domain"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "serde",
  "serde_json",
