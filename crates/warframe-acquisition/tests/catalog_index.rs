@@ -31,7 +31,11 @@ fn wfcd_fixture() -> Vec<u8> {
       {"uniqueName":"/Lotus/Types/Vehicles/Hoverboard/HoverboardParts/PartComponents/HoverboardSolarisA/HoverboardSolarisADeck","name":"Bad Baby","type":"K-Drive Component","category":"Misc","masterable":true,"components":[]},
       {"uniqueName":"/Lotus/Weapons/Tenno/Rifle/Braton","name":"Braton","type":"Rifle","category":"Primary","masterable":true,"components":[]},
       {"uniqueName":"/Lotus/Weapons/Orokin/BallasSword/BallasSwordWeapon","name":"Paracesis","type":"Rifle","category":"Melee","masterable":true,"components":[]},
-      {"uniqueName":"/Lotus/Weapons/Grineer/KuvaLich/LongGuns/KuvaChakkhurr","name":"Kuva Chakkhurr","type":"Rifle","category":"Primary","masterable":true,"components":[]}
+      {"uniqueName":"/Lotus/Weapons/Grineer/KuvaLich/LongGuns/KuvaChakkhurr","name":"Kuva Chakkhurr","type":"Rifle","category":"Primary","masterable":true,"components":[]},
+      {"uniqueName":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod","name":"Serration","type":"Rifle Mod","category":"Mods","masterable":false,"components":[]},
+      {"uniqueName":"/Lotus/Powersuits/Trinity/LinkAugmentCard","name":"Abating Link","type":"Warframe Mod","category":"Mods","masterable":false,"components":[]},
+      {"uniqueName":"/Lotus/Types/Friendly/Pets/CatbrowPetPowerSuits/ChargeAugmentCard","name":"Charm","type":"Kavat Mod","category":"Mods","masterable":false,"components":[]},
+      {"uniqueName":"/Lotus/Upgrades/CosmeticEnhancers/Offensive/AmmoEfficiencyOnSliding","name":"Akimbo Slip Shot","type":"Secondary Arcane","category":"Arcanes","masterable":false,"components":[]}
     ]"#.to_vec()
 }
 
@@ -112,6 +116,26 @@ fn parses_canonical_items_and_prime_parent_components() {
         .unwrap();
     assert_eq!(kdrive.category(), Some(Category::Vehicle));
     assert!(kdrive.masterable());
+
+    // A mod is named after what it fits and filed with it. Both of these paths are read by a
+    // branch below the mod one -- the augment as a Powersuit, the precept as a pet -- so the only
+    // thing keeping them out of Frame and Companion is that "Mods" is tested first.
+    for path in [
+        "/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod",
+        "/Lotus/Powersuits/Trinity/LinkAugmentCard",
+        "/Lotus/Types/Friendly/Pets/CatbrowPetPowerSuits/ChargeAugmentCard",
+    ] {
+        let metadata = catalog.resolve(path).unwrap();
+        assert_eq!(metadata.category(), Some(Category::Mod), "{path}");
+        assert!(!metadata.masterable(), "{path}");
+    }
+    assert_eq!(
+        catalog
+            .resolve("/Lotus/Upgrades/CosmeticEnhancers/Offensive/AmmoEfficiencyOnSliding")
+            .unwrap()
+            .category(),
+        Some(Category::Arcane)
+    );
 
     assert_eq!(
         catalog

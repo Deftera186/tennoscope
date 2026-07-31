@@ -20,6 +20,16 @@ impl ItemId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The catalogue path behind this id: the whole id, unless it names a rank.
+    ///
+    /// A mod or arcane held at several ranks is several holdings -- the market prices rank 0 and
+    /// the ceiling separately -- so each gets a row keyed `<path>#<rank>`. The catalogue knows
+    /// only the path, and anything asking it about one of those rows has to ask about this or be
+    /// told the item does not exist.
+    pub fn catalog_path(&self) -> &str {
+        self.0.split('#').next().unwrap_or(&self.0)
+    }
 }
 
 impl fmt::Display for ItemId {
@@ -48,6 +58,8 @@ pub enum Category {
     Resource,
     Blueprint,
     Vehicle,
+    Mod,
+    Arcane,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

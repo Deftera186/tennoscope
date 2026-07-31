@@ -106,6 +106,9 @@ struct RawEntry {
     item_type: String,
     #[serde(default)]
     item_count: Option<i64>,
+    /// Where a ranked copy records the rank it was fused to, as JSON inside a JSON string.
+    #[serde(default)]
+    upgrade_fingerprint: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -137,15 +140,34 @@ struct RawInventory {
     kubrow_pets: Vec<RawEntry>,
     operator_amps: Vec<RawEntry>,
     mech_suits: Vec<RawEntry>,
+    // Defaulted, unlike every section above, because these were added to the decoder later and a
+    // response that omits one is a section the account has nothing in -- not a broken snapshot.
+    /// Unranked mods and arcanes, stacked by type. The largest holding in the response by value.
+    #[serde(default)]
+    raw_upgrades: Vec<RawEntry>,
+    /// Mods and arcanes carrying a rank, plus rivens: one row per copy, no `ItemCount`.
+    #[serde(default)]
+    upgrades: Vec<RawEntry>,
+    /// Ayatan sculptures and stars.
+    #[serde(default)]
+    fusion_treasures: Vec<RawEntry>,
+    /// Built Railjack armaments.
+    #[serde(default)]
+    crew_ship_weapons: Vec<RawEntry>,
 }
 
 struct AccumulatedEntry {
+    /// The catalogue path these copies came from, which is the map key for everything except a
+    /// ranked mod -- that one is keyed per rank, and still has to look its artwork and name up here.
+    path: String,
     name: Option<String>,
     category: Category,
     quantity: i64,
     mastered: bool,
     masterable: bool,
     max_rank: Option<u32>,
+    rank: Option<u32>,
+    fusion_limit: Option<u32>,
     image_name: Option<String>,
 }
 
@@ -210,6 +232,23 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
             self.catalog,
         )?;
         add_unique_section(&mut entries, raw.mech_suits, Category::Frame, self.catalog)?;
+        add_upgrade_section(&mut entries, raw.raw_upgrades, self.catalog)?;
+        // One row per copy and no `ItemCount`. Copies that carry a rank get a row per rank rather
+        // than joining the unranked stack, because the market prices the ranks separately.
+        add_upgrade_section(&mut entries, raw.upgrades, self.catalog)?;
+        add_stackable_section(
+            &mut entries,
+            raw.fusion_treasures,
+            Category::Resource,
+            1,
+            self.catalog,
+        )?;
+        add_unique_section(
+            &mut entries,
+            raw.crew_ship_weapons,
+            Category::Weapon,
+            self.catalog,
+        )?;
 
         for xp in raw.xp_info {
             validate_item_type(&xp.item_type)?;
@@ -232,7 +271,9 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
             .into_iter()
             .filter(|(_, accumulated)| accumulated.quantity >= 0)
             .map(|(path, accumulated)| {
-                let name = accumulated.name.unwrap_or(display_label(&path)?);
+                let name = accumulated
+                    .name
+                    .unwrap_or(display_label(&accumulated.path)?);
                 let id = ItemId::new(path).map_err(|_| AcquisitionError::SnapshotInvalid)?;
                 let item = CatalogItem::new(id, name, accumulated.category)
                     .map_err(|_| AcquisitionError::SnapshotInvalid)?;
@@ -244,7 +285,11 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
                 };
                 let quantity = u32::try_from(accumulated.quantity)
                     .map_err(|_| AcquisitionError::SnapshotInvalid)?;
-                Ok(InventoryEntry::new(item, quantity).with_mastered(accumulated.mastered))
+                let entry = InventoryEntry::new(item, quantity).with_mastered(accumulated.mastered);
+                Ok(match accumulated.rank {
+                    Some(rank) => entry.with_rank(rank, accumulated.fusion_limit),
+                    None => entry,
+                })
             })
             .collect::<Result<Vec<_>, AcquisitionError>>()?;
         InventorySnapshot::coherent(domain_entries).map_err(|_| AcquisitionError::SnapshotInvalid)
@@ -264,6 +309,69 @@ fn add_misc_section(
         };
         add_stackable_item(output, item, category, 1, catalog)?;
     }
+    Ok(())
+}
+
+/// Mods, arcanes and rivens, whether they carry a rank or not.
+///
+/// Both sections mix the two kinds, and only the path tells them apart -- WFCD files an arcane
+/// under `/Upgrades/CosmeticEnhancers/`. The fallback is what an unresolved path gets: 12 of this
+/// account's 1,011 rows are newer than the cached catalog, and "a mod" is a better guess for them
+/// than "a resource".
+fn add_upgrade_section(
+    output: &mut BTreeMap<String, AccumulatedEntry>,
+    items: Vec<RawEntry>,
+    catalog: Option<&CatalogIndex>,
+) -> Result<(), AcquisitionError> {
+    for item in items {
+        let category = if item.item_type.contains("/CosmeticEnhancers/") {
+            Category::Arcane
+        } else {
+            Category::Mod
+        };
+        match fused_rank(item.upgrade_fingerprint.as_deref()) {
+            0 => add_stackable_item(output, item, category, 1, catalog)?,
+            rank => add_ranked_copy(output, item.item_type, category, rank, catalog)?,
+        }
+    }
+    Ok(())
+}
+
+/// The rank a copy was fused to, from the fingerprint the game stores it in.
+///
+/// The fingerprint is a JSON document inside a JSON string, and an unranked copy omits `lvl`
+/// entirely rather than writing zero. A riven's fingerprint carries its rolled stats in the same
+/// field, so this has to read one key rather than assume a shape.
+fn fused_rank(fingerprint: Option<&str>) -> u32 {
+    fingerprint
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|parsed| parsed.get("lvl")?.as_u64())
+        .and_then(|rank| u32::try_from(rank).ok())
+        .unwrap_or(0)
+}
+
+/// One fused copy, on a row of its own for its rank.
+///
+/// Ranks are not a detail of the same holding: `Serration` sells for 3p unranked and 48p at rank
+/// 10, and the two are separate listings on warframe.market. Summing them onto one row forces one
+/// price onto both, and the only price a merged row can honestly show is the lower.
+fn add_ranked_copy(
+    output: &mut BTreeMap<String, AccumulatedEntry>,
+    path: String,
+    category: Category,
+    rank: u32,
+    catalog: Option<&CatalogIndex>,
+) -> Result<(), AcquisitionError> {
+    validate_item_type(&path)?;
+    let mut resolved = accumulated_entry(&path, category, catalog);
+    resolved.rank = Some(rank);
+    // The key, not the path: the path is what the catalogue is asked about, and several rows share
+    // it. `#` cannot occur in an item path, which `validate_item_type` has already established.
+    let entry = output.entry(format!("{path}#{rank}")).or_insert(resolved);
+    entry.quantity = entry
+        .quantity
+        .checked_add(1)
+        .ok_or(AcquisitionError::SnapshotInvalid)?;
     Ok(())
 }
 
@@ -368,7 +476,12 @@ fn mastery_threshold(category: Category, max_rank: u32) -> Option<u64> {
     let affinity_per_rank_squared = match category {
         Category::Frame | Category::Companion | Category::Vehicle => 1_000_u64,
         Category::Weapon => 500_u64,
-        Category::PrimePart | Category::Relic | Category::Resource | Category::Blueprint => {
+        Category::PrimePart
+        | Category::Relic
+        | Category::Resource
+        | Category::Blueprint
+        | Category::Mod
+        | Category::Arcane => {
             return None;
         }
     };
@@ -384,6 +497,7 @@ fn accumulated_entry(
 ) -> AccumulatedEntry {
     let metadata = catalog.and_then(|catalog| catalog.resolve(path));
     AccumulatedEntry {
+        path: path.to_owned(),
         name: metadata.map(|metadata| metadata.name().to_owned()),
         category: metadata
             .and_then(|metadata| metadata.category())
@@ -392,6 +506,8 @@ fn accumulated_entry(
         mastered: false,
         masterable: metadata.is_some_and(|metadata| metadata.masterable()),
         max_rank: metadata.map(|metadata| metadata.max_rank()),
+        rank: None,
+        fusion_limit: metadata.and_then(|metadata| metadata.fusion_limit()),
         image_name: metadata
             .and_then(|metadata| metadata.image_name())
             .map(str::to_owned),

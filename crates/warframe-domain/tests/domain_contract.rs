@@ -146,6 +146,8 @@ fn category_wire_shape_is_stable_snake_case() {
         (Category::Resource, "resource"),
         (Category::Blueprint, "blueprint"),
         (Category::Vehicle, "vehicle"),
+        (Category::Mod, "mod"),
+        (Category::Arcane, "arcane"),
     ];
 
     for (category, wire) in cases {

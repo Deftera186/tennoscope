@@ -10,6 +10,7 @@ pub struct CatalogMetadata {
     category: Option<Category>,
     masterable: bool,
     max_rank: u32,
+    fusion_limit: Option<u32>,
     image_name: Option<String>,
     ducats: u32,
 }
@@ -29,6 +30,13 @@ impl CatalogMetadata {
 
     pub const fn max_rank(&self) -> u32 {
         self.max_rank
+    }
+
+    /// The highest rank a mod or arcane of this kind can be fused to, where the catalogue publishes
+    /// a believable one. Unrelated to `max_rank`, which is the level cap equipment earns mastery
+    /// against.
+    pub const fn fusion_limit(&self) -> Option<u32> {
+        self.fusion_limit
     }
 
     pub fn image_name(&self) -> Option<&str> {
@@ -95,6 +103,7 @@ impl CatalogIndex {
                     category,
                     masterable: item.masterable && category.is_some_and(is_equipment),
                     max_rank: catalog_max_rank(&item.name),
+                    fusion_limit: believable_fusion_limit(item.fusion_limit),
                     image_name: validated_image_name(item.image_name.as_deref())?,
                     ducats: item.ducats.unwrap_or(0),
                 },
@@ -125,6 +134,7 @@ impl CatalogIndex {
                         category: Some(Category::PrimePart),
                         masterable: false,
                         max_rank: 0,
+                        fusion_limit: None,
                         image_name: validated_image_name(component.image_name.as_deref())?,
                         ducats: component.ducats.unwrap_or(0),
                     },
@@ -203,6 +213,9 @@ struct WfcdItem {
     image_name: Option<String>,
     #[serde(default)]
     ducats: Option<u32>,
+    /// The mod's own rank ceiling. Not `masterable` equipment's level cap.
+    #[serde(default)]
+    fusion_limit: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -224,7 +237,15 @@ fn classify_item(item: &WfcdItem) -> Option<Category> {
     let category = item.category.to_ascii_lowercase();
     let item_type = item.item_type.to_ascii_lowercase();
     let path = item.unique_name.as_str();
-    if item_type == "k-drive component" {
+    // Before anything that reads the path. A mod is named after what it fits, and lives with it:
+    // Trinity's Abating Link is `/Lotus/Powersuits/Trinity/LinkAugmentCard` and a companion precept
+    // sits under `/Types/Friendly/Pets/`. Classified by path first, 21 of this account's 674 mod
+    // stacks came out as Companion and the augments as Frame.
+    if category == "mods" {
+        Some(Category::Mod)
+    } else if category == "arcanes" {
+        Some(Category::Arcane)
+    } else if item_type == "k-drive component" {
         Some(Category::Vehicle)
     } else if category.contains("warframe")
         || matches!(item_type.as_str(), "warframe" | "archwing" | "necramech")
@@ -275,6 +296,20 @@ fn is_equipment(category: Category) -> bool {
         category,
         Category::Frame | Category::Weapon | Category::Companion | Category::Vehicle
     )
+}
+
+/// The highest rank a mod actually has is 10 -- the game's own ceiling, and the only ranks
+/// warframe.market quotes are 0 and one of 3, 5 or 10.
+const HIGHEST_REAL_FUSION_LIMIT: u32 = 10;
+
+/// A published fusion limit, or nothing when the catalogue's number cannot be a rank.
+///
+/// Every riven placeholder carries `fusionLimit: 515`. Taken at face value a rank-3 riven -- which
+/// is a maxed riven -- reads as barely started, and it can never reach its own ceiling, so it would
+/// sit forever in the "partially ranked, no market quote" bucket. Dropping the value says the
+/// ceiling is unknown, which is the truth and is what the pricing rule needs to hear.
+fn believable_fusion_limit(published: Option<u32>) -> Option<u32> {
+    published.filter(|limit| *limit <= HIGHEST_REAL_FUSION_LIMIT)
 }
 
 fn catalog_max_rank(name: &str) -> u32 {

@@ -172,6 +172,146 @@ fn incomplete_truncated_or_structurally_wrong_payload_is_rejected() {
 }
 
 #[test]
+fn mods_arcanes_sculptures_and_armaments_are_tracked_and_each_rank_is_its_own_row() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["RawUpgrades"] = serde_json::json!([
+        {"ItemType":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod","ItemCount":3,
+         "LastAdded":{"$oid":"6889f4a4a1b2c3d4e5f60718"}},
+        {"ItemType":"/Lotus/Upgrades/CosmeticEnhancers/Melee/ArcaneAvenger","ItemCount":2},
+        {"ItemType":"/Lotus/Powersuits/Trinity/LinkAugmentCard","ItemCount":1}
+    ]);
+    payload["Upgrades"] = serde_json::json!([
+        {"ItemId":{"$oid":"6889f4a4a1b2c3d4e5f60719"},
+         "ItemType":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod",
+         "UpgradeFingerprint":"{\"lvl\":5}"},
+        {"ItemId":{"$oid":"6889f4a4a1b2c3d4e5f6071c"},
+         "ItemType":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod",
+         "UpgradeFingerprint":"{\"lvl\":5}"},
+        {"ItemId":{"$oid":"6889f4a4a1b2c3d4e5f6071d"},
+         "ItemType":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod",
+         "UpgradeFingerprint":"{\"lvl\":10}"},
+        {"ItemId":{"$oid":"6889f4a4a1b2c3d4e5f6071a"},
+         "ItemType":"/Lotus/Upgrades/Mods/Randomized/LotusRifleRandomModRare",
+         "UpgradeFingerprint":"{\"compat\":\"/Lotus/Weapons/Tenno/Rifle/Braton\"}"}
+    ]);
+    payload["FusionTreasures"] = serde_json::json!([{"ItemType":"/Lotus/Types/Items/FusionTreasures/OroFusexF",
+                            "ItemCount":2,"Sockets":1}]);
+    payload["CrewShipWeapons"] = serde_json::json!([{"ItemId":{"$oid":"6889f4a4a1b2c3d4e5f6071b"},
+                            "ItemType":"/Lotus/Weapons/CrewShip/Turret/Zetki/ZetkiPhoton",
+                            "UpgradeFingerprint":"{}","UpgradeType":"","UpgradeVer":101}]);
+
+    let snapshot = InventoryJsonDecoder::default()
+        .decode(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+    let by_id = |id: &str| {
+        snapshot
+            .entries()
+            .iter()
+            .find(|entry| entry.item.id.as_str() == id)
+            .unwrap_or_else(|| panic!("no entry for {id}"))
+            .clone()
+    };
+
+    // Serration is held at three ranks, so it is three holdings worth three different prices --
+    // 3p, and whatever a rank-5 and a rank-10 copy fetch. Summed onto one row, the only price the
+    // row could honestly show is the unranked one, and the ranked copies would be given away.
+    let unranked = by_id("/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod");
+    assert_eq!(unranked.quantity, 3);
+    assert_eq!(unranked.rank, None);
+    assert_eq!(unranked.item.category, Category::Mod);
+    assert!(!unranked.mastered);
+
+    let rank_five = by_id("/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod#5");
+    assert_eq!(
+        rank_five.quantity, 2,
+        "two copies at the same rank share a row"
+    );
+    assert_eq!(rank_five.rank, Some(5));
+    assert_eq!(rank_five.item.name, "Weapon Damage Amount Mod");
+    assert_eq!(rank_five.item.category, Category::Mod);
+
+    assert_eq!(
+        by_id("/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod#10").rank,
+        Some(10)
+    );
+
+    // A riven's fingerprint carries rolled stats and no `lvl`, which is rank 0, not a parse failure.
+    let riven = by_id("/Lotus/Upgrades/Mods/Randomized/LotusRifleRandomModRare");
+    assert_eq!(riven.quantity, 1);
+    assert_eq!(riven.rank, None);
+
+    assert_eq!(
+        by_id("/Lotus/Upgrades/CosmeticEnhancers/Melee/ArcaneAvenger")
+            .item
+            .category,
+        Category::Arcane
+    );
+
+    // An augment mod lives at its Warframe's own path. Categorised by that path it would read as a
+    // Frame the player has never owned.
+    let augment = by_id("/Lotus/Powersuits/Trinity/LinkAugmentCard");
+    assert_eq!(augment.item.category, Category::Mod);
+    assert_eq!(augment.quantity, 1);
+
+    let sculpture = by_id("/Lotus/Types/Items/FusionTreasures/OroFusexF");
+    assert_eq!(sculpture.quantity, 2);
+    assert_eq!(sculpture.item.category, Category::Resource);
+
+    assert_eq!(
+        by_id("/Lotus/Weapons/CrewShip/Turret/Zetki/ZetkiPhoton")
+            .item
+            .category,
+        Category::Weapon
+    );
+}
+
+/// The ceiling decides which of the market's two quotes a copy is owed, so it has to come from the
+/// catalogue -- and a riven's published ceiling is a sentinel that has to be refused.
+#[test]
+fn ranked_copies_carry_the_ceiling_the_catalogue_can_vouch_for() {
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[
+          {"uniqueName":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod","name":"Serration","type":"Rifle Mod","category":"Mods","masterable":false,"fusionLimit":10},
+          {"uniqueName":"/Lotus/Upgrades/Mods/Randomized/LotusRifleRandomModRare","name":"Rifle Riven Mod","type":"Rifle Mod","category":"Mods","masterable":false,"fusionLimit":515}
+        ]"#,
+    )
+    .unwrap();
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["Upgrades"] = serde_json::json!([
+        {"ItemType":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod","UpgradeFingerprint":"{\"lvl\":10}"},
+        {"ItemType":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod","UpgradeFingerprint":"{\"lvl\":8}"},
+        {"ItemType":"/Lotus/Upgrades/Mods/Randomized/LotusRifleRandomModRare","UpgradeFingerprint":"{\"lvl\":3}"}
+    ]);
+    let snapshot = InventoryJsonDecoder::with_catalog(&catalog)
+        .decode(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+    let by_id = |id: &str| {
+        snapshot
+            .entries()
+            .iter()
+            .find(|entry| entry.item.id.as_str() == id)
+            .unwrap_or_else(|| panic!("no entry for {id}"))
+    };
+
+    let maxed = by_id("/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod#10");
+    assert_eq!(maxed.max_rank, Some(10));
+    assert_eq!(maxed.at_max_rank(), Some(true));
+    assert_eq!(maxed.item.name, "Serration");
+
+    let partial = by_id("/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod#8");
+    assert_eq!(partial.at_max_rank(), Some(false));
+
+    // 515 is not a rank. Believed, a maxed rank-3 riven can never reach its ceiling and is quoted
+    // forever as a card somebody abandoned part-way up.
+    let riven = by_id("/Lotus/Upgrades/Mods/Randomized/LotusRifleRandomModRare#3");
+    assert_eq!(riven.max_rank, None);
+    assert_eq!(riven.at_max_rank(), None);
+}
+
+/// The four sections above were added to the decoder after the others, so an account holding
+/// nothing in one of them must still sync. Only the sections that were always authoritative are
+/// allowed to reject a snapshot by their absence.
+#[test]
 fn every_authoritative_section_and_sync_marker_is_required() {
     let required = [
         "LastInventorySync",

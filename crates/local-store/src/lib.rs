@@ -9,7 +9,7 @@ use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot, ItemId,
 };
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, Error)]
@@ -105,7 +105,11 @@ impl SqliteStore {
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match version {
             0 => initialize_schema(&mut connection)?,
-            1 => migrate_v1_to_v2(&mut connection)?,
+            1 => {
+                migrate_v1_to_v2(&mut connection)?;
+                migrate_v2_to_v3(&mut connection)?;
+            }
+            2 => migrate_v2_to_v3(&mut connection)?,
             SCHEMA_VERSION => validate_schema(&connection)?,
             other => return Err(StoreError::UnsupportedSchemaVersion(other)),
         }
@@ -134,8 +138,9 @@ impl SqliteStore {
         after_delete()?;
         {
             let mut statement = transaction.prepare(
-                "INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO inventory \
+                 (item_id, name, category, quantity, mastered, image_name, rank, max_rank) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
             for entry in snapshot.entries() {
                 let category = encode_category(entry.item.category)?;
@@ -146,6 +151,8 @@ impl SqliteStore {
                     i64::from(entry.quantity),
                     entry.mastered,
                     entry.item.image_name,
+                    entry.rank,
+                    entry.max_rank,
                 ])?;
             }
         }
@@ -162,7 +169,8 @@ impl SqliteStore {
 
     pub fn load_collection(&self) -> Result<Collection, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT item_id, name, category, quantity, mastered, image_name FROM inventory ORDER BY item_id",
+            "SELECT item_id, name, category, quantity, mastered, image_name, rank, max_rank \
+             FROM inventory ORDER BY item_id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -172,44 +180,54 @@ impl SqliteStore {
                 row.get::<_, Value>(3)?,
                 row.get::<_, Value>(4)?,
                 row.get::<_, Value>(5)?,
+                row.get::<_, Value>(6)?,
+                row.get::<_, Value>(7)?,
             ))
         })?;
         let raw_entries = rows.collect::<Result<Vec<_>, _>>()?;
         let entries = raw_entries
             .into_iter()
-            .map(|(id, name, category, quantity, mastered, image_name)| {
-                let id = expect_text(id, "<unknown>", "item_id")?;
-                let name = expect_text(name, &id, "name")?;
-                let category = expect_text(category, &id, "category")?;
-                let quantity = expect_integer(quantity, &id, "quantity")?;
-                let mastered = expect_integer(mastered, &id, "mastered")?;
-                let image_name = expect_optional_text(image_name, &id, "image_name")?;
-                let category = decode_category(&id, category)?;
-                let quantity =
-                    u32::try_from(quantity).map_err(|error| corrupt_row(&id, "quantity", error))?;
-                let mastered = match mastered {
-                    0 => false,
-                    1 => true,
-                    value => {
-                        return Err(corrupt_row(
-                            &id,
-                            "mastered",
-                            format!("expected 0 or 1, found {value}"),
-                        ));
-                    }
-                };
-                let item_id =
-                    ItemId::new(id.clone()).map_err(|error| corrupt_row(&id, "item_id", error))?;
-                let item = CatalogItem::new(item_id, name, category)
-                    .map_err(|error| corrupt_row(&id, "name", error))?;
-                let item = match image_name {
-                    Some(image_name) => item
-                        .with_image_name(image_name)
-                        .map_err(|error| corrupt_row(&id, "image_name", error))?,
-                    None => item,
-                };
-                Ok(InventoryEntry::new(item, quantity).with_mastered(mastered))
-            })
+            .map(
+                |(id, name, category, quantity, mastered, image_name, rank, max_rank)| {
+                    let id = expect_text(id, "<unknown>", "item_id")?;
+                    let name = expect_text(name, &id, "name")?;
+                    let category = expect_text(category, &id, "category")?;
+                    let quantity = expect_integer(quantity, &id, "quantity")?;
+                    let mastered = expect_integer(mastered, &id, "mastered")?;
+                    let image_name = expect_optional_text(image_name, &id, "image_name")?;
+                    let rank = expect_optional_rank(rank, &id, "rank")?;
+                    let max_rank = expect_optional_rank(max_rank, &id, "max_rank")?;
+                    let category = decode_category(&id, category)?;
+                    let quantity = u32::try_from(quantity)
+                        .map_err(|error| corrupt_row(&id, "quantity", error))?;
+                    let mastered = match mastered {
+                        0 => false,
+                        1 => true,
+                        value => {
+                            return Err(corrupt_row(
+                                &id,
+                                "mastered",
+                                format!("expected 0 or 1, found {value}"),
+                            ));
+                        }
+                    };
+                    let item_id = ItemId::new(id.clone())
+                        .map_err(|error| corrupt_row(&id, "item_id", error))?;
+                    let item = CatalogItem::new(item_id, name, category)
+                        .map_err(|error| corrupt_row(&id, "name", error))?;
+                    let item = match image_name {
+                        Some(image_name) => item
+                            .with_image_name(image_name)
+                            .map_err(|error| corrupt_row(&id, "image_name", error))?,
+                        None => item,
+                    };
+                    let entry = InventoryEntry::new(item, quantity).with_mastered(mastered);
+                    Ok(match rank {
+                        Some(rank) => entry.with_rank(rank, max_rank),
+                        None => entry,
+                    })
+                },
+            )
             .collect::<Result<Vec<_>, StoreError>>()?;
         let snapshot = InventorySnapshot::coherent(entries)?;
         let mut collection = Collection::default();
@@ -283,9 +301,30 @@ fn initialize_schema(connection: &mut Connection) -> Result<(), StoreError> {
     Ok(())
 }
 
+/// Adds `image_name`. Leaves the version at 2 rather than at `SCHEMA_VERSION`, because the v3
+/// migration runs straight after it and is what finishes the job.
 fn migrate_v1_to_v2(connection: &mut Connection) -> Result<(), StoreError> {
     let transaction = connection.transaction()?;
     transaction.execute("ALTER TABLE inventory ADD COLUMN image_name TEXT", [])?;
+    transaction.pragma_update(None, "user_version", 2)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Adds the rank a mod or arcane was fused to.
+///
+/// Every existing row is unranked, which is both the honest answer for a database that never
+/// recorded one and the state the next sync overwrites anyway.
+fn migrate_v2_to_v3(connection: &mut Connection) -> Result<(), StoreError> {
+    let transaction = connection.transaction()?;
+    transaction.execute(
+        "ALTER TABLE inventory ADD COLUMN rank INTEGER CHECK (rank IS NULL OR rank >= 0)",
+        [],
+    )?;
+    transaction.execute(
+        "ALTER TABLE inventory ADD COLUMN max_rank INTEGER CHECK (max_rank IS NULL OR max_rank >= 0)",
+        [],
+    )?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     validate_schema(&transaction)?;
     transaction.commit()?;
@@ -311,6 +350,8 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
             ("quantity", "INTEGER", true, 0),
             ("mastered", "INTEGER", true, 0),
             ("image_name", "TEXT", false, 0),
+            ("rank", "INTEGER", false, 0),
+            ("max_rank", "INTEGER", false, 0),
         ],
     )?;
     validate_table(
@@ -567,6 +608,25 @@ fn expect_text(value: Value, item_id: &str, field: &'static str) -> Result<Strin
     }
 }
 
+/// A stored rank, or nothing for the unranked stack and for everything that cannot be ranked.
+fn expect_optional_rank(
+    value: Value,
+    item_id: &str,
+    field: &'static str,
+) -> Result<Option<u32>, StoreError> {
+    match value {
+        Value::Null => Ok(None),
+        Value::Integer(value) => u32::try_from(value)
+            .map(Some)
+            .map_err(|error| corrupt_row(item_id, field, error)),
+        other => Err(corrupt_row(
+            item_id,
+            field,
+            format!("expected INTEGER or NULL, found {:?}", other.data_type()),
+        )),
+    }
+}
+
 fn expect_optional_text(
     value: Value,
     item_id: &str,
@@ -681,7 +741,7 @@ mod tests {
         store
             .connection
             .execute(
-                "INSERT INTO inventory VALUES ('bad', 'Bad', 'unknown', 1, 0, NULL)",
+                "INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name) VALUES ('bad', 'Bad', 'unknown', 1, 0, NULL)",
                 [],
             )
             .unwrap();
@@ -696,7 +756,7 @@ mod tests {
         store
             .connection
             .execute(
-                "INSERT INTO inventory VALUES ('huge', 'Huge', 'weapon', ?1, 0, NULL)",
+                "INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name) VALUES ('huge', 'Huge', 'weapon', ?1, 0, NULL)",
                 [i64::MAX],
             )
             .unwrap();
@@ -712,7 +772,7 @@ mod tests {
             store
                 .connection
                 .execute(
-                    "INSERT INTO inventory VALUES (?1, ?2, 'weapon', 1, 0, NULL)",
+                    "INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name) VALUES (?1, ?2, 'weapon', 1, 0, NULL)",
                     params![id, name],
                 )
                 .unwrap();
@@ -732,7 +792,7 @@ mod tests {
             store
                 .connection
                 .execute(
-                    "INSERT INTO inventory VALUES ('lex', 'Lex', 'weapon', 1, ?1, NULL)",
+                    "INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name) VALUES ('lex', 'Lex', 'weapon', 1, ?1, NULL)",
                     [value],
                 )
                 .unwrap();
@@ -748,11 +808,11 @@ mod tests {
         for (column, sql) in [
             (
                 "quantity",
-                "INSERT INTO inventory VALUES ('lex', 'Lex', 'weapon', X'01', 0, NULL)",
+                "INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name) VALUES ('lex', 'Lex', 'weapon', X'01', 0, NULL)",
             ),
             (
                 "name",
-                "INSERT INTO inventory VALUES ('lex', X'01', 'weapon', 1, 0, NULL)",
+                "INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name) VALUES ('lex', X'01', 'weapon', 1, 0, NULL)",
             ),
         ] {
             let store = SqliteStore::in_memory().unwrap();

@@ -9,6 +9,19 @@ pub struct InventoryEntry {
     pub item: CatalogItem,
     pub quantity: u32,
     pub mastered: bool,
+    /// The rank every copy on this entry carries, for the things that have one: mods, arcanes and
+    /// rivens. `None` for everything else and for the unranked stack, which is the default state
+    /// and the tier the market quotes by default.
+    ///
+    /// A rank is not cosmetic. `Serration` sells for 3p at rank 0 and 48p at rank 10, so copies at
+    /// different ranks are different holdings and get an entry each -- which is why this is on the
+    /// entry rather than on the catalog item, whose identity is the same card either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rank: Option<u32>,
+    /// The highest rank this card can reach, where it is known. Absent for a riven, whose published
+    /// limit is a sentinel rather than a rank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_rank: Option<u32>,
 }
 
 impl InventoryEntry {
@@ -17,12 +30,27 @@ impl InventoryEntry {
             item,
             quantity,
             mastered: false,
+            rank: None,
+            max_rank: None,
         }
     }
 
     pub fn with_mastered(mut self, mastered: bool) -> Self {
         self.mastered = mastered;
         self
+    }
+
+    pub fn with_rank(mut self, rank: u32, max_rank: Option<u32>) -> Self {
+        self.rank = Some(rank);
+        self.max_rank = max_rank;
+        self
+    }
+
+    /// Whether these copies are fully ranked. `None` when the ceiling is unknown, which is not the
+    /// same answer as "no" and must not be collapsed into one: an unknown ceiling means the market
+    /// quote for a maxed copy cannot be claimed for this one.
+    pub fn at_max_rank(&self) -> Option<bool> {
+        Some(self.rank.unwrap_or(0) >= self.max_rank?)
     }
 }
 

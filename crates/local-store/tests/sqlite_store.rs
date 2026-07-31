@@ -174,3 +174,90 @@ fn latest_snapshot_metadata_round_trips_and_empty_store_has_none() {
 
     assert_eq!(store.latest_snapshot_meta().unwrap(), Some(meta));
 }
+
+/// A rank has to survive the database or the row split means nothing: both rows come back
+/// unranked, resolve to the same market listing, and are handed the same price -- which is exactly
+/// what a maxed `Arcane Reaper` showing an unranked one's 15p looked like.
+#[test]
+fn a_ranked_row_keeps_its_rank_and_ceiling_across_a_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("store.sqlite3");
+    let mut store = SqliteStore::open(&path).unwrap();
+    store
+        .replace_collection(
+            &snapshot(vec![
+                entry("serration", "Serration", Category::Mod, 3, false),
+                entry("serration#10", "Serration", Category::Mod, 1, false).with_rank(10, Some(10)),
+                // A riven's ceiling is unpublished, and an absent one must stay absent rather than
+                // come back as zero, which would read as a maxed card.
+                entry("riven#3", "Rifle Riven Mod", Category::Mod, 1, false).with_rank(3, None),
+            ]),
+            &SnapshotMeta::fake("build").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = SqliteStore::open(&path).unwrap();
+    let collection = reopened.load_collection().unwrap();
+    let ranks: Vec<_> = collection
+        .entries()
+        .map(|entry| {
+            (
+                entry.item.id.as_str().to_owned(),
+                entry.rank,
+                entry.max_rank,
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        ranks,
+        vec![
+            ("riven#3".to_owned(), Some(3), None),
+            ("serration".to_owned(), None, None),
+            ("serration#10".to_owned(), Some(10), Some(10)),
+        ]
+    );
+}
+
+/// A database written before ranks existed must open and keep its rows. Refusing it would throw
+/// away a collection over a column, and rebuilding it costs a game session.
+#[test]
+fn a_database_from_before_ranks_migrates_with_its_rows_intact() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("store.sqlite3");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE inventory (
+                    item_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                    mastered INTEGER NOT NULL CHECK (mastered IN (0, 1)),
+                    image_name TEXT
+                 );
+                 CREATE TABLE snapshot_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    observed_at TEXT NOT NULL CHECK (length(trim(observed_at)) > 0),
+                    game_build TEXT NOT NULL CHECK (length(trim(game_build)) > 0),
+                    source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+                    item_count INTEGER NOT NULL CHECK (item_count >= 0)
+                 );
+                 INSERT INTO inventory (item_id, name, category, quantity, mastered, image_name)
+                 VALUES ('paris', 'Paris', 'weapon', 2, 1, NULL);
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+    }
+
+    let store = SqliteStore::open(&path).unwrap();
+    let collection = store.load_collection().unwrap();
+    let entries: Vec<_> = collection
+        .entries()
+        .map(|entry| (entry.item.name.clone(), entry.quantity, entry.rank))
+        .collect();
+
+    assert_eq!(entries, vec![("Paris".to_owned(), 2, None)]);
+}
