@@ -19,6 +19,11 @@ pub const API_V2: &str = "https://api.warframe.market/v2";
 mod auth;
 pub use auth::{MarketToken, renewed_token, sign_in, verify_token};
 
+mod credential_store;
+pub use credential_store::{
+    CredentialBacking, CredentialStore, KEYRING_ENTRY, KEYRING_SERVICE, KeyringStore,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Method {
     Get,
