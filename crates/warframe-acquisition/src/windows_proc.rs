@@ -95,18 +95,29 @@ impl ProcessDiscovery for WindowsProc {
             .map(|process| (process.pid().as_u32(), process.start_time()))
             .collect::<Vec<_>>();
 
-        // Oldest first, then lowest PID: a launcher relaunch can leave the dying instance visible
-        // for a moment, and the surviving one is the one that has been up longest.
-        candidates.sort_unstable_by_key(|&(pid, start_time)| (Reverse(start_time), pid));
-        let selected = candidates
-            .first()
-            .map(|&(pid, start_time)| GameProcess::identified(pid, start_time));
+        let selected = select_candidate(&mut candidates);
         self.handles
             .lock()
             .map_err(|_| AcquisitionError::ProcessDiscoveryFailed)?
             .retain(|process, _| Some(*process) == selected);
         Ok(selected)
     }
+}
+
+/// Pick the live game out of the processes sharing its image name.
+///
+/// Newest first, then lowest PID: a launcher relaunch leaves the dying instance visible for a
+/// moment beside the one it just started, and the survivor is the new one -- the old one is on its
+/// way out. `start_time` is seconds since the epoch here, so newest is largest, which is what
+/// `Reverse` selects. PID breaks the tie when both start within the same second.
+///
+/// Split out from `discover` so the ordering can be asserted without a running game; it is the one
+/// part of discovery that has a wrong answer rather than an empty one.
+fn select_candidate(candidates: &mut [(u32, u64)]) -> Option<GameProcess> {
+    candidates.sort_unstable_by_key(|&(pid, start_time)| (Reverse(start_time), pid));
+    candidates
+        .first()
+        .map(|&(pid, start_time)| GameProcess::identified(pid, start_time))
 }
 
 impl MemoryReader for WindowsProc {
@@ -343,6 +354,40 @@ mod tests {
             "an unreadable region is not worth handing to the scanner"
         );
         assert!(readable_region(0x1000, 0, true, true, false).is_none());
+    }
+
+    /// A relaunch is the case this ordering exists for: the launcher starts a new game while the
+    /// old one is still winding down, so both carry the image name for a moment. Reading the dying
+    /// instance means every later poll fails against a process on its way out, so the newest wins.
+    ///
+    /// The comment here used to say "oldest first", which is the opposite of what the sort does --
+    /// nothing asserted it either way, so the two could disagree indefinitely.
+    #[test]
+    fn a_relaunch_is_read_from_the_new_process_rather_than_the_dying_one() {
+        // start_time is seconds since the epoch on this backend, so the newer game is the larger.
+        let dying = (100_u32, 1_785_530_000_u64);
+        let relaunched = (200_u32, 1_785_531_000_u64);
+        let mut candidates = [dying, relaunched];
+        assert_eq!(
+            select_candidate(&mut candidates).map(GameProcess::pid),
+            Some(relaunched.0),
+            "the surviving game is the one that started last"
+        );
+
+        // Same second: the tie has to break somewhere, and it has to break the same way every poll
+        // or the reader alternates between two processes.
+        let mut tied = [(300_u32, 1_785_531_000_u64), (200_u32, 1_785_531_000_u64)];
+        assert_eq!(
+            select_candidate(&mut tied).map(GameProcess::pid),
+            Some(200),
+            "a tie must resolve deterministically"
+        );
+
+        assert_eq!(
+            select_candidate(&mut []),
+            None,
+            "no game is an empty result, not a failure"
+        );
     }
 
     #[test]

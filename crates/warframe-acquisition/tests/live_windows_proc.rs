@@ -65,15 +65,23 @@ fn live_recent_writes_degrade_to_a_full_rescan() {
 
     let started = std::time::Instant::now();
     let recent = adapter.recently_written_regions(&process).unwrap();
+    let readable = adapter.readable_regions(&process).unwrap();
     println!(
         "rescan_regions={} rescan_ms={}",
         recent.len(),
         started.elapsed().as_millis()
     );
-    assert_eq!(
+    // Not an equality: the two enumerations are seconds apart against a running game, which maps
+    // and unmaps as it goes, so the counts drift by a region or two in either direction and an
+    // exact comparison fails at random. What has to hold is that the rescan is a *full* one -- a
+    // degraded write-tracker that returned a handful of regions, or none, would read as "the game
+    // barely wrote anything" and the scanner would skip the memory it needs.
+    let drift = recent.len().abs_diff(readable.len());
+    assert!(
+        drift * 100 < readable.len().max(1),
+        "a full rescan must cover every readable region, got {} against {} readable",
         recent.len(),
-        adapter.readable_regions(&process).unwrap().len(),
-        "every readable region must be rescanned when write tracking is unavailable"
+        readable.len()
     );
     assert!(
         adapter
