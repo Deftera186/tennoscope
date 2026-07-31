@@ -4,7 +4,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{Read, Seek, SeekFrom},
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -19,11 +18,19 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CatalogIndex, CollectionPriceCache, GameProcess, InventoryAcquirer,
-    InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, ProcessDiscovery,
-    RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner,
-    WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current, latest_dump,
+    InventoryHttpTransport, MarketPriceCache, MemoryReader, ProcessDiscovery, RelicCatalogCache,
+    RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner, WarmOutcome,
+    WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current, latest_dump,
 };
 use warframe_domain::RewardCandidate;
+
+/// The platform's process-memory backend. Both sides implement `MemoryReader` and
+/// `ProcessDiscovery`, which is the seam everything below the app already works through -- naming
+/// the concrete type once here is what keeps `cfg` out of the call sites.
+#[cfg(unix)]
+use warframe_acquisition::LinuxProc as GameMemory;
+#[cfg(windows)]
+use warframe_acquisition::WindowsProc as GameMemory;
 
 /// How long to keep re-reading the reward screen before giving up. The cards appear a few
 /// milliseconds after the log announces them and the screen lives for fifteen seconds, so this is
@@ -353,7 +360,7 @@ impl AcquisitionPort for ProductionAcquisition {
                 Ok(catalog) => catalog,
                 Err(_) => return InventoryRefreshOutcome::catalog_failed(),
             };
-        let procfs = LinuxProc::new();
+        let procfs = GameMemory::new();
         let transport = match InventoryHttpTransport::new() {
             Ok(transport) => transport,
             Err(error) => {
@@ -480,7 +487,7 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
 }
 
 fn monitor_game(shared: SharedRuntime, app: AppHandle) {
-    let procfs = LinuxProc::new();
+    let procfs = GameMemory::new();
     let mut machine = MonitorMachine::new(15);
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
@@ -684,7 +691,7 @@ fn load_relic_catalog(app_data: &Path) -> Option<RelicRewardIndex> {
 fn handle_reward_event(
     event: RewardLogEvent,
     process: Option<GameProcess>,
-    procfs: &LinuxProc,
+    procfs: &GameMemory,
     catalog: Option<&CatalogIndex>,
     relic_catalog: Option<&RelicRewardIndex>,
     reward_catalog: &[RewardCatalogEntry],
@@ -1149,7 +1156,7 @@ fn spawn_player_record_scan(
     let expected_generation = generation.load(Ordering::Acquire);
     std::thread::spawn(move || {
         let started = Instant::now();
-        let procfs = LinuxProc::new();
+        let procfs = GameMemory::new();
         let scanner =
             RewardMemoryScanner::new(256 * 1024, 768 * 1024 * 1024, Duration::from_millis(1_500));
         let resolution = scan_player_record_until_ready(
@@ -1461,6 +1468,29 @@ fn apply_reward_observations(
     let _ = runtime.core.apply_reward_candidates(candidates);
 }
 
+/// A string that stays the same while the log grows and changes when the log is replaced.
+///
+/// The monitor resumes at a byte offset, so it has to be able to tell "the same file, longer" from
+/// "a new file that happens to be at the same path" -- getting that wrong either re-reads the whole
+/// log or silently skips the start of a new one.
+///
+/// This was `dev:ino`, which is exactly the right answer and does not exist on Windows. Creation
+/// time is the portable stand-in: the game rotates `EE.log` by writing a new file, which gets a new
+/// creation time, while appending to the open one does not. Where the platform has no creation time
+/// the path alone still distinguishes logs; only rotation-in-place goes unnoticed, and the length
+/// check the caller already does catches the truncation that comes with it.
+pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
+    let created = metadata
+        .created()
+        .ok()
+        .and_then(|created| created.duration_since(UNIX_EPOCH).ok())
+        .map(|since| since.as_nanos());
+    match created {
+        Some(created) => format!("{}:{created}", path.display()),
+        None => path.display().to_string(),
+    }
+}
+
 fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (MonitorInput, Vec<u8>) {
     let Some(path) = inventory_log_path(pid) else {
         return (MonitorInput::running(now, pid, None), Vec::new());
@@ -1469,7 +1499,7 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
         Ok(metadata) => metadata,
         Err(_) => return (MonitorInput::running_with_log_error(now, pid), Vec::new()),
     };
-    let identity = format!("{}:{}", metadata.dev(), metadata.ino());
+    let identity = log_identity(&path, &metadata);
     if machine.process_pid() != Some(pid) {
         return (
             MonitorInput::running(
