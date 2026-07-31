@@ -17,6 +17,8 @@ use std::{
     process::Command,
 };
 
+use image::{DynamicImage, GenericImageView, GrayImage};
+
 use warframe_acquisition::RewardCatalogEntry;
 
 use crate::{overlay_window::WindowRect, reward_source::VisualRewardSource};
@@ -350,10 +352,11 @@ fn image_size(path: &Path) -> Result<(u32, u32), &'static str> {
 /// `-threshold` to drop everything dimmer than the text, and `-negate` because tesseract is trained
 /// on dark-on-light.
 ///
-/// 74% is the middle of a plateau, not a tuned peak. Measured over twelve labelled cards from three
-/// captured screens, every cutoff from 70% to 78% reads all twelve exactly; plain thresholding
-/// without `-normalize` only manages that at isolated values like 78% and 88% and drops to 0.89 in
-/// between, which is a spike to fall off rather than a setting to rely on.
+/// 74% is the middle of a plateau, not a tuned peak, and the plateau was re-swept against this Rust
+/// pipeline rather than inherited from the ImageMagick one it replaced. Over the eleven labelled
+/// fixture cards: 66% and below garbles a card, 70% and 74% read every card exactly, 78% drops
+/// `Caliban Prime Chassis Blueprint` to 0.96 and 82% drops `Bronco Prime Receiver` to 0.89. So the
+/// usable band is 70-78% and 74% sits in it with room on both sides.
 fn read_region(
     image: &Path,
     x: u32,
@@ -361,21 +364,107 @@ fn read_region(
     width: u32,
     height: u32,
 ) -> Result<(String, PathBuf), &'static str> {
+    let source = image::open(image).map_err(|_| "capture could not be decoded")?;
     let crop = scratch_file("reward-crop", "png");
-    let cropped = Command::new("magick")
-        .arg(image)
-        .args(["-crop", &format!("{width}x{height}+{x}+{y}"), "+repage"])
-        .args(["-colorspace", "gray", "-normalize"])
-        .args(["-threshold", "74%", "-negate", "-resize", "300%"])
-        .arg(&crop)
-        .status()
-        .map_err(|_| "magick is not available")?;
-    if !cropped.success() {
-        let _ = std::fs::remove_file(&crop);
-        return Err("could not crop the reward card");
-    }
+    prepare_crop(&source, x, y, width, height)
+        .save(&crop)
+        .map_err(|_| "could not write the reward card crop")?;
     let text = ocr_crop(&crop)?;
     Ok((text, crop))
+}
+
+/// Crop, greyscale, normalize, threshold, invert and upscale one card title.
+///
+/// Split from the file handling so the pipeline can be driven from pixels in a test rather than
+/// only through a temp file.
+pub fn prepare_crop(source: &DynamicImage, x: u32, y: u32, width: u32, height: u32) -> GrayImage {
+    let cropped = source.view(x, y, width, height).to_image();
+    let grey = cropped
+        .pixels()
+        .map(|pixel| luma(pixel[0], pixel[1], pixel[2]))
+        .collect::<Vec<_>>();
+    let prepared = threshold_inverted(&normalize_contrast(&grey));
+    let prepared = GrayImage::from_raw(width, height, prepared)
+        .unwrap_or_else(|| GrayImage::new(width, height));
+    // 300%, matching what `magick -resize` did: tesseract reads a 58px title band poorly and a
+    // 174px one exactly. ImageMagick's default filter is Mitchell, which `image` does not offer, so
+    // the replacement was swept over the eleven labelled fixture cards rather than guessed at:
+    // Nearest reads `Burston Prime Stock` at 0.89 and Triangle at 0.94, while CatmullRom and
+    // Lanczos3 both read every card exactly bar the wrapped screen's known speck at 0.954. Either
+    // of the last two would do; CatmullRom is the cheaper kernel.
+    image::imageops::resize(
+        &prepared,
+        width * 3,
+        height * 3,
+        image::imageops::FilterType::CatmullRom,
+    )
+}
+
+/// ImageMagick 7's `-colorspace gray`: a Rec.709 weighted sum of the *gamma-encoded* bytes.
+///
+/// `image`'s own `to_luma8` is Rec.601 and weights red at 76 rather than 54. On near-white text
+/// over dark card art that difference is large enough to move pixels across the threshold, so the
+/// weighting is spelled out here rather than taken from the crate.
+pub fn luma(red: u8, green: u8, blue: u8) -> u8 {
+    let value = 0.212_656 * red as f32 + 0.715_158 * green as f32 + 0.072_186 * blue as f32;
+    value.round().clamp(0.0, 255.0) as u8
+}
+
+/// ImageMagick's `-normalize`, which is `-contrast-stretch 2%x1%` rather than a plain min-max
+/// stretch.
+///
+/// The clipping is what makes one threshold constant work across card art: it discards the darkest
+/// 2% and brightest 1% of the histogram before stretching, so a stray specular highlight cannot pin
+/// the top of the range and leave the actual text sitting well below the cutoff.
+pub fn normalize_contrast(grey: &[u8]) -> Vec<u8> {
+    if grey.is_empty() {
+        return Vec::new();
+    }
+    let mut histogram = [0_u32; 256];
+    for value in grey {
+        histogram[*value as usize] += 1;
+    }
+    let total = grey.len() as f64;
+    let black_clip = (total * 0.02) as u32;
+    let white_clip = (total * 0.01) as u32;
+
+    let mut seen = 0;
+    let low = histogram
+        .iter()
+        .position(|count| {
+            seen += count;
+            seen > black_clip
+        })
+        .unwrap_or(0) as u8;
+    let mut seen = 0;
+    let high = histogram
+        .iter()
+        .rposition(|count| {
+            seen += count;
+            seen > white_clip
+        })
+        .unwrap_or(255) as u8;
+
+    // A flat crop -- a capture taken a moment too early is entirely black -- has no range to
+    // stretch, and dividing by it would panic on exactly that frame.
+    if high <= low {
+        return grey.to_vec();
+    }
+    let span = (high - low) as f32;
+    grey.iter()
+        .map(|value| (((*value).clamp(low, high) - low) as f32 * 255.0 / span).round() as u8)
+        .collect()
+}
+
+/// `-threshold 74% -negate` in one pass: keep what is brighter than the cutoff, then invert,
+/// because tesseract is trained on dark-on-light.
+pub fn threshold_inverted(grey: &[u8]) -> Vec<u8> {
+    // ImageMagick compares strictly against the scaled cutoff: at 74% of 255 that is 188.7, so 188
+    // is background and 189 is text.
+    let cutoff = 0.74 * 255.0;
+    grey.iter()
+        .map(|value| if (*value as f32) > cutoff { 0 } else { 255 })
+        .collect()
 }
 
 /// OCR a crop that `read_region` has already isolated to text.

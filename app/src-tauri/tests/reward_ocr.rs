@@ -325,12 +325,75 @@ fn live_capture_reaches_the_game_window() {
         "window discovery failed"
     );
     assert_ne!(outcome, Err("import is not available"));
-    assert_ne!(outcome, Err("magick is not available"));
     assert_ne!(outcome, Err("tesseract is not available"));
+    assert_ne!(outcome, Err("capture could not be decoded"));
     assert_ne!(
         outcome,
         Err("capture was not a PNG or PPM"),
         "PPM header parsing failed"
     );
     assert_ne!(outcome, Err("could not capture the game window"));
+}
+
+/// The preprocess that isolates the title from the card art used to be an ImageMagick invocation.
+/// It is Rust now, and these are the properties it had to keep, stated as pixels rather than as
+/// "it still reads the fixtures" -- the fixture reads above already cover that end to end, but they
+/// cannot say *which* step drifted when one of them fails.
+///
+/// `-colorspace gray` in ImageMagick 7 is a Rec.709 weighted sum of the gamma-encoded bytes, which
+/// is not what `image`'s `to_luma8` computes (that is Rec.601): red is 54 not 76. Getting this
+/// wrong shifts every pixel of near-white text against dark art by enough to move the threshold.
+#[test]
+fn luma_matches_the_imagemagick_weighting_it_replaced() {
+    assert_eq!(app_lib::luma(255, 0, 0), 54);
+    assert_eq!(app_lib::luma(0, 255, 0), 182);
+    assert_eq!(app_lib::luma(0, 0, 255), 18);
+    assert_eq!(app_lib::luma(255, 255, 255), 255);
+    assert_eq!(app_lib::luma(0, 0, 0), 0);
+}
+
+/// `-normalize` is `-contrast-stretch 2%x1%`: it discards the darkest 2% and brightest 1% of the
+/// histogram before stretching, rather than mapping the literal min and max. That clipping is the
+/// whole point -- a single stray white pixel in a crop would otherwise pin the top of the range and
+/// leave the actual text well below the threshold.
+#[test]
+fn normalize_clips_the_histogram_tails_before_stretching() {
+    // 1000 pixels: 5 black, 990 spread over 100..=150, 5 white. The tails are inside the clip, so
+    // the stretch has to run on 100..=150 and ignore the outliers entirely.
+    let mut pixels = vec![0_u8; 5];
+    pixels.extend((0..990).map(|index| 100 + (index * 50 / 989) as u8));
+    pixels.extend([255_u8; 5]);
+    let stretched = app_lib::normalize_contrast(&pixels);
+    assert_eq!(stretched[0], 0, "clipped darks stay at the bottom");
+    assert_eq!(stretched[999], 255, "clipped lights stay at the top");
+    assert_eq!(stretched[5], 0, "the darkest unclipped value maps to 0");
+    assert_eq!(
+        stretched[994], 255,
+        "the brightest unclipped value maps to 255"
+    );
+    let middle = stretched[500];
+    assert!(
+        (120..=136).contains(&middle),
+        "the midpoint should land near mid-grey, not at {middle}"
+    );
+}
+
+/// A flat crop has no range to stretch. ImageMagick leaves it alone rather than dividing by zero,
+/// and so must this -- a divide by zero here would be a panic on a black frame, which is exactly
+/// what a capture taken a moment too early looks like.
+#[test]
+fn normalize_leaves_a_flat_image_alone() {
+    assert_eq!(app_lib::normalize_contrast(&[128; 64]), vec![128; 64]);
+    assert_eq!(app_lib::normalize_contrast(&[]), Vec::<u8>::new());
+}
+
+/// `-threshold 74%` keeps everything strictly above 74% of full scale, and `-negate` follows it
+/// because tesseract is trained on dark-on-light. The two are one step here.
+#[test]
+fn threshold_keeps_text_and_inverts_for_tesseract() {
+    // 74% of 255 is 188.7, so 188 is below the cut and 189 is above it.
+    assert_eq!(
+        app_lib::threshold_inverted(&[188, 189, 0, 255]),
+        vec![255, 0, 255, 0]
+    );
 }
