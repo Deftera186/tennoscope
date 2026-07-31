@@ -29,6 +29,16 @@ zeroize.workspace = true
 libc = "0.2"
 nix = { version = "0.30", features = ["process", "uio"] }
 
+# The Windows backend reads another process the way procfs does on Linux, through crates that keep
+# their own `unsafe` to themselves -- `forbid(unsafe_code)` is per-crate, so it survives here.
+#
+# `read-process-memory` is pinned exactly: 0.2.0 is days old and its immediate predecessor was
+# yanked, so a caret range is an invitation to break on an unattended `cargo update`.
+[target.'cfg(windows)'.dependencies]
+proc-maps = "0.5"
+read-process-memory = "=0.2.0"
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+
 [dev-dependencies]
 static_assertions = "1"
 tempfile = "3"
