@@ -9,7 +9,7 @@ use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot, ItemId,
 };
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 #[derive(Debug, Error)]
@@ -108,8 +108,13 @@ impl SqliteStore {
             1 => {
                 migrate_v1_to_v2(&mut connection)?;
                 migrate_v2_to_v3(&mut connection)?;
+                migrate_v3_to_v4(&mut connection)?;
             }
-            2 => migrate_v2_to_v3(&mut connection)?,
+            2 => {
+                migrate_v2_to_v3(&mut connection)?;
+                migrate_v3_to_v4(&mut connection)?;
+            }
+            3 => migrate_v3_to_v4(&mut connection)?,
             SCHEMA_VERSION => validate_schema(&connection)?,
             other => return Err(StoreError::UnsupportedSchemaVersion(other)),
         }
@@ -278,6 +283,33 @@ impl SqliteStore {
             row.get(2)?,
         )?))
     }
+
+    /// The stored warframe.market token, if this installation fell back to the database.
+    ///
+    /// Returned as a string rather than a credential type: this crate is the bottom of the stack
+    /// and has no business knowing what a market token is. The crate above wraps it.
+    pub fn market_credential(&self) -> Result<Option<String>, StoreError> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT token FROM market_credential WHERE id = 1")?;
+        let mut rows = statement.query([])?;
+        rows.next()?.map(|row| row.get(0)).transpose().map_err(Into::into)
+    }
+
+    pub fn set_market_credential(&mut self, token: &str) -> Result<(), StoreError> {
+        self.connection.execute(
+            "INSERT INTO market_credential (id, token) VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET token = excluded.token",
+            params![token],
+        )?;
+        Ok(())
+    }
+
+    pub fn clear_market_credential(&mut self) -> Result<(), StoreError> {
+        self.connection
+            .execute("DELETE FROM market_credential WHERE id = 1", [])?;
+        Ok(())
+    }
 }
 
 fn initialize_schema(connection: &mut Connection) -> Result<(), StoreError> {
@@ -325,6 +357,23 @@ fn migrate_v2_to_v3(connection: &mut Connection) -> Result<(), StoreError> {
         "ALTER TABLE inventory ADD COLUMN max_rank INTEGER CHECK (max_rank IS NULL OR max_rank >= 0)",
         [],
     )?;
+    transaction.pragma_update(None, "user_version", 3)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Adds somewhere to keep the warframe.market token when no OS keyring is available.
+///
+/// Empty for every existing database, which is the honest state: nothing was linked before this
+/// migration existed.
+fn migrate_v3_to_v4(connection: &mut Connection) -> Result<(), StoreError> {
+    let transaction = connection.transaction()?;
+    transaction.execute_batch(
+        "CREATE TABLE market_credential (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            token TEXT NOT NULL CHECK (length(trim(token)) > 0)
+        );",
+    )?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     validate_schema(&transaction)?;
     transaction.commit()?;
@@ -367,6 +416,7 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
     )?;
     validate_canonical_table(connection, "inventory")?;
     validate_canonical_table(connection, "snapshot_audit")?;
+    validate_canonical_table(connection, "market_credential")?;
     validate_constraints(connection)
 }
 
@@ -424,6 +474,14 @@ fn normalize_sql(sql: &str) -> String {
             '\'' => {
                 in_string = true;
                 normalized.push(character);
+            }
+            '-' if characters.peek() == Some(&'-') => {
+                characters.next();
+                for comment_character in characters.by_ref() {
+                    if comment_character == '\n' {
+                        break;
+                    }
+                }
             }
             '"' | '`' | '[' | ']' | ';' => {}
             character if character.is_ascii_whitespace() => {}
