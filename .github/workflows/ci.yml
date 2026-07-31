@@ -65,6 +65,25 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  # The Windows half of the port is invisible to the job above: `cfg(windows)` code is not compiled
+  # by a Linux clippy run, so without this leg the Windows backends are never built by anything.
+  # It is the only verification vehicle for them -- there is no Windows machine behind this project.
+  windows:
+    name: Rust (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The reward tests shell out to tesseract on every platform. Chocolatey's package puts it on
+      # PATH, which is all the OCR path asks for.
+      - name: Install tesseract
+        run: choco install --no-progress -y tesseract
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
   frontend:
     name: Frontend
     runs-on: ubuntu-latest
