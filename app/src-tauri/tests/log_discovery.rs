@@ -1,4 +1,6 @@
-use app_lib::{inventory_log_path_at, log_identity};
+#[cfg(unix)]
+use app_lib::inventory_log_path_at;
+use app_lib::log_identity;
 use std::fs;
 use tempfile::tempdir;
 
@@ -21,6 +23,14 @@ fn log_identity_survives_appending_and_changes_when_the_file_is_replaced() {
         "appending to the log must not change its identity"
     );
 
+    // Reading the same unmodified file twice must also be stable: under Wine the creation time
+    // jitters below the millisecond, and a jittering identity reads as a rotation on every poll.
+    assert_eq!(
+        log_identity(&path, &fs::metadata(&path).unwrap()),
+        original,
+        "the identity must not depend on when it was asked for"
+    );
+
     // A different path is a different log even with identical contents.
     let other = dir.path().join("other-EE.log");
     fs::write(&other, b"first").unwrap();
@@ -31,6 +41,7 @@ fn log_identity_survives_appending_and_changes_when_the_file_is_replaced() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn discovers_any_wine_user_from_environment_and_retries_creation() {
     let dir = tempdir().unwrap();
@@ -49,6 +60,7 @@ fn discovers_any_wine_user_from_environment_and_retries_creation() {
     assert_eq!(inventory_log_path_at(&proc_root, 7), Some(log));
 }
 
+#[cfg(unix)]
 #[test]
 fn derives_prefix_from_mapped_drive_c_path_without_environment() {
     let dir = tempdir().unwrap();
@@ -68,4 +80,35 @@ fn derives_prefix_from_mapped_drive_c_path_without_environment() {
     fs::create_dir_all(log.parent().unwrap()).unwrap();
     fs::write(&log, b"").unwrap();
     assert_eq!(inventory_log_path_at(&proc_root, 7), Some(log));
+}
+
+/// On Windows there is no Wine prefix to walk -- the log is simply under `%LOCALAPPDATA%`. The
+/// root-parameterised shape is kept anyway, because it is what lets the layout be asserted against
+/// a synthetic tree instead of against whatever happens to be on the machine running the test.
+#[cfg(windows)]
+#[test]
+fn the_windows_log_sits_directly_under_local_appdata() {
+    let dir = tempdir().unwrap();
+    let local_appdata = dir.path().join("AppData/Local");
+    assert!(
+        app_lib::inventory_log_under(&local_appdata).is_none(),
+        "a machine that has never run Warframe has no log to find"
+    );
+
+    let log = local_appdata.join("Warframe/EE.log");
+    fs::create_dir_all(log.parent().unwrap()).unwrap();
+    fs::write(&log, b"").unwrap();
+    assert_eq!(app_lib::inventory_log_under(&local_appdata), Some(log));
+}
+
+/// A directory where the log should be is not a log. Warframe has been seen to leave the folder
+/// behind after an uninstall, and treating that as a found log makes every later read fail with a
+/// permission error rather than with "the game has not run yet".
+#[cfg(windows)]
+#[test]
+fn a_directory_named_like_the_log_is_not_the_log() {
+    let dir = tempdir().unwrap();
+    let local_appdata = dir.path().join("AppData/Local");
+    fs::create_dir_all(local_appdata.join("Warframe/EE.log")).unwrap();
+    assert!(app_lib::inventory_log_under(&local_appdata).is_none());
 }

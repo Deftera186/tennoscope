@@ -431,10 +431,31 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
     })))
 }
 
+#[cfg(unix)]
 fn inventory_log_path(pid: u32) -> Option<PathBuf> {
     inventory_log_path_at(Path::new("/proc"), pid)
 }
 
+/// On Windows the game writes to its own `%LOCALAPPDATA%`, so there is no prefix to discover and
+/// the PID is not needed -- but the signature is shared with the Wine path, which does need it.
+#[cfg(windows)]
+fn inventory_log_path(_pid: u32) -> Option<PathBuf> {
+    inventory_log_under(Path::new(&std::env::var_os("LOCALAPPDATA")?))
+}
+
+/// The log under a given `%LOCALAPPDATA%`, if the game has written one.
+///
+/// Taking the root as an argument is what makes the layout testable against a synthetic tree; the
+/// Wine path is parameterised the same way and for the same reason.
+#[cfg(windows)]
+pub fn inventory_log_under(local_appdata: &Path) -> Option<PathBuf> {
+    let path = local_appdata.join("Warframe/EE.log");
+    // `is_file` and not `exists`: an uninstall can leave the folder behind, and taking a directory
+    // for the log turns every later read into a permission error instead of "the game has not run".
+    path.is_file().then_some(path)
+}
+
+#[cfg(unix)]
 pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
     let mut prefixes = Vec::new();
     let process_root = proc_root.join(pid.to_string());
@@ -1480,12 +1501,18 @@ fn apply_reward_observations(
 /// creation time, while appending to the open one does not. Where the platform has no creation time
 /// the path alone still distinguishes logs; only rotation-in-place goes unnoticed, and the length
 /// check the caller already does catches the truncation that comes with it.
+///
+/// Seconds, not the full precision the platform offers: under Wine the reported creation time
+/// jitters by a few hundred microseconds between reads of the same unmodified file, which would
+/// make every poll look like a rotation and re-read the log from zero. A rotation and the append
+/// before it cannot share a second and also matter -- the replacement log starts empty, so the
+/// length check catches it either way.
 pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
     let created = metadata
         .created()
         .ok()
         .and_then(|created| created.duration_since(UNIX_EPOCH).ok())
-        .map(|since| since.as_nanos());
+        .map(|since| since.as_secs());
     match created {
         Some(created) => format!("{}:{created}", path.display()),
         None => path.display().to_string(),
