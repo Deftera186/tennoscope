@@ -12,6 +12,11 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # A pre-release tag (`v0.4.2-rc1`) builds with debug assertions on, which is what makes the
+  # `[DEBUG-…]` tracing exist at all -- every one of those lines is `cfg(debug_assertions)`, so a
+  # normal release binary handed to a tester reports nothing when something goes wrong. Stable
+  # tags are unaffected: `-` in the tag is the whole switch.
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
 
 jobs:
   windows:
@@ -109,6 +114,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
+          # Marked pre-release from the tag itself, so an `-rc`/`-beta` build cannot be presented
+          # as stable by accident -- and those are exactly the builds with assertions left on.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             target/release/bundle/appimage/*.AppImage
