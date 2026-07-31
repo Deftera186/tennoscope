@@ -271,15 +271,77 @@ pub(crate) fn capture_game_window() -> Result<(WindowRect, image::DynamicImage),
         monitor.x().map_err(|_| "could not read the monitor")?,
         monitor.y().map_err(|_| "could not read the monitor")?,
     );
-    let frame = monitor
-        .capture_region(
-            rect.x.saturating_sub(origin_x).max(0) as u32,
-            rect.y.saturating_sub(origin_y).max(0) as u32,
-            rect.width,
-            rect.height,
-        )
+    let visible = visible_region(
+        rect,
+        origin_x,
+        origin_y,
+        monitor.width().map_err(|_| "could not read the monitor")?,
+        monitor.height().map_err(|_| "could not read the monitor")?,
+    )
+    .ok_or("the game window is not on any monitor")?;
+    let captured = monitor
+        .capture_region(visible.x, visible.y, visible.width, visible.height)
         .map_err(|_| "could not capture the game window")?;
+    // Paste back at the window's own origin: every crop downstream is a fraction of the *window*,
+    // so the frame handed on has to be window sized even when part of it was off screen.
+    let mut frame = image::RgbaImage::new(rect.width, rect.height);
+    image::imageops::replace(
+        &mut frame,
+        &captured,
+        i64::from(visible.paste_x),
+        i64::from(visible.paste_y),
+    );
     Ok((rect, image::DynamicImage::ImageRgba8(frame)))
+}
+
+/// The part of the game window that is actually on this monitor.
+///
+/// `capture_region` rejects a region that reaches past the monitor rather than clipping it, so a
+/// game in windowed mode sitting even one pixel off the edge -- which is ordinary, the title bar
+/// gets dragged -- makes every capture fail with "could not capture the game window". Clamping the
+/// offset alone is worse than failing: the region would then be captured from the wrong place and
+/// the reward crops would silently read the pixels next to the cards.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct VisibleRegion {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+    /// Where the captured piece belongs within the window-sized frame.
+    paste_x: u32,
+    paste_y: u32,
+}
+
+fn visible_region(
+    rect: WindowRect,
+    origin_x: i32,
+    origin_y: i32,
+    monitor_width: u32,
+    monitor_height: u32,
+) -> Option<VisibleRegion> {
+    let (x, width, paste_x) = visible_axis(rect.x, origin_x, rect.width, monitor_width)?;
+    let (y, height, paste_y) = visible_axis(rect.y, origin_y, rect.height, monitor_height)?;
+    (width > 0 && height > 0).then_some(VisibleRegion {
+        x,
+        y,
+        width,
+        height,
+        paste_x,
+        paste_y,
+    })
+}
+
+/// One axis of the clip: where to capture from, how much of it is on the monitor, and how far into
+/// the window-sized frame the piece belongs.
+fn visible_axis(start: i32, origin: i32, span: u32, monitor: u32) -> Option<(u32, u32, u32)> {
+    let offset = i64::from(start) - i64::from(origin);
+    let clipped = offset.max(0);
+    let visible = (offset + i64::from(span)).min(i64::from(monitor)) - clipped;
+    Some((
+        u32::try_from(clipped).ok()?,
+        u32::try_from(visible.max(0)).ok()?,
+        u32::try_from(clipped - offset).ok()?,
+    ))
 }
 
 /// Where the game's window is, in the desktop's own coordinates.
@@ -616,7 +678,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::warframe_window_from_xwininfo_tree;
+    use super::{VisibleRegion, WindowRect, visible_region, warframe_window_from_xwininfo_tree};
 
     /// Real `xwininfo -root -tree` lines. Warframe's IME helpers carry the same class name as the
     /// game window and one of them carries its title too, so picking the first match by name alone
@@ -643,5 +705,61 @@ mod tests {
             (rect.x, rect.y, rect.width, rect.height),
             (1920, 0, 1920, 1080)
         );
+    }
+
+    /// `capture_region` rejects an out-of-bounds region rather than clipping it, so a game window
+    /// hanging off the edge of the monitor -- ordinary in windowed mode, and the shape a second
+    /// monitor produces at every capture -- failed the whole read. The clip is what keeps that a
+    /// partial frame instead of no frame.
+    #[test]
+    fn a_window_hanging_off_the_monitor_is_clipped_rather_than_refused() {
+        let full = WindowRect {
+            x: 1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        assert_eq!(
+            visible_region(full, 1920, 0, 1920, 1080),
+            Some(VisibleRegion {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+                paste_x: 0,
+                paste_y: 0
+            }),
+            "a window filling its monitor must capture whole and unshifted"
+        );
+
+        // Dragged 100px past the right edge and 50 above the top: the capture shrinks, and the
+        // piece that survives belongs 50px down in the window-sized frame, not at its origin.
+        let overhanging = WindowRect {
+            x: 1820,
+            y: -50,
+            width: 1920,
+            height: 1080,
+        };
+        assert_eq!(
+            visible_region(overhanging, 0, 0, 1920, 1080),
+            Some(VisibleRegion {
+                x: 1820,
+                y: 0,
+                width: 100,
+                height: 1030,
+                paste_x: 0,
+                paste_y: 50
+            })
+        );
+
+        // Entirely off the monitor is the one case with nothing to read; an empty region would be
+        // rejected by `capture_region` anyway, so it has to be an absence here.
+        let elsewhere = WindowRect {
+            x: 4000,
+            y: 0,
+            width: 800,
+            height: 600,
+        };
+        assert_eq!(visible_region(elsewhere, 0, 0, 1920, 1080), None);
     }
 }
