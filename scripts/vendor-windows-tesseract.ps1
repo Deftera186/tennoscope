@@ -8,9 +8,14 @@
 #
 # Only what the OCR path actually calls is kept: the executable, the DLLs beside it, and English
 # training data. The full install is ~600 MB of language packs the reward reader never opens.
+#
+# The version is pinned to one that exists: UB-Mannheim serves a flat directory and prunes it, so a
+# version that was current when this was written is not necessarily still downloadable. 5.5.0 was
+# named here and 404s; check https://digi.bib.uni-mannheim.de/tesseract/ before bumping, because
+# the failure lands in the release build rather than in CI.
 $ErrorActionPreference = 'Stop'
 
-$version = '5.5.0.20241111'
+$version = '5.4.0.20240606'
 $url = "https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-$version.exe"
 $root = Split-Path -Parent $PSScriptRoot
 $vendor = Join-Path $root 'app/src-tauri/vendor/tesseract'
