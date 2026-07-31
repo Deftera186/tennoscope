@@ -29,6 +29,11 @@ jobs:
 
       # Tauri's Linux system libraries plus tesseract. Screen capture and the crop pipeline are
       # Rust now, so tesseract is the only thing the reward tests still shell out to.
+      #
+      # pipewire and clang are xcap's, not ours: xcap depends on pipewire unconditionally on Linux
+      # (for the portal capture path) and its bindings are generated with bindgen. Neither is
+      # optional, and a developer machine running a desktop already has both -- which is exactly
+      # why their absence surfaced on a runner rather than locally.
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -39,6 +44,8 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \
+            libpipewire-0.3-dev \
+            libclang-dev \
             tesseract-ocr \
             tesseract-ocr-eng
 

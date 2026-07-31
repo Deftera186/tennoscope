@@ -86,6 +86,8 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \
+            libpipewire-0.3-dev \
+            libclang-dev \
             tesseract-ocr \
             tesseract-ocr-eng
 
