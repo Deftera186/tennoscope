@@ -18,8 +18,8 @@ const view: AppView = {
       { id: 'rhino', name: 'Rhino', category: 'frame', quantity: 1, mastered: true, live: false, priceable: true },
       { id: 'braton', name: 'Braton', category: 'weapon', quantity: 3, mastered: true, live: false, priceable: true },
       { id: 'carrier', name: 'Carrier', category: 'companion', quantity: 1, mastered: false, live: false, priceable: true },
-      { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 19, live: false, priceable: true },
-      { id: 'lith-a1', name: 'Lith A1 Relic', category: 'relic', quantity: 7, mastered: false, platinum: 20, live: true, priceable: true },
+      { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 19, live: false, priceable: true, monthly_trades: 4 },
+      { id: 'lith-a1', name: 'Lith A1 Relic', category: 'relic', quantity: 7, mastered: false, platinum: 20, live: true, priceable: true, monthly_trades: 3 },
       { id: 'argon-crystal', name: 'Argon Crystal', category: 'resource', quantity: 4, mastered: false, live: false, priceable: true },
       { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 0, mastered: false, live: false, priceable: false },
       // Owned, and no name rule reaches a warframe.market listing for it. The page control must
@@ -64,6 +64,7 @@ describe('MVP desktop interface', () => {
   afterEach(() => { cleanup(); vi.useRealTimers() })
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.clear()  // The price floor outlives a render, which is the point of it.
     backend.getView.mockResolvedValue(view)
     backend.refreshInventory.mockResolvedValue(view)
     backend.refreshPrices.mockResolvedValue(view)
@@ -95,6 +96,32 @@ describe('MVP desktop interface', () => {
     expect(screen.getByRole('article', { name: 'Rhino' })).toHaveTextContent('Mastered')
   })
 
+  // Three copies of a mod at three ranks are three holdings at three prices. The cards must be
+  // tellable apart by name alone, and the one nobody quotes must read as bracketed rather than
+  // borrow either end.
+  it('draws a rank per card and brackets the rank the market does not quote', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.getView.mockResolvedValue({
+      ...view,
+      collection: {
+        total_entries: 3,
+        items: [
+          { id: 'serration', name: 'Serration', category: 'mod', quantity: 3, mastered: false, platinum: 3, live: false, priceable: true },
+          { id: 'serration#7', name: 'Serration', category: 'mod', quantity: 1, mastered: false, platinum: 3, platinum_ceiling: 48, rank: 7, max_rank: 10, live: false, priceable: true },
+          { id: 'serration#10', name: 'Serration', category: 'mod', quantity: 1, mastered: false, platinum: 48, rank: 10, max_rank: 10, live: false, priceable: true },
+        ],
+      },
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+
+    expect(screen.getByRole('article', { name: 'Serration' })).toHaveTextContent('Owned ×3')
+    expect(screen.getByRole('article', { name: 'Serration, Rank 7/10' })).toHaveTextContent('3–48')
+    const maxed = screen.getByRole('article', { name: 'Serration, Rank 10/10' })
+    expect(maxed).toHaveTextContent('48')
+    expect(within(maxed).getByText('Rank 10/10')).toHaveClass('maxed')
+  })
+
   it('filters by search, category, and ownership without losing canonical names', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App />)
@@ -116,7 +143,7 @@ describe('MVP desktop interface', () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App />)
     await screen.findByRole('heading', { name: 'Your collection' })
-    for (const label of ['Frame', 'Weapon', 'Companion', 'Prime Part', 'Relic', 'Resource', 'Blueprint', 'Vehicle']) {
+    for (const label of ['Frame', 'Weapon', 'Companion', 'Prime Part', 'Relic', 'Resource', 'Blueprint', 'Vehicle', 'Mod', 'Arcane']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
     }
     await userEvent.click(within(screen.getByRole('group', { name: 'Sort collection' })).getByRole('button', { name: 'Quantity' }))
@@ -177,19 +204,26 @@ describe('MVP desktop interface', () => {
     expect(card.querySelectorAll('[data-metal="ducat"]')).toHaveLength(1)
   })
 
-  it('keeps risk disclosure and local-first details available from settings', async () => {
+  it('separates the controls from the notices, and keeps both reachable', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App />)
     await screen.findByRole('heading', { name: 'Your collection' })
+
+    // Settings holds what changes behaviour. The overlay preview is a control, not a notice, so it
+    // moved here off the page of standing statements.
     await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    expect(screen.getByRole('heading', { name: 'Settings & about' })).toBeInTheDocument()
-    expect(screen.getByText(/stored on this device/i)).toBeInTheDocument()
-    expect(screen.getByText(/process inspection may carry/i)).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.queryByText(/process inspection may carry/i), 'a disclosure is not a preference').not.toBeInTheDocument()
     // A preview you cannot dismiss is a trap: the same control has to put it away.
     await userEvent.click(screen.getByRole('button', { name: 'Preview reward overlay' }))
     expect(overlay.showRewardOverlay).toHaveBeenCalledOnce()
     await userEvent.click(screen.getByRole('button', { name: 'Hide reward overlay' }))
     expect(overlay.hideRewardOverlay).toHaveBeenCalledOnce()
+
+    await userEvent.click(screen.getByRole('button', { name: 'About' }))
+    expect(screen.getByText(/stored on this device/i)).toBeInTheDocument()
+    expect(screen.getByText(/process inspection may carry/i)).toBeInTheDocument()
+    expect(screen.queryByRole('slider'), 'and a preference is not a disclosure').not.toBeInTheDocument()
   })
 
   it('refreshes inventory and announces live state', async () => {
@@ -247,20 +281,17 @@ describe('MVP desktop interface', () => {
     expect(backend.getView).toHaveBeenCalledTimes(3)
   })
 
-  // The readout belongs to the backend now, because the background relic sweep spends requests
-  // nobody clicked for and only the backend knows that pass's total. One line covers both.
+  // The readout belongs to the backend, which is the only party that knows a pass's total.
   it('reports a live pricing pass from the backend, whoever asked for it', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     backend.getView.mockResolvedValue({ ...view, collection: { ...view.collection, pricing: { done: 12, total: 65 } } })
     render(<App/>)
 
     expect(await screen.findByText(/Checking live prices · 12 of 65/)).toBeInTheDocument()
-    // The worth figure climbs while that runs, so its own note has to say why.
-    expect(within(screen.getByTestId('band-worth')).getByText(/checking 12 of 65/)).toBeInTheDocument()
   })
 
-  // Both passes come out of one three-requests-a-second budget, so letting a click overlap the
-  // sweep only makes each slower and leaves the one readout describing two queues.
+  // Every pass comes out of one three-requests-a-second budget, so letting a click overlap one
+  // already running only makes each slower and leaves the one readout describing two queues.
   it('refuses a page refresh while a background pass is already spending requests', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     backend.getView.mockResolvedValue({ ...view, collection: { ...view.collection, pricing: { done: 3, total: 65 } } })
@@ -303,7 +334,7 @@ describe('MVP desktop interface', () => {
     backend.getView.mockResolvedValue({
       ...view,
       collection: {
-        total_entries: 6,
+        total_entries: 8,
         items: [
           { id: 'frame', name: 'Frame', category: 'frame', quantity: 1, mastered: true, live: false },
           { id: 'weapon', name: 'Weapon', category: 'weapon', quantity: 1, mastered: false, live: false },
@@ -311,6 +342,8 @@ describe('MVP desktop interface', () => {
           { id: 'vehicle', name: 'Vehicle', category: 'vehicle', quantity: 1, mastered: true, live: false },
           { id: 'part', name: 'Part', category: 'prime_part', quantity: 1, mastered: false, live: false },
           { id: 'resource', name: 'Resource', category: 'resource', quantity: 1, mastered: false, live: false },
+          { id: 'mod', name: 'Mod', category: 'mod', quantity: 12, mastered: false, live: false },
+          { id: 'arcane', name: 'Arcane', category: 'arcane', quantity: 3, mastered: false, live: false },
         ],
       },
     })
@@ -399,9 +432,9 @@ describe('MVP desktop interface', () => {
     expect(await screen.findByRole('button', { name: /Price these 7/ })).toBeInTheDocument()
   })
 
-  // Relics have no daily price by design, so a relic the startup sweep missed is unpriced -- and an
-  // unpriced item is precisely the one a manual refresh exists for. Sending only already-priced
-  // items would close the recovery path against the items that need it.
+  // A relic no dump in the last month saw trade is unpriced -- and an unpriced item is precisely
+  // the one a manual refresh exists for. Sending only already-priced items would close the recovery
+  // path against the items that need it.
   it('offers to price an owned item that has no price yet, and never an unowned one', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     const user = userEvent.setup()
@@ -451,14 +484,39 @@ describe('MVP desktop interface', () => {
     expect(names).toEqual(['Lex Prime Receiver', 'Lith A1 Relic', 'Zenith Prime Receiver'])
   })
 
-  // A partial sum shown as a total is a lie the reader cannot detect, so the cell carries its count.
-  it('sums the priced stacks and says how many it counted', async () => {
+  // The market rate is the plain reading of what is owned; what the market would actually take is
+  // the qualification on it, so it is under the figure at the size of one. The fixture caps in both
+  // directions: the market takes all 1 Lex Prime Receiver at 19p, and 3 of the 7 Lith A1 at 20p, so
+  // 159p at market rate is 79p anybody could actually sell.
+  it('leads with the market rate and puts what is sellable under it', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App/>)
     const worth = await screen.findByTestId('band-worth')
     expect(within(worth).getByText('159'), 'the worth is a figure, in a row of plain counts').toBeInTheDocument()
-    expect(within(worth).getByAltText(/platinum/i), 'and the game\'s own icon says which currency it is').toBeInTheDocument()
-    expect(within(worth).getByText(/3 of 9 items priced/)).toBeInTheDocument()
+    // Both figures carry the game's own icon. Without it the second one reads as another item count,
+    // which is exactly what the three cells beside it hold.
+    expect(within(worth).getAllByAltText(/platinum/i)).toHaveLength(2)
+    expect(worth.querySelector('.band-aside')?.textContent, 'the achievable total, the size of a footnote').toBe('79 sellable')
+    expect(within(worth).getByText(/only the copies the market buys in a month/i), 'the cap, on the figure it applies to').toBeInTheDocument()
+  })
+
+  // A slider whose effect is invisible until you navigate away is a knob, not a control.
+  it('leaves out stacks under the price floor, and says so where it is set', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: 'Settings' }))
+
+    const slider = screen.getByRole('slider', { name: /minimum platinum/i })
+    fireEvent.change(slider, { target: { value: '20' } })
+    // Only the 20p Lith A1 clears a 20p floor; the 19p Lex Prime Receiver no longer counts.
+    expect(screen.getByText(/1 stacks counted · 60 platinum sellable/)).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Collection' }))
+    const worth = await screen.findByTestId('band-worth')
+    expect(within(worth).getByText('159'), 'the market rate never moves with the floor').toBeInTheDocument()
+    expect(worth.querySelector('.band-aside')?.textContent).toBe('60 sellable')
+    expect(within(worth).getByText(/at 20 platinum and over/)).toBeInTheDocument()
   })
 
   // The page refresh asks about exactly what is on screen, so a filtered view costs only the

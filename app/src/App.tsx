@@ -15,10 +15,11 @@ import {
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
 import { RewardCards } from './RewardCards'
 import { MetalMark } from './MetalMark'
-import { clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, stackValue } from './collection'
+import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
+import { MAX_PRICE_FLOOR, readPriceFloor, writePriceFloor } from './settings'
 import { snapshotFreshness } from './freshness'
 
-type Page = 'collection' | 'rewards' | 'diagnostics' | 'settings'
+type Page = 'collection' | 'rewards' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
 type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'value-desc'
 
@@ -32,6 +33,8 @@ const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: str
   { value: 'resource', label: 'Resource', tally: 'S' },
   { value: 'blueprint', label: 'Blueprint', tally: 'B' },
   { value: 'vehicle', label: 'Vehicle', tally: 'V' },
+  { value: 'mod', label: 'Mod', tally: 'M' },
+  { value: 'arcane', label: 'Arcane', tally: 'A' },
 ]
 
 const sortOptions: Array<{ value: Sort; label: string }> = [
@@ -57,6 +60,7 @@ const pageLabel: Record<Page, string> = {
   rewards: 'Rewards',
   diagnostics: 'Diagnostics',
   settings: 'Settings',
+  about: 'About',
 }
 
 /**
@@ -69,6 +73,9 @@ function Mark({ name, className = 'punch-glyph' }: { name: Page | 'refresh' | 's
     rewards: <><circle cx="12" cy="14.5" r="7.5"/><path d="M12 7V1.5M9 4h6"/></>,
     diagnostics: <><path d="M2 21h20M6 21 14 3M11 21 19 3"/></>,
     settings: <><path d="M7 2h10l-2 9H9z"/><path d="M10 11h4v11h-4z"/></>,
+    // The office's own hallmark cartouche, which is what this page is: the register's statement
+    // about itself.
+    about: <><path d="M4 3h16v11.5L12 21 4 14.5z"/><path d="M12 8v6"/></>,
     refresh: <><path d="M21 5v6h-6"/><path d="M20 11a8 8 0 1 0-1.5 6"/></>,
     search: <><circle cx="10.5" cy="10.5" r="7"/><path d="M15.5 15.5 22 22"/></>,
   }
@@ -83,6 +90,7 @@ function App() {
   const [pricing, setPricing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
+  const [priceFloor, setPriceFloor] = useState(readPriceFloor)
   const viewGeneration = useRef(0)
   const foregroundInFlight = useRef(0)
 
@@ -169,7 +177,7 @@ function App() {
    *
    * The local flag exists only to hold the control down for the up-to-2.5s gap before the poll
    * carries the backend's own progress. The counting is the backend's: it is the only party that
-   * knows the total, and it runs the background sweep the same way.
+   * knows the total, and it publishes the count the same way for every pass.
    */
   async function priceLive(ids: string[]) {
     setPricing(true)
@@ -204,7 +212,7 @@ function App() {
         </div>
       </div>
       <nav className="hallmark-row" aria-label="Primary">
-        {(['collection', 'rewards', 'diagnostics', 'settings'] as const).map(item => <button
+        {(['collection', 'rewards', 'diagnostics', 'settings', 'about'] as const).map(item => <button
           key={item}
           type="button"
           aria-label={pageLabel[item]}
@@ -224,10 +232,14 @@ function App() {
     <main className="sheet">
       {error && <p className="error-banner" role="alert">{error}</p>}
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive}/>}
+        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
         {page === 'diagnostics' && <DiagnosticsPage view={view}/>}
-        {page === 'settings' && <SettingsPage/>}
+        {page === 'settings' && <SettingsPage view={view} priceFloor={priceFloor} onPriceFloor={floor => {
+          setPriceFloor(floor)
+          writePriceFloor(floor)
+        }}/>}
+        {page === 'about' && <AboutPage/>}
       </>}
     </main>
   </div>
@@ -255,7 +267,7 @@ function SetupScreen({ busy, error, onAccept }: { busy: boolean; error: string |
           <p>Third-party software and process inspection may carry account-policy or anti-cheat risk, even when access is read-only.</p>
         </article>
       </div>
-      <p className="footnote">After acceptance, automatic read-only acquisition is enabled by default. You can revisit this disclosure in Settings.</p>
+      <p className="footnote">After acceptance, automatic read-only acquisition is enabled by default. You can revisit this disclosure in About.</p>
       {error && <p className="error-banner" role="alert">{error}</p>}
       <button type="button" className="seal" onClick={onAccept} disabled={busy}>
         {busy ? 'Saving locally…' : 'Accept risk and continue'}<span aria-hidden="true">→</span>
@@ -274,7 +286,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void }) {
+function CollectionPage({ view, pricing, onPriceLive, priceFloor }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -286,6 +298,11 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
   const missing = view.collection.items.filter(item => item.quantity === 0).length
   const priced = view.collection.items.filter(item => item.platinum !== undefined)
   const worth = priced.reduce((total, item) => total + (stackValue(item) ?? 0), 0)
+  // The second, smaller figure. A unit price is only half of what a stack is worth: this collection's
+  // largest single holding is 182 Quickdraw at a true 2p, and the whole game trades two Quickdraw a
+  // month. Market rate leads because it is the plain reading of what is owned; what the market would
+  // actually take sits under it, at the size of a qualification, which is what it is.
+  const sellable = priced.reduce((total, item) => total + (sellableValue(item, priceFloor) ?? 0), 0)
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase()
     return view.collection.items
@@ -309,18 +326,16 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
   const visibleItems = pageItems(filtered, currentPage)
   const firstResult = filtered.length ? (currentPage - 1) * COLLECTION_PAGE_SIZE + 1 : 0
   const lastResult = Math.min(currentPage * COLLECTION_PAGE_SIZE, filtered.length)
-  // What the refresh can *attempt*, not what already has a number. Relics carry no daily price by
-  // design, so anything the startup sweep missed -- an outage, a first run, one acquired since --
-  // is unpriced, and excluding unpriced items would close the manual path against exactly the items
-  // that need it. `priceable` is the backend's own answer to "can warframe.market be asked about
+  // What the refresh can *attempt*, not what already has a number. A relic is priced only if some
+  // dump in the last month saw it trade, so a thinly-traded one is unpriced, and excluding unpriced
+  // items would close the manual path against exactly the items that need it. `priceable` is the backend's own answer to "can warframe.market be asked about
   // this": it drops every name the price table cannot resolve, so counting owned items instead
   // promised prices for items no request was ever going to be made for. Quantity 0 is not owned and
   // is never priceable.
   const pricableVisibleIds = visibleItems.filter(item => item.priceable).map(item => item.id)
-  // One readout for the whole page, published by whichever pass is spending requests -- the startup
-  // relic sweep or this button. They come out of one rate-limited budget, so two counters would be
-  // describing one queue twice, and the sweep is the one that used to run for twenty-two seconds
-  // with nothing on this page admitting it.
+  // One readout for the whole page, published by the backend rather than counted here: it is the
+  // party that knows the total, and every pass comes out of one rate-limited budget, so a second
+  // counter would be describing one queue twice.
   const inProgress = view.collection.pricing ?? null
   const dumpDate = view.health.collection_prices.last_success
   useEffect(() => setPage(1), [search, category, ownership, sort])
@@ -336,12 +351,21 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
       <BandCell kind="items" value={view.collection.total_entries} label="Items tracked" note={`${owned} currently owned`}/>
       <BandCell kind="mastered" value={mastered} label="Mastered" note={masteryEligible.length ? `${Math.round(mastered / masteryEligible.length * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
       <BandCell kind="missing" value={missing} label="Missing" note="From known collection data"/>
-      {/* The worth figure climbs the whole time a pass is running, so its own note is where the
-          reason belongs -- a total that moves with nothing saying why is a moving target, not a
-          valuation. */}
-      <BandCell kind="worth" value={worth} unit={<MetalMark metal="plat" alt=" platinum"/>} label="Collection worth" note={inProgress
-        ? `${priced.length} of ${view.collection.items.length} items priced · checking ${inProgress.done} of ${inProgress.total}`
-        : `${priced.length} of ${view.collection.items.length} items priced`}/>
+      {/* Two figures and the one clause that qualifies them. The cell had five numbers in it and
+          read as an argument about the collection rather than a valuation of it; the live-pass count
+          was a second copy of the register line below, and the priced-item count mostly measured how
+          much of a collection is untradeable. The cap is stated here, on the figure it applies to,
+          rather than down among the filters where it was answering a question nobody had asked yet. */}
+      <BandCell
+        kind="worth"
+        value={worth}
+        unit={<MetalMark metal="plat" alt=" platinum"/>}
+        aside={<>{figure(sellable)}<MetalMark metal="plat" alt=" platinum"/> sellable</>}
+        label="Collection worth"
+        note={priceFloor
+          ? `Sellable counts only the copies the market buys in a month, at ${priceFloor} platinum and over`
+          : 'Sellable counts only the copies the market buys in a month'}
+      />
     </div>
 
     <div className="register">
@@ -418,19 +442,31 @@ function CollectionPage({ view, pricing, onPriceLive }: { view: AppView; pricing
   </section>
 }
 
+/** Struck figures are grouped: a five-digit total is read, not counted. */
+function figure(value: number): string {
+  return value.toLocaleString('en-US')
+}
+
 // The worth cell sits in a row of plain counts, where a bare number reads as one more count.
-function BandCell({ kind, value, unit, label, note }: { kind: string; value: number; unit?: ReactNode; label: string; note: string }) {
+// `aside` takes the slot the other cells put their note in, so four labels still strike one line
+// across the band: a second figure wedged between mark and label would drop this label alone.
+function BandCell({ kind, value, unit, aside, label, note }: { kind: string; value: number; unit?: ReactNode; aside?: ReactNode; label: string; note?: string }) {
   return <div className={`band-cell ${kind}`} data-summary={kind} data-testid={`band-${kind}`}>
-    <span className="band-figure">{value}{unit}</span>
+    <span className="band-figure">{figure(value)}{unit}</span>
     <span className="band-label">{label}</span>
-    <p className="band-note">{note}</p>
+    {aside && <span className="band-aside">{aside}</span>}
+    {note && <p className="band-note">{note}</p>}
   </div>
 }
 
 function CollectionEntry({ item }: { item: CollectionItem }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
-  return <article className={`entry cat-${item.category}`} aria-label={item.name}>
+  // The rank belongs in the accessible name, not only in the marks: a mod held at two ranks is two
+  // cards headed the same word, and without it they are indistinguishable to anyone not reading
+  // the cartouches.
+  const label = rankLabel(item) ? `${item.name}, ${rankLabel(item)}` : item.name
+  return <article className={`entry cat-${item.category}`} aria-label={label}>
     <div className="entry-well">
       {item.image_url && !artFailed
         ? <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" onError={() => setArtFailed(true)}/>
@@ -443,11 +479,20 @@ function CollectionEntry({ item }: { item: CollectionItem }) {
         {missing
           ? <span className="hallmark absent">Missing</span>
           : <span className="hallmark owned">Owned ×{item.quantity}</span>}
+        {rankLabel(item) && <span className={`hallmark rank${atMaxRank(item) ? ' maxed' : ''}`}>{rankLabel(item)}</span>}
         {item.mastered && <span className="hallmark mastered">Mastered</span>}
         {item.platinum !== undefined && <span className={`price${item.live ? ' live' : ''}`}>
           <MetalMark metal="plat" alt="platinum "/>
-          <b>{item.platinum}</b>
-          {item.quantity > 1 && <em>{stackValue(item)} total</em>}
+          {item.platinum_ceiling === undefined
+            ? <>
+              <b>{item.platinum}</b>
+              {item.quantity > 1 && <em>{stackValue(item)} total</em>}
+            </>
+            // Nobody sells a half-ranked card, so the market brackets it without ever quoting it.
+            // The two ends are what is known; a single number here would be invented.
+            : <b title="Sellers list unranked and fully ranked copies only, so this rank sits between the two">
+              {item.platinum}–{item.platinum_ceiling}
+            </b>}
         </span>}
       </div>
       {item.live && <p className="freshness">checked live</p>}
@@ -533,40 +578,93 @@ function DiagnosticsPage({ view }: { view: AppView }) {
   </div>
 }
 
-function SettingsPage() {
+function SettingsPage({ view, priceFloor, onPriceFloor }: { view: AppView; priceFloor: number; onPriceFloor: (floor: number) => void }) {
+  // The slider's own readout. A floor that only moves a figure on another page is a knob with no
+  // dial: this says, at the moment it is dragged, exactly which holding it just wrote off.
+  const counted = view.collection.items.filter(item => (sellableValue(item, priceFloor) ?? 0) > 0)
+  const total = counted.reduce((sum, item) => sum + (sellableValue(item, priceFloor) ?? 0), 0)
   return <section className="page" aria-labelledby="settings-title">
     <div className="mark-head">
-      <h1 id="settings-title" className="mark">Settings &amp; about</h1>
+      <h1 id="settings-title" className="mark">Settings</h1>
+      <p className="prose">Preferences are held on this device, and take effect as they are set.</p>
+    </div>
+
+    <section aria-label="Preferences">
+      <div className="procedure-head">
+        <h2 className="column-head">Preferences</h2>
+      </div>
+      <div className="setting">
+        <div>
+          <h3>Collection price floor</h3>
+          <p className="prose">Stacks worth less than this per copy are left out of the sellable figure, and out of it alone — the market-rate total always counts everything. What the market completes is measured; whether a 3&nbsp;platinum mod is worth an evening of arranging the trade by hand is yours to say.</p>
+        </div>
+        <div className="dial">
+          <label className="dial-slot">
+            <span className="sr-only">Minimum platinum a copy must be worth to count</span>
+            <input
+              type="range"
+              min={0}
+              max={MAX_PRICE_FLOOR}
+              step={1}
+              value={priceFloor}
+              style={{ '--dial-fill': `${priceFloor / MAX_PRICE_FLOOR * 100}%` } as CSSProperties}
+              aria-valuetext={priceFloor ? `${priceFloor} platinum and over` : 'Every price counts'}
+              onChange={event => onPriceFloor(Number(event.target.value))}
+            />
+          </label>
+          <output className="dial-figure">
+            {priceFloor ? <>{priceFloor}<MetalMark metal="plat" alt=" platinum"/><span> and over</span></> : <span>Every price</span>}
+          </output>
+        </div>
+        <p className="band-note">{figure(counted.length)} stacks counted · {figure(total)} platinum sellable</p>
+      </div>
+
+      <div className="setting">
+        <div>
+          <h3>Reward overlay placement</h3>
+          <p className="prose">The strip is drawn against the game's own window, so where it lands is compositor-specific and there is no way to see it without a fissure running. This puts it on screen with nothing to read, and takes it down again.</p>
+        </div>
+        <OverlayPreviewToggle/>
+      </div>
+    </section>
+  </section>
+}
+
+/** What the office says about itself: what it is, and what it does to your machine to say it. */
+function AboutPage() {
+  return <section className="page" aria-labelledby="about-title">
+    <div className="mark-head">
+      <h1 id="about-title" className="mark">About</h1>
       <p className="prose">TennoScope is a free, open-source, local-first companion. GPLv3 · MVP.</p>
     </div>
+
     <div className="clauses">
       <article className="clause">
         <span className="clause-index" aria-hidden="true">I</span>
         <div>
-          <h2>Local-first storage</h2>
+          <h3>Local-first storage</h3>
           <p className="prose">Your inventory snapshot and preferences are stored on this device in the application data directory. The UI has no telemetry or cloud account.</p>
         </div>
       </article>
       <article className="clause caution">
         <span className="clause-index" aria-hidden="true">Caution</span>
         <div>
-          <h2>Read-only access disclosure</h2>
+          <h3>Read-only access disclosure</h3>
           <p className="prose">TennoScope inspects the running game process. Third-party software and process inspection may carry account-policy or anti-cheat risk even when no game memory is modified.</p>
         </div>
       </article>
       <article className="clause">
         <span className="clause-index" aria-hidden="true">II</span>
         <div>
-          <h2>Automatic synchronization</h2>
+          <h3>Automatic synchronization</h3>
           <p className="prose">The local EE.log monitor watches for inventory synchronization and refreshes automatically. Manual refresh remains available in the masthead.</p>
         </div>
       </article>
       <article className="clause">
         <span className="clause-index" aria-hidden="true">III</span>
         <div>
-          <h2>Reward overlay</h2>
-          <p className="prose">Reward names are read from the screen with OCR and matched against the squad's own relic pool. The strip is non-focusable and click-through, so it never takes input from the game. Placement is compositor-specific — preview it here to check where it lands.</p>
-          <OverlayPreviewToggle/>
+          <h3>Reward overlay</h3>
+          <p className="prose">Reward names are read from the screen with OCR and matched against the squad's own relic pool. The strip is non-focusable and click-through, so it never takes input from the game. Settings can preview where it lands.</p>
         </div>
       </article>
     </div>

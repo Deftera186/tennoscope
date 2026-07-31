@@ -193,6 +193,15 @@
   font-variant-numeric: tabular-nums; color: var(--platinum);
 }
 .band-cell.mastered .band-figure { color: var(--gold); }
+/* The qualification on the figure above, in the slot the other cells note themselves in, so the
+   band still reads as one row. Set a shade brighter than a note and in the register's tabular
+   face: it is a second reading of the same holding, not a remark about it. */
+.band-aside {
+  display: block; margin-top: var(--hair);
+  font-family: var(--face-register); font-size: .72rem; letter-spacing: .04em;
+  font-variant-numeric: tabular-nums; color: var(--platinum-dim);
+}
+.band-aside .metal-mark { height: 1em; width: auto; margin-left: .25em; vertical-align: -.12em; }
 .band-label { display: block; margin-top: var(--step); font-family: var(--face-register); font-size: .62rem; letter-spacing: .15em; text-transform: uppercase; color: var(--platinum-dim); }
 .band-note { margin: var(--hair) 0 0; color: var(--platinum-deep); font-size: .72rem; }
 
@@ -338,6 +347,11 @@
 .hallmark.owned { color: var(--platinum); }
 .hallmark.absent { color: var(--platinum-deep); background: var(--plate); }
 .hallmark.mastered { color: var(--gold); }
+/* A rank is a qualifier on the mark beside it, so it sits back from the ownership figure. Fully
+   ranked is the state worth platinum, and it earns the struck lip rather than a new colour: the
+   text reads 10/10 either way, and gold already means mastered. */
+.hallmark.rank { color: var(--platinum-deep); }
+.hallmark.rank.maxed { color: var(--platinum); box-shadow: var(--strike); }
 .hallmark.doubt { color: var(--oxblood); background: rgb(221 111 96 / 18%); }
 
 /* A dump reading is yesterday's median; a live one was fetched moments ago and is good for 15
@@ -495,6 +509,61 @@
 .stages li.degraded .assay-verdict { color: var(--gold); }
 .stages li.failed .assay-verdict { color: var(--oxblood); }
 
+/* ------------------------------------------------------------------ settings */
+
+/* Each preference is a ruled plate under the "Preferences" head, which draws the top rule for the
+   first of them -- so a setting rules only below itself and two never double up. Grid items start
+   rather than stretch: a control is as wide as it needs to be, and the stamp is not a banner. */
+.setting { display: grid; justify-items: start; gap: var(--step); padding: var(--course) 0; border-bottom: 1px solid var(--rule); }
+.setting > * { max-width: 100%; }
+.setting h3, .clause h3 { margin: 0 0 var(--tight); font-family: var(--face-mark); font-size: 1.4rem; font-weight: 700; letter-spacing: -.015em; text-transform: uppercase; color: var(--platinum); }
+.setting .prose { font-size: .84rem; }
+.setting .band-note { margin: 0; }
+
+/* The gauge and its reading, side by side: a slider whose value you have to go and look for
+   somewhere else is a control that answers a question nobody asked it. */
+.dial { display: flex; width: 100%; align-items: center; gap: var(--course); }
+.dial-slot { display: flex; flex: 1 1 auto; min-width: 0; }
+.dial-figure {
+  display: flex; flex: none; align-items: baseline; gap: .4rem;
+  font-family: var(--face-mark); font-size: 2rem; font-weight: 700; line-height: 1;
+  font-variant-numeric: tabular-nums; color: var(--platinum);
+}
+.dial-figure span {
+  font-family: var(--face-register); font-size: .62rem; font-weight: 400;
+  letter-spacing: .15em; text-transform: uppercase; color: var(--platinum-dim);
+}
+
+/* An engraved groove filled in platinum to the setting, with a struck square rider on it. The fill
+   is a gradient driven by an inline custom property because a native progress fill exists in Gecko
+   and not in WebKit, and WebKitGTK is what actually draws this window. */
+.dial-slot input[type="range"] {
+  width: 100%; height: 2.25rem; margin: 0; padding: 0;
+  appearance: none; background: transparent; cursor: pointer;
+}
+.dial-slot input[type="range"]::-webkit-slider-runnable-track {
+  height: 2px; border-radius: 0;
+  background: linear-gradient(to right, var(--platinum) 0 var(--dial-fill, 0%), var(--rule-bright) var(--dial-fill, 0%) 100%);
+}
+.dial-slot input[type="range"]::-moz-range-track {
+  height: 2px; border-radius: 0;
+  background: linear-gradient(to right, var(--platinum) 0 var(--dial-fill, 0%), var(--rule-bright) var(--dial-fill, 0%) 100%);
+}
+.dial-slot input[type="range"]::-webkit-slider-thumb {
+  width: 10px; height: 26px; margin-top: -12px;
+  appearance: none; border: 0; border-radius: 0;
+  background: var(--platinum); box-shadow: var(--strike);
+}
+.dial-slot input[type="range"]::-moz-range-thumb {
+  width: 10px; height: 26px; border: 0; border-radius: 0;
+  background: var(--platinum); box-shadow: var(--strike);
+}
+.dial-slot input[type="range"]:hover::-webkit-slider-thumb { background: var(--gold); }
+.dial-slot input[type="range"]:hover::-moz-range-thumb { background: var(--gold); }
+.dial-slot input[type="range"]:focus { outline: none; }
+.dial-slot input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--touchstone), 0 0 0 4px var(--gold); }
+.dial-slot input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(--touchstone), 0 0 0 4px var(--gold); }
+
 /* ------------------------------------------------------------------- clauses */
 
 .clauses { display: grid; }
@@ -506,8 +575,7 @@
    side stripe: a thick coloured edge on a callout is the oldest tell there is. */
 .clause.caution { padding-inline: var(--step); background: var(--plate); box-shadow: inset 0 1px 0 var(--gold-dim), inset 0 -1px 0 var(--gold-dim); }
 .clause.caution .clause-index { color: var(--gold); }
-.clause.caution h2 { font-size: 1.05rem; }
-.clause h2 { margin: 0 0 var(--tight); font-family: var(--face-mark); font-size: 1.4rem; font-weight: 700; letter-spacing: -.015em; text-transform: uppercase; color: var(--platinum); }
+.clause.caution h3 { font-size: 1.05rem; }
 .clause .prose { font-size: .84rem; }
 .clause .stamp { margin-top: var(--step); }
 
@@ -673,6 +741,8 @@
   .punch-face { padding: .7rem .95rem 1.05rem; }
   .punch-glyph { width: 1.05rem; height: 1.05rem; }
   .clause { grid-template-columns: 1fr; gap: var(--tight); }
+  .dial { flex-direction: column; align-items: flex-start; gap: var(--tight); }
+  .dial-slot { width: 100%; }
   .register-controls { flex-direction: column; }
   /* flex-basis is the main axis: in a column this would become a 22rem HEIGHT. */
   .search-slot { flex: none; }
