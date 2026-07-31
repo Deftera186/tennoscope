@@ -125,8 +125,6 @@ struct Runtime {
     setup: SetupStatus,
     last_refresh_started: Option<Instant>,
     refresh_in_flight: bool,
-    /// One relic sweep at a time; see `spawn_owned_relic_sweep`.
-    relic_sweep_in_flight: bool,
     overlay_preview_until: Option<Instant>,
     monitor_started: bool,
     // Survives across missions on purpose: the same relic pools recur all evening, so a price
@@ -334,12 +332,6 @@ fn refresh_blocking(shared: &SharedRuntime) -> Result<AppView, String> {
     if let Ok(mut runtime) = shared.lock() {
         runtime.refresh_in_flight = false;
     }
-    // A refresh is the only thing that can add a relic to the collection, including the very first
-    // one, which is what turns an empty first-install snapshot into 65 relics the startup sweep
-    // never saw. The lock is released above on purpose: the sweep takes about 22 seconds.
-    if result.is_ok() {
-        spawn_owned_relic_sweep(Arc::clone(shared));
-    }
     result
 }
 
@@ -425,7 +417,6 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         setup,
         last_refresh_started: None,
         refresh_in_flight: false,
-        relic_sweep_in_flight: false,
         overlay_preview_until: None,
         monitor_started: false,
         live_prices,
@@ -1534,25 +1525,31 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
 }
 
 /// Price the collection: cached table first so items are priced before any request is made, then
-/// at most one download for the day's dump, then a live sweep of the relics the player owns.
+/// at most one download for the day's dump. Nothing else. No request is made per item, ever,
+/// unless the player asks for one.
 ///
-/// There is nothing to schedule for the dump itself. The whole collection is priced by a single
-/// file, so that part runs once at start and is done -- no queue, no worker, no rate limiting,
-/// because there are no per-item requests to pace. A cached table that is already as new as
-/// anything published skips the download entirely; the file is 3.9 MB and it changes once a day.
-/// Relics are the exception: the dump's relic prices run up to 1.5x high, so they are priced live
-/// instead, which is where the per-item pacing in `sweep_owned_relics` comes from.
+/// There is nothing to schedule. The whole collection is priced by a single file, so this runs
+/// once at start and is done -- no queue, no worker, no rate limiting, because there are no
+/// per-item requests to pace. A cached table that is already as new as anything published skips
+/// the download entirely; the file is 3.9 MB and it changes once a day.
+///
+/// Relics used to be the exception, swept live at 3 requests a second for about 22 seconds of
+/// every launch, because the dump's relic prices read up to 6x high. They are not an exception any
+/// more: the fault was the *ask*, and the same file carries completed trades, which are per unit.
+/// One file prices only the relics that traded that day, so `PriceTable::adopt` unions it with the
+/// files before it and coverage goes from 45% of a real collection's relics to 96%. The sweep's
+/// remaining job -- the last few percent -- is not worth 70 requests a launch against a holding
+/// that came to 391p.
 ///
 /// The dumps lag, so the usual launch re-downloads the same file it already had. The refreshed
-/// table adopts the checked prices held by the table the runtime is *currently* serving when the
-/// date matches, or the download would throw away every price the last sweep spent 22 seconds
-/// learning.
+/// table adopts from the table the runtime is *currently* serving, or the download would throw
+/// away both the carried relic prices and every price the player spent a request on.
 ///
 /// The download and the fold are deliberately separate steps. `latest_dump` spends seconds on the
 /// network, so it runs outside the lock; the fold, the write to disk and the publish then happen
 /// under one hold of it. Folding in a table read *before* the download would silently erase any
-/// price the relic sweep or a page refresh landed while it was in flight -- prices the player has
-/// already paid requests for -- and erase them from disk as well as memory. Do not reorder these.
+/// price a page refresh landed while it was in flight -- prices the player has already paid
+/// requests for -- and erase them from disk as well as memory. Do not reorder these.
 fn start_collection_prices(shared: SharedRuntime) {
     std::thread::spawn(move || {
         let Some(app_data) = shared.lock().ok().map(|runtime| runtime.app_data.clone()) else {
@@ -1595,7 +1592,7 @@ fn start_collection_prices(shared: SharedRuntime) {
             };
             // The current table, not `cached`: anything checked during the download is in here.
             if let Some(current) = runtime.core.collection_prices() {
-                table.adopt_checked(&current);
+                table.adopt(&current);
             }
             let stored = cache.store_table(&table);
             let priced = table.len();
@@ -1607,109 +1604,8 @@ fn start_collection_prices(shared: SharedRuntime) {
                     "Prices loaded but could not be saved for the next start",
                 ),
             };
-            if stored.is_err() {
-                return;
-            }
-        }
-        spawn_owned_relic_sweep(shared);
-    });
-}
-
-/// Sweep whatever relics are not priced yet, off the calling thread.
-///
-/// A first-ever launch prices nothing: the snapshot does not exist yet, so the startup sweep finds
-/// no owned relics and returns having done nothing anybody can fix without a restart. This is what
-/// fires after an inventory refresh has produced a snapshot -- and after any later refresh that
-/// adds a relic the player did not own before. It costs nothing when there is nothing new, because
-/// the sweep's filter is per-relic.
-///
-/// One sweep at a time. Two overlapping sweeps would spend the same requests twice against an API
-/// with a documented rate limit, and a first run is exactly where refreshes and the startup sweep
-/// collide: the sweep takes about 22 seconds and a refresh may be repeated after 15.
-fn spawn_owned_relic_sweep(shared: SharedRuntime) {
-    let Ok(mut runtime) = shared.lock() else {
-        return;
-    };
-    if runtime.relic_sweep_in_flight {
-        return;
-    }
-    runtime.relic_sweep_in_flight = true;
-    let app_data = runtime.app_data.clone();
-    let live_prices = runtime.live_prices.clone();
-    drop(runtime);
-    std::thread::spawn(move || {
-        sweep_owned_relics(&shared, &CollectionPriceCache::new(&app_data), &live_prices);
-        if let Ok(mut runtime) = shared.lock() {
-            runtime.relic_sweep_in_flight = false;
         }
     });
-}
-
-/// Prices the player's owned relics live and writes the results back into the persisted table, so
-/// they outlive the 15-minute live cache and survive a restart.
-///
-/// Never holds the runtime lock across the sweep: a real collection is 65 relics, about 22 seconds
-/// at the 3-requests/second floor `MarketPriceCache::warm` enforces, and the view is rebuilt every
-/// 2.5 seconds. Everything the sweep needs is copied out under one short lock before `warm` -- which
-/// paces the requests itself -- is ever called; the table is only written back under a second short
-/// lock once the sweep has finished.
-///
-/// Bounded by `owned_relic_market_names`, never by every relic the dump lists, and then by the one
-/// question worth asking per relic: has warframe.market already answered about this one? Answered
-/// means answered, price or no price -- a relic nobody happens to be selling gave a real answer,
-/// and asking only "does it have a price" put that relic back in the queue on every inventory sync
-/// for the rest of the session. Either answer lives exactly as long as the dump it arrived with
-/// (see `PriceTable::adopt_checked`), so that single filter is the whole freshness rule -- there is
-/// no second cadence to keep in step.
-fn sweep_owned_relics(
-    shared: &SharedRuntime,
-    cache: &CollectionPriceCache,
-    live_prices: &MarketPriceCache,
-) {
-    let Ok((owned, table)) = shared.lock().map(|runtime| {
-        (
-            runtime.core.owned_relic_market_names().unwrap_or_default(),
-            runtime.core.collection_prices(),
-        )
-    }) else {
-        return;
-    };
-    let Some(table) = table else {
-        return;
-    };
-    let to_sweep: Vec<String> = owned
-        .into_iter()
-        .filter(|name| !table.has_been_checked(name))
-        .collect();
-    if to_sweep.is_empty() {
-        return;
-    }
-    let Some(market) = warframe_acquisition::WarframeMarketHttp::new() else {
-        return;
-    };
-    if let Ok(mut runtime) = shared.lock() {
-        let _ = runtime
-            .core
-            .record_collection_prices_sweeping(to_sweep.len());
-    }
-    let (outcome, unpriced) = warm_with_progress(shared, &market, &to_sweep, live_prices);
-    let Some((priced, date, stored)) =
-        store_checked_prices(shared, cache, &to_sweep, live_prices, &unpriced)
-    else {
-        return;
-    };
-    let Ok(mut runtime) = shared.lock() else {
-        return;
-    };
-    if let Some(failure) = outcome.failure() {
-        let _ = runtime.core.record_collection_prices_degraded(failure);
-    } else if !stored {
-        let _ = runtime
-            .core
-            .record_collection_prices_degraded(CHECKED_PRICES_UNSAVED);
-    } else {
-        let _ = runtime.core.record_collection_prices_ready(priced, date);
-    }
 }
 
 /// What the collection price row says when a checked price reached memory but not disk.
@@ -1725,12 +1621,12 @@ const CHECKED_PRICES_UNSAVED: &str = "Checked prices could not be saved for the 
 ///
 /// Each name still goes through `warm`, so every request claims a slot from the same shared clock
 /// the reward fill and the pool warm claim from; a one-element slice is paced exactly as a
-/// sixty-five-element one. That is why this is a loop around the existing call rather than a second
+/// forty-eight-element one. That is why this is a loop around the existing call rather than a second
 /// implementation of it beside the rate limiter.
 ///
 /// `Unavailable` is deliberately not collected. An unreachable endpoint is a reason to try again,
 /// and recording it as an answer would blacklist a relic until tomorrow's dump over a router that
-/// rebooted mid-sweep.
+/// rebooted mid-pass.
 fn warm_with_progress(
     shared: &SharedRuntime,
     market: &dyn warframe_acquisition::MarketPriceSource,
@@ -1773,16 +1669,17 @@ fn publish_pricing_progress(shared: &SharedRuntime, pricing: Option<PricingProgr
 /// Folds prices just checked against warframe.market into the persisted price table, so they
 /// outlive the 15-minute live cache and survive a restart.
 ///
-/// The whole read-modify-write-persist runs under one hold of the runtime lock. There are two
-/// writers now -- the startup relic sweep and the page refresh -- and either could otherwise
-/// clone the table, be overtaken, and then write its stale copy over the other's prices on disk.
+/// The whole read-modify-write-persist runs under one hold of the runtime lock. The page refresh
+/// is the only writer, but two of them overlap readily -- the player clicks, changes page, clicks
+/// again -- and either could otherwise clone the table, be overtaken, and then write its stale
+/// copy over the other's prices on disk.
 /// The network work is deliberately *not* in here: callers pace their own requests first and call
 /// this with the answers, so the lock the 2.5-second view poll needs is held for a clone and a
 /// file write rather than for twenty seconds of HTTP.
 ///
 /// `unpriced` are the names the market answered about with nothing for sale. They are folded in
 /// the same hold and persisted by the same write, because a no-seller answer that only reached
-/// memory would put those relics back in the next sweep's queue after a restart.
+/// memory would make the next refresh re-ask about them after a restart.
 ///
 /// Returns how many items the table can now price, the dump date it belongs to, and whether the
 /// write to disk succeeded.

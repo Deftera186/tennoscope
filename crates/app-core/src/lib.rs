@@ -10,7 +10,7 @@ use serde::Serialize;
 use thiserror::Error;
 use warframe_acquisition::{
     AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogIndex, CatalogLoadSource,
-    MarketPriceCache, PriceTable, StageState, relic_base,
+    MarketPriceCache, PriceTable, StageState,
 };
 use warframe_domain::{
     CatalogItem, Category, DomainError, InventoryEntry, InventorySnapshot, RewardAdvisor,
@@ -109,10 +109,10 @@ impl AppCore {
 
     /// How far through a live pricing pass we are, or `None` when none is running.
     ///
-    /// Published rather than inferred because both passes that spend requests -- the background
-    /// relic sweep and the page refresh -- are the only things that know their own total, and the
-    /// collection's worth figure moves the whole time either is running. A reader watching a
-    /// number climb with nothing to explain it has been given a moving target, not a valuation.
+    /// Published rather than inferred because the page refresh is the only thing that knows its
+    /// own total, and the collection's worth figure moves the whole time it is running. A reader
+    /// watching a number climb with nothing to explain it has been given a moving target, not a
+    /// valuation.
     pub fn set_pricing_progress(&mut self, pricing: Option<PricingProgress>) {
         self.pricing = pricing;
     }
@@ -130,44 +130,11 @@ impl AppCore {
         let mut names = collection
             .entries()
             .filter(|entry| item_ids.iter().any(|id| id == entry.item.id.as_str()))
+            // A ranked row will not show what comes back -- the market answers about rank 0 -- so
+            // asking on its behalf spends a request to learn a number that is then discarded. The
+            // unranked row of the same name, where one is owned, still asks for it.
+            .filter(|entry| entry.rank.unwrap_or(0) == 0)
             .filter_map(|entry| prices.market_name(&entry.item.name))
-            .collect::<Vec<_>>();
-        names.sort();
-        names.dedup();
-        Ok(names)
-    }
-
-    /// warframe.market's names for the relics the player owns, one per refinement tier owned.
-    ///
-    /// Bounded by ownership rather than by the dump: the dump lists every relic the game has (772
-    /// measured), while the sweep this feeds spends one request per name at 3/second, and a real
-    /// collection owns a few dozen of them -- 65 versus 772 is the difference between 22 seconds
-    /// and four minutes.
-    ///
-    /// A refined relic drags its intact listing into the sweep alongside it. That listing is what
-    /// `price_for` falls back to, and it has to be asked about for the fallback to hold anything:
-    /// measured over 80 relics, no `exceptional` or `flawless` tier had a single online seller and
-    /// 61% of `radiant` tiers had none either, so without the intact price those relics would go
-    /// from showing an approximate number to showing nothing. It costs no extra request for the
-    /// ordinary case, where the player owns the intact copy too and the dedup below folds them.
-    pub fn owned_relic_market_names(&self) -> Result<Vec<String>, AppError> {
-        let Some(prices) = self.prices.as_ref() else {
-            return Ok(Vec::new());
-        };
-        let relic_names: std::collections::HashSet<String> =
-            prices.relic_market_names().into_iter().collect();
-        let collection = self.store.load_collection()?;
-        let mut names = collection
-            .entries()
-            .filter(|entry| entry.quantity >= 1)
-            .filter_map(|entry| prices.market_name(&entry.item.name))
-            .filter(|name| relic_names.contains(relic_base(name).unwrap_or(name)))
-            .flat_map(|name| {
-                relic_base(&name)
-                    .map(str::to_owned)
-                    .into_iter()
-                    .chain(std::iter::once(name))
-            })
             .collect::<Vec<_>>();
         names.sort();
         names.dedup();
@@ -177,8 +144,8 @@ impl AppCore {
     /// The daily price table currently backing the collection view, if it has loaded.
     ///
     /// Returned by value (an `Arc` clone) rather than borrowed, so a caller can read it, drop the
-    /// runtime lock, and spend a long time (the relic sweep, ~22 seconds) working from the copy
-    /// without holding the lock the 2.5-second view poll also needs.
+    /// runtime lock, and spend a long time (a page's live pricing, ~16 seconds) working from the
+    /// copy without holding the lock the 2.5-second view poll also needs.
     pub fn collection_prices(&self) -> Option<Arc<PriceTable>> {
         self.prices.clone()
     }
@@ -205,21 +172,33 @@ impl AppCore {
                     .prices
                     .as_ref()
                     .and_then(|prices| prices.market_name(&entry.item.name));
+                // A live check answers about the listing's default rank, which is rank 0: the
+                // orders endpoint returns the cheapest sellers and those are unranked copies.
+                // Measured 2026-07-30, `arcane_reaper` answers 10p unranked against 350p at rank 5.
+                // The cache and the checked-price map are keyed by listing name alone, so both
+                // numbers would otherwise land on every rank row of that name and quote a maxed
+                // arcane at what an unranked one goes for.
+                let unranked = entry.rank.unwrap_or(0) == 0;
                 let live = market_name
                     .as_deref()
+                    .filter(|_| unranked)
                     .zip(self.live.as_ref())
                     .and_then(|(name, cache)| cache.get(name));
-                let stored = market_name
-                    .as_deref()
-                    .zip(self.prices.as_ref())
-                    .and_then(|(name, prices)| prices.price_for(name));
+                let stored =
+                    market_name
+                        .as_deref()
+                        .zip(self.prices.as_ref())
+                        .map(|(name, prices)| {
+                            prices.ranked_price_for(name, entry.rank, entry.at_max_rank())
+                        });
                 // A price the player checked against warframe.market is persisted into the price
-                // table so it outlives that cache's fifteen minutes: a relic has no dump price at
-                // all, and for everything else the checked number is the better of the two.
+                // table so it outlives that cache's fifteen minutes: most relics have no dump price
+                // at all, and everywhere else the checked number is the better of the two.
                 // Presenting either as a dump price once the cache has dropped it would attribute
                 // it to a file it did not come from.
                 let checked = market_name
                     .as_deref()
+                    .filter(|_| unranked)
                     .zip(self.prices.as_ref())
                     .is_some_and(|(name, prices)| prices.has_checked_price(name));
                 // Resolving to a market name is the whole test for whether this item can be
@@ -229,9 +208,20 @@ impl AppCore {
                 // single request.
                 CollectionItemView::priced(
                     entry,
-                    live.or(stored),
+                    live.or(stored.and_then(|price| price.platinum)),
                     live.is_some() || checked,
                     market_name.is_some(),
+                )
+                // A live check answers for the listing, which is the unranked one, so it does not
+                // settle a part-ranked copy. The bound stands until the copy is finished.
+                .with_price_ceiling(stored.and_then(|price| price.ceiling))
+                // Read from the same table whether or not this copy has a price, and never from the
+                // live cache: the orders endpoint reports who is selling, not who bought.
+                .with_monthly_trades(
+                    market_name
+                        .as_deref()
+                        .zip(self.prices.as_ref())
+                        .and_then(|(name, prices)| prices.monthly_trades(name)),
                 )
             })
             .collect::<Vec<_>>();
@@ -260,7 +250,10 @@ impl AppCore {
         let entries = collection
             .entries()
             .map(|entry| {
-                let Some(metadata) = catalog.resolve(entry.item.id.as_str()) else {
+                // By path, not by id: a ranked row's id carries its rank, and the catalogue has
+                // never heard of it. Resolving on the raw id left every ranked mod holding the
+                // decoder's fallback label and no artwork.
+                let Some(metadata) = catalog.resolve(entry.item.id.catalog_path()) else {
                     return Ok(entry.clone());
                 };
                 let mut item = CatalogItem::new(
@@ -271,7 +264,14 @@ impl AppCore {
                 if let Some(image_name) = metadata.image_name() {
                     item = item.with_image_name(image_name)?;
                 }
-                Ok(InventoryEntry::new(item, entry.quantity).with_mastered(entry.mastered))
+                let enriched =
+                    InventoryEntry::new(item, entry.quantity).with_mastered(entry.mastered);
+                // Enrichment is about the card, not the copies. Dropping the rank here put both
+                // rows of a mod back on one price.
+                Ok(match entry.rank {
+                    Some(rank) => enriched.with_rank(rank, entry.max_rank),
+                    None => enriched,
+                })
             })
             .collect::<Result<Vec<_>, DomainError>>()?;
         self.store
@@ -505,25 +505,6 @@ impl AppCore {
         self.current_view()
     }
 
-    /// The startup relic sweep has begun, on the same row as `record_collection_prices_ready`.
-    ///
-    /// A ~22-second sweep with nothing written to this row until it finishes reads as work that
-    /// never started, not work that is running -- Diagnostics is the only place that 22 seconds is
-    /// visible at all, since nothing else in the UI waits on it. It says how many relics it set out
-    /// to check and no more: the sweep skips names the live cache already holds without counting
-    /// them, so anything the pass reports back is not a fraction of this number.
-    pub fn record_collection_prices_sweeping(
-        &mut self,
-        relics: usize,
-    ) -> Result<AppView, AppError> {
-        let last_success = self.health.collection_prices.last_success.clone();
-        self.health.collection_prices = BackendHealth::ready(
-            format!("Checking live prices for {relics} owned relics"),
-            last_success,
-        )?;
-        self.current_view()
-    }
-
     pub fn record_capture_degraded(
         &mut self,
         message: impl Into<String>,
@@ -560,7 +541,7 @@ pub struct CollectionView {
     items: Vec<CollectionItemView>,
     total_entries: usize,
     snapshot: Option<SnapshotMeta>,
-    /// A live pricing pass in flight, background sweep or page refresh alike.
+    /// A live pricing pass in flight: the player asked about the page in front of them.
     pricing: Option<PricingProgress>,
 }
 
@@ -601,9 +582,23 @@ pub struct CollectionItemView {
     image_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     platinum: Option<u32>,
+    /// The maxed quote for a copy stopped part-way up. Present only with `platinum`, and only when
+    /// the market prices the two ends of the range but nothing between them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platinum_ceiling: Option<u32>,
+    /// The rank these copies carry, absent for the unranked stack and for anything that cannot be
+    /// ranked at all.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rank: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_rank: Option<u32>,
     live: bool,
     /// Whether warframe.market can be asked about this item at all.
     priceable: bool,
+    /// How many of these the market completes in a month. Absent when nobody traded one today,
+    /// which for a holding means the same as none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    monthly_trades: Option<u32>,
 }
 
 impl CollectionItemView {
@@ -635,15 +630,34 @@ impl CollectionItemView {
         self.platinum
     }
 
+    /// The top of the range for a part-ranked copy the market brackets but never quotes.
+    pub fn platinum_ceiling(&self) -> Option<u32> {
+        self.platinum_ceiling
+    }
+
+    pub fn rank(&self) -> Option<u32> {
+        self.rank
+    }
+
+    pub fn max_rank(&self) -> Option<u32> {
+        self.max_rank
+    }
+
     /// Whether this price came from warframe.market just now, rather than from the daily dump.
     pub fn live(&self) -> bool {
         self.live
     }
 
     /// Whether warframe.market has a listing this item's name resolves to. Not the same as having
-    /// a price: a relic the sweep has not reached yet is priceable and shows a dash.
+    /// a price: a relic no dump in the last month has traded is priceable and shows a dash.
     pub fn priceable(&self) -> bool {
         self.priceable
+    }
+
+    /// The market's appetite for these, over a month. The other half of what a stack is worth: a
+    /// correct 2p unit price on 182 copies is still not 364p if the game trades two a month.
+    pub fn monthly_trades(&self) -> Option<u32> {
+        self.monthly_trades
     }
 
     fn priced(
@@ -658,6 +672,16 @@ impl CollectionItemView {
             priceable,
             ..Self::from(entry)
         }
+    }
+
+    fn with_price_ceiling(mut self, ceiling: Option<u32>) -> Self {
+        self.platinum_ceiling = ceiling;
+        self
+    }
+
+    fn with_monthly_trades(mut self, traded: Option<u32>) -> Self {
+        self.monthly_trades = traded;
+        self
     }
 }
 
@@ -675,8 +699,12 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
                 )
             }),
             platinum: None,
+            platinum_ceiling: None,
+            rank: entry.rank,
+            max_rank: entry.max_rank,
             live: false,
             priceable: false,
+            monthly_trades: None,
         }
     }
 }

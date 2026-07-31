@@ -310,7 +310,7 @@ impl WarmOutcome {
     /// Oversize outranks everything: it does not fix itself, it hits every item at once, and as an
     /// absent price it presents as "the whole collection is worthless" with nothing saying
     /// otherwise. An unreachable endpoint is reported whether or not the pass priced anything --
-    /// a 65-relic sweep that lost half its prices to an outage is not a healthy pass, and reading
+    /// a 48-item page that lost half its prices to an outage is not a healthy pass, and reading
     /// Ready off it is how a player concludes those relics are simply worthless. A pass that priced
     /// something and merely found an item unsold is not news.
     pub fn failure(self) -> Option<&'static str> {

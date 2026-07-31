@@ -101,6 +101,61 @@ fn a_live_price_takes_precedence_over_the_dump_and_says_so() {
     assert!(view.collection().items()[0].live());
 }
 
+/// The two ranks are two holdings and must not converge on one number.
+///
+/// The live cache and the checked-price map are keyed by listing name alone, and both rank rows
+/// resolve to the same one. Applied to both, the market's answer -- which is about rank 0, because
+/// the orders endpoint returns the cheapest sellers and those are unranked -- would price a maxed
+/// mod at what an unranked one goes for.
+#[test]
+fn a_live_price_answers_for_the_unranked_row_only() {
+    let dump = r#"{"Serration": [
+        {"order_type":"sell","median":48.0,"mod_rank":10,"volume":40},
+        {"order_type":"sell","median":3.0,"mod_rank":0,"volume":300}
+    ]}"#;
+    let mut core = core_with_items(vec![
+        item("/a", "Serration", Category::Mod, 3),
+        item("/a#10", "Serration", Category::Mod, 1).with_rank(10, Some(10)),
+    ]);
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+    let live = MarketPriceCache::new();
+    live.insert("Serration", 4);
+    core.set_live_prices(live);
+
+    let view = core.current_view().expect("view builds");
+    let rows: Vec<_> = view
+        .collection()
+        .items()
+        .iter()
+        .map(|item| (item.rank(), item.platinum(), item.live()))
+        .collect();
+
+    assert_eq!(
+        rows,
+        vec![(None, Some(4), true), (Some(10), Some(48), false)],
+        "the unranked row takes the live 4p, the maxed row the dump's maxed median"
+    );
+}
+
+/// A request whose answer the row would discard is a request not worth spending.
+#[test]
+fn a_ranked_row_is_not_offered_for_a_live_lookup() {
+    let core = core_with_items(vec![
+        item("/a#10", "Serration", Category::Mod, 1).with_rank(10, Some(10)),
+    ]);
+    let mut core = core;
+    core.set_collection_prices(Arc::new(
+        PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("fixture parses"),
+    ));
+
+    assert_eq!(
+        core.market_names_for(&["/a#10".to_owned()]).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
 /// The live cache keys on warframe.market's name, which is not always the catalog's. Resolving
 /// through the dump is what lets a relic priced live be found again.
 #[test]
@@ -269,70 +324,6 @@ fn an_item_the_player_does_not_own_is_not_priced() {
     let items = view.collection().items();
     assert_eq!(items[0].platinum(), None, "quantity 0 is not owned");
     assert_eq!(items[1].platinum(), Some(20));
-}
-
-/// The sweep is bounded by what the player owns, not by what exists. Measured against a real
-/// collection that is 65 relics and about 22 seconds; the dump lists 772.
-#[test]
-fn only_owned_relics_are_swept() {
-    let dump = r#"{
-        "Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}],
-        "Meso B2 Relic": [{"order_type":"sell","median":9.0,"volume":12}],
-        "Serration": [{"order_type":"sell","median":50.0,"volume":12}]
-    }"#;
-    let mut core = core_with_items(vec![
-        item("/a", "Axi A1 Radiant", Category::Relic, 2),
-        item("/b", "Meso B2 Intact", Category::Relic, 0),
-        item("/c", "Serration", Category::Resource, 1),
-    ]);
-    core.set_collection_prices(Arc::new(
-        PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
-    ));
-
-    assert_eq!(
-        core.owned_relic_market_names().expect("resolves"),
-        vec![
-            "Axi A1 Relic".to_owned(),
-            "Axi A1 Relic (Radiant)".to_owned()
-        ],
-        "a relic at quantity 0 is not owned, and a resource is not a relic"
-    );
-}
-
-/// A radiant relic drags its intact listing into the sweep, because that listing is what its price
-/// falls back to when nobody is selling the refined tier -- which measured over 80 relics is 61% of
-/// radiants, and every single `exceptional` and `flawless`.
-#[test]
-fn a_refined_relic_sweeps_the_intact_listing_it_falls_back_to() {
-    let dump = r#"{"Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}]}"#;
-    let mut core = core_with_items(vec![item("/a", "Axi A1 Radiant", Category::Relic, 3)]);
-    core.set_collection_prices(Arc::new(
-        PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
-    ));
-
-    assert_eq!(
-        core.owned_relic_market_names().unwrap(),
-        vec![
-            "Axi A1 Relic".to_owned(),
-            "Axi A1 Relic (Radiant)".to_owned()
-        ]
-    );
-}
-
-/// Owning the intact copy as well costs nothing extra: it is the same name the refined tier
-/// already pulled in, and the dedup folds them.
-#[test]
-fn owning_a_tier_and_its_intact_fallback_is_one_request_each() {
-    let dump = r#"{"Axi A1 Relic": [{"order_type":"sell","median":20.0,"volume":30}]}"#;
-    let mut core = core_with_items(vec![
-        item("/a", "Axi A1 Intact", Category::Relic, 1),
-        item("/b", "Axi A1 Radiant", Category::Relic, 3),
-    ]);
-    core.set_collection_prices(Arc::new(
-        PriceTable::from_dump_json(dump.as_bytes(), "2026-07-27").expect("fixture parses"),
-    ));
-
-    assert_eq!(core.owned_relic_market_names().unwrap().len(), 2);
 }
 
 /// The page control promised prices for items it was never going to send. It counted everything

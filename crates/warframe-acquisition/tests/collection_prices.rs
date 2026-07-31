@@ -37,7 +37,7 @@ fn refresh(
 ) -> Result<PriceTable, PriceDumpError> {
     let mut table = latest_dump(source, now_unix)?;
     if let Some(previous) = previous {
-        table.adopt_checked(previous);
+        table.adopt(previous);
     }
     cache.store_table(&table)?;
     Ok(table)
@@ -92,15 +92,169 @@ fn a_blueprint_resolves_to_a_listing_without_the_suffix() {
     assert_eq!(table.price_for("Forma Blueprint"), Some(8));
 }
 
-/// warframe.market's statistics quote a bulk listing's whole lot, and the dump mirrors them
-/// unmodified, so a relic's daily median runs high — measured up to 6x, and heavy-tailed enough
-/// that no constant corrects it. Relics are priced from a live sweep instead, which has `perTrade`
-/// to divide by, and until that lands they have no price rather than an inflated one.
+/// warframe.market's `sell` statistics quote a bulk listing's whole lot, and the dump mirrors them
+/// unmodified, so a relic's daily ask runs high — measured up to 6x, and heavy-tailed enough that
+/// no constant corrects it. An ask is therefore never a relic's price, however alone it stands.
 #[test]
-fn a_relic_is_not_priced_from_the_dump() {
+fn a_relic_is_not_priced_from_the_dumps_asking_price() {
     let table = table();
     assert_eq!(table.price_for("Axi A1 Radiant"), None);
     assert_eq!(table.price_for("Axi A1 Relic"), None);
+}
+
+/// The `closed` statistics are the same day's *completed trades*, and they are quoted per unit --
+/// warframe.market's bulk-lot fault is in `statistics_live` alone. Measured 2026-07-30 on
+/// `lith_t11_relic` intact: 30p asked, 4.5p traded, and 4.67-5.00p per unit across all four online
+/// sellers. So a relic that traded has a dump price, and the sweep no longer has to buy it.
+#[test]
+fn a_relic_that_traded_is_priced_from_the_closed_statistics() {
+    let dump = r#"{"Lith T11 Relic": [
+        {"order_type":"closed","median":4.5,"subtype":"intact","volume":561},
+        {"order_type":"closed","median":6.0,"subtype":"radiant","volume":152},
+        {"order_type":"sell","median":30.0,"subtype":"intact","volume":847}
+    ]}"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    assert_eq!(
+        table.price_for("Lith T11 Intact"),
+        Some(5),
+        "the traded price, not the 30p six-pack ask"
+    );
+    assert_eq!(table.price_for("Lith T11 Radiant"), Some(6));
+    assert!(
+        !table.has_checked_price("Lith T11 Relic"),
+        "a dump price is not a live check, however good it is"
+    );
+    assert!(
+        table.market_name("Lith T11 Intact").is_some(),
+        "and the name still resolves, so a page refresh can still improve on it"
+    );
+}
+
+/// A tier that did not trade borrows the intact tier's traded price, exactly as it already borrowed
+/// its checked one. Over 80 relics nobody at all was selling `exceptional` or `flawless`, and the
+/// closed records are thinner still: 157 of the 172 in the 2026-07-30 dump are intact.
+#[test]
+fn a_tier_that_did_not_trade_falls_back_to_the_intact_one() {
+    let dump = r#"{"Lith T11 Relic": [
+        {"order_type":"closed","median":4.5,"subtype":"intact","volume":561}
+    ]}"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    assert_eq!(table.price_for("Lith T11 Flawless"), Some(5));
+}
+
+/// A closed record standing on one or two trades is one player's odd deal, not a price. Measured on
+/// the 2026-07-30 dump, every record quoting more than 1.5x its own ask sat at volume 4 or below.
+/// For a relic there is no ask to fall back to, so a thin record leaves it unpriced -- which is the
+/// answer the sweep is for.
+#[test]
+fn a_closed_price_on_too_few_trades_is_refused() {
+    let dump = r#"{
+        "Lith T11 Relic": [{"order_type":"closed","median":90.0,"subtype":"intact","volume":2}],
+        "Vitality": [
+            {"order_type":"closed","median":115.0,"volume":2},
+            {"order_type":"sell","median":1.0,"volume":300}
+        ]
+    }"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    assert_eq!(table.price_for("Lith T11 Intact"), None);
+    assert_eq!(
+        table.price_for("Vitality"),
+        Some(1),
+        "an item with an ask falls back to it rather than quoting two trades"
+    );
+}
+
+/// A closed record clears the volume floor and still reads high. `Vitality` unranked on 2026-07-30
+/// closed at 115p on four trades -- against a 1p ask backed by 3,186 listings -- and its rank-10
+/// row asks 35p. Trusting the trade outright priced 113 unranked copies at 35p, 3,955p of one
+/// account's collection, from a rank nobody in it held. The lower of the two measurements is the
+/// price, so a freak trade loses to the ask exactly as a six-pack ask loses to the trade.
+#[test]
+fn a_closed_price_above_its_own_ask_loses_to_it() {
+    let dump = r#"{"Vitality": [
+        {"order_type":"closed","median":115.0,"mod_rank":0,"volume":4},
+        {"order_type":"sell","median":1.0,"mod_rank":0,"volume":3186},
+        {"order_type":"closed","median":27.0,"mod_rank":10,"volume":1},
+        {"order_type":"sell","median":35.0,"mod_rank":10,"volume":4809}
+    ]}"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    assert_eq!(
+        table
+            .ranked_price_for("Vitality", Some(0), Some(false))
+            .platinum,
+        Some(1),
+        "four trades do not outweigh three thousand listings"
+    );
+    assert_eq!(
+        table
+            .ranked_price_for("Vitality", Some(10), Some(true))
+            .platinum,
+        Some(35),
+        "and the maxed row keeps its own ask rather than the unranked mess"
+    );
+}
+
+/// The rank is matched, never crossed. `Serration` on 2026-07-30 carries a `closed` record at rank
+/// 10 and none at rank 0: reading the closed median without pairing it to its own rank prices every
+/// unranked copy at the maxed 20p. That is the fault `CACHE_SCHEMA` was bumped for the first time,
+/// and preferring `closed` is precisely the change that could restore it.
+#[test]
+fn a_closed_price_at_one_rank_does_not_price_another() {
+    let dump = r#"{"Serration": [
+        {"order_type":"closed","median":20.0,"mod_rank":10,"volume":14},
+        {"order_type":"sell","median":49.0,"mod_rank":10,"volume":1346},
+        {"order_type":"sell","median":3.0,"mod_rank":0,"volume":1540}
+    ]}"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    assert_eq!(
+        table
+            .ranked_price_for("Serration", Some(0), Some(false))
+            .platinum,
+        Some(3),
+        "an unranked copy keeps its own rank's ask; the rank-10 trade is not its price"
+    );
+    assert_eq!(
+        table
+            .ranked_price_for("Serration", Some(10), Some(true))
+            .platinum,
+        Some(20),
+        "the maxed copy takes the maxed trade over the maxed ask"
+    );
+}
+
+/// The seven listings in a real dump that are quoted at one rank above 0 and nowhere else. All
+/// seven are between 80p and 300p, so the copy that pays for the mistake is always an expensive one.
+#[test]
+fn a_rank_only_quote_does_not_price_an_unranked_copy() {
+    let dump = r#"{"Scan Matter": [
+        {"order_type":"sell","median":240.0,"mod_rank":3,"volume":17}
+    ]}"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    assert_eq!(
+        table
+            .ranked_price_for("Scan Matter", Some(0), Some(false))
+            .platinum,
+        None,
+        "nothing in the dump says what an unranked copy goes for, and the rank-3 ask does not"
+    );
+    assert_eq!(
+        table
+            .ranked_price_for("Scan Matter", Some(3), Some(true))
+            .platinum,
+        Some(240),
+        "the maxed copy is the one the quote is for"
+    );
+    assert_eq!(
+        table.market_name("Scan Matter").as_deref(),
+        Some("Scan Matter"),
+        "the name still resolves, so the page refresh can ask what the unranked copy is worth"
+    );
 }
 
 /// Resolution still works, because the live sweep needs the market name to build its slug.
@@ -172,12 +326,6 @@ fn a_refined_relic_falls_back_to_the_intact_listing() {
 }
 
 #[test]
-fn the_relics_needing_a_sweep_are_the_ones_the_dump_lists() {
-    let names = table().relic_market_names();
-    assert_eq!(names, vec!["Axi A1 Relic".to_owned()]);
-}
-
-#[test]
 fn a_non_relic_is_still_priced_from_the_dump() {
     assert_eq!(table().price_for("Serration"), Some(50));
 }
@@ -227,6 +375,77 @@ fn resolution_yields_the_market_name_the_live_lookup_needs() {
     );
     assert_eq!(table.market_name("Serration"), Some("Serration".to_owned()));
     assert_eq!(table.market_name("Not An Item"), None);
+}
+
+/// The dump quotes a rankable listing twice and no more: rank 0 and the ceiling. Measured on the
+/// 2026-07-29 dump, 1,512 of 1,514 rankable names carry exactly those two.
+const RANKED_DUMP: &str = r#"{
+    "Serration": [
+        {"order_type":"sell","median":48.0,"mod_rank":10,"volume":40},
+        {"order_type":"sell","median":3.0,"mod_rank":0,"volume":300},
+        {"order_type":"buy","median":15.0,"mod_rank":10,"volume":12}
+    ],
+    "Arcane Reaper": [
+        {"order_type":"sell","median":400.0,"mod_rank":5,"volume":8},
+        {"order_type":"sell","median":15.0,"mod_rank":0,"volume":60}
+    ],
+    "Mirage Prime Systems Blueprint": [
+        {"order_type":"sell","median":20.0,"volume":1127}
+    ]
+}"#;
+
+fn ranked_table() -> PriceTable {
+    PriceTable::from_dump_json(RANKED_DUMP.as_bytes(), "2026-07-29").expect("fixture parses")
+}
+
+/// The stack the collection is overwhelmingly made of. A mod's plain listing price is its rank-0
+/// one, and quoting the maxed median here valued an unranked `Arcane Reaper` at 400p when its own
+/// rank sells for 15p.
+#[test]
+fn an_unranked_copy_takes_the_rank_zero_price() {
+    let priced = ranked_table().ranked_price_for("Arcane Reaper", None, None);
+
+    assert_eq!(priced.platinum, Some(15));
+    assert_eq!(priced.ceiling, None, "there is nothing to bound");
+}
+
+#[test]
+fn a_fully_ranked_copy_takes_the_maxed_price() {
+    let priced = ranked_table().ranked_price_for("Serration", Some(10), Some(true));
+
+    assert_eq!(priced.platinum, Some(48));
+    assert_eq!(priced.ceiling, None, "the ceiling is this copy's own price");
+}
+
+/// Nobody lists a half-ranked card, so the market brackets it without ever quoting it. Either end
+/// presented alone is a number the player cannot get: 3p sells their work short, 48p is not on
+/// offer for what they hold.
+#[test]
+fn a_part_ranked_copy_is_bounded_rather_than_priced() {
+    let priced = ranked_table().ranked_price_for("Serration", Some(7), Some(false));
+
+    assert_eq!(priced.platinum, Some(3));
+    assert_eq!(priced.ceiling, Some(48));
+}
+
+/// A riven's ceiling is unpublished -- the catalogue's 515 is a sentinel -- and an unknown ceiling
+/// is not the same answer as "not maxed". Claiming the maxed quote for a copy that might not have
+/// earned it would overstate the holding, so it stays a bound.
+#[test]
+fn a_ranked_copy_with_no_known_ceiling_is_bounded_too() {
+    let priced = ranked_table().ranked_price_for("Serration", Some(3), None);
+
+    assert_eq!(priced.platinum, Some(3));
+    assert_eq!(priced.ceiling, Some(48));
+}
+
+/// Rank is a fact about mods and arcanes. A prime part has one price and must not grow a range.
+#[test]
+fn an_unrankable_item_has_no_maxed_quote() {
+    let priced = ranked_table().ranked_price_for("Mirage Prime Systems Blueprint", Some(3), None);
+
+    assert_eq!(priced.platinum, Some(20));
+    assert_eq!(priced.ceiling, None);
 }
 
 /// A truncated download must be rejected whole. Half a dump applied silently would halve the
@@ -492,7 +711,7 @@ fn the_startup_refresh_must_adopt_from_the_current_table_not_a_pre_download_snap
     current.insert_checked("Serration", 42); // a page refresh landed during the download
 
     let mut from_snapshot = table();
-    from_snapshot.adopt_checked(&snapshot);
+    from_snapshot.adopt(&snapshot);
     assert_eq!(
         from_snapshot.price_for("Serration"),
         Some(50),
@@ -500,7 +719,7 @@ fn the_startup_refresh_must_adopt_from_the_current_table_not_a_pre_download_snap
     );
 
     let mut from_current = table();
-    from_current.adopt_checked(&current);
+    from_current.adopt(&current);
     assert_eq!(from_current.price_for("Serration"), Some(42));
 }
 
@@ -567,20 +786,25 @@ fn a_corrupt_cache_file_yields_no_table_rather_than_a_panic() {
     );
 }
 
-/// A cache written before this map was generalised names it `relic_prices`. Reading it under the
-/// old name is one serde attribute against re-spending a whole sweep's requests on the first
-/// launch after an upgrade.
+/// A cache written by an older parse must be refused, not read.
+///
+/// What is stored is the parsed table, and `dump_is_current` skips the download while the stored
+/// date is today's or yesterday's -- so a pricing fix does not reach a running install until the
+/// publisher moves on. It happened: the 2026-07-29 dump was cached before subtypes were priced
+/// apart, storing `Serration` at its maxed 48p under the plain listing name, and every rank of
+/// every mod showed that price for a day after the fix shipped. One download is the cost of not
+/// doing that again.
 #[test]
-fn a_cache_written_under_the_old_field_name_still_carries_its_prices() {
+fn a_cache_written_by_an_older_parse_is_refused() {
     let directory = tempfile::tempdir().expect("temp dir");
-    let stored = r#"{"prices":{"Serration":50},"relic_names":["Axi A1 Relic"],"relic_prices":{"Axi A1 Relic":17},"dump_date":"2026-07-27"}"#;
+    let stored = r#"{"prices":{"Serration":48},"relic_names":["Axi A1 Relic"],"checked_prices":{"Axi A1 Relic":17},"dump_date":"2026-07-27"}"#;
     std::fs::write(directory.path().join("collection-prices.json"), stored).expect("write cache");
 
-    let table = CollectionPriceCache::new(directory.path())
-        .load_cached()
-        .expect("a stored table is readable");
-
-    assert_eq!(table.price_for("Axi A1 Radiant"), Some(17));
+    assert!(
+        CollectionPriceCache::new(directory.path())
+            .load_cached()
+            .is_none()
+    );
 }
 
 /// A checked price survives the cache round-trip, or every restart would cost another sweep.
@@ -705,4 +929,212 @@ fn a_no_seller_answer_is_not_counted_as_a_priced_item() {
     table.mark_checked_unpriced("Axi A1 Relic");
 
     assert_eq!(table.len(), before);
+}
+
+/// A relic price outlives the dump that produced it.
+///
+/// Only 163 of 772 relics carry a `closed` record on any given day, so one file prices 44% of a
+/// real collection's relics and the next file prices a different 44%. They do not disagree; they
+/// are sparse. Unioning them reaches 96% at twenty-eight days, and every one of those days is a
+/// download the app already makes.
+#[test]
+fn a_relic_price_carries_into_the_next_dump() {
+    let priced = r#"{"Lith T11 Relic": [
+        {"order_type":"closed","median":4.5,"subtype":"intact","volume":561}
+    ]}"#;
+    let silent = r#"{"Lith T11 Relic": [
+        {"order_type":"sell","median":30.0,"subtype":"intact","volume":847}
+    ]}"#;
+    let yesterday =
+        PriceTable::from_dump_json(priced.as_bytes(), "2026-07-29").expect("fixture parses");
+    let mut today =
+        PriceTable::from_dump_json(silent.as_bytes(), "2026-07-30").expect("fixture parses");
+    assert_eq!(today.price_for("Lith T11 Intact"), None, "nothing traded");
+
+    today.adopt(&yesterday);
+
+    assert_eq!(
+        today.price_for("Lith T11 Intact"),
+        Some(5),
+        "yesterday's traded price, not today's 30p six-pack ask"
+    );
+    assert!(
+        !today.has_checked_price("Lith T11 Relic"),
+        "a carried dump price is still a dump price"
+    );
+
+    // And it goes on carrying, so a relic that trades once a fortnight stays priced.
+    let mut tomorrow =
+        PriceTable::from_dump_json(silent.as_bytes(), "2026-07-31").expect("fixture parses");
+    tomorrow.adopt(&today);
+    assert_eq!(tomorrow.price_for("Lith T11 Intact"), Some(5));
+}
+
+/// Carried thirty days and no further. Past a month the number stops being a stale reading and
+/// starts being a guess, and a relic still uncarried by then is one nobody has traded in a month.
+#[test]
+fn a_carried_relic_price_expires() {
+    let priced = r#"{"Lith T11 Relic": [
+        {"order_type":"closed","median":4.5,"subtype":"intact","volume":561}
+    ]}"#;
+    let old = PriceTable::from_dump_json(priced.as_bytes(), "2026-06-29").expect("fixture parses");
+
+    let mut just_inside =
+        PriceTable::from_dump_json(b"{}", "2026-07-29").expect("an empty dump parses");
+    just_inside.adopt(&old);
+    assert_eq!(just_inside.price_for("Lith T11 Intact"), Some(5), "30 days");
+
+    let mut just_outside =
+        PriceTable::from_dump_json(b"{}", "2026-07-30").expect("an empty dump parses");
+    just_outside.adopt(&old);
+    assert_eq!(just_outside.price_for("Lith T11 Intact"), None, "31 days");
+}
+
+/// Today's file wins over a carried one, and only relics are carried at all. Everything else is
+/// priced from an ask that is quoted fresh every day; carrying those would keep a number alive for
+/// a month that the very next download already answered.
+#[test]
+fn todays_dump_wins_and_only_relics_are_carried() {
+    let yesterday = r#"{
+        "Lith T11 Relic": [{"order_type":"closed","median":4.5,"subtype":"intact","volume":561}],
+        "Serration": [{"order_type":"sell","median":50.0,"mod_rank":0,"volume":12}]
+    }"#;
+    let today = r#"{
+        "Lith T11 Relic": [{"order_type":"closed","median":9.0,"subtype":"intact","volume":300}]
+    }"#;
+    let yesterday =
+        PriceTable::from_dump_json(yesterday.as_bytes(), "2026-07-29").expect("fixture parses");
+    let mut today =
+        PriceTable::from_dump_json(today.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    today.adopt(&yesterday);
+
+    assert_eq!(
+        today.price_for("Lith T11 Intact"),
+        Some(9),
+        "today's trade, not yesterday's"
+    );
+    assert_eq!(
+        today.price_for("Serration"),
+        None,
+        "a mod delisted from the dump reads as unpriced rather than as a month-old ask"
+    );
+}
+
+/// A unit price is half of what a holding is worth. The other half is how many the market takes:
+/// this account owns 182 `Quickdraw` at a correct 2p, and the whole game traded two in the window.
+#[test]
+fn the_market_appetite_is_counted_from_completed_trades_alone() {
+    let dump = r#"{
+        "Quickdraw": [
+            {"order_type":"closed","median":2.0,"mod_rank":0,"volume":0.1},
+            {"order_type":"sell","median":2.0,"mod_rank":0,"volume":740}
+        ],
+        "Scan Matter": [{"order_type":"sell","median":240.0,"mod_rank":3,"volume":17}]
+    }"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    assert_eq!(
+        table.monthly_trades("Quickdraw"),
+        Some(3),
+        "a tenth of a trade a day is three a month, and the 740 people asking are not buyers"
+    );
+    assert_eq!(
+        table.monthly_trades("Scan Matter"),
+        None,
+        "nobody completed a trade, so there is no appetite to report -- only an asking price"
+    );
+    assert_eq!(
+        table.monthly_trades("Vitality"),
+        None,
+        "and an item the dump does not carry at all is not resolvable, let alone traded"
+    );
+}
+
+/// The `MIN_CLOSED_VOLUME` floor is about whether a median is a price. It has nothing to say about
+/// whether a trade happened, and applying it here would report a thinly traded item as untraded.
+#[test]
+fn one_trade_is_too_thin_to_be_a_price_and_still_counts_as_a_trade() {
+    let dump = r#"{"Pressure Point": [
+        {"order_type":"closed","median":50.0,"mod_rank":0,"volume":1},
+        {"order_type":"sell","median":1.0,"mod_rank":0,"volume":900}
+    ]}"#;
+    let table = PriceTable::from_dump_json(dump.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    assert_eq!(
+        table.price_for("Pressure Point"),
+        Some(1),
+        "one trade at 50p against a 1p ask is one player's odd deal, and the ask bounds it"
+    );
+    assert_eq!(
+        table.monthly_trades("Pressure Point"),
+        Some(30),
+        "that odd deal was still a trade, and thirty a month is the market this stack sells into"
+    );
+}
+
+/// A relic's price is carried for up to thirty days because the dumps are sparse. The appetite has
+/// to ride along, and for every item rather than only the relics: `Intruder` completed 159 trades
+/// across twenty-eight days and carries no `closed` record at all on the 2026-07-30 dump, so a stack
+/// of 104 read as unsellable on the strength of one quiet morning. It rides along as a mean, not as
+/// the last count seen -- a day with no trade is a real zero, and a rate that only ever inherits the
+/// days somebody bought one reads every quiet listing as a busy one.
+#[test]
+fn a_quiet_day_averages_into_the_appetite_rather_than_replacing_it() {
+    let yesterday = r#"{
+        "Lith T11 Relic": [{"order_type":"closed","median":5.0,"subtype":"intact","volume":8}],
+        "Intruder": [
+            {"order_type":"closed","median":3.0,"mod_rank":0,"volume":6},
+            {"order_type":"sell","median":3.0,"mod_rank":0,"volume":14436}
+        ]
+    }"#;
+    let today = r#"{
+        "Serration": [{"order_type":"sell","median":3.0,"mod_rank":0,"volume":90}],
+        "Intruder": [{"order_type":"sell","median":3.0,"mod_rank":0,"volume":14436}]
+    }"#;
+    let yesterday =
+        PriceTable::from_dump_json(yesterday.as_bytes(), "2026-07-29").expect("fixture parses");
+    let mut today =
+        PriceTable::from_dump_json(today.as_bytes(), "2026-07-30").expect("fixture parses");
+
+    today.adopt(&yesterday);
+
+    assert_eq!(today.price_for("Lith T11 Intact"), Some(5));
+    assert_eq!(
+        today.monthly_trades("Lith T11 Intact"),
+        Some(120),
+        "eight trades one day and none the next is four a day, not eight"
+    );
+    assert_eq!(
+        today.monthly_trades("Intruder"),
+        Some(90),
+        "a quiet day is not an unsellable item, and not a free pass either"
+    );
+    assert_eq!(
+        today.monthly_trades("Serration"),
+        None,
+        "an item no dump in hand has seen trade is still untraded"
+    );
+}
+
+/// The counts expire on the same thirty-day boundary as the prices. A month-old reading of what the
+/// market wanted is a guess, and the figure it feeds is a plan rather than a keepsake.
+#[test]
+fn a_carried_trade_count_expires() {
+    let old = r#"{"Intruder": [
+        {"order_type":"closed","median":3.0,"mod_rank":0,"volume":6},
+        {"order_type":"sell","median":3.0,"mod_rank":0,"volume":14436}
+    ]}"#;
+    let today = r#"{"Intruder": [{"order_type":"sell","median":3.0,"mod_rank":0,"volume":14436}]}"#;
+    let old = PriceTable::from_dump_json(old.as_bytes(), "2026-06-29").expect("fixture parses");
+
+    let mut within =
+        PriceTable::from_dump_json(today.as_bytes(), "2026-07-29").expect("fixture parses");
+    within.adopt(&old);
+    assert_eq!(within.monthly_trades("Intruder"), Some(90), "thirty days");
+
+    let mut past =
+        PriceTable::from_dump_json(today.as_bytes(), "2026-07-30").expect("fixture parses");
+    past.adopt(&old);
+    assert_eq!(past.monthly_trades("Intruder"), None, "thirty-one does not");
 }
