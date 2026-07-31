@@ -986,10 +986,15 @@ fn trace_player_record_evidence(
 /// `TENNOSCOPE_DEBUG_LOG` redirects the file. Tests that exercise instrumented code otherwise
 /// append to the same log the live app writes, and a test fixture's output is indistinguishable
 /// from a real run once it is in there -- which already cost one misreading of this log.
+///
+/// The default lives in the platform temp directory rather than at a literal `/tmp`: there is no
+/// `/tmp` on Windows, so a hardcoded path meant every one of these lines was silently dropped on
+/// the platform where a remote tester is the only way to see them at all.
 #[cfg(debug_assertions)]
 pub fn append_debug_line(line: &str) {
-    let path = std::env::var("TENNOSCOPE_DEBUG_LOG")
-        .unwrap_or_else(|_| "/tmp/tennoscope-reward-debug.log".to_owned());
+    let path = std::env::var_os("TENNOSCOPE_DEBUG_LOG")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("tennoscope-reward-debug.log"));
     let Ok(mut output) = OpenOptions::new().create(true).append(true).open(path) else {
         return;
     };
@@ -1022,7 +1027,7 @@ fn trace_rejected_response_record(pid: u32, identity: &str, address: u64, bytes:
     let suffix = identity
         .get(identity.len().saturating_sub(6)..)
         .unwrap_or(identity);
-    let path = format!("/tmp/tennoscope-rejected-{pid}-{suffix}.bin");
+    let path = std::env::temp_dir().join(format!("tennoscope-rejected-{pid}-{suffix}.bin"));
     let Ok(mut output) = OpenOptions::new().create(true).append(true).open(path) else {
         return;
     };

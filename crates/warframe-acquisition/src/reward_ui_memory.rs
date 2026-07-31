@@ -210,10 +210,10 @@ fn capture_ambiguous_graph(process: &GameProcess, candidates: &[(usize, Containe
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    let path = format!(
-        "/tmp/tennoscope-ui-ambiguity-{}-{timestamp}.json",
+    let path = std::env::temp_dir().join(format!(
+        "tennoscope-ui-ambiguity-{}-{timestamp}.json",
         process.pid()
-    );
+    ));
     if let Ok(bytes) = serde_json::to_vec(candidates) {
         let _ = fs::write(path, bytes);
     }
