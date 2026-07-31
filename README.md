@@ -2,14 +2,14 @@
 
 # TennoScope
 
-**A Warframe companion for Linux. No Overwolf, no account, no telemetry.**
+**A Warframe companion for Linux and Windows. No Overwolf, no account, no telemetry.**
 
 Reads your collection off the running game and tells you which relic reward is worth taking,
 while the timer is still going.
 
 [![CI](https://github.com/Deftera186/tennoscope/actions/workflows/ci.yml/badge.svg)](https://github.com/Deftera186/tennoscope/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Platform: Linux](https://img.shields.io/badge/platform-Linux-informational.svg)](#install)
+[![Platform: Linux | Windows](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-informational.svg)](#install)
 
 </div>
 
@@ -102,6 +102,21 @@ sudo apt install ./TennoScope_*_amd64.deb     # Debian, Ubuntu
 sudo dnf install ./TennoScope-*.x86_64.rpm    # Fedora
 ```
 
+### Windows
+
+Download the `.exe` from the [latest release](https://github.com/Deftera186/tennoscope/releases/latest)
+and run it. It installs for your user only, so there is no UAC prompt, and it carries everything
+it needs — there is nothing else to install.
+
+Windows SmartScreen will warn you the first time, because the installer is not code-signed: a
+certificate costs money this project does not take. "More info" then "Run anyway" gets past it.
+
+> [!IMPORTANT]
+> Set **Display Mode** to **Borderless** in Warframe's options. In exclusive fullscreen the game
+> owns the display outright and no application can draw over it — the collection browser still
+> works, but the reward overlay will not appear. TennoScope says so in its diagnostics panel if it
+> hits this.
+
 ### Anything else — AppImage
 
 ```bash
@@ -114,16 +129,17 @@ Self-contained, no `tennoscope` command. If you want one:
 
 ### The overlay's toolchain
 
-The collection browser works on its own. The relic overlay shells out to `xwininfo`, ImageMagick 7
-(`magick` — the v6 `convert` will not do) and `tesseract` with English data. The `.deb` and `.rpm`
-list these as recommended rather than required, so install them if your package manager skipped
-them:
+On Windows there is nothing to do: the installer ships its own copy of Tesseract.
+
+On Linux the collection browser works on its own, and the relic overlay needs `tesseract` with
+English data. The `.deb` and `.rpm` list it as recommended rather than required, so install it if
+your package manager skipped it:
 
 ```bash
-sudo apt install x11-utils imagemagick tesseract-ocr tesseract-ocr-eng   # Debian, Ubuntu
-sudo dnf install xorg-x11-utils ImageMagick tesseract tesseract-langpack-eng  # Fedora
-sudo pacman -S xorg-xwininfo imagemagick tesseract tesseract-data-eng    # Arch
-sudo emerge x11-apps/xwininfo media-gfx/imagemagick app-text/tesseract   # Gentoo
+sudo apt install tesseract-ocr tesseract-ocr-eng     # Debian, Ubuntu
+sudo dnf install tesseract tesseract-langpack-eng    # Fedora
+sudo pacman -S tesseract tesseract-data-eng          # Arch
+sudo emerge app-text/tesseract                       # Gentoo
 ```
 
 ### Building it yourself
@@ -131,29 +147,39 @@ sudo emerge x11-apps/xwininfo media-gfx/imagemagick app-text/tesseract   # Gento
 ```bash
 corepack enable
 cd app && pnpm install --frozen-lockfile
-pnpm tauri build          # AppImage, .deb and .rpm land in target/release/bundle/
+pnpm tauri build          # Linux: AppImage, .deb and .rpm in target/release/bundle/
+                          # Windows: an NSIS installer in target/release/bundle/nsis/
 ```
 
 Per-distribution prerequisites and the packaging recipes are in
 [`packaging/`](packaging/README.md). Building needs Rust 1.85+, Node 20.19+, pnpm 10 and the
-Tauri 2 Linux libraries.
+Tauri 2 Linux libraries. A Windows build additionally wants `scripts/vendor-windows-tesseract.ps1`
+run first, which fetches the Tesseract the installer bundles.
 
 Running needs:
 
-- Linux, with Warframe running through Wine or Proton and logged in.
-- Permission to inspect your own game process. If acquisition fails, see
-  [process permissions](#process-permissions).
+- Linux with Warframe running through Wine or Proton, or Windows 10/11 with the native client.
+  Either way, logged in.
+- Permission to inspect your own game process. On Linux, if acquisition fails, see
+  [process permissions](#process-permissions). On Windows no elevation is needed — the game runs
+  as the same user.
+- On Windows, Warframe set to **Borderless** display mode, or the overlay cannot be drawn.
 - Network access for the inventory request, the item catalog and market prices. The catalog is
   cached for offline use.
 
 ## Known limits
 
-- **Linux only, for now.** Acquisition reads `/proc`. Windows and macOS support is the goal, but
-  no adapter exists yet.
-- **Overlay placement** reads the game rectangle from `xwininfo` and draws an override-redirect
-  X11 window over it, which is window-manager independent: Warframe is an X11 client under Wine
-  and Proton alike, and the app joins it there rather than asking the compositor for anything.
-  Verified on sway; other compositors are untested rather than unsupported.
+- **No macOS.** Warframe has no macOS client, so there is nothing to read.
+- **Overlay placement on Linux** draws an override-redirect X11 window over the game rectangle,
+  which is window-manager independent: Warframe is an X11 client under Wine and Proton alike, and
+  the app joins it there rather than asking the compositor for anything. Verified on sway; other
+  compositors are untested rather than unsupported.
+- **Overlay placement on Windows** uses a topmost, click-through, never-activated window. That
+  beats a borderless game and cannot beat an exclusive-fullscreen one, which is why Borderless is
+  a requirement rather than a suggestion. If a driver or overlay conflict leaves the strip
+  invisible, `TENNOSCOPE_OPAQUE_OVERLAY=1` draws it with a solid background instead.
+- **Windows polling costs more than Linux.** There is no `soft-dirty` equivalent, so every memory
+  poll rescans every region rather than only the pages the game wrote.
 - **Card geometry** is calibrated on 16:9 and scales by window width. Ultrawide is untested and
   may drift.
 - **English reward names** only.
@@ -172,7 +198,10 @@ pinned Warframe inventory origin, the pinned catalog source and warframe.market.
 
 ## Process permissions
 
-TennoScope must read `/proc/<pid>/maps` and `/proc/<pid>/mem` of your own game process.
+On Windows this section does not apply: TennoScope opens the game with `PROCESS_VM_READ` as the
+same user that launched it, which needs no elevation and no configuration.
+
+On Linux, TennoScope must read `/proc/<pid>/maps` and `/proc/<pid>/mem` of your own game process.
 
 ```bash
 cat /proc/sys/kernel/yama/ptrace_scope   # 0 normally permits same-user inspection

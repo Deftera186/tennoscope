@@ -24,8 +24,9 @@ not apply. What matters instead:
 - **Escalation.** Anything that requires or encourages running as root, a setuid binary, or broad
   capabilities. The documented answer to a `ptrace_scope` failure is a user decision, never a
   privilege grab by the application.
-- **Command injection** through the external tools the reward reader shells out to (`xwininfo`,
-  `import`, `magick`, `tesseract`).
+- **Command injection** through `tesseract`, the one external tool the reward reader still shells
+  out to. On Windows that is the copy bundled with the installer; a path that would run a
+  different one is in scope.
 - **Catalog integrity.** The item catalog is fetched over the network and cached. A path that
   accepts an unvalidated or partial generation is in scope.
 

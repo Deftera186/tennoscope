@@ -11,6 +11,24 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Added
+
+- **Windows support.** TennoScope now runs on Windows 10 and 11 against the native game client,
+  with the same collection browser, the same reward overlay and the same local-only storage. The
+  installer is a per-user NSIS package: no administrator prompt, no prerequisites, and it carries
+  its own copy of Tesseract so there is nothing else to install. It is not code-signed, so
+  SmartScreen warns on first run.
+- **Warframe's display mode is checked.** On Windows an exclusive-fullscreen game owns the display
+  and nothing can draw over it, so the diagnostics panel now asks for Borderless when it cannot
+  find the game window, instead of reporting a generic capture failure.
+
+### Changed
+
+- **The reward reader no longer shells out to anything but Tesseract.** Screen capture, cropping,
+  contrast normalisation and thresholding are all in-process Rust now. On Linux that means
+  `xwininfo` and ImageMagick are no longer needed at all — packages have dropped them from their
+  recommended dependencies — and every read is one process spawn instead of four.
+
 ## [0.4.1] - 2026-07-31
 
 ### Fixed

@@ -23,8 +23,12 @@ cd app && pnpm install --frozen-lockfile
 ```
 
 You will also need the Tauri 2 Linux system libraries, and — for the reward reader's tests —
-ImageMagick 7 and `tesseract` with English data. Per-distribution commands are in
+`tesseract` with English data. Per-distribution commands are in
 [`packaging/README.md`](packaging/README.md).
+
+The Windows half of the port cannot be verified by a Linux `cargo test`, because `cfg(windows)`
+code is not compiled by it. CI has a windows-latest leg for exactly this; locally, `cargo xwin`
+with `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine` builds and runs the same tests in seconds.
 
 ```bash
 cd app && pnpm tauri dev

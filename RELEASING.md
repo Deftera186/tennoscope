@@ -21,7 +21,7 @@ Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
 ## Cutting a release
 
 1. **Confirm the tree is green.** CI runs this, but run it locally too — the reward reader's tests
-   need ImageMagick and Tesseract, and a machine missing one fails differently than CI does.
+   need Tesseract, and a machine missing it fails differently than CI does.
 
    ```bash
    cargo fmt --all --check
