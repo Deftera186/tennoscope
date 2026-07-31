@@ -38,6 +38,9 @@ Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
    - `app/package.json` — `version`
    - `packaging/arch/PKGBUILD` — `pkgver`
 
+   Then `cargo update --workspace --offline`, so `Cargo.lock` carries the new version too. The
+   release build runs `--locked` and fails on a lockfile that still names the old one.
+
 3. **Close the changelog section.** Rename `## [Unreleased]` to `## [0.1.0] - YYYY-MM-DD`, open a
    fresh empty `## [Unreleased]` above it, and update the link definitions at the bottom.
 
