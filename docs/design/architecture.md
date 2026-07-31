@@ -19,7 +19,7 @@ The first release provides:
 - English UI recognition, with locale-independent catalog identities in storage; and
 - native packaging for Arch, Gentoo, Debian/Ubuntu, and Fedora, plus an AppImage fallback.
 
-The MVP excludes Windows and macOS support, Flatpak, accounts, telemetry, cloud synchronization, trade automation, builds, mods, arcanes, general resources, farming planners, and non-English recognition.
+The MVP excludes Windows and macOS support, Flatpak, accounts, telemetry, cloud synchronization, trade automation, builds, farming planners, and non-English recognition.
 
 ## User Experience
 
