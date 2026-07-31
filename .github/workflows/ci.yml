@@ -59,10 +59,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The reward tests shell out to tesseract on every platform. Chocolatey's package puts it on
-      # PATH, which is all the OCR path asks for.
+      # The reward tests shell out to tesseract on every platform. Chocolatey appends to the
+      # *machine* PATH, which a step already running never sees -- every later step inherits the
+      # environment captured when the job started, so the tests reported "tesseract is not
+      # available" against an installed tesseract. `$GITHUB_PATH` is the one that reaches them.
       - name: Install tesseract
-        run: choco install --no-progress -y tesseract
+        run: |
+          choco install --no-progress -y tesseract
+          "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
+        shell: pwsh
 
       - uses: Swatinem/rust-cache@v2
 

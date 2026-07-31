@@ -26,8 +26,14 @@ jobs:
       - uses: actions/checkout@v5
 
       # The installer ships its own Tesseract, so the runner needs one only for the test suite.
+      # Chocolatey appends to the *machine* PATH, which later steps do not see -- they inherit the
+      # environment captured when the job started -- so `$GITHUB_PATH` is what actually reaches
+      # the tests. Without it every OCR test fails with "tesseract is not available".
       - name: Install tesseract
-        run: choco install --no-progress -y tesseract
+        run: |
+          choco install --no-progress -y tesseract
+          "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
+        shell: pwsh
 
       - name: Vendor tesseract for the bundle
         run: ./scripts/vendor-windows-tesseract.ps1
