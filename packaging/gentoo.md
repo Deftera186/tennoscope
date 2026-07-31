@@ -33,9 +33,10 @@ The two block each other; emerge one or the other.
 
 ## Runtime dependencies
 
-Both pull in the WebKitGTK stack, plus the relic overlay's toolchain: `x11-apps/xwininfo`,
-`media-gfx/imagemagick[X]` — the `X` flag is what provides `import`, and 7.x is what provides
-`magick` — and `app-text/tesseract`, whose English data is installed unconditionally.
+Both pull in the WebKitGTK stack, plus the relic overlay's one external tool,
+`app-text/tesseract`, whose English data is installed unconditionally. Window location and the
+crop pipeline used to need `x11-apps/xwininfo` and `media-gfx/imagemagick`; both are in-process
+now and neither is a dependency any more.
 
 ## Building an untagged commit
 

@@ -27,8 +27,8 @@ jobs:
       # Cheap and first: four files declare the release version and nothing else makes them agree.
       - run: ./scripts/check-versions.sh
 
-      # Tauri's Linux system libraries, plus tesseract and ImageMagick's `import`. The reward tests
-      # skip nothing, so everything they shell out to has to be here.
+      # Tauri's Linux system libraries plus tesseract. Screen capture and the crop pipeline are
+      # Rust now, so tesseract is the only thing the reward tests still shell out to.
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -39,23 +39,8 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \
-            imagemagick \
             tesseract-ocr \
             tesseract-ocr-eng
-
-      # noble's `imagemagick` is 6.9, which has no `magick` binary -- that name only exists in 7,
-      # and the OCR crop pipeline is written against it. The AppImage is upstream's only prebuilt
-      # 7 for Linux; it is extracted rather than run directly because the runner has no FUSE.
-      - name: Install ImageMagick 7
-        run: |
-          curl -fsSL -o magick.AppImage \
-            https://github.com/ImageMagick/ImageMagick/releases/download/7.1.2-29/ImageMagick-7.1.2-29-gcc-x86_64.AppImage
-          chmod +x magick.AppImage
-          ./magick.AppImage --appimage-extract > /dev/null
-          sudo mv squashfs-root /opt/imagemagick
-          sudo ln -s /opt/imagemagick/AppRun /usr/local/bin/magick
-          rm magick.AppImage
-          magick -version
 
       # No toolchain action: rust-toolchain.toml pins the channel and components, and rustup on
       # the runner installs it on the first cargo call. One source of truth for the version.

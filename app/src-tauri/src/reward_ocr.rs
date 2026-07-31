@@ -500,6 +500,37 @@ pub fn threshold_inverted(grey: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+/// The bundled Tesseract's file name, which is the whole of the platform difference.
+pub const TESSERACT_EXECUTABLE: &str = if cfg!(windows) {
+    "tesseract.exe"
+} else {
+    "tesseract"
+};
+
+/// Which Tesseract to run, given the app's resource directory.
+///
+/// Windows has no package manager to lean on and no player should have to install an OCR engine
+/// before the overlay works, so the NSIS bundle ships one under `tesseract/` and this prefers it.
+/// The fallback is not a nicety: a `cargo test` run has no resource directory at all, and every
+/// Linux package still gets Tesseract from the distribution.
+pub fn tesseract_program(resource_dir: &Path) -> PathBuf {
+    let bundled = resource_dir.join("tesseract").join(TESSERACT_EXECUTABLE);
+    if bundled.is_file() {
+        return bundled;
+    }
+    PathBuf::from("tesseract")
+}
+
+/// Set once at startup from the resolved resource directory, because the OCR path is reached from
+/// worker threads that have no `AppHandle` to ask.
+static TESSERACT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Point the OCR path at the bundled engine. Called once from Tauri's `setup`; later calls lose,
+/// which is what makes this safe to call from a test that only wants the default.
+pub fn use_bundled_tesseract(resource_dir: &Path) {
+    let _ = TESSERACT.set(tesseract_program(resource_dir));
+}
+
 /// OCR a crop that `read_region` has already isolated to text.
 ///
 /// `--psm 11`, sparse text, rather than the obvious `--psm 6`, one uniform block. The title band
@@ -517,7 +548,22 @@ pub fn threshold_inverted(grey: &[u8]) -> Vec<u8> {
 /// does not need. What it costs is a little leading punctuation, which `normalise` drops before the
 /// match ever sees it.
 pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
-    let text = Command::new("tesseract")
+    let program = TESSERACT
+        .get()
+        .cloned()
+        .unwrap_or_else(|| "tesseract".into());
+    let mut command = Command::new(&program);
+    // The bundled engine's `eng.traineddata` sits beside it, not in the install prefix it was
+    // compiled with, so it has to be told where to look. `--tessdata-dir` rather than the
+    // `TESSDATA_PREFIX` environment variable because setting one of those is `unsafe` since the
+    // 2024 edition, and this crate forbids that.
+    if let Some(directory) = program.parent().filter(|path| !path.as_os_str().is_empty()) {
+        command.args([
+            std::ffi::OsStr::new("--tessdata-dir"),
+            directory.as_os_str(),
+        ]);
+    }
+    let text = command
         .arg(image)
         .args(["-", "--psm", "11"])
         .output()

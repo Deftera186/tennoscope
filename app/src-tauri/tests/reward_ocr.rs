@@ -402,3 +402,24 @@ fn threshold_keeps_text_and_inverts_for_tesseract() {
         vec![255, 0, 255, 0]
     );
 }
+
+/// Windows has no package manager to lean on, and asking a player to install Tesseract before the
+/// overlay works is exactly the extra step this bundle exists to remove. So the installer ships the
+/// binary next to the app and the OCR path prefers it -- but only when it is really there, because
+/// a developer build has no bundled copy and must still find the one on PATH.
+#[test]
+fn ocr_prefers_the_bundled_tesseract_over_the_one_on_path() {
+    let empty = tempfile::tempdir().expect("temp dir");
+    assert_eq!(
+        app_lib::tesseract_program(empty.path()),
+        std::path::PathBuf::from("tesseract"),
+        "with nothing bundled the OCR path must fall back to PATH"
+    );
+
+    let bundled = tempfile::tempdir().expect("temp dir");
+    let directory = bundled.path().join("tesseract");
+    std::fs::create_dir_all(&directory).expect("create bundle dir");
+    let program = directory.join(app_lib::TESSERACT_EXECUTABLE);
+    std::fs::write(&program, b"").expect("write stub");
+    assert_eq!(app_lib::tesseract_program(bundled.path()), program);
+}

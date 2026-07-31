@@ -14,7 +14,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "TennoScope — Local-first Warframe Companion",
+        "title": "TennoScope \u2014 Local-first Warframe Companion",
         "width": 1180,
         "height": 760,
         "minWidth": 360,
@@ -25,7 +25,7 @@
       },
       {
         "label": "reward-overlay",
-        "title": "TennoScope — Reward Advisor",
+        "title": "TennoScope \u2014 Reward Advisor",
         "url": "/overlay",
         "width": 1100,
         "height": 190,
@@ -46,7 +46,11 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["appimage", "deb", "rpm"],
+    "targets": [
+      "appimage",
+      "deb",
+      "rpm"
+    ],
     "category": "Utility",
     "license": "GPL-3.0-only",
     "licenseFile": "../../LICENSE",
@@ -61,17 +65,12 @@
     "linux": {
       "deb": {
         "recommends": [
-          "x11-utils",
-          "imagemagick",
           "tesseract-ocr",
           "tesseract-ocr-eng"
         ]
       },
       "rpm": {
         "recommends": [
-          "/usr/bin/xwininfo",
-          "/usr/bin/magick",
-          "/usr/bin/import",
           "/usr/bin/tesseract"
         ]
       }
