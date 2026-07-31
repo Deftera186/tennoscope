@@ -1,7 +1,9 @@
 mod common;
 
 use common::{FakeTransport, ok, ok_with_token, status};
-use warframe_market::{MarketError, MarketToken, Method, sign_in, verify_token};
+use warframe_market::{
+    MarketError, MarketRequest, MarketResponse, MarketToken, Method, sign_in, verify_token,
+};
 
 /// A fake token. Shaped like a JWT so the parsing is exercised, but signed by nobody and
 /// belonging to no account.
@@ -135,4 +137,29 @@ fn neither_the_token_nor_the_password_survives_into_a_rendering() {
         !rendered.contains("player@example.invalid"),
         "address leaked: {rendered}"
     );
+
+    // The same rule applies once the token is on a request or a response: rendering either must
+    // not print it, even though both derive `Clone` and both are ordinary structs a caller might
+    // hand to `{:?}` without thinking about what they carry.
+    let request = MarketRequest {
+        method: Method::Post,
+        url: "https://api.warframe.market/v1/auth/signin".to_owned(),
+        token: Some(FAKE_TOKEN.to_owned()),
+        body: Some(format!(r#"{{"email":"player@example.invalid","password":"{password}"}}"#)),
+    };
+    let rendered = format!("{request:?}");
+    assert!(!rendered.contains(FAKE_TOKEN), "token leaked: {rendered}");
+    assert!(!rendered.contains(password), "password leaked: {rendered}");
+    assert!(
+        !rendered.contains("player@example.invalid"),
+        "address leaked: {rendered}"
+    );
+
+    let response = MarketResponse {
+        status: 200,
+        authorization: Some(format!("JWT {FAKE_TOKEN}")),
+        body: b"{}".to_vec(),
+    };
+    let rendered = format!("{response:?}");
+    assert!(!rendered.contains(FAKE_TOKEN), "token leaked: {rendered}");
 }

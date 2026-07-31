@@ -31,7 +31,7 @@ pub enum Method {
 ///
 /// Separate so a transport cannot accidentally log a formatted request that carries the
 /// credential, and so a test can assert on the URL without the token appearing in the failure.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MarketRequest {
     pub method: Method,
     pub url: String,
@@ -39,13 +39,45 @@ pub struct MarketRequest {
     pub body: Option<String>,
 }
 
+/// Hand-written so a stray `{request:?}` -- in a log line, a panic message, an `.expect(&format!())`
+/// -- prints the method and url and nothing that could be a credential. `token` is the account
+/// token; `body` is, for signin, the serialized password.
+impl std::fmt::Debug for MarketRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MarketRequest")
+            .field("method", &self.method)
+            .field("url", &self.url)
+            .field("token", &self.token.as_ref().map(|_| "<redacted>"))
+            .field("body", &self.body.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 /// The response, with the `Authorization` header kept because that is where a renewed token
 /// arrives -- warframe.market reissues on use rather than only at signin.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct MarketResponse {
     pub status: u16,
     pub authorization: Option<String>,
     pub body: Vec<u8>,
+}
+
+/// Hand-written: `authorization` carries a renewed token, and `body` on an account route
+/// describes the player's orders, so neither belongs in a rendering. The status and body length
+/// are kept because they are what a diagnostic actually needs.
+impl std::fmt::Debug for MarketResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MarketResponse")
+            .field("status", &self.status)
+            .field(
+                "authorization",
+                &self.authorization.as_ref().map(|_| "<redacted>"),
+            )
+            .field("body_len", &self.body.len())
+            .finish()
+    }
 }
 
 pub trait MarketTransport {
