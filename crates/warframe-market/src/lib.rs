@@ -16,6 +16,9 @@ use thiserror::Error;
 pub const API_V1: &str = "https://api.warframe.market/v1";
 pub const API_V2: &str = "https://api.warframe.market/v2";
 
+mod auth;
+pub use auth::{MarketToken, renewed_token, sign_in, verify_token};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Method {
     Get,
