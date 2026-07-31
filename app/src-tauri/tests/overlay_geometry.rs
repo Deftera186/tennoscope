@@ -163,3 +163,24 @@ fn only_an_exact_title_match_counts_as_the_game() {
         );
     }
 }
+
+/// Exclusive fullscreen is the one placement this app cannot win on Windows: the game owns the
+/// display, its window never appears in the enumeration the overlay measures against, and nothing
+/// short of a swapchain hook draws above it. So a missing rect is the signal, and the panel has to
+/// say the one thing that fixes it rather than reporting a generic capture problem.
+///
+/// Linux does not share the failure -- an override-redirect window sits above a Wine fullscreen
+/// game -- so the notice must stay off that platform entirely.
+#[test]
+fn a_missing_game_window_asks_for_borderless_only_where_that_is_the_cure() {
+    assert_eq!(app_lib::borderless_notice(true), None, "found: nothing to say");
+    let missing = app_lib::borderless_notice(false);
+    if cfg!(windows) {
+        assert!(
+            missing.is_some_and(|notice| notice.contains("Borderless")),
+            "the notice must name the display mode that fixes it, got {missing:?}"
+        );
+    } else {
+        assert_eq!(missing, None, "override-redirect already covers fullscreen");
+    }
+}

@@ -85,17 +85,48 @@ fn overlay_geometry(
         }))
 }
 
-pub fn configure_reward_overlay(window: &WebviewWindow) -> tauri::Result<()> {
-    // A full squad at startup: nothing has been read yet, and `show_reward_overlay` resizes to the
-    // real count before the strip is ever on screen.
-    let geometry = overlay_geometry(window, crate::reward_ocr::MAX_CARDS)?;
+/// What to tell the player when the game window could not be located.
+///
+/// On Windows an exclusive-fullscreen game owns the display outright: it is absent from the window
+/// enumeration the overlay measures against, and no window style draws above it. Borderless is the
+/// fix, so the panel names it. Linux has no such gap -- the override-redirect strip sits above a
+/// Wine fullscreen game -- so there is nothing to ask for there.
+pub const fn borderless_notice(found: bool) -> Option<&'static str> {
+    if found || !cfg!(windows) {
+        return None;
+    }
+    Some(
+        "Warframe window not found. Set Display Mode to Borderless in the game's options; \
+         the overlay cannot draw over exclusive fullscreen.",
+    )
+}
+
+/// The notice for the game as it is right now, or `None` when there is nothing to say.
+pub fn overlay_placement_notice() -> Option<&'static str> {
+    borderless_notice(warframe_window_rect().is_some())
+}
+
+pub fn configure_reward_overlay(window: &WebviewWindow, cards: usize) -> tauri::Result<()> {
+    let geometry = overlay_geometry(window, cards)?;
     if let Some(geometry) = geometry {
         window.set_size(PhysicalSize::new(geometry.width, geometry.height))?;
         window.set_position(PhysicalPosition::new(geometry.x, geometry.y))?;
     }
+    // The three that make this a strip over a game rather than a window: no activation (so clicking
+    // nothing steals the game's focus), no hit testing (so the pointer passes through), topmost.
+    // On Windows these are exactly `WS_EX_NOACTIVATE`, `WS_EX_TRANSPARENT | WS_EX_LAYERED` and
+    // `WS_EX_TOPMOST`; re-asserting topmost on every show is what recovers the z-order after the
+    // game has been alt-tabbed back to the front.
     window.set_focusable(false)?;
     window.set_ignore_cursor_events(true)?;
     window.set_always_on_top(true)?;
+    // Escape hatch for the one failure this cannot be tested for from here: a WebView2 child HWND
+    // under `WS_EX_LAYERED` with no layer attributes is the likeliest way `transparent: true` comes
+    // out invisible or black on a real Windows machine. Setting a colour makes the strip opaque --
+    // uglier, but readable -- and costs nothing when unset.
+    if std::env::var_os("TENNOSCOPE_OPAQUE_OVERLAY").is_some() {
+        window.set_background_color(Some(tauri::window::Color(14, 16, 22, 255)))?;
+    }
     Ok(())
 }
 
@@ -173,8 +204,12 @@ pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
                     return;
                 }
             }
-            let _ = configure_reward_overlay(&window);
+            let _ = configure_reward_overlay(&window, cards);
             let _ = window.show();
+            // Showing a window puts it at the top of its own band, which on Windows is enough to
+            // drop it out of the topmost band it was placed in. Re-asserting after the show is what
+            // keeps the strip above a borderless game rather than behind it.
+            let _ = window.set_always_on_top(true);
             #[cfg(debug_assertions)]
             trace_overlay("shown via plain window");
         });

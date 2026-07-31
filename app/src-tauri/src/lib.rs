@@ -60,7 +60,7 @@ mod reward_source;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
-pub use overlay_window::{OverlayGeometry, WindowRect, reward_overlay_geometry};
+pub use overlay_window::{OverlayGeometry, WindowRect, borderless_notice, reward_overlay_geometry};
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
@@ -1348,6 +1348,12 @@ fn publish_reward_result(
             result.choices.elapsed.as_millis(),
             now.to_string(),
         );
+        // Read the cards but could not find the window to draw over: on Windows that is exclusive
+        // fullscreen, and the player is the only one who can fix it. Said here rather than in the
+        // README because a strip that silently fails to appear reads as a broken app.
+        if let Some(notice) = overlay_window::overlay_placement_notice() {
+            let _ = runtime.core.record_capture_degraded(notice);
+        }
         if result.diagnostic == RewardSourceDiagnostic::Disagreement {
             let _ = runtime
                 .core
