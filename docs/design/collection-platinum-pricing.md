@@ -23,11 +23,11 @@ Measured on 2026-07-29, and the source of the constants and rules below.
 | `sell`/`closed` median ratio, matched on `(subtype, rank)` | median 1.17x, 144 pairs at ≥2x, 24 at ≥4x | The bulk-lot inflation is visible in the file itself, and only in `sell` |
 | `closed` records quoting >1.5x their own ask | 15 of 3,179 pairs; 1 survives a `volume >= 3` floor | The floor is necessary and not sufficient. `Vitality` unranked: 115p closed on 4 trades against a 1p ask on 3,186 listings. Taking the lower of the two removes all 15 |
 | Relics with a usable `closed` record | 163 of 772 on one day, 425 across four | One day prices 45% of a real collection's relics; 28 days unioned price 96% |
-| A real collection's relic holding | 71 rows, 202 copies, 391p | 1.4% of the collection, against ~70 requests and 22s per launch to sweep it |
+| A test collection's relic holding | 1.4% of its priced worth | Against ~70 requests and 22s per launch to sweep it |
 | Newest dump on 2026-07-29 | `price_history_2026-07-27.json` | The fetcher walks back from today; the data is a day or two old by construction |
 | Three name rules, no manifest | 2,940 of 3,835 dump items reachable from the 15,972 catalog names | Name matching alone is enough |
-| A fourth rule appending ` Blueprint` | 25 firings against a real 1,106-item collection, 25 of them wrong, 0 right | Rejected: it prices built equipment at its blueprint's listing |
-| Prime parts in that collection | 75 of 75 resolved by rule 1 | The rejected rule had nothing left to reach |
+| A fourth rule appending ` Blueprint` | 25 firings against a test collection, 25 of them wrong, 0 right | Rejected: it prices built equipment at its blueprint's listing |
+| Prime parts in that collection | All resolved by rule 1 | The rejected rule had nothing left to reach |
 | `/v2/items` manifest on top | 257 more, 228 of them sets | Rejected: its entire contribution is items that must not be priced |
 | Mirage Prime Systems, dump median sell | 20p, against 19p live from an online seller | The daily median tracks the live number closely |
 | Mirage Prime Systems, dump minimum sell | 10p | Rejected: the day's cheapest listing includes offline lowballers |
@@ -39,9 +39,9 @@ Measured on 2026-07-29, and the source of the constants and rules below.
 | Refinement tiers with an ingame seller, over 80 relics | intact 85%, radiant 39%, exceptional 0%, flawless 0% | A tier is priced from its own subtype where anyone is selling it, and from intact where nobody is |
 | Radiant against intact where both are quotable | median 1.46x, worst 17x (Requiem I–IV, 1p intact against 17p radiant) | Pricing every tier at intact is not a rounding error |
 | Listings quoted at one rank above 0 and no other | 7 of 3,835, all 80–300p (`Scan Matter` 240p, `Sword Alone` 300p) | An unranked copy has no price from such a listing rather than the maxed one, which valued a 0/3 `Scan Matter` at 240p |
-| A real collection's priced holding | 1,215 rows, 7,982 copies, 30,817p | The total is dominated by bulk commons, not by anything concentrated: the largest single stack is 364p |
-| The same collection capped at a month of completed trades | 24,086p, 89 rows capped | What the market will actually take is 22% under the market rate |
-| That capped total by unit price | 14,936p of it at 1–5p, 6,708p at 11p+ | The cap does not answer "this is too high" on its own: the cheap end is cheap *and* genuinely traded. A price floor at 6p would take it to 9,150p and delete `Intruder` ×104 at a true 3p |
+| A test collection's priced holding | Several thousand copies over ~1,200 rows | The total is dominated by bulk commons, not by anything concentrated: no single stack is more than about 1% of it |
+| The same collection capped at a month of completed trades | 89 rows capped | What the market will actually take is 22% under the market rate |
+| That capped total by unit price | About three-fifths of it at 1–5p | The cap does not answer "this is too high" on its own: the cheap end is cheap *and* genuinely traded. A 6p floor would cut it by nearly two thirds and delete `Intruder`, which is a true 3p against 104 completed trades a month |
 | `closed` volume for one item on one day against 28 | `Intruder` 0 on the 30th, 159 across the month; `Quickdraw` 2 across the month | A day's dump is a sparse sample of appetite. Reading one day understated the sellable total by a quarter and moved it ±11%; carrying the last day that *saw* a trade overstated `Quickdraw` at 30/month against a true 2 |
 
 The rejected manifest is the load-bearing negative result. Its unique contribution is warframe.market
@@ -89,9 +89,9 @@ tuned constant: a lot-inflated ask always loses to the trade, and a freak trade 
 ask. The volume floor stays, because it is the only guard against a thin trade reading *low*, where
 the ask cannot help.
 
-Left uncaught, that one record cost 3,955p of a real 27,150p collection: `Vitality`'s rank-0 group
-took the 115p trade, its rank-10 group fell back to a 35p ask, and the cross-group minimum then
-priced 113 unranked copies at a rank nobody in the collection held.
+Left uncaught, that one record cost about a seventh of a test collection's total: `Vitality`'s rank-0
+group took the 115p trade, its rank-10 group fell back to a 35p ask, and the cross-group minimum then
+priced every unranked copy at a rank nobody in the collection held.
 
 Preferring closed does change every price, not only the bulk-listed ones. Where neither number is a
 lot, closed is still a median 0.83x sell, because closed is what a buyer paid and sell is what a
@@ -126,11 +126,11 @@ the gap, in order, with no network call between them:
 
 There is deliberately no mirror of rule 2 appending ` Blueprint`. It looks symmetrical and it is not:
 the names it reaches are *built* equipment, and a built Warframe is not a thing anybody can sell.
-Measured against a real 1,106-item collection it fired 25 times -- `Ash Prime` at its blueprint's
+Measured against a test collection it fired 25 times -- `Ash Prime` at its blueprint's
 14p, `Octavia Prime` at 50p, `Banshee Prime` at 10p on an item the player does not own -- and was
 wrong all 25 times, with no correct firing anywhere in the collection. Every prime part the player
 can actually sell is in the dump under its own name and resolves by rule 1. Dropping the
-rule took the collection from 266 priced items to 241, and all 25 lost were false prices.
+rule cost 25 priced items, and all 25 were false prices.
 
 Rule 3 recovers 772 relic names that no other rule reaches, and prices the ones that traded. A
 relic is the worst case for the bulk-lot fault -- sellers list them six at a time, so the ask runs
@@ -147,7 +147,7 @@ collection goes 45% at one dump, 76% at three, 86% at seven, 96% at twenty-eight
 days is a download the app already makes, so the union costs nothing.
 
 **This is what removed the startup sweep.** The sweep spent about 70 requests and 22 seconds of
-every launch to refine a holding worth 391p -- 1.4% of the collection -- and the union now answers
+every launch to refine a holding worth 1.4% of the collection -- and the union now answers
 96% of it for free. The live path remains, but only where the player points it: the page refresh.
 A relic no dump in the last month saw trade shows the honest dash it always did, and one click
 prices it.
@@ -226,8 +226,8 @@ There used to be a second trigger -- a relic sweep at every launch and after eve
 about 70 requests and 22 seconds, because the dump's relic ask was unusable and nothing else was on
 offer. It is gone. The `closed` statistics gave relics a real dump price, and unioning the daily
 dumps (see Price Source) covers 96% of a real collection's relics for no request at all. The last
-few percent were never worth 22 seconds of every launch against a 391p holding, and a player who
-wants them has a button.
+few percent were never worth 22 seconds of every launch against 1.4% of a collection's worth, and a
+player who wants them has a button.
 
 This is not a sweep of the collection. Nothing is fetched for an item the player does not own, and
 nothing at all is fetched without a click, which is what keeps a feature that could have cost a
@@ -322,7 +322,7 @@ deliberately *not* told apart on the card. That is a real corner cut: an item pr
 completed trades and one priced from an untested asking price both read as "from the 2026-07-30
 dump". It stays cut because the distinction is not one a player can act on -- both are the same
 day-old file, and the live check is the affordance for wanting better -- while a third provenance
-state on every card is a visible cost on all 3,209 of them. Add it if the ask fallback ever proves
+state on every card is a visible cost on every one of them. Add it if the ask fallback ever proves
 to be misleading in a way the volume floor does not catch.
 
 "Checked live" covers both the fifteen-minute cache and a persisted checked price, deliberately.
@@ -361,9 +361,10 @@ newest one started, so an older response can never land on top of a newer one.
 
 Every unit price above can be right and the collection's total still be a number nobody could
 realise. warframe.market is not an order book: a trade is arranged in chat and completed by two
-players standing in a dojo, one item at a time. 7,982 copies at a correct 1–5p each is 21,837p that
-would take years of evenings to collect, and 182 Quickdraws is not 364p of platinum, it is 364p of
-platinum that the two people who wanted a Quickdraw this month already have.
+players standing in a dojo, one item at a time. Several thousand copies at a correct 1–5p each is a
+five-figure total that would take years of evenings to collect, and two hundred `Quickdraw` is not
+400p of platinum, it is 400p of platinum that the two people who wanted a `Quickdraw` this month
+already have.
 
 So the collection's headline worth is each stack at its unit price times the *smaller* of what is
 owned and what the whole game completes in a month. The market rate stays beside it, unchanged.
@@ -377,7 +378,7 @@ trade in the game for that item -- and that is the right direction for a bound t
 
 Appetite is averaged across the dumps seen, not read off today's file, because a day's dump samples
 the market as thinly for volume as it does for price. Both plainer readings are biased and both were
-measured on a real account: today's count alone understated the sellable total by about a quarter and
+measured on a test collection: today's count alone understated the sellable total by about a quarter and
 swung it a tenth with whichever listings happened to trade that morning, since `Intruder` completed
 159 trades in twenty-eight days and has no `closed` record at all on the 30th. Carrying the last
 count *seen* overstates by the same mechanism inverted -- it conditions on a day where a trade
@@ -388,7 +389,7 @@ cache is a file rewritten on every checked price and several thousand counts per
 than the figure they support is worth. Each dump gets an equal share until a month of them have been
 seen and a thirtieth after that. The equal share is what makes it converge: weighting today at a flat
 thirtieth from the first day leaves the very first dump 40% of the estimate a month later, which is
-how the same real account read `Quickdraw` at 15 a month. A residual overstatement remains, since an
+how the same measurement read `Quickdraw` at 15 a month. A residual overstatement remains, since an
 item's average begins on the first day it was seen to trade and so discards the leading zeros -- it
 puts `Quickdraw` at 3 rather than 2, which changes no decision anybody makes.
 
@@ -396,22 +397,23 @@ The counts expire on the same thirty-day boundary as the carried relic prices, d
 dump that saw a trade rather than the last one processed, so an item nobody has bought in a month
 drops out entirely instead of decaying towards zero forever.
 
-The cap is not enough on its own, and what is left over is not a measurement problem. 14,936p of one
-real account's 24,086p is items priced at 1–5p, and the volume cap barely touches them because the
+The cap is not enough on its own, and what is left over is not a measurement problem. About
+three-fifths of a test collection's sellable total is items priced at 1–5p, and the volume cap
+barely touches them because the
 market genuinely does complete those trades: `Redirection` 68 a month, `Intruder` 104. The tempting
 second cut -- write off anything under some price -- is not something this design can decide. It
 would be the only invented constant where everything else is measured, and any constant it picked
-would be wrong for somebody: at a 6p floor the account loses `Intruder` ×104 at a true 3p, which is
-312p that demonstrably moves, and for a player who will not spend an evening on 3p mods that 312p is
-correctly gone.
+would be wrong for somebody: at a 6p floor the collection loses `Intruder` at a true 3p against 104
+completed trades a month, platinum that demonstrably moves, and for a player who will not spend an
+evening on 3p mods it is correctly gone.
 
 So the floor exists and belongs to the player. A slider in Settings, 0 to 20 platinum, applied to the
 sellable figure and never to the market rate: a stack whose copies are worth less than the floor
 stops counting. Zero is the default, which is the measured answer with nothing invented on top of it.
 The slider stops at 20 because above roughly that point the figure stops answering -- every floor
 from 21p up lands within a few percent of the last, since all that is left by then is the few dozen
-items anybody would trade one at a time (3p → 21,369p, 6p → 9,150p, 11p → 6,708p, 16p → 5,459p,
-21p → 4,309p). The floor is a display preference over a figure the frontend already computes, so it
+items anybody would trade one at a time. The floor is a display preference over a figure the
+frontend already computes, so it
 lives in the window's own storage rather than in SQLite; putting it in the database would mean a
 migration, an IPC pair and a round trip to move a slider.
 
@@ -425,7 +427,7 @@ The band's worth cell is two figures and one clause: the market rate as the stru
 total under it at the size of a qualification, and the cap that produced it as the note. Market rate
 leads because it is the plain reading of what is owned; the capped figure is the thing that needs
 explaining. Both figures carry the game's own platinum icon -- the sellable line sits in the slot the
-three cells beside it fill with item counts, and without the icon a bare `16,994 sellable` reads as
+three cells beside it fill with item counts, and without the icon a bare `sellable` figure reads as
 one more count. The icon is set to the line's own `1em` there rather than to the figure's, since a
 mark sized for a 2rem total beside 0.72rem text is a badge, not a unit. The note names the cap in the
 terms the reader has -- copies the market buys in a month -- rather than in the dump's own vocabulary
@@ -438,7 +440,7 @@ untradeable, which is not a fact about worth. And the trade count was there to s
 free, a job the price floor now does directly and adjustably. The cap, and the floor when one is set,
 is stated in the cell's own note rather than on the register line among the filters, where it was
 answering a question the reader had not been given yet. The per-card treatment is deliberately left
-alone; how much of one stack the market takes is a fact about 89 cards out of 1,215, and putting a
+alone; how much of one stack the market takes is a fact about a small minority of cards, and putting a
 hallmark on all of them to serve those would cost more attention than the band total's haircut is
 worth explaining twice.
 
