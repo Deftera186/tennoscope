@@ -11,11 +11,6 @@ CREATE TABLE inventory (
     max_rank INTEGER CHECK (max_rank IS NULL OR max_rank >= 0)
 );
 
--- The linked warframe.market token, when no OS keyring was available to hold it.
---
--- One row, enforced by the CHECK rather than by convention: a renewed token arrives on every
--- authenticated call, and a table that accumulated them would leave the reader choosing between
--- credentials that all look current.
 CREATE TABLE market_credential (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     token TEXT NOT NULL CHECK (length(trim(token)) > 0)

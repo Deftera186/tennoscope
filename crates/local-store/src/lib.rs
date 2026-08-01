@@ -365,7 +365,9 @@ fn migrate_v2_to_v3(connection: &mut Connection) -> Result<(), StoreError> {
 /// Adds somewhere to keep the warframe.market token when no OS keyring is available.
 ///
 /// Empty for every existing database, which is the honest state: nothing was linked before this
-/// migration existed.
+/// migration existed. The table holds exactly one row, enforced by a CHECK rather than by
+/// convention: a renewed token arrives on every authenticated call, and a table that accumulated
+/// them would leave the reader choosing between credentials that all look current.
 fn migrate_v3_to_v4(connection: &mut Connection) -> Result<(), StoreError> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(
@@ -474,14 +476,6 @@ fn normalize_sql(sql: &str) -> String {
             '\'' => {
                 in_string = true;
                 normalized.push(character);
-            }
-            '-' if characters.peek() == Some(&'-') => {
-                characters.next();
-                for comment_character in characters.by_ref() {
-                    if comment_character == '\n' {
-                        break;
-                    }
-                }
             }
             '"' | '`' | '[' | ']' | ';' => {}
             character if character.is_ascii_whitespace() => {}
