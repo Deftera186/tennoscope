@@ -13,9 +13,10 @@ use warframe_acquisition::{
     MarketPriceCache, PriceTable, StageState,
 };
 use warframe_domain::{
-    CatalogItem, Category, DomainError, InventoryEntry, InventorySnapshot, RewardAdvisor,
-    RewardCandidate, RewardView,
+    CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot,
+    RewardAdvisor, RewardCandidate, RewardView,
 };
+use warframe_market::{MarketItems, MarketOrder, OrderKind};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -909,4 +910,155 @@ impl From<warframe_acquisition::StageHealth> for AcquisitionStageView {
             message: value.diagnostic().to_string(),
         }
     }
+}
+
+/// What the collection says about one order.
+///
+/// Four states rather than a boolean because "we disagree" and "we cannot say" are different
+/// claims with different consequences, and collapsing them is how a stale snapshot turns into a
+/// screen of confident accusations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum OrderStatus {
+    Ok,
+    /// The collection holds none of this. The order outlived its item.
+    Missing,
+    /// The order lists more than the collection holds.
+    Overshoot {
+        owned: u32,
+    },
+    /// The comparison cannot be made, so no claim is offered and no fix is put on the row.
+    Unverifiable,
+}
+
+/// One order with the collection's opinion of it.
+#[derive(Clone, Debug, Serialize)]
+pub struct ReconciledOrder {
+    pub order: MarketOrder,
+    /// warframe.market's English name for the item, for the row. Absent only if the item table is
+    /// missing the entry entirely.
+    pub name: Option<String>,
+    pub status: OrderStatus,
+}
+
+/// Judge each order against the collection.
+///
+/// The rule: **a mismatch is claimed only when the snapshot is coherent and newer than the
+/// order.** Everything else is `Unverifiable`, which carries no flag and no fix.
+///
+/// That restraint is not caution for its own sake. The application's stated failure posture is to
+/// keep the last coherent inventory when the reader breaks, so a snapshot can be stale or absent
+/// while looking exactly like a current one from here. Judging against one produces confident
+/// accusations about orders that were never wrong -- each with a delete button beside it.
+pub fn reconcile_orders(
+    orders: &[MarketOrder],
+    items: &MarketItems,
+    collection: &Collection,
+    snapshot: Option<&SnapshotMeta>,
+) -> Vec<ReconciledOrder> {
+    // Quantity per card, summed across ranks. A card at two ranks is two entries in the
+    // collection and one listing on the market, so comparing against either entry alone would
+    // call a legitimate order an overshoot.
+    let mut owned: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for entry in collection.entries() {
+        *owned.entry(entry.item.id.catalog_path()).or_default() += entry.quantity;
+    }
+
+    orders
+        .iter()
+        .map(|order| ReconciledOrder {
+            order: order.clone(),
+            name: items.name(&order.item_id).map(str::to_owned),
+            status: status_for(order, items, &owned, snapshot),
+        })
+        .collect()
+}
+
+fn status_for(
+    order: &MarketOrder,
+    items: &MarketItems,
+    owned: &std::collections::HashMap<&str, u32>,
+    snapshot: Option<&SnapshotMeta>,
+) -> OrderStatus {
+    // Owning none of something is the ordinary state for something you are trying to buy.
+    if order.kind != OrderKind::Sell {
+        return OrderStatus::Unverifiable;
+    }
+    // A rank names a particular copy, and the collection stores each rank separately. Which copies
+    // the order means is not answerable from the order, so a maxed arcane listed at rank 5 is not
+    // evidence about the unranked stack of the same card.
+    if order.rank.is_some_and(|rank| rank > 0) {
+        return OrderStatus::Unverifiable;
+    }
+    let (Some(snapshot), Some(updated_at)) = (snapshot, order.updated_at.as_deref()) else {
+        return OrderStatus::Unverifiable;
+    };
+    // A snapshot older than the order describes a world before the order changed, and cannot
+    // contradict it. Both sides are reduced to an instant first: the two timestamps are not in the
+    // same format and comparing them as text is silently, permanently wrong -- production snapshot
+    // metadata carries Unix seconds ("1785507554") while orders carry RFC 3339
+    // ("2026-07-30T10:00:00Z"), and "1" sorts before "2", so a text comparison would mark every
+    // order unverifiable on every real installation and the feature would ship doing nothing.
+    let (Some(observed), Some(updated)) =
+        (instant_of(snapshot.observed_at()), instant_of(updated_at))
+    else {
+        return OrderStatus::Unverifiable;
+    };
+    if observed <= updated {
+        return OrderStatus::Unverifiable;
+    }
+    let Some(path) = items.catalog_path(&order.item_id) else {
+        return OrderStatus::Unverifiable;
+    };
+    match owned.get(path).copied().unwrap_or(0) {
+        0 => OrderStatus::Missing,
+        held if held < order.quantity => OrderStatus::Overshoot { owned: held },
+        _ => OrderStatus::Ok,
+    }
+}
+
+/// Seconds since the Unix epoch for either timestamp form this application produces.
+///
+/// Two forms exist and both are load-bearing. Production snapshot metadata records
+/// `SystemTime`-derived Unix seconds; `SnapshotMeta::fake` and warframe.market both use RFC 3339.
+/// The frontend already absorbs the same split in `freshness.ts`, which is how it went unnoticed.
+///
+/// Parsed by hand rather than by taking a date dependency for one inequality. Only the ordering
+/// matters here, so this needs to be monotonic rather than calendar-exact: leap seconds and the
+/// fractional part are ignored, and an offset other than `Z` is treated as unparseable rather than
+/// guessed at.
+fn instant_of(value: &str) -> Option<i64> {
+    let value = value.trim();
+    if value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return value.parse().ok();
+    }
+    let (date, rest) = value.split_once('T')?;
+    // Anything not stated in UTC is left unparsed. A wrong guess about an offset moves an order
+    // across the snapshot boundary, which turns "we cannot say" into a confident accusation.
+    if !rest.ends_with('Z') {
+        return None;
+    }
+    let time = rest.trim_end_matches('Z');
+    let mut date_parts = date.split('-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: i64 = date_parts.next()?.parse().ok()?;
+    let day: i64 = date_parts.next()?.parse().ok()?;
+    let mut time_parts = time.split(':');
+    let hour: i64 = time_parts.next()?.parse().ok()?;
+    let minute: i64 = time_parts.next()?.parse().ok()?;
+    let second: i64 = time_parts
+        .next()
+        .unwrap_or("0")
+        .split('.')
+        .next()?
+        .parse()
+        .ok()?;
+    // Hinnant's days-from-civil, the standard algorithm, exact for every date this will see.
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
 }
