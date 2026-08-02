@@ -6,7 +6,10 @@
 
 use std::{io::Read, time::Duration};
 
-use reqwest::blocking::{Client, RequestBuilder};
+use reqwest::{
+    blocking::{Client, RequestBuilder},
+    redirect::Policy,
+};
 use warframe_acquisition::{MARKET_MIN_GAP, RequestPacer};
 
 use crate::{MarketError, MarketRequest, MarketResponse, MarketTransport, Method};
@@ -40,6 +43,9 @@ impl MarketHttp {
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(TOTAL_TIMEOUT)
             .user_agent(USER_AGENT)
+            // Every URL this transport calls is a known API endpoint under a fixed origin, so a
+            // redirect is a signal something is wrong rather than something to follow.
+            .redirect(Policy::none())
             .build()
             .map_err(|_| MarketError::Unreachable)?;
         Ok(Self { client, pacer })
