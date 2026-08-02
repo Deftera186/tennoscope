@@ -27,8 +27,14 @@ jobs:
       # Cheap and first: four files declare the release version and nothing else makes them agree.
       - run: ./scripts/check-versions.sh
 
-      # Tauri's Linux system libraries, plus tesseract and ImageMagick's `import`. The reward tests
-      # skip nothing, so everything they shell out to has to be here.
+      # Tauri's Linux system libraries plus tesseract. Screen capture and the crop pipeline are
+      # Rust now, so tesseract is the only thing the reward tests still shell out to.
+      #
+      # The block after libssl is xcap's, not ours. Its Linux capture path links EGL, gbm, wayland
+      # and xcb, depends on pipewire unconditionally for the portal route, and generates bindings
+      # with bindgen (hence clang). None of it is optional, and a developer machine running a
+      # desktop already has every one -- which is why their absence showed up on a runner and not
+      # in review. The list is the `-l` flags off the failing link line, not a guess.
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -39,29 +45,44 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \
-            imagemagick \
+            libpipewire-0.3-dev \
+            libclang-dev \
+            libgbm-dev \
+            libegl-dev \
+            libwayland-dev \
+            libxcb1-dev \
             tesseract-ocr \
             tesseract-ocr-eng
-
-      # noble's `imagemagick` is 6.9, which has no `magick` binary -- that name only exists in 7,
-      # and the OCR crop pipeline is written against it. The AppImage is upstream's only prebuilt
-      # 7 for Linux; it is extracted rather than run directly because the runner has no FUSE.
-      - name: Install ImageMagick 7
-        run: |
-          curl -fsSL -o magick.AppImage \
-            https://github.com/ImageMagick/ImageMagick/releases/download/7.1.2-29/ImageMagick-7.1.2-29-gcc-x86_64.AppImage
-          chmod +x magick.AppImage
-          ./magick.AppImage --appimage-extract > /dev/null
-          sudo mv squashfs-root /opt/imagemagick
-          sudo ln -s /opt/imagemagick/AppRun /usr/local/bin/magick
-          rm magick.AppImage
-          magick -version
 
       # No toolchain action: rust-toolchain.toml pins the channel and components, and rustup on
       # the runner installs it on the first cargo call. One source of truth for the version.
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # The Windows half of the port is invisible to the job above: `cfg(windows)` code is not compiled
+  # by a Linux clippy run, so without this leg the Windows backends are never built by anything.
+  # It is the only verification vehicle for them -- there is no Windows machine behind this project.
+  windows:
+    name: Rust (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The reward tests shell out to tesseract on every platform. Chocolatey appends to the
+      # *machine* PATH, which a step already running never sees -- every later step inherits the
+      # environment captured when the job started, so the tests reported "tesseract is not
+      # available" against an installed tesseract. `$GITHUB_PATH` is the one that reaches them.
+      - name: Install tesseract
+        run: |
+          choco install --no-progress -y tesseract
+          "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - uses: Swatinem/rust-cache@v2
+
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 

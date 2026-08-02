@@ -1,9 +1,14 @@
 use std::{collections::BTreeMap, env, time::Duration};
 
 use warframe_acquisition::{
-    LinuxProc, ProcessDiscovery, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
-    RewardResolution, resolve_current_reward_choices,
+    ProcessDiscovery, RewardMemoryScanner, RewardNeedle, RewardRepresentation, RewardResolution,
+    resolve_current_reward_choices,
 };
+
+#[cfg(unix)]
+use warframe_acquisition::LinuxProc as GameMemory;
+#[cfg(windows)]
+use warframe_acquisition::WindowsProc as GameMemory;
 
 fn main() {
     let names = env::args().skip(1).collect::<Vec<_>>();
@@ -15,7 +20,7 @@ fn main() {
         .into_iter()
         .map(|name| RewardNeedle::from_paths(name, Vec::new()).expect("valid reward name"))
         .collect::<Vec<_>>();
-    let procfs = LinuxProc::new();
+    let procfs = GameMemory::new();
     let process = procfs
         .discover()
         .expect("process discovery")

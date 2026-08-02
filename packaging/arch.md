@@ -23,7 +23,7 @@ The recipe builds the locked Rust workspace and frontend, runs both test suites,
 needs network access, so `makepkg` will not work in an offline chroot without vendored sources.
 
 The relic overlay's toolchain is in `optdepends`, not `depends` — the collection browser runs
-without it. `check()` does need it, so `imagemagick` and `tesseract` are in `checkdepends`; skip
-that step with `makepkg --nocheck` if you would rather not pull them in to build.
+without it. `check()` does need it, so `tesseract` is in `checkdepends`; skip
+that step with `makepkg --nocheck` if you would rather not pull it in to build.
 
 Before any AUR submission: use a literal `sha256sums` digest, and add a `.SRCINFO`.

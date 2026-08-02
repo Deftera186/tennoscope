@@ -17,6 +17,8 @@ mod orchestrator;
 mod relic_catalog;
 mod reward_memory;
 mod reward_ui_memory;
+#[cfg(windows)]
+mod windows_proc;
 
 pub use authorization::AuthorizationScanner;
 pub use catalog::{
@@ -50,6 +52,8 @@ pub use reward_memory::{
     RewardResolution, resolve_current_reward_choices, resolve_reward_choices,
 };
 pub use reward_ui_memory::PersistentRewardResolver;
+#[cfg(windows)]
+pub use windows_proc::WindowsProc;
 
 /// A credential whose standard formatting surfaces never expose its contents.
 pub struct SecretString(Zeroizing<String>);
@@ -143,6 +147,9 @@ impl GameProcess {
         }
     }
 
+    /// Only the procfs backend reads this back: on Windows the live `PROCESS_VM_READ` handle is
+    /// what pins the PID, so the value is recorded for identity but never compared.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) const fn start_time_ticks(self) -> Option<u64> {
         self.start_time_ticks
     }

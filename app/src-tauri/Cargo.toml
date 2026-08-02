@@ -28,9 +28,14 @@ local-store = { path = "../../crates/local-store" }
 warframe-acquisition = { path = "../../crates/warframe-acquisition" }
 warframe-domain = { path = "../../crates/warframe-domain" }
 tauri-plugin-single-instance = "2"
+image = { version = "0.25", default-features = false, features = ["png", "pnm"] }
+xcap = { version = "0.9.7", features = ["image"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
+
+[target."cfg(windows)".dependencies]
+xcap = { version = "0.9.7", features = ["image", "wgc"] }
 
 [dev-dependencies]
 tempfile = "3"

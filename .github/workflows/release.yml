@@ -12,11 +12,67 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # A pre-release tag (`v0.4.2-rc1`) builds with debug assertions on, which is what makes the
+  # `[DEBUG-…]` tracing exist at all -- every one of those lines is `cfg(debug_assertions)`, so a
+  # normal release binary handed to a tester reports nothing when something goes wrong. Stable
+  # tags are unaffected: `-` in the tag is the whole switch.
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
 
 jobs:
+  windows:
+    name: Windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The installer ships its own Tesseract, so the runner needs one only for the test suite.
+      # Chocolatey appends to the *machine* PATH, which later steps do not see -- they inherit the
+      # environment captured when the job started -- so `$GITHUB_PATH` is what actually reaches
+      # the tests. Without it every OCR test fails with "tesseract is not available".
+      - name: Install tesseract
+        run: |
+          choco install --no-progress -y tesseract
+          "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
+        shell: pwsh
+
+      - name: Vendor tesseract for the bundle
+        run: ./scripts/vendor-windows-tesseract.ps1
+        shell: pwsh
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: app/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: app/.node-version
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+
+      # Same gates the Linux bundle script applies, spelled out because that script is /bin/sh.
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - run: pnpm tauri build
+        working-directory: app
+
+      # The installer is unsigned: a code-signing certificate costs money this project does not
+      # take. SmartScreen will warn on first run until the download builds reputation, which is
+      # said in the release notes rather than left for the player to discover.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: target/release/bundle/nsis/*-setup.exe
+
   bundles:
     name: Linux bundles
     runs-on: ubuntu-latest
+    # The draft release is attached here, so the Windows installer has to exist by then.
+    needs: windows
     steps:
       - uses: actions/checkout@v5
 
@@ -30,22 +86,14 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             libssl-dev \
-            imagemagick \
+            libpipewire-0.3-dev \
+            libclang-dev \
+            libgbm-dev \
+            libegl-dev \
+            libwayland-dev \
+            libxcb1-dev \
             tesseract-ocr \
             tesseract-ocr-eng
-
-      # Same as CI: noble's `imagemagick` is 6.9 and has no `magick` binary, which the OCR crop
-      # pipeline is written against. Needed here because the bundle script runs the test suite.
-      - name: Install ImageMagick 7
-        run: |
-          curl -fsSL -o magick.AppImage \
-            https://github.com/ImageMagick/ImageMagick/releases/download/7.1.2-29/ImageMagick-7.1.2-29-gcc-x86_64.AppImage
-          chmod +x magick.AppImage
-          ./magick.AppImage --appimage-extract > /dev/null
-          sudo mv squashfs-root /opt/imagemagick
-          sudo ln -s /opt/imagemagick/AppRun /usr/local/bin/magick
-          rm magick.AppImage
-          magick -version
 
       - uses: Swatinem/rust-cache@v2
 
@@ -68,13 +116,22 @@ jobs:
       # the artifact users actually download.
       - run: ./scripts/build-linux-bundles.sh appimage deb rpm
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: windows-installer
+
       # A draft, not a publish. The release notes are written by hand from CHANGELOG.md and the
       # release goes out when the maintainer says so.
       - uses: softprops/action-gh-release@v2
         with:
           draft: true
+          # Marked pre-release from the tag itself, so an `-rc`/`-beta` build cannot be presented
+          # as stable by accident -- and those are exactly the builds with assertions left on.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           files: |
             target/release/bundle/appimage/*.AppImage
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm
+            windows-installer/*.exe

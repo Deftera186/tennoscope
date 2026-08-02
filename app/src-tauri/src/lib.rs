@@ -4,7 +4,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     io::{Read, Seek, SeekFrom},
-    os::unix::fs::MetadataExt,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -19,11 +18,19 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CatalogIndex, CollectionPriceCache, GameProcess, InventoryAcquirer,
-    InventoryHttpTransport, LinuxProc, MarketPriceCache, MemoryReader, ProcessDiscovery,
-    RelicCatalogCache, RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner,
-    WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current, latest_dump,
+    InventoryHttpTransport, MarketPriceCache, MemoryReader, ProcessDiscovery, RelicCatalogCache,
+    RelicRewardIndex, RelicsRunHttp, RewardCatalogEntry, RewardMemoryScanner, WarmOutcome,
+    WfcdCatalogHttp, WfcdRelicCatalogHttp, dump_is_current, latest_dump,
 };
 use warframe_domain::RewardCandidate;
+
+/// The platform's process-memory backend. Both sides implement `MemoryReader` and
+/// `ProcessDiscovery`, which is the seam everything below the app already works through -- naming
+/// the concrete type once here is what keeps `cfg` out of the call sites.
+#[cfg(unix)]
+use warframe_acquisition::LinuxProc as GameMemory;
+#[cfg(windows)]
+use warframe_acquisition::WindowsProc as GameMemory;
 
 /// How long to keep re-reading the reward screen before giving up. The cards appear a few
 /// milliseconds after the log announces them and the screen lives for fifteen seconds, so this is
@@ -53,14 +60,16 @@ mod reward_source;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
-pub use overlay_window::{OverlayGeometry, WindowRect, reward_overlay_geometry};
+pub use overlay_window::{OverlayGeometry, WindowRect, borderless_notice, reward_overlay_geometry};
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
 pub use reward_ocr::{
-    MAX_CARDS, ScreenRewardSource, best_match, card_block_left, card_block_width, ocr_crop,
-    read_cards, warframe_window_from_xwininfo_tree,
+    MAX_CARDS, ScreenRewardSource, TESSERACT_EXECUTABLE, best_match, card_block_left,
+    card_block_width, largest_warframe_window, luma, normalize_contrast, ocr_crop, prepare_crop,
+    read_cards, read_cards_in, tesseract_program, threshold_inverted,
+    warframe_window_from_xwininfo_tree,
 };
 pub use reward_source::{
     BoundMemoryRewardSource, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSet,
@@ -353,7 +362,7 @@ impl AcquisitionPort for ProductionAcquisition {
                 Ok(catalog) => catalog,
                 Err(_) => return InventoryRefreshOutcome::catalog_failed(),
             };
-        let procfs = LinuxProc::new();
+        let procfs = GameMemory::new();
         let transport = match InventoryHttpTransport::new() {
             Ok(transport) => transport,
             Err(error) => {
@@ -423,10 +432,31 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
     })))
 }
 
+#[cfg(unix)]
 fn inventory_log_path(pid: u32) -> Option<PathBuf> {
     inventory_log_path_at(Path::new("/proc"), pid)
 }
 
+/// On Windows the game writes to its own `%LOCALAPPDATA%`, so there is no prefix to discover and
+/// the PID is not needed -- but the signature is shared with the Wine path, which does need it.
+#[cfg(windows)]
+fn inventory_log_path(_pid: u32) -> Option<PathBuf> {
+    inventory_log_under(Path::new(&std::env::var_os("LOCALAPPDATA")?))
+}
+
+/// The log under a given `%LOCALAPPDATA%`, if the game has written one.
+///
+/// Taking the root as an argument is what makes the layout testable against a synthetic tree; the
+/// Wine path is parameterised the same way and for the same reason.
+#[cfg(windows)]
+pub fn inventory_log_under(local_appdata: &Path) -> Option<PathBuf> {
+    let path = local_appdata.join("Warframe/EE.log");
+    // `is_file` and not `exists`: an uninstall can leave the folder behind, and taking a directory
+    // for the log turns every later read into a permission error instead of "the game has not run".
+    path.is_file().then_some(path)
+}
+
+#[cfg(unix)]
 pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
     let mut prefixes = Vec::new();
     let process_root = proc_root.join(pid.to_string());
@@ -480,7 +510,7 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
 }
 
 fn monitor_game(shared: SharedRuntime, app: AppHandle) {
-    let procfs = LinuxProc::new();
+    let procfs = GameMemory::new();
     let mut machine = MonitorMachine::new(15);
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
@@ -684,7 +714,7 @@ fn load_relic_catalog(app_data: &Path) -> Option<RelicRewardIndex> {
 fn handle_reward_event(
     event: RewardLogEvent,
     process: Option<GameProcess>,
-    procfs: &LinuxProc,
+    procfs: &GameMemory,
     catalog: Option<&CatalogIndex>,
     relic_catalog: Option<&RelicRewardIndex>,
     reward_catalog: &[RewardCatalogEntry],
@@ -1149,7 +1179,7 @@ fn spawn_player_record_scan(
     let expected_generation = generation.load(Ordering::Acquire);
     std::thread::spawn(move || {
         let started = Instant::now();
-        let procfs = LinuxProc::new();
+        let procfs = GameMemory::new();
         let scanner =
             RewardMemoryScanner::new(256 * 1024, 768 * 1024 * 1024, Duration::from_millis(1_500));
         let resolution = scan_player_record_until_ready(
@@ -1319,6 +1349,12 @@ fn publish_reward_result(
             result.choices.elapsed.as_millis(),
             now.to_string(),
         );
+        // Read the cards but could not find the window to draw over: on Windows that is exclusive
+        // fullscreen, and the player is the only one who can fix it. Said here rather than in the
+        // README because a strip that silently fails to appear reads as a broken app.
+        if let Some(notice) = overlay_window::overlay_placement_notice() {
+            let _ = runtime.core.record_capture_degraded(notice);
+        }
         if result.diagnostic == RewardSourceDiagnostic::Disagreement {
             let _ = runtime
                 .core
@@ -1461,6 +1497,35 @@ fn apply_reward_observations(
     let _ = runtime.core.apply_reward_candidates(candidates);
 }
 
+/// A string that stays the same while the log grows and changes when the log is replaced.
+///
+/// The monitor resumes at a byte offset, so it has to be able to tell "the same file, longer" from
+/// "a new file that happens to be at the same path" -- getting that wrong either re-reads the whole
+/// log or silently skips the start of a new one.
+///
+/// This was `dev:ino`, which is exactly the right answer and does not exist on Windows. Creation
+/// time is the portable stand-in: the game rotates `EE.log` by writing a new file, which gets a new
+/// creation time, while appending to the open one does not. Where the platform has no creation time
+/// the path alone still distinguishes logs; only rotation-in-place goes unnoticed, and the length
+/// check the caller already does catches the truncation that comes with it.
+///
+/// Seconds, not the full precision the platform offers: under Wine the reported creation time
+/// jitters by a few hundred microseconds between reads of the same unmodified file, which would
+/// make every poll look like a rotation and re-read the log from zero. A rotation and the append
+/// before it cannot share a second and also matter -- the replacement log starts empty, so the
+/// length check catches it either way.
+pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
+    let created = metadata
+        .created()
+        .ok()
+        .and_then(|created| created.duration_since(UNIX_EPOCH).ok())
+        .map(|since| since.as_secs());
+    match created {
+        Some(created) => format!("{}:{created}", path.display()),
+        None => path.display().to_string(),
+    }
+}
+
 fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (MonitorInput, Vec<u8>) {
     let Some(path) = inventory_log_path(pid) else {
         return (MonitorInput::running(now, pid, None), Vec::new());
@@ -1469,7 +1534,7 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
         Ok(metadata) => metadata,
         Err(_) => return (MonitorInput::running_with_log_error(now, pid), Vec::new()),
     };
-    let identity = format!("{}:{}", metadata.dev(), metadata.ino());
+    let identity = log_identity(&path, &metadata);
     if machine.process_pid() != Some(pid) {
         return (
             MonitorInput::running(
@@ -1793,6 +1858,11 @@ pub fn run() {
                         .level(log::LevelFilter::Info)
                         .build(),
                 )?;
+            }
+            // Before anything can read a reward screen: the NSIS bundle ships Tesseract under the
+            // resource directory so a Windows player installs one thing, not two.
+            if let Ok(resources) = app.path().resource_dir() {
+                reward_ocr::use_bundled_tesseract(&resources);
             }
             let runtime = initialize_runtime(app.handle())?;
             let should_refresh = runtime

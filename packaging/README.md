@@ -63,6 +63,6 @@ Install Node.js, Corepack/pnpm, and Rust separately. Building an `.rpm` does not
 
 - AppImage builds are the broadest single-file output but still depend on a sufficiently compatible Linux userspace; see [appimage.md](appimage.md).
 - Native package maintainers should declare runtime WebKitGTK/GTK dependencies generated or required by Tauri rather than bundling system libraries blindly.
-- The relic overlay shells out to `xwininfo`, ImageMagick 7 (`magick` and `import`) and `tesseract` with English data. The collection browser runs without them, so declare them as weak dependencies — `Recommends` on deb and rpm, `optdepends` on Arch — not hard ones.
+- The relic overlay shells out to `tesseract` with English data; window location and the crop pipeline are in-process now, so `xwininfo` and ImageMagick are no longer needed. The collection browser runs without OCR, so declare tesseract as a weak dependency — `Recommends` on deb and rpm, `optdepends` on Arch — not a hard one.
 - Do not package the application with setuid bits or broad ptrace capabilities. Document Yama requirements instead.
 - Preserve `LICENSE`, `THIRD_PARTY_NOTICES.md`, and WFCD attribution in binary distributions.

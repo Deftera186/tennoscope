@@ -83,8 +83,7 @@ body:
     id: tools
     attributes:
       label: External tool versions
-      description: Only if the reward overlay is involved.
+      description: Only if the reward overlay is involved. Windows bundles their own tesseract.
       value: |
-        $ magick --version | head -1
         $ tesseract --version | head -1
       render: shell

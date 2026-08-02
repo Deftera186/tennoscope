@@ -6,16 +6,15 @@ arch=('x86_64')
 url='https://github.com/Deftera186/tennoscope'
 license=('GPL-3.0-only')
 depends=('glib2' 'gtk3' 'libsoup3' 'webkit2gtk-4.1')
-# The relic overlay shells out to these; the collection browser works without them.
+# The relic overlay shells out to tesseract; the collection browser works without it. Window
+# location and the crop pipeline used to be xwininfo and ImageMagick and are now in-process.
 optdepends=(
-  'xorg-xwininfo: locate the Warframe window for the relic overlay'
-  'imagemagick: capture and crop the reward screen for the relic overlay'
   'tesseract: read the reward card titles for the relic overlay'
   'tesseract-data-eng: English data for reward card recognition'
 )
 makedepends=('cargo' 'nodejs' 'pnpm')
-# check() runs the reward-reader tests, which shell out to magick and tesseract for real.
-checkdepends=('imagemagick' 'tesseract' 'tesseract-data-eng')
+# check() runs the reward-reader tests, which shell out to tesseract for real.
+checkdepends=('tesseract' 'tesseract-data-eng')
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
 sha256sums=('SKIP')
 

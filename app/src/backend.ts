@@ -33,5 +33,24 @@ export const getView = () => invoke<AppView>('get_view')
 export const refreshInventory = () => invoke<AppView>('refresh_inventory')
 export const refreshPrices = (ids: string[]) => invoke<AppView>('refresh_prices', { itemIds: ids })
 export const loadFakeSession = () => invoke<AppView>('load_fake_session')
-export const getSetupStatus = () => invoke<SetupStatus>('get_setup_status')
+/**
+ * Setup status, waiting out a backend that has not finished starting.
+ *
+ * Tauri builds the windows before it runs the setup hook, so the webview can reach `invoke`
+ * before the runtime is managed -- and the first thing setup does is open SQLite, which on a cold
+ * first run is slow enough to lose that race. One failure here is not "the backend is
+ * unavailable", it is "the backend is still starting"; only a persistent one is worth telling the
+ * player about. This is the first call the app makes, so the retry belongs here rather than at
+ * the one call site.
+ */
+export async function getSetupStatus(attempts = 12, delayMs = 250): Promise<SetupStatus> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await invoke<SetupStatus>('get_setup_status')
+    } catch (error) {
+      if (attempt >= attempts) throw error
+      await new Promise(resolve => setTimeout(resolve, delayMs))
+    }
+  }
+}
 export const acceptRiskDisclosure = () => invoke<SetupStatus>('accept_risk_disclosure')

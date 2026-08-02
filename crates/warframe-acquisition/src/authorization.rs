@@ -274,6 +274,59 @@ struct CountedCandidate {
     locations: Vec<u64>,
 }
 
+impl CandidateSet {
+    /// Drop every candidate but the newest one per account.
+    ///
+    /// A mistyped password, a re-login, or a session the game refreshed leaves each nonce it ever
+    /// held resident in the process until the game itself restarts, and the scan finds all of
+    /// them -- which read as "multiple authorizations" and stayed unrecoverable for the rest of
+    /// the play session. The nonce is a monotonically increasing counter for a given account, so
+    /// the largest one is the live session; the smaller ones are dead credentials that would be
+    /// rejected by the endpoint anyway. Ambiguity across *different* accounts is left alone: that
+    /// one has no right answer and should still refuse.
+    fn collapse_stale_nonces(&mut self) {
+        let mut newest: Vec<usize> = Vec::new();
+        for index in 0..self.candidates.len() {
+            match newest.iter_mut().find(|kept| {
+                self.candidates[**kept].authorization.account_id()
+                    == self.candidates[index].authorization.account_id()
+            }) {
+                Some(kept) => {
+                    if nonce_value(&self.candidates[index]) > nonce_value(&self.candidates[*kept]) {
+                        *kept = index;
+                    }
+                }
+                None => newest.push(index),
+            }
+        }
+        if newest.len() == self.candidates.len() {
+            return;
+        }
+        newest.sort_unstable();
+        let mut index = 0;
+        self.candidates.retain(|_| {
+            let keep = newest.binary_search(&index).is_ok();
+            index += 1;
+            keep
+        });
+        // The dropped copies were part of what made the survivor look unconvincing. Overflow only
+        // ever recorded "there were more distinct pairs than we keep", so once a single credential
+        // for a single account is left it no longer stands in the way of trusting it -- but with
+        // two accounts still in hand it is exactly the signal that should keep refusing.
+        if self.candidates.len() == 1 {
+            self.overflowed = false;
+        }
+    }
+}
+
+fn nonce_value(candidate: &CountedCandidate) -> u64 {
+    candidate
+        .authorization
+        .nonce()
+        .parse::<u64>()
+        .unwrap_or_default()
+}
+
 impl CandidateAccumulator {
     fn record(&mut self, candidate: Candidate) {
         let set = match candidate.rank {
@@ -435,6 +488,8 @@ fn push_candidate(
 fn select_candidate(
     mut candidates: CandidateAccumulator,
 ) -> Result<InventoryAuthorization, AcquisitionError> {
+    candidates.url.collapse_stale_nonces();
+    candidates.login.collapse_stale_nonces();
     if let Some(authorization) = candidates.take_confident_url() {
         return Ok(authorization);
     }
@@ -563,6 +618,58 @@ mod tests {
 
         let selected = select_candidate(candidates).unwrap();
         assert_eq!(selected.account_id(), "00112233445566778899aabb");
+    }
+
+    #[test]
+    fn a_re_login_keeps_the_newest_nonce_rather_than_refusing() {
+        let mut candidates = CandidateAccumulator::default();
+        for (nonce, location) in [
+            // The dead session left behind by the mistyped password, still resident in the game's
+            // memory, and copied more times than the live one purely by chance.
+            ("123456789012345670", 0),
+            ("123456789012345670", 1),
+            ("123456789012345670", 2),
+            ("123456789012345670", 3),
+            ("123456789012345678", 4),
+            ("123456789012345678", 5),
+            ("123456789012345678", 6),
+        ] {
+            candidates.record(Candidate {
+                rank: CandidateRank::UrlEncoded,
+                authorization: InventoryAuthorization::from_zeroizing(
+                    Zeroizing::new(CURRENT_ACCOUNT.to_owned()),
+                    Zeroizing::new(nonce.to_owned()),
+                ),
+                location,
+            });
+        }
+
+        let selected = select_candidate(candidates).unwrap();
+
+        assert_eq!(selected.account_id(), CURRENT_ACCOUNT);
+        assert_eq!(selected.nonce(), "123456789012345678");
+    }
+
+    #[test]
+    fn two_different_accounts_still_refuse() {
+        let mut candidates = CandidateAccumulator::default();
+        for (account, location) in [(CURRENT_ACCOUNT, 0), ("ffeeddccbbaa998877665544", 1)] {
+            for copy in 0..4 {
+                candidates.record(Candidate {
+                    rank: CandidateRank::UrlEncoded,
+                    authorization: InventoryAuthorization::from_zeroizing(
+                        Zeroizing::new(account.to_owned()),
+                        Zeroizing::new("123456789012345678".to_owned()),
+                    ),
+                    location: location * 10 + copy,
+                });
+            }
+        }
+
+        assert!(matches!(
+            select_candidate(candidates),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
     }
 
     #[test]

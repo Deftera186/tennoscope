@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Warframe Helper is a GPLv3 alternative to AlecaFrame with local-only persistence. It connects only to public catalog, pricing, reader-definition, and release sources; player data never leaves the device. Linux is the first-class platform: the application must work across distributions, desktop environments, window managers, X11, and Wayland without Overwolf. The first release focuses on automatic relic reward advice and automatic inventory/mastery tracking.
+Warframe Helper is a GPLv3 alternative to AlecaFrame with local-only persistence. It connects only to public catalog, pricing, reader-definition, and release sources; player data never leaves the device. Linux and Windows are both first-class: on Linux the application must work across distributions, desktop environments, window managers, X11, and Wayland, and on Windows against the native client, in either case without Overwolf. The first release focuses on automatic relic reward advice and automatic inventory/mastery tracking.
 
 The product is one packaged desktop application built from a modular Rust workspace and a Tauri 2 shell. Rust owns all game integration, recognition, persistence, and domain logic. HTML and CSS render a modern collection browser and a transient in-game overlay without carrying Electron's runtime overhead.
 
@@ -10,16 +10,16 @@ The product is one packaged desktop application built from a modular Rust worksp
 
 The first release provides:
 
-- automatic detection of Warframe running through Wine or Proton;
+- automatic detection of Warframe, running through Wine or Proton on Linux or natively on Windows;
 - automatic synchronization of prime parts, relic quantities, and owned/mastered frames, weapons, and companions;
 - automatic detection of the relic reward screen;
 - a click-through reward advisor showing platinum value, ducats, ownership or set progress, and mastery relevance for every choice;
 - a catalog-first desktop collection browser with search, filters, categories, item detail, and synchronization diagnostics;
 - local caching of catalog and market data for degraded offline operation;
 - English UI recognition, with locale-independent catalog identities in storage; and
-- native packaging for Arch, Gentoo, Debian/Ubuntu, and Fedora, plus an AppImage fallback.
+- native packaging for Arch, Gentoo, Debian/Ubuntu, and Fedora, an AppImage fallback, and a per-user NSIS installer for Windows.
 
-The MVP excludes Windows and macOS support, Flatpak, accounts, telemetry, cloud synchronization, trade automation, builds, farming planners, and non-English recognition.
+The MVP excludes macOS support — Warframe has no macOS client — as well as Flatpak, accounts, telemetry, cloud synchronization, trade automation, builds, farming planners, and non-English recognition.
 
 ## User Experience
 
@@ -64,11 +64,15 @@ Game Acquisition hides Wine/Proton process topology, log formats, memory layouts
 
 Production adapters cover `EE.log` and passive local artifacts, process memory, and process lifecycle. These are real internal seams because replay and synthetic adapters exercise the same acquisition behavior in tests.
 
+Memory access has one adapter per platform behind the same `MemoryReader`/`ProcessDiscovery` traits: procfs with `process_vm_readv` on Linux, `VirtualQueryEx` with `ReadProcessMemory` on Windows. They differ in one observable way. Linux resets and reads `/proc/<pid>/clear_refs` soft-dirty bits, so a poll rescans only the pages the game wrote; Windows has no equivalent that works on another process, so its adapter falls back to the trait defaults and rescans everything. Neither crate contains `unsafe` — every platform call is made through a crate that encapsulates its own.
+
 #### Screen Observer
 
-Screen Observer hides PipeWire portal sessions, compositor differences, X11 capture, frame selection, and reward recognition. Its interface emits a reward-screen observation containing recognized catalog identities and confidence. It neither prices rewards nor renders the overlay.
+Screen Observer hides PipeWire portal sessions, compositor differences, X11 and Windows Graphics Capture, frame selection, and reward recognition. Capture and the preprocessing pipeline are in-process on both platforms; the only external tool is Tesseract, which Windows bundles and Linux takes from the distribution. Its interface emits a reward-screen observation containing recognized catalog identities and confidence. It neither prices rewards nor renders the overlay.
 
 Wayland requires a functioning PipeWire plus `xdg-desktop-portal` backend. The tested matrix includes representative GNOME, KDE, wlroots, and Hyprland sessions. Minimal window managers must install and configure a compatible portal backend.
+
+Windows captures through Windows Graphics Capture rather than GDI, because `BitBlt` against a D3D swapchain returns a black frame. Placement is the one capability that does not reach parity: an override-redirect X11 window sits above a fullscreen Wine client, but nothing short of a swapchain hook draws over an exclusive-fullscreen Windows game. Borderless is therefore a documented requirement, surfaced in the health panel rather than only in the README.
 
 #### Observation Pipeline
 

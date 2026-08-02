@@ -11,7 +11,8 @@ path they exercise is still live code in `warframe-acquisition`.
 ## Requirements
 
 Python 3.11+, a running Warframe session under Wine/Proton, and the same `/proc` access the app
-needs. The screen scripts additionally shell out to `xwininfo`, `import`, `magick` and `tesseract`.
+needs. These are Linux-only research instruments, not shipped code: the screen ones still shell
+out to `xwininfo`, `import`, `magick` and `tesseract`, which the app itself no longer does.
 
 No paths are hardcoded: [`_paths.py`](_paths.py) finds the Wine prefix from the live process's own
 mappings, the same way the app does. Override with `TENNOSCOPE_EE_LOG` and `TENNOSCOPE_CATALOG` to

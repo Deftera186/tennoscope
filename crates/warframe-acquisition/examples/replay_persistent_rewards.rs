@@ -1,6 +1,11 @@
 use std::{env, time::Duration};
 
-use warframe_acquisition::{LinuxProc, PersistentRewardResolver, ProcessDiscovery, RewardNeedle};
+use warframe_acquisition::{PersistentRewardResolver, ProcessDiscovery, RewardNeedle};
+
+#[cfg(unix)]
+use warframe_acquisition::LinuxProc as GameMemory;
+#[cfg(windows)]
+use warframe_acquisition::WindowsProc as GameMemory;
 
 fn main() {
     let names = env::args().skip(1).collect::<Vec<_>>();
@@ -12,7 +17,7 @@ fn main() {
         .iter()
         .map(|name| RewardNeedle::from_paths(name.clone(), Vec::new()).expect("valid reward name"))
         .collect::<Vec<_>>();
-    let memory = LinuxProc::new();
+    let memory = GameMemory::new();
     let process = memory
         .discover()
         .expect("process discovery")
