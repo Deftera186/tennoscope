@@ -21,7 +21,8 @@ pub use auth::{MarketToken, renewed_token, sign_in, verify_token};
 
 mod credential_store;
 pub use credential_store::{
-    CredentialBacking, CredentialStore, KEYRING_ENTRY, KEYRING_SERVICE, KeyringStore,
+    CredentialBacking, CredentialStore, DatabaseStore, KEYRING_ENTRY, KEYRING_SERVICE,
+    KeyringStore, open_credential_store,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

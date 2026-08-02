@@ -4752,6 +4752,7 @@ name = "warframe-market"
 version = "0.4.1"
 dependencies = [
  "keyring",
+ "local-store",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

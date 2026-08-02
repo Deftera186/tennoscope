@@ -1,6 +1,7 @@
 use std::sync::Mutex;
 
 use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
+use warframe_market::DatabaseStore;
 
 const FAKE_TOKEN: &str = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.";
 
@@ -112,4 +113,99 @@ fn probing_the_keyring_is_cheap_and_repeatable() {
         elapsed < std::time::Duration::from_secs(2),
         "the keyring probe blocked startup for {elapsed:?}"
     );
+}
+
+/// A database file the store opens for itself.
+///
+/// The path rather than a handle: `AppCore` owns its `SqliteStore` privately and does not lend it
+/// out, and a credential read happens at startup and on renewal -- rare enough that opening for
+/// each one is cheaper than restructuring who owns the connection.
+fn database_path() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("tennoscope.sqlite3");
+    // Created up front so the store's own open finds a migrated schema rather than making one.
+    local_store::SqliteStore::open(&path).expect("database initialises");
+    (directory, path)
+}
+
+#[test]
+fn the_database_store_round_trips_a_token() {
+    let (_directory, path) = database_path();
+    let store = DatabaseStore::new(path);
+
+    store
+        .store(&MarketToken::new(FAKE_TOKEN.to_owned()))
+        .expect("store succeeds");
+
+    assert_eq!(
+        store
+            .load()
+            .expect("load succeeds")
+            .expect("a token is held")
+            .expose(),
+        FAKE_TOKEN
+    );
+    assert_eq!(store.backing(), CredentialBacking::Database);
+}
+
+#[test]
+fn the_database_store_clears() {
+    let (_directory, path) = database_path();
+    let store = DatabaseStore::new(path);
+    store
+        .store(&MarketToken::new(FAKE_TOKEN.to_owned()))
+        .expect("store succeeds");
+
+    store.clear().expect("clear succeeds");
+
+    assert!(store.load().expect("load succeeds").is_none());
+}
+
+/// A token stored by one instance is readable by the next, which is what surviving a restart
+/// means when the store opens the file per operation.
+#[test]
+fn a_token_outlives_the_store_that_wrote_it() {
+    let (_directory, path) = database_path();
+    DatabaseStore::new(path.clone())
+        .store(&MarketToken::new(FAKE_TOKEN.to_owned()))
+        .expect("store succeeds");
+
+    let reopened = DatabaseStore::new(path);
+
+    assert_eq!(
+        reopened
+            .load()
+            .expect("load succeeds")
+            .expect("a token is held")
+            .expose(),
+        FAKE_TOKEN
+    );
+}
+
+/// Opening always produces a usable store. A machine with no keyring still links, which is the
+/// entire reason the fallback exists.
+///
+/// Asserted by round-tripping a token rather than by checking which backing was chosen: that
+/// varies by machine, and an enum match over both variants would be true however broken the
+/// store was.
+#[test]
+fn opening_a_store_produces_one_that_works() {
+    let (_directory, path) = database_path();
+
+    let store = warframe_market::open_credential_store(path);
+    store
+        .store(&MarketToken::new(FAKE_TOKEN.to_owned()))
+        .expect("the chosen store accepts a token");
+
+    assert_eq!(
+        store
+            .load()
+            .expect("the chosen store reads back")
+            .expect("a token is held")
+            .expose(),
+        FAKE_TOKEN
+    );
+
+    // Left as it was found, so a developer's real keyring does not keep a test token.
+    store.clear().expect("the chosen store clears");
 }

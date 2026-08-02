@@ -80,3 +80,66 @@ impl CredentialStore for KeyringStore {
         CredentialBacking::Keyring
     }
 }
+
+use std::path::PathBuf;
+
+use local_store::SqliteStore;
+
+/// The fallback: the token in the application's own database, which is file-permissioned but
+/// readable by anything running as this user.
+///
+/// Holds a path rather than a connection. `AppCore` owns its `SqliteStore` privately and does not
+/// lend it out, and threading an `Arc<Mutex<_>>` through it to reach one row would restructure who
+/// owns the database for the sake of a value read at startup and written when a token renews.
+/// Opening per operation costs a file open on a path already in the page cache.
+pub struct DatabaseStore {
+    path: PathBuf,
+}
+
+impl DatabaseStore {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    fn open(&self) -> Result<SqliteStore, MarketError> {
+        SqliteStore::open(&self.path).map_err(|_| MarketError::CredentialUnavailable)
+    }
+}
+
+impl CredentialStore for DatabaseStore {
+    fn load(&self) -> Result<Option<MarketToken>, MarketError> {
+        self.open()?
+            .market_credential()
+            .map(|held| held.map(MarketToken::new))
+            .map_err(|_| MarketError::CredentialUnavailable)
+    }
+
+    fn store(&self, token: &MarketToken) -> Result<(), MarketError> {
+        self.open()?
+            .set_market_credential(token.expose())
+            .map_err(|_| MarketError::CredentialUnavailable)
+    }
+
+    fn clear(&self) -> Result<(), MarketError> {
+        self.open()?
+            .clear_market_credential()
+            .map_err(|_| MarketError::CredentialUnavailable)
+    }
+
+    fn backing(&self) -> CredentialBacking {
+        CredentialBacking::Database
+    }
+}
+
+/// The best credential store this machine offers.
+///
+/// The keyring is tried first and the database is the fallback rather than the other way round,
+/// because a credential in a keyring survives a stolen backup and one in a database file does not.
+/// This never fails: a machine with no keyring still links, which is the reason the fallback
+/// exists at all.
+pub fn open_credential_store(database: PathBuf) -> Box<dyn CredentialStore + Send + Sync> {
+    KeyringStore::available().map_or_else(
+        || Box::new(DatabaseStore::new(database.clone())) as Box<dyn CredentialStore + Send + Sync>,
+        |keyring| Box::new(keyring) as Box<dyn CredentialStore + Send + Sync>,
+    )
+}
