@@ -16,7 +16,7 @@ use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot,
     RewardAdvisor, RewardCandidate, RewardView,
 };
-use warframe_market::{MarketItems, MarketOrder, OrderKind};
+use warframe_market::{CredentialBacking, MarketItems, MarketOrder, OrderKind};
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -35,6 +35,7 @@ pub struct AppCore {
     prices: Option<Arc<PriceTable>>,
     live: Option<MarketPriceCache>,
     pricing: Option<PricingProgress>,
+    market_account: MarketAccountView,
 }
 
 pub trait AcquisitionPort {
@@ -92,6 +93,7 @@ impl AppCore {
             prices: None,
             live: None,
             pricing: None,
+            market_account: MarketAccountView::unlinked(),
         })
     }
 
@@ -155,6 +157,48 @@ impl AppCore {
     /// overwriting it with something less true.
     pub fn health(&self) -> &HealthView {
         &self.health
+    }
+
+    pub fn market_account(&self) -> &MarketAccountView {
+        &self.market_account
+    }
+
+    /// Replace the account state and say so in the health row.
+    pub fn set_market_account(&mut self, account: MarketAccountView) -> Result<AppView, AppError> {
+        self.health.market_account = match account.link {
+            LinkState::Unlinked => BackendHealth::idle(
+                "No warframe.market account linked",
+                self.health.market_account.last_success.clone(),
+            )?,
+            LinkState::NeedsRelink => {
+                BackendHealth::degraded("The warframe.market credential was refused")?
+            }
+            LinkState::Linked => {
+                let backing = match account.backing {
+                    Some(CredentialBacking::Keyring) => "the OS keyring",
+                    _ => "the local database",
+                };
+                BackendHealth::ready(
+                    format!("warframe.market account linked; credential held in {backing}"),
+                    account.fetched_at.clone(),
+                )?
+            }
+        };
+        self.market_account = account;
+        self.current_view()
+    }
+
+    /// A fetch failed. The orders already held stay: the list is still true as of when it was
+    /// fetched and its age is on the screen, and replacing a slightly old answer with none is not
+    /// an improvement.
+    pub fn record_market_account_failure(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        let last_success = self.health.market_account.last_success.clone();
+        self.health.market_account =
+            BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.current_view()
     }
 
     pub fn current_view(&self) -> Result<AppView, AppError> {
@@ -240,6 +284,7 @@ impl AppCore {
             },
             reward: self.reward.clone(),
             health,
+            market_account: self.market_account.clone(),
         })
     }
 
@@ -521,6 +566,7 @@ pub struct AppView {
     collection: CollectionView,
     reward: RewardView,
     health: HealthView,
+    market_account: MarketAccountView,
 }
 
 impl AppView {
@@ -534,6 +580,10 @@ impl AppView {
 
     pub fn health(&self) -> &HealthView {
         &self.health
+    }
+
+    pub fn market_account(&self) -> &MarketAccountView {
+        &self.market_account
     }
 }
 
@@ -809,6 +859,10 @@ pub struct HealthView {
     collection_prices: BackendHealth,
     database: BackendHealth,
     acquisition_stages: Vec<AcquisitionStageView>,
+    /// The linked warframe.market account, kept apart from `market` -- that row answers "could we
+    /// reach warframe.market for a price", and this one answers "is an account connected". One
+    /// can be healthy while the other is not.
+    market_account: BackendHealth,
 }
 
 impl HealthView {
@@ -828,6 +882,7 @@ impl HealthView {
             )?,
             database: BackendHealth::ready("SQLite database available", None)?,
             acquisition_stages: Vec::new(),
+            market_account: BackendHealth::idle("No warframe.market account linked", None)?,
         })
     }
 
@@ -874,6 +929,10 @@ impl HealthView {
 
     pub fn acquisition_stages(&self) -> &[AcquisitionStageView] {
         &self.acquisition_stages
+    }
+
+    pub fn market_account(&self) -> &BackendHealth {
+        &self.market_account
     }
 }
 
@@ -1014,6 +1073,82 @@ fn status_for(
         0 => OrderStatus::Missing,
         held if held < order.quantity => OrderStatus::Overshoot { owned: held },
         _ => OrderStatus::Ok,
+    }
+}
+
+/// Whether an account is linked, and whether it still works.
+///
+/// `NeedsRelink` is separate from `Unlinked` because they call for different things from the
+/// player: one is an invitation, the other is a repair. Presenting a refused credential as an
+/// unlinked account also loses the fact that something used to work, which is the part worth
+/// reporting.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkState {
+    #[default]
+    Unlinked,
+    Linked,
+    NeedsRelink,
+}
+
+/// The account section's whole state.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct MarketAccountView {
+    pub link: LinkState,
+    /// Which credential store holds the token. Reported because a database file and a keyring are
+    /// not equally strong, and the player is entitled to know which one they got.
+    pub backing: Option<CredentialBacking>,
+    pub orders: Vec<ReconciledOrder>,
+    pub fetched_at: Option<String>,
+    /// What the visible sell orders are asking, in total.
+    pub listed_platinum: u32,
+    /// How many orders carry a claim. Not a count of orders worth looking at -- an unverifiable
+    /// order is not a problem, and counting one would put a false alarm on the navigation of every
+    /// machine that has not read the game yet.
+    pub flagged: usize,
+}
+
+impl MarketAccountView {
+    pub fn unlinked() -> Self {
+        Self::default()
+    }
+
+    pub fn needs_relink() -> Self {
+        Self {
+            link: LinkState::NeedsRelink,
+            ..Self::default()
+        }
+    }
+
+    pub fn linked(
+        backing: CredentialBacking,
+        orders: Vec<ReconciledOrder>,
+        fetched_at: String,
+    ) -> Self {
+        // A hidden order is offered to nobody and a buy order is money going out, so neither is
+        // part of what this account is asking for.
+        let listed_platinum = orders
+            .iter()
+            .filter(|entry| entry.order.visible && entry.order.kind == OrderKind::Sell)
+            .map(|entry| entry.order.platinum.saturating_mul(entry.order.quantity))
+            .sum();
+        let flagged = orders
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.status,
+                    OrderStatus::Missing | OrderStatus::Overshoot { .. }
+                )
+            })
+            .count();
+        Self {
+            link: LinkState::Linked,
+            backing: Some(backing),
+            orders,
+            fetched_at: Some(fetched_at),
+            listed_platinum,
+            flagged,
+        }
     }
 }
 

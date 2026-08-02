@@ -374,7 +374,16 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
                 "catalog": {"state": "degraded", "message": "Fake session; live catalog not connected", "last_success": null},
                 "market": {"state": "degraded", "message": "Fake session; live market not connected", "last_success": null},
                 "collection_prices": {"state": "idle", "message": "Collection price dump has not loaded yet", "last_success": null},
-                "database": {"state": "ready", "message": "SQLite database available", "last_success": null}
+                "database": {"state": "ready", "message": "SQLite database available", "last_success": null},
+                "market_account": {"state": "idle", "message": "No warframe.market account linked", "last_success": null}
+            },
+            "market_account": {
+                "link": "unlinked",
+                "backing": null,
+                "orders": [],
+                "fetched_at": null,
+                "listed_platinum": 0,
+                "flagged": 0
             }
         })
     );
