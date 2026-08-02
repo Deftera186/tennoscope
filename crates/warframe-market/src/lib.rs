@@ -111,7 +111,7 @@ pub trait MarketTransport {
 /// No variant carries a token, a password, or an account identifier. `Rejected` deliberately does
 /// not say which field was wrong: that is a detail the API knows and this application has no use
 /// for, and carrying it means carrying it into every log line that renders the error.
-#[derive(Clone, Debug, Eq, Error, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 pub enum MarketError {
     #[error("warframe.market could not be reached")]
     Unreachable,

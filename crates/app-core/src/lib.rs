@@ -200,6 +200,15 @@ impl AppCore {
         self.current_view()
     }
 
+    /// The stored collection, for a caller that has to join something against it.
+    pub fn collection_for_reconciliation(&self) -> Result<Collection, AppError> {
+        Ok(self.store.load_collection()?)
+    }
+
+    pub fn latest_snapshot_meta(&self) -> Result<Option<SnapshotMeta>, AppError> {
+        Ok(self.store.latest_snapshot_meta()?)
+    }
+
     pub fn current_view(&self) -> Result<AppView, AppError> {
         let collection = self.store.load_collection()?;
         let mut items = collection

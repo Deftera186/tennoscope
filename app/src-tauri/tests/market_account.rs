@@ -1,0 +1,204 @@
+use std::sync::Mutex;
+
+use app_core::{LinkState, OrderStatus};
+use app_lib::market_account::{MarketSession, account_view, failure_message};
+use warframe_domain::Collection;
+use warframe_market::{
+    CredentialBacking, CredentialStore, MarketError, MarketRequest, MarketResponse, MarketToken,
+    MarketTransport,
+};
+
+/// A credential store that holds one token, so the session can be exercised without a keyring.
+#[derive(Default)]
+struct MemoryStore {
+    held: Mutex<Option<String>>,
+}
+
+impl CredentialStore for MemoryStore {
+    fn load(&self) -> Result<Option<MarketToken>, MarketError> {
+        Ok(self.held.lock().expect("lock").clone().map(MarketToken::new))
+    }
+    fn store(&self, token: &MarketToken) -> Result<(), MarketError> {
+        *self.held.lock().expect("lock") = Some(token.expose().to_owned());
+        Ok(())
+    }
+    fn clear(&self) -> Result<(), MarketError> {
+        *self.held.lock().expect("lock") = None;
+        Ok(())
+    }
+    fn backing(&self) -> CredentialBacking {
+        CredentialBacking::Database
+    }
+}
+
+struct ScriptedTransport {
+    replies: Mutex<Vec<Result<MarketResponse, MarketError>>>,
+}
+
+impl ScriptedTransport {
+    fn new(replies: Vec<Result<MarketResponse, MarketError>>) -> Self {
+        Self {
+            replies: Mutex::new(replies),
+        }
+    }
+}
+
+impl MarketTransport for ScriptedTransport {
+    fn send(&self, _request: MarketRequest) -> Result<MarketResponse, MarketError> {
+        let mut replies = self.replies.lock().expect("lock");
+        if replies.is_empty() {
+            return Err(MarketError::Unreachable);
+        }
+        replies.remove(0)
+    }
+}
+
+fn ok(body: &str) -> Result<MarketResponse, MarketError> {
+    Ok(MarketResponse {
+        status: 200,
+        authorization: None,
+        body: body.as_bytes().to_vec(),
+    })
+}
+
+const ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
+    {"id":"item-one","gameRef":"/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+     "i18n":{"en":{"name":"Braton Prime Blueprint"}}}
+],"error":null}"#;
+
+const ORDERS: &str = r#"{"apiVersion":"0.25.0","data":[
+    {"id":"order-one","itemId":"item-one","type":"sell","platinum":12,"quantity":1,
+     "perTrade":1,"visible":true,"updatedAt":"2026-07-30T10:00:00Z"}
+],"error":null}"#;
+
+/// With no stored credential the view is unlinked, and nothing is requested. A session that asked
+/// the API about an account it has no token for would spend a request to be told 401.
+#[test]
+fn an_unlinked_session_asks_for_nothing() {
+    let mut session = MarketSession::new(Box::new(MemoryStore::default()));
+    let transport = ScriptedTransport::new(Vec::new());
+
+    let view = account_view(
+        &mut session,
+        &transport,
+        &Collection::default(),
+        None,
+        "2026-07-31T12:00:00Z",
+    )
+    .expect("view builds");
+
+    assert_eq!(view.link, LinkState::Unlinked);
+    assert!(view.orders.is_empty());
+}
+
+#[test]
+fn a_linked_session_lists_and_reconciles() {
+    let store = MemoryStore::default();
+    store
+        .store(&MarketToken::new("fake-token".to_owned()))
+        .expect("token stores");
+    let mut session = MarketSession::new(Box::new(store));
+    let transport = ScriptedTransport::new(vec![ok(ITEMS), ok(ORDERS)]);
+
+    let view = account_view(
+        &mut session,
+        &transport,
+        &Collection::default(),
+        None,
+        "2026-07-31T12:00:00Z",
+    )
+    .expect("view builds");
+
+    assert_eq!(view.link, LinkState::Linked);
+    assert_eq!(view.orders.len(), 1);
+    // No snapshot, so nothing is claimed.
+    assert_eq!(view.orders[0].status, OrderStatus::Unverifiable);
+    assert_eq!(view.listed_platinum, 12);
+}
+
+/// The item table is fetched once and reused. It is 1.61 MB, and re-fetching it on every refresh
+/// would make opening the section the most expensive thing the application does.
+#[test]
+fn the_item_table_is_fetched_once() {
+    let store = MemoryStore::default();
+    store
+        .store(&MarketToken::new("fake-token".to_owned()))
+        .expect("token stores");
+    let mut session = MarketSession::new(Box::new(store));
+    // Two refreshes, but only three replies: items once, then orders twice.
+    let transport = ScriptedTransport::new(vec![ok(ITEMS), ok(ORDERS), ok(ORDERS)]);
+
+    for _ in 0..2 {
+        account_view(
+            &mut session,
+            &transport,
+            &Collection::default(),
+            None,
+            "2026-07-31T12:00:00Z",
+        )
+        .expect("view builds");
+    }
+}
+
+/// A refused credential produces a relink rather than an error the caller has to interpret.
+#[test]
+fn a_refused_credential_becomes_a_relink() {
+    let store = MemoryStore::default();
+    store
+        .store(&MarketToken::new("fake-token".to_owned()))
+        .expect("token stores");
+    let mut session = MarketSession::new(Box::new(store));
+    let transport = ScriptedTransport::new(vec![
+        ok(ITEMS),
+        Ok(MarketResponse {
+            status: 401,
+            authorization: None,
+            body: Vec::new(),
+        }),
+    ]);
+
+    let view = account_view(
+        &mut session,
+        &transport,
+        &Collection::default(),
+        None,
+        "2026-07-31T12:00:00Z",
+    )
+    .expect("view builds");
+
+    assert_eq!(view.link, LinkState::NeedsRelink);
+}
+
+/// Every message the interface can show is checked for the two things that must never be in one.
+///
+/// The check is for a credential *value* rather than for the word "token": one message names the
+/// paste-token path on purpose, because that is the path that still works when signin does not.
+#[test]
+fn no_failure_message_carries_a_credential_or_an_address() {
+    for error in [
+        MarketError::Unreachable,
+        MarketError::RateLimited,
+        MarketError::Unauthorized,
+        MarketError::Rejected,
+        MarketError::SigninUnavailable,
+        MarketError::Malformed,
+        MarketError::CredentialUnavailable,
+    ] {
+        let message = failure_message(error);
+        assert!(!message.contains('@'), "address-shaped message: {message}");
+        assert!(
+            !message.contains("eyJ"),
+            "a token value in a message: {message}"
+        );
+        assert!(!message.trim().is_empty(), "blank message for {error:?}");
+    }
+}
+
+/// The signin route going away must not read as a wrong password: it points at the path that
+/// still works.
+#[test]
+fn a_missing_signin_route_points_at_the_paste_path() {
+    let message = failure_message(MarketError::SigninUnavailable);
+
+    assert!(message.contains("token"), "unhelpful message: {message}");
+}

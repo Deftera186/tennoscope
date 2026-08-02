@@ -4176,6 +4176,7 @@ dependencies = [
  "tempfile",
  "warframe-acquisition",
  "warframe-domain",
+ "warframe-market",
 ]
 
 [[package]]

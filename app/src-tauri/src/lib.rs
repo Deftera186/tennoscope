@@ -44,12 +44,14 @@ const POLLER_GONE_STREAK: u32 = 2;
 /// Upper bound on how long a single fissure mission is worth watching for.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 
+pub mod market_account;
 mod monitor;
 mod overlay_window;
 mod reward_log;
 mod reward_observer;
 mod reward_ocr;
 mod reward_source;
+pub use market_account::{MarketSession, account_view, failure_message};
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
@@ -131,6 +133,7 @@ struct Runtime {
     // fetched two runs ago is one this run does not have to make. Shared with the collection, so
     // a pool warmed mid-mission also prices those items in the browser.
     live_prices: MarketPriceCache,
+    market: MarketSession,
 }
 type SharedRuntime = Arc<Mutex<Runtime>>;
 
@@ -296,6 +299,250 @@ async fn load_fake_session(state: State<'_, SharedRuntime>) -> Result<AppView, S
     .map_err(|_| "fake session task failed".to_owned())?
 }
 
+/// Now, as Unix seconds in a string.
+///
+/// The same form `refresh_blocking` already stamps snapshot metadata with, rather than a second
+/// vocabulary for the same idea. Only two things read it: the reconciliation, which normalises
+/// both forms to an instant anyway, and the interface, whose `snapshotFreshness` already parses
+/// epoch seconds -- so formatting a calendar date here would add a date algorithm to produce a
+/// string nothing needs in that shape.
+fn now_unix_seconds() -> String {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+        .to_string()
+}
+
+/// Fetch the account and publish it, turning any failure into a health message rather than an
+/// error the interface has to interpret.
+///
+/// The transport is built per call rather than held: it is cheap, and a client built at startup on
+/// a machine that was offline then would be a client that never works.
+fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
+    let pacer = {
+        let runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        runtime.live_prices.pacer()
+    };
+    let Ok(transport) = warframe_market::MarketHttp::new(pacer) else {
+        let mut runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        return runtime
+            .core
+            .record_market_account_failure(market_account::failure_message(
+                warframe_market::MarketError::Unreachable,
+            ))
+            .map_err(|_| "application view is unavailable".to_owned());
+    };
+    let now = now_unix_seconds();
+    let mut runtime = shared
+        .lock()
+        .map_err(|_| "application state is unavailable".to_owned())?;
+    let collection = runtime
+        .core
+        .collection_for_reconciliation()
+        .map_err(|_| "the collection could not be read".to_owned())?;
+    let snapshot = runtime
+        .core
+        .latest_snapshot_meta()
+        .map_err(|_| "the snapshot could not be read".to_owned())?;
+    let Runtime { core, market, .. } = &mut *runtime;
+    match market_account::account_view(market, &transport, &collection, snapshot.as_ref(), &now) {
+        Ok(view) => core
+            .set_market_account(view)
+            .map_err(|_| "application view is unavailable".to_owned()),
+        Err(error) => core
+            .record_market_account_failure(market_account::failure_message(error))
+            .map_err(|_| "application view is unavailable".to_owned()),
+    }
+}
+
+#[tauri::command]
+async fn market_status(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || publish_account(&shared))
+        .await
+        .map_err(|_| "market status task failed".to_owned())?
+}
+
+/// Exchange an email and password for a token, then publish the account.
+///
+/// The password reaches this function, is passed once to the signin call, and is dropped. It is
+/// not stored, not echoed back, and not part of any value this command returns.
+#[tauri::command]
+async fn market_sign_in(
+    email: String,
+    password: String,
+    state: State<'_, SharedRuntime>,
+) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let pacer = {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            runtime.live_prices.pacer()
+        };
+        let transport = warframe_market::MarketHttp::new(pacer).map_err(|_| {
+            market_account::failure_message(warframe_market::MarketError::Unreachable).to_owned()
+        })?;
+        let token = warframe_market::sign_in(&transport, &email, &password)
+            .map_err(|error| market_account::failure_message(error).to_owned())?;
+        shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?
+            .market
+            .adopt(token)
+            .map_err(|error| market_account::failure_message(error).to_owned())?;
+        publish_account(&shared)
+    })
+    .await
+    .map_err(|_| "sign-in task failed".to_owned())?
+}
+
+/// Link with a token pasted from a signed-in browser session.
+///
+/// Verified before it is stored, so a bad paste fails at the paste box rather than at the next
+/// action.
+#[tauri::command]
+async fn market_link_token(
+    token: String,
+    state: State<'_, SharedRuntime>,
+) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let pacer = {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            runtime.live_prices.pacer()
+        };
+        let transport = warframe_market::MarketHttp::new(pacer).map_err(|_| {
+            market_account::failure_message(warframe_market::MarketError::Unreachable).to_owned()
+        })?;
+        let verified =
+            warframe_market::verify_token(&transport, &warframe_market::MarketToken::new(token))
+                .map_err(|error| market_account::failure_message(error).to_owned())?;
+        shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?
+            .market
+            .adopt(verified)
+            .map_err(|error| market_account::failure_message(error).to_owned())?;
+        publish_account(&shared)
+    })
+    .await
+    .map_err(|_| "link task failed".to_owned())?
+}
+
+#[tauri::command]
+async fn market_sign_out(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        {
+            let mut runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            runtime
+                .market
+                .forget()
+                .map_err(|error| market_account::failure_message(error).to_owned())?;
+        }
+        shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?
+            .core
+            .set_market_account(app_core::MarketAccountView::unlinked())
+            .map_err(|_| "application view is unavailable".to_owned())
+    })
+    .await
+    .map_err(|_| "sign-out task failed".to_owned())?
+}
+
+#[tauri::command]
+async fn refresh_orders(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || publish_account(&shared))
+        .await
+        .map_err(|_| "order refresh task failed".to_owned())?
+}
+
+/// Take one order down, then refresh so the list reflects what the account now holds.
+#[tauri::command]
+async fn remove_order(
+    order_id: String,
+    state: State<'_, SharedRuntime>,
+) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        write_then_refresh(&shared, |transport, token| {
+            warframe_market::delete_order(transport, token, &order_id)
+        })
+    })
+    .await
+    .map_err(|_| "order removal task failed".to_owned())?
+}
+
+/// Lower one order to the quantity the collection says is held.
+#[tauri::command]
+async fn set_order_quantity(
+    order_id: String,
+    quantity: u32,
+    state: State<'_, SharedRuntime>,
+) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        write_then_refresh(&shared, |transport, token| {
+            warframe_market::set_order_quantity(transport, token, &order_id, quantity)
+        })
+    })
+    .await
+    .map_err(|_| "order update task failed".to_owned())?
+}
+
+/// Both writes share this: perform it, keep whatever token came back, then refresh.
+///
+/// The refresh is not optional. A write that changed the account and left the list showing the
+/// old state would invite the player to press the same button again.
+fn write_then_refresh<F>(shared: &SharedRuntime, write: F) -> Result<AppView, String>
+where
+    F: FnOnce(
+        &dyn warframe_market::MarketTransport,
+        &warframe_market::MarketToken,
+    ) -> Result<warframe_market::MarketToken, warframe_market::MarketError>,
+{
+    let (pacer, token) = {
+        let runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        (
+            runtime.live_prices.pacer(),
+            runtime
+                .market
+                .token()
+                .map_err(|error| market_account::failure_message(error).to_owned())?,
+        )
+    };
+    let Some(token) = token else {
+        return Err(market_account::failure_message(warframe_market::MarketError::Unauthorized)
+            .to_owned());
+    };
+    let transport = warframe_market::MarketHttp::new(pacer).map_err(|_| {
+        market_account::failure_message(warframe_market::MarketError::Unreachable).to_owned()
+    })?;
+    let renewed = write(&transport, &token)
+        .map_err(|error| market_account::failure_message(error).to_owned())?;
+    shared
+        .lock()
+        .map_err(|_| "application state is unavailable".to_owned())?
+        .market
+        .adopt(renewed)
+        .map_err(|error| market_account::failure_message(error).to_owned())?;
+    publish_account(shared)
+}
+
 async fn refresh_shared(shared: SharedRuntime) -> Result<AppView, String> {
     tauri::async_runtime::spawn_blocking(move || refresh_blocking(&shared))
         .await
@@ -420,6 +667,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         overlay_preview_until: None,
         monitor_started: false,
         live_prices,
+        market: MarketSession::new(warframe_market::open_credential_store(paths.database.clone())),
     })))
 }
 
@@ -1817,7 +2065,14 @@ pub fn run() {
             refresh_prices,
             load_fake_session,
             show_reward_overlay,
-            hide_reward_overlay
+            hide_reward_overlay,
+            market_status,
+            market_sign_in,
+            market_link_token,
+            market_sign_out,
+            refresh_orders,
+            remove_order,
+            set_order_quantity
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
