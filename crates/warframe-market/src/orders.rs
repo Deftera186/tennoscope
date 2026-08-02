@@ -121,12 +121,22 @@ pub fn list_mine(
     }
 }
 
+/// Rejects an id that could not name a single existing order: empty, or carrying a `/` that would
+/// let it address something other than one order in the path it is interpolated into.
+fn validate_order_id(order_id: &str) -> Result<(), MarketError> {
+    if order_id.is_empty() || order_id.contains('/') {
+        return Err(MarketError::Rejected);
+    }
+    Ok(())
+}
+
 /// Take an order down.
 pub fn delete_order(
     transport: &dyn MarketTransport,
     token: &MarketToken,
     order_id: &str,
 ) -> Result<MarketToken, MarketError> {
+    validate_order_id(order_id)?;
     let response = transport.send(MarketRequest {
         method: Method::Delete,
         url: format!("{API_V2}/order/{order_id}"),
@@ -140,12 +150,17 @@ pub fn delete_order(
 ///
 /// Only the quantity is sent. A patch that also carried the price would silently reprice an order
 /// the player asked only to shrink, and they would find out from a buyer.
+///
+/// This call sends whatever `quantity` it is given -- it has no current quantity to check against,
+/// so it cannot enforce that the value is a reduction. Keeping the new quantity at or below what
+/// the order already holds is the caller's obligation.
 pub fn set_order_quantity(
     transport: &dyn MarketTransport,
     token: &MarketToken,
     order_id: &str,
     quantity: u32,
 ) -> Result<MarketToken, MarketError> {
+    validate_order_id(order_id)?;
     // Zero is a deletion wearing a patch's clothes. The two are different actions behind different
     // buttons, and refusing here means no caller can route round that distinction.
     if quantity == 0 {

@@ -117,6 +117,28 @@ fn a_quantity_of_zero_is_refused() {
     assert!(transport.seen().is_empty(), "no request should have been sent");
 }
 
+/// An id carrying a `/` would address something other than one order in the interpolated path.
+/// These writes are irreversible against a real account, so this is caught before any request.
+#[test]
+fn deleting_with_a_slash_in_the_id_is_refused() {
+    let transport = FakeTransport::new(Vec::new());
+
+    let outcome = delete_order(&transport, &token(), "order/one");
+
+    assert_eq!(outcome.unwrap_err(), MarketError::Rejected);
+    assert!(transport.seen().is_empty(), "no request should have been sent");
+}
+
+#[test]
+fn patching_with_a_slash_in_the_id_is_refused() {
+    let transport = FakeTransport::new(Vec::new());
+
+    let outcome = set_order_quantity(&transport, &token(), "order/one", 1);
+
+    assert_eq!(outcome.unwrap_err(), MarketError::Rejected);
+    assert!(transport.seen().is_empty(), "no request should have been sent");
+}
+
 /// Every authenticated call may reissue the token, and the writes are authenticated calls. Missing
 /// it here would expire an account that deletes orders regularly.
 #[test]
