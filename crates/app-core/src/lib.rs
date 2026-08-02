@@ -166,10 +166,9 @@ impl AppCore {
     /// Replace the account state and say so in the health row.
     pub fn set_market_account(&mut self, account: MarketAccountView) -> Result<AppView, AppError> {
         self.health.market_account = match account.link {
-            LinkState::Unlinked => BackendHealth::idle(
-                "No warframe.market account linked",
-                self.health.market_account.last_success.clone(),
-            )?,
+            // Nothing carried forward: with no account linked there is no fetch for a timestamp
+            // to describe, and one left behind reads as though a link were still in place.
+            LinkState::Unlinked => BackendHealth::idle("No warframe.market account linked", None)?,
             LinkState::NeedsRelink => {
                 BackendHealth::degraded("The warframe.market credential was refused")?
             }

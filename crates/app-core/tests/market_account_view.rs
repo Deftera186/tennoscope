@@ -163,4 +163,7 @@ fn unlinking_clears_the_orders() {
     assert!(view.market_account().orders.is_empty());
     assert_eq!(view.market_account().link, LinkState::Unlinked);
     assert_eq!(view.market_account().backing, None);
+    // The health row clears with the view. A success time left on a row that reads "no account
+    // linked" describes a fetch for an account the player disconnected.
+    assert_eq!(view.health().market_account().last_success(), None);
 }
