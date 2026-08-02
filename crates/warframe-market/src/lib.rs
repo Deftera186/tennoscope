@@ -28,6 +28,11 @@ pub use credential_store::{
 mod items;
 pub use items::{MAX_ITEMS_BYTES, MarketItems};
 
+mod orders;
+pub use orders::{
+    MAX_ORDERS_BYTES, MarketOrder, OrderKind, delete_order, list_mine, set_order_quantity,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Method {
     Get,
