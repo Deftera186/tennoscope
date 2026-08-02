@@ -111,6 +111,12 @@ it needs — there is nothing else to install.
 Windows SmartScreen will warn you the first time, because the installer is not code-signed: a
 certificate costs money this project does not take. "More info" then "Run anyway" gets past it.
 
+> [!NOTE]
+> **Windows support is best-effort.** This project is developed and tested on Linux; the Windows
+> build is compiled and unit-tested in CI, but no Windows machine runs it before a release. It is
+> expected to work and bug reports are welcome — just know that a Windows-only problem may take a
+> round trip to diagnose, because reproducing it needs a machine the author does not have.
+
 > [!IMPORTANT]
 > Set **Display Mode** to **Borderless** in Warframe's options. In exclusive fullscreen the game
 > owns the display outright and no application can draw over it — the collection browser still

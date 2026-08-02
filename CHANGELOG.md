@@ -17,7 +17,8 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   with the same collection browser, the same reward overlay and the same local-only storage. The
   installer is a per-user NSIS package: no administrator prompt, no prerequisites, and it carries
   its own copy of Tesseract so there is nothing else to install. It is not code-signed, so
-  SmartScreen warns on first run.
+  SmartScreen warns on first run. Support is best-effort: the Windows build is compiled and
+  unit-tested in CI, but no Windows machine runs it before a release.
 - **Warframe's display mode is checked.** On Windows an exclusive-fullscreen game owns the display
   and nothing can draw over it, so the diagnostics panel now asks for Borderless when it cannot
   find the game window, instead of reporting a generic capture failure.
@@ -28,6 +29,21 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   contrast normalisation and thresholding are all in-process Rust now. On Linux that means
   `xwininfo` and ImageMagick are no longer needed at all — packages have dropped them from their
   recommended dependencies — and every read is one process spawn instead of four.
+
+### Fixed
+
+- **A mistyped password no longer locks acquisition out for the session.** Every login a running
+  game has performed leaves its credentials in memory, so a failed attempt followed by a
+  successful one left two behind and the reader refused to choose between them — "multiple
+  inventory authorizations were found", with nothing but restarting the game to clear it. It now
+  takes the newest one for an account, which is the live session. Two *different* accounts still
+  refuse, because that case has no right answer.
+- **Pre-release builds no longer open a console window beside the app.** They keep debug
+  assertions on so their tracing survives, and the Windows console was suppressed by the absence
+  of exactly that flag rather than by the build profile it should have followed.
+- **A slow first start no longer reports the backend as unavailable.** The window is created
+  before the backend finishes opening its database, and the first status call could arrive in
+  that gap; it now waits for the backend rather than declaring it missing.
 
 ## [0.4.1] - 2026-07-31
 

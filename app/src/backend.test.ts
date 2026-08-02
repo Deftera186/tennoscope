@@ -21,4 +21,32 @@ describe('typed Tauri command bridge', () => {
     await refreshInventory()
     expect(invoke).toHaveBeenCalledWith('refresh_inventory')
   })
+
+  it('waits out a backend that has not finished starting', async () => {
+    invoke
+      .mockRejectedValueOnce(new Error('command get_setup_status not found'))
+      .mockRejectedValueOnce(new Error('command get_setup_status not found'))
+      .mockResolvedValueOnce({ risk_accepted: true })
+
+    await expect(getSetupStatus(5, 0)).resolves.toEqual({ risk_accepted: true })
+    expect(invoke).toHaveBeenCalledTimes(3)
+  })
+
+  it('gives up once the backend is plainly not coming', async () => {
+    const unavailable = () => Promise.reject(new Error('command get_setup_status not found'))
+    invoke
+      .mockImplementationOnce(unavailable)
+      .mockImplementationOnce(unavailable)
+      .mockImplementationOnce(unavailable)
+
+    let caught: unknown
+    try {
+      await getSetupStatus(3, 0)
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(Error)
+    expect(invoke).toHaveBeenCalledTimes(3)
+  })
 })
