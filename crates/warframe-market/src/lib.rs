@@ -25,6 +25,9 @@ pub use credential_store::{
     KeyringStore, open_credential_store,
 };
 
+mod items;
+pub use items::{MAX_ITEMS_BYTES, MarketItems};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Method {
     Get,
