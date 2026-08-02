@@ -1028,9 +1028,19 @@ fn status_for(
 /// fractional part are ignored, and an offset other than `Z` is treated as unparseable rather than
 /// guessed at.
 fn instant_of(value: &str) -> Option<i64> {
+    /// Seconds the epoch form is allowed to name: 2001 to 2603. Wide enough that no real clock
+    /// leaves it, narrow enough that a millisecond value cannot pass as a second one.
+    const PLAUSIBLE: std::ops::RangeInclusive<i64> = 1_000_000_000..=20_000_000_000;
+
     let value = value.trim();
     if value.bytes().all(|byte| byte.is_ascii_digit()) {
-        return value.parse().ok();
+        // Bounded rather than parsed bare. A writer emitting milliseconds would otherwise read as
+        // an instant tens of thousands of years out, which is newer than every order there will
+        // ever be -- so a stale snapshot would judge, confidently and always.
+        return value
+            .parse()
+            .ok()
+            .filter(|seconds| PLAUSIBLE.contains(seconds));
     }
     let (date, rest) = value.split_once('T')?;
     // Anything not stated in UTC is left unparsed. A wrong guess about an offset moves an order
@@ -1061,4 +1071,60 @@ fn instant_of(value: &str) -> Option<i64> {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
     Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+#[cfg(test)]
+mod instant_tests {
+    use super::instant_of;
+
+    #[test]
+    fn epoch_seconds_are_taken_as_written() {
+        assert_eq!(instant_of("1785492000"), Some(1_785_492_000));
+    }
+
+    #[test]
+    fn rfc_3339_utc_is_the_same_instant_as_its_epoch_seconds() {
+        assert_eq!(instant_of("2026-07-31T10:00:00Z"), Some(1_785_492_000));
+    }
+
+    #[test]
+    fn a_fractional_second_is_dropped_rather_than_rejected() {
+        assert_eq!(instant_of("2026-07-31T10:00:00.482Z"), Some(1_785_492_000));
+    }
+
+    /// The branch that must never start guessing. An assumed offset moves an order across the
+    /// snapshot boundary, turning "we cannot say" into a confident accusation with a delete
+    /// button beside it.
+    #[test]
+    fn an_offset_other_than_utc_is_not_guessed_at() {
+        assert_eq!(instant_of("2026-07-31T10:00:00+02:00"), None);
+        assert_eq!(instant_of("2026-07-31T10:00:00-05:00"), None);
+    }
+
+    #[test]
+    fn a_missing_seconds_field_reads_as_the_minute() {
+        assert_eq!(instant_of("2026-07-31T10:00Z"), Some(1_785_492_000));
+    }
+
+    /// Milliseconds would otherwise parse as an instant tens of thousands of years out, which is
+    /// newer than every order there will ever be -- so a stale snapshot would judge, always.
+    #[test]
+    fn a_millisecond_value_is_refused_rather_than_read_as_seconds() {
+        assert_eq!(instant_of("1785492000123"), None);
+    }
+
+    #[test]
+    fn implausibly_small_digit_strings_are_refused() {
+        assert_eq!(instant_of("0"), None);
+        assert_eq!(instant_of("42"), None);
+    }
+
+    #[test]
+    fn malformed_input_yields_no_instant() {
+        assert_eq!(instant_of(""), None);
+        assert_eq!(instant_of("   "), None);
+        assert_eq!(instant_of("yesterday"), None);
+        assert_eq!(instant_of("2026-07-31"), None);
+        assert_eq!(instant_of("2026-07-31Tten o'clockZ"), None);
+    }
 }
