@@ -5,7 +5,9 @@
 //! runtime where every future field addition would have to be careful of it.
 #![forbid(unsafe_code)]
 
-use app_core::{MarketAccountView, reconcile_orders};
+use std::sync::Arc;
+
+use app_core::{MarketAccountView, OrderStatus, ReconciledOrder, reconcile_orders};
 use local_store::SnapshotMeta;
 use warframe_domain::Collection;
 use warframe_market::{
@@ -17,8 +19,10 @@ pub struct MarketSession {
     store: Box<dyn CredentialStore + Send + Sync>,
     /// warframe.market's item table. 1.61 MB and one request, so it is fetched once per launch
     /// and reused: re-fetching it on every order refresh would make opening the section the most
-    /// expensive thing the application does.
-    items: Option<MarketItems>,
+    /// expensive thing the application does. Held behind an `Arc` so a caller can take its own
+    /// handle and let go of `&mut MarketSession` before doing anything slow with it, rather than
+    /// cloning the whole table out on every refresh.
+    items: Option<Arc<MarketItems>>,
 }
 
 impl MarketSession {
@@ -44,11 +48,30 @@ impl MarketSession {
         self.store.clear()
     }
 
-    pub fn items(&mut self, transport: &dyn MarketTransport) -> Result<&MarketItems, MarketError> {
+    /// The item table already held, if a fetch has happened since launch.
+    ///
+    /// For a caller that wants to fetch unlocked: it can take this handle, decide for itself
+    /// whether a fetch is needed, and only come back to store the result -- rather than holding
+    /// whatever lock guards this session for the whole network round trip.
+    pub fn cached_items(&self) -> Option<Arc<MarketItems>> {
+        self.items.clone()
+    }
+
+    /// Keep an item table a caller fetched on its own.
+    pub fn set_items(&mut self, items: Arc<MarketItems>) {
+        self.items = Some(items);
+    }
+
+    pub fn items(&mut self, transport: &dyn MarketTransport) -> Result<Arc<MarketItems>, MarketError> {
         if self.items.is_none() {
-            self.items = Some(MarketItems::fetch(transport)?);
+            self.items = Some(Arc::new(MarketItems::fetch(transport)?));
         }
-        self.items.as_ref().ok_or(MarketError::Malformed)
+        // The `None` branch just above either returned on failure or filled this in, so the field
+        // is always occupied here. Reporting `Malformed` on a miss would blame warframe.market for
+        // a local bookkeeping mistake it had no part in.
+        Ok(Arc::clone(
+            self.items.as_ref().expect("populated immediately above"),
+        ))
     }
 }
 
@@ -67,7 +90,7 @@ pub fn account_view(
         return Ok(MarketAccountView::unlinked());
     };
     let backing = session.backing();
-    let items = session.items(transport)?.clone();
+    let items = session.items(transport)?;
     match list_mine(transport, &token) {
         Ok((orders, renewed)) => {
             // Stored before the view is built, so a renewal survives even if something later in
@@ -105,4 +128,49 @@ pub const fn failure_message(error: MarketError) -> &'static str {
         MarketError::Malformed => "warframe.market sent a response this version cannot read",
         MarketError::CredentialUnavailable => "The credential could not be saved on this machine",
     }
+}
+
+/// The order named is not one the held view currently lists.
+///
+/// Shared by both writing commands: a stale or fabricated id must be refused before it reaches
+/// the transport, since a delete or a quantity write acts irreversibly on a real account.
+pub const ORDER_NOT_HELD: &str = "That order is not on the currently held list";
+
+/// A quantity write was asked for on an order the reconciliation has not flagged as an overshoot.
+///
+/// The only quantity this command will ever send is the collection's own count, taken from
+/// `OrderStatus::Overshoot { owned }`. An order that is not an overshoot has no such count to send.
+pub const ORDER_NOT_OVERSHOOT: &str = "That order is not currently flagged as oversold";
+
+/// Find one order by id in the account view currently held, so a write can be checked against
+/// what the player is actually looking at rather than against whatever a frontend call supplies.
+pub fn find_order<'a>(view: &'a MarketAccountView, order_id: &str) -> Option<&'a ReconciledOrder> {
+    view.orders.iter().find(|entry| entry.order.id == order_id)
+}
+
+/// The quantity a write is allowed to send for this order: the collection's own count, and only
+/// when the reconciliation has flagged the order as overselling it. Anything else -- `Ok`,
+/// `Missing`, `Unverifiable`, or an id absent from the view -- has no quantity this command may
+/// derive, and the caller must refuse rather than fall back to a frontend-supplied number.
+pub fn overshoot_quantity(view: &MarketAccountView, order_id: &str) -> Option<u32> {
+    match find_order(view, order_id)?.status {
+        OrderStatus::Overshoot { owned } => Some(owned),
+        _ => None,
+    }
+}
+
+/// Whether a delete may proceed: only for an id the held view actually lists. Checked before any
+/// transport is built, since a stale or fabricated id must never reach a delete call.
+pub fn authorize_removal(view: &MarketAccountView, order_id: &str) -> Result<(), &'static str> {
+    find_order(view, order_id).map(|_| ()).ok_or(ORDER_NOT_HELD)
+}
+
+/// The quantity a quantity write may send, or the reason it is refused. Checked before any
+/// transport is built: the only value ever sent is the collection's own count on an order
+/// currently flagged as an overshoot, never a number a caller supplied.
+pub fn authorize_quantity_write(
+    view: &MarketAccountView,
+    order_id: &str,
+) -> Result<u32, &'static str> {
+    overshoot_quantity(view, order_id).ok_or(ORDER_NOT_OVERSHOOT)
 }

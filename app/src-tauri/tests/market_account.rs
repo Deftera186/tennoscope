@@ -1,11 +1,13 @@
 use std::sync::Mutex;
 
-use app_core::{LinkState, OrderStatus};
-use app_lib::market_account::{MarketSession, account_view, failure_message};
+use app_core::{LinkState, MarketAccountView, OrderStatus, ReconciledOrder};
+use app_lib::market_account::{
+    MarketSession, account_view, authorize_quantity_write, authorize_removal, failure_message,
+};
 use warframe_domain::Collection;
 use warframe_market::{
-    CredentialBacking, CredentialStore, MarketError, MarketRequest, MarketResponse, MarketToken,
-    MarketTransport,
+    CredentialBacking, CredentialStore, MarketError, MarketOrder, MarketRequest, MarketResponse,
+    MarketToken, MarketTransport, OrderKind,
 };
 
 /// A credential store that holds one token, so the session can be exercised without a keyring.
@@ -202,3 +204,101 @@ fn a_missing_signin_route_points_at_the_paste_path() {
 
     assert!(message.contains("token"), "unhelpful message: {message}");
 }
+
+fn order(id: &str, status: OrderStatus) -> ReconciledOrder {
+    ReconciledOrder {
+        order: MarketOrder {
+            id: id.to_owned(),
+            item_id: "item-one".to_owned(),
+            kind: OrderKind::Sell,
+            platinum: 10,
+            quantity: 5,
+            per_trade: 1,
+            rank: None,
+            subtype: None,
+            visible: true,
+            updated_at: None,
+        },
+        name: Some("Braton Prime Blueprint".to_owned()),
+        status,
+    }
+}
+
+/// A quantity write is refused, without ever reaching the transport, for an order the
+/// reconciliation has not flagged as an overshoot -- the caller supplying a lower or higher number
+/// than warframe.market currently lists is not this command's business to arbitrate; only an
+/// overshoot has a quantity this command may derive and send.
+#[test]
+fn a_quantity_write_is_refused_for_an_order_that_is_not_an_overshoot() {
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![order("order-one", OrderStatus::Ok)],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+
+    let result = authorize_quantity_write(&view, "order-one");
+
+    assert!(result.is_err(), "an Ok order has no overshoot quantity");
+}
+
+/// The only quantity ever authorized is the collection's own count from `Overshoot { owned }` --
+/// never a number the caller supplies. A caller asking to raise a two-unit overshoot to nine
+/// still only gets back the two the collection holds.
+#[test]
+fn a_quantity_write_derives_the_owned_count_from_the_overshoot() {
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![order("order-one", OrderStatus::Overshoot { owned: 2 })],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+
+    let quantity = authorize_quantity_write(&view, "order-one").expect("overshoot authorizes");
+
+    assert_eq!(quantity, 2, "the caller's own desired value never enters this path");
+}
+
+/// An id absent from the currently held view is refused for a quantity write, the same as an id
+/// present but not overshooting.
+#[test]
+fn a_quantity_write_is_refused_for_an_id_not_on_the_held_list() {
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![order("order-one", OrderStatus::Overshoot { owned: 2 })],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+
+    let result = authorize_quantity_write(&view, "order-two");
+
+    assert!(result.is_err(), "an unknown id has nothing to authorize");
+}
+
+/// A delete is refused for an id absent from the account view currently held. The check happens
+/// before any transport is built, so a stale or fabricated id never reaches a real delete call.
+#[test]
+fn a_removal_is_refused_for_an_id_not_on_the_held_list() {
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![order("order-one", OrderStatus::Ok)],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+
+    let result = authorize_removal(&view, "order-missing");
+
+    assert!(result.is_err(), "an id not on the list must be refused");
+}
+
+/// A delete for an id that is on the list is authorized, so a legitimate removal is not blocked by
+/// the same guard that protects against a stale one.
+#[test]
+fn a_removal_is_authorized_for_an_id_on_the_held_list() {
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![order("order-one", OrderStatus::Ok)],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+
+    let result = authorize_removal(&view, "order-one");
+
+    assert!(result.is_ok(), "a held id must be authorized");
+}
+

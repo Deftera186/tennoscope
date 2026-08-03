@@ -51,7 +51,6 @@ mod reward_log;
 mod reward_observer;
 mod reward_ocr;
 mod reward_source;
-pub use market_account::{MarketSession, account_view, failure_message};
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
 };
@@ -133,7 +132,7 @@ struct Runtime {
     // fetched two runs ago is one this run does not have to make. Shared with the collection, so
     // a pool warmed mid-mission also prices those items in the browser.
     live_prices: MarketPriceCache,
-    market: MarketSession,
+    market: market_account::MarketSession,
 }
 type SharedRuntime = Arc<Mutex<Runtime>>;
 
@@ -318,12 +317,48 @@ fn now_unix_seconds() -> String {
 ///
 /// The transport is built per call rather than held: it is cheap, and a client built at startup on
 /// a machine that was offline then would be a client that never works.
+///
+/// The runtime mutex is taken three times rather than once and held throughout, because `get_view`
+/// polls that same mutex every 2.5 seconds from the frontend. Holding it across the item fetch and
+/// `list_mine` -- each a real HTTP call with its own timeout, plus whatever the pacer makes them
+/// wait -- would freeze that poll, and with it the whole interface, for as long as warframe.market
+/// takes to answer. Cheap state is read under the first lock and carried out by value; the network
+/// happens with no lock held; the result is published under a final lock taken only to write it.
 fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
-    let pacer = {
+    let (pacer, token, backing, cached_items, collection, snapshot) = {
         let runtime = shared
             .lock()
             .map_err(|_| "application state is unavailable".to_owned())?;
-        runtime.live_prices.pacer()
+        let token = runtime
+            .market
+            .token()
+            .map_err(|error| market_account::failure_message(error).to_owned())?;
+        let collection = runtime
+            .core
+            .collection_for_reconciliation()
+            .map_err(|_| "the collection could not be read".to_owned())?;
+        let snapshot = runtime
+            .core
+            .latest_snapshot_meta()
+            .map_err(|_| "the snapshot could not be read".to_owned())?;
+        (
+            runtime.live_prices.pacer(),
+            token,
+            runtime.market.backing(),
+            runtime.market.cached_items(),
+            collection,
+            snapshot,
+        )
+    };
+
+    let Some(token) = token else {
+        let mut runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        return runtime
+            .core
+            .set_market_account(app_core::MarketAccountView::unlinked())
+            .map_err(|_| "application view is unavailable".to_owned());
     };
     let Ok(transport) = warframe_market::MarketHttp::new(pacer) else {
         let mut runtime = shared
@@ -337,25 +372,83 @@ fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
             .map_err(|_| "application view is unavailable".to_owned());
     };
     let now = now_unix_seconds();
+
+    // Unlocked from here: an item fetch (only on the first call after launch) and `list_mine` are
+    // both real network round trips.
+    let outcome = fetch_account(&transport, &token, backing, cached_items, &collection, snapshot.as_ref(), &now);
+
     let mut runtime = shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?;
-    let collection = runtime
-        .core
-        .collection_for_reconciliation()
-        .map_err(|_| "the collection could not be read".to_owned())?;
-    let snapshot = runtime
-        .core
-        .latest_snapshot_meta()
-        .map_err(|_| "the snapshot could not be read".to_owned())?;
-    let Runtime { core, market, .. } = &mut *runtime;
-    match market_account::account_view(market, &transport, &collection, snapshot.as_ref(), &now) {
-        Ok(view) => core
-            .set_market_account(view)
-            .map_err(|_| "application view is unavailable".to_owned()),
-        Err(error) => core
+    match outcome {
+        Ok(FetchedAccount {
+            items,
+            renewed,
+            view,
+        }) => {
+            runtime.market.set_items(items);
+            match runtime.market.adopt(renewed) {
+                Ok(()) => runtime
+                    .core
+                    .set_market_account(view)
+                    .map_err(|_| "application view is unavailable".to_owned()),
+                // The account was read successfully but the renewed credential could not be kept.
+                // The fetch is not wasted for that: it is reported as a health problem rather than
+                // silently discarded, and the next refresh will simply ask again.
+                Err(error) => runtime
+                    .core
+                    .record_market_account_failure(market_account::failure_message(error))
+                    .map_err(|_| "application view is unavailable".to_owned()),
+            }
+        }
+        Err(error) => runtime
+            .core
             .record_market_account_failure(market_account::failure_message(error))
             .map_err(|_| "application view is unavailable".to_owned()),
+    }
+}
+
+/// What a successful, unlocked account fetch produced: the item table to keep for next time (newly
+/// fetched, or simply the one that was already cached), the token to store (renewed on every use),
+/// and the view to publish.
+struct FetchedAccount {
+    items: std::sync::Arc<warframe_market::MarketItems>,
+    renewed: warframe_market::MarketToken,
+    view: app_core::MarketAccountView,
+}
+
+/// The network part of `publish_account`, done with no runtime lock held.
+///
+/// A refused credential is not an error here: it is the account's own state, and the interface has
+/// a repair for it. Its own token is not carried anywhere since nothing renews on a 401.
+fn fetch_account(
+    transport: &dyn warframe_market::MarketTransport,
+    token: &warframe_market::MarketToken,
+    backing: warframe_market::CredentialBacking,
+    cached_items: Option<std::sync::Arc<warframe_market::MarketItems>>,
+    collection: &warframe_domain::Collection,
+    snapshot: Option<&SnapshotMeta>,
+    now: &str,
+) -> Result<FetchedAccount, warframe_market::MarketError> {
+    let items = match cached_items {
+        Some(items) => items,
+        None => std::sync::Arc::new(warframe_market::MarketItems::fetch(transport)?),
+    };
+    match warframe_market::list_mine(transport, token) {
+        Ok((orders, renewed)) => {
+            let reconciled = app_core::reconcile_orders(&orders, &items, collection, snapshot);
+            Ok(FetchedAccount {
+                items,
+                renewed,
+                view: app_core::MarketAccountView::linked(backing, reconciled, now.to_owned()),
+            })
+        }
+        Err(warframe_market::MarketError::Unauthorized) => Ok(FetchedAccount {
+            items,
+            renewed: token.clone(),
+            view: app_core::MarketAccountView::needs_relink(),
+        }),
+        Err(error) => Err(error),
     }
 }
 
@@ -470,6 +563,10 @@ async fn refresh_orders(state: State<'_, SharedRuntime>) -> Result<AppView, Stri
 }
 
 /// Take one order down, then refresh so the list reflects what the account now holds.
+///
+/// Refuses an id that is not on the account view currently held, rather than asking
+/// warframe.market about it: a stale or fabricated id must not reach a delete, since it acts
+/// irreversibly on a real account.
 #[tauri::command]
 async fn remove_order(
     order_id: String,
@@ -477,6 +574,16 @@ async fn remove_order(
 ) -> Result<AppView, String> {
     let shared = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
+        {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            if let Err(message) =
+                market_account::authorize_removal(runtime.core.market_account(), &order_id)
+            {
+                return Err(message.to_owned());
+            }
+        }
         write_then_refresh(&shared, |transport, token| {
             warframe_market::delete_order(transport, token, &order_id)
         })
@@ -486,14 +593,26 @@ async fn remove_order(
 }
 
 /// Lower one order to the quantity the collection says is held.
+///
+/// The quantity is never taken from the caller: it is derived here from the reconciliation's own
+/// `OrderStatus::Overshoot { owned }` on the order named, which is the only quantity this command
+/// will ever send. An order that is not currently flagged as an overshoot -- including one whose
+/// id is not on the held list at all -- is refused before anything is sent, because a value the
+/// frontend supplied unchecked would be a write of anything it liked to a real account.
 #[tauri::command]
 async fn set_order_quantity(
     order_id: String,
-    quantity: u32,
     state: State<'_, SharedRuntime>,
 ) -> Result<AppView, String> {
     let shared = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
+        let quantity = {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            market_account::authorize_quantity_write(runtime.core.market_account(), &order_id)
+                .map_err(|message| message.to_owned())?
+        };
         write_then_refresh(&shared, |transport, token| {
             warframe_market::set_order_quantity(transport, token, &order_id, quantity)
         })
@@ -504,8 +623,10 @@ async fn set_order_quantity(
 
 /// Both writes share this: perform it, keep whatever token came back, then refresh.
 ///
-/// The refresh is not optional. A write that changed the account and left the list showing the
-/// old state would invite the player to press the same button again.
+/// The refresh happens whether or not the renewed token could be stored. A write that changed the
+/// account and left the list showing the old state would invite the player to press the same
+/// button again; a credential that failed to store is instead surfaced through the health row on
+/// the next fetch, when `token()` finds nothing and the account reads as unlinked or refused.
 fn write_then_refresh<F>(shared: &SharedRuntime, write: F) -> Result<AppView, String>
 where
     F: FnOnce(
@@ -534,12 +655,14 @@ where
     })?;
     let renewed = write(&transport, &token)
         .map_err(|error| market_account::failure_message(error).to_owned())?;
-    shared
+    // Not propagated on failure: the write already happened on the account, and returning early
+    // here would leave the list on screen out of date with no way back except pressing the same
+    // button again. `publish_account` re-reads the token itself and reports whatever it finds.
+    let _ = shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?
         .market
-        .adopt(renewed)
-        .map_err(|error| market_account::failure_message(error).to_owned())?;
+        .adopt(renewed);
     publish_account(shared)
 }
 
@@ -667,7 +790,9 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         overlay_preview_until: None,
         monitor_started: false,
         live_prices,
-        market: MarketSession::new(warframe_market::open_credential_store(paths.database.clone())),
+        market: market_account::MarketSession::new(warframe_market::open_credential_store(
+            paths.database.clone(),
+        )),
     })))
 }
 
