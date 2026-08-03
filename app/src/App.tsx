@@ -303,6 +303,9 @@ function App() {
 
     <main className="sheet">
       {error && <p className="error-banner" role="alert">{error}</p>}
+      {/* A sell can be started from a collection card, and its failure has to be readable where it
+          was started. The orders screen renders this itself, in the block that owns the recovery. */}
+      {ordersError && page !== 'orders' && <p className="error-banner" role="alert">{ordersError}</p>}
       {!view ? <LoadingView/> : <>
         {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} onSell={ordersSell} ordersBusy={ordersBusy}/>}
         {page === 'rewards' && <RewardPage view={view}/>}

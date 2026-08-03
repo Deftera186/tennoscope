@@ -6,6 +6,7 @@ const backend = vi.hoisted(() => ({
   getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(), refreshPrices: vi.fn(),
   marketStatus: vi.fn(), marketSignIn: vi.fn(), marketLinkToken: vi.fn(), marketSignOut: vi.fn(),
   refreshOrders: vi.fn(), removeOrder: vi.fn(), setOrderQuantity: vi.fn(),
+  setMarketPresence: vi.fn(), createOrder: vi.fn(),
 }))
 const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverlay: vi.fn() }))
 vi.mock('./backend', () => backend)
@@ -49,7 +50,7 @@ const view: AppView = {
     orders: [],
     listed_platinum: 0,
     listable: [],
-    presence: { status: null, auto: false },
+    presence: { status: null, wanted: null, auto: false },
     flagged: 0,
   },
   health: {
@@ -86,6 +87,8 @@ describe('MVP desktop interface', () => {
     backend.refreshOrders.mockResolvedValue(view)
     backend.removeOrder.mockResolvedValue(view)
     backend.setOrderQuantity.mockResolvedValue(view)
+    backend.setMarketPresence.mockResolvedValue(view)
+    backend.createOrder.mockResolvedValue(view)
     overlay.showRewardOverlay.mockResolvedValue(undefined)
     overlay.hideRewardOverlay.mockResolvedValue(undefined)
   })
@@ -594,5 +597,27 @@ describe('MVP desktop interface', () => {
     render(<App/>)
     await screen.findByRole('heading', { name: 'Your collection' })
     expect(await screen.findByText(/listed 30p/i)).toBeInTheDocument()
+  })
+
+  /**
+   * A sell started from a card is answered on the card's own screen. The failure state lived only
+   * on the orders screen, so a refused listing from the collection told the player nothing at all
+   * -- the form simply closed and the item was not listed.
+   */
+  it('says so on the collection screen when a sell from a card is refused', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.marketStatus.mockResolvedValue({
+      ...view,
+      market_account: { ...view.market_account, link: 'linked', listable: ['lex-prime-receiver'] },
+    })
+    backend.createOrder.mockRejectedValue(new Error('refused'))
+    render(<App/>)
+    await screen.findByRole('heading', { name: 'Your collection' })
+
+    const card = await screen.findByRole('article', { name: 'Lex Prime Receiver' })
+    await userEvent.click(await within(card).findByRole('button', { name: 'Sell' }))
+    await userEvent.click(within(card).getByRole('button', { name: /list for sale/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not publish that listing/i)
   })
 })
