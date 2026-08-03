@@ -50,6 +50,25 @@ spare mod, so each stack is also counted at no more copies than the whole game t
 Settings has a price floor for the rest of it — the 2p mods that do sell, if you will sit down and
 arrange every one of those trades by hand.
 
+## warframe.market account (optional)
+
+Off by default. Link your warframe.market account — by signing in or by pasting a token from a
+signed-in browser session — and TennoScope shows your orders alongside your collection: total
+listed value, how long ago they were fetched, and which ones no longer match what you own. An
+order for something you sold, or for more than you still hold, is flagged and fixable in one
+action.
+
+You can also list something for sale — from a collection card or from the orders screen — take any
+listing down, and set what warframe.market shows you as: online, in game, invisible, or offline,
+held for as long as TennoScope is running. Listing is offered for items that need a price and a
+quantity and nothing else; relics, sets, and anything sold by rank are not offered, because
+warframe.market wants more about them than TennoScope asks you for.
+
+This is the one feature that sends anything off your device: your warframe.market credential, kept
+in your OS keyring where one is available and in the local database otherwise, never in a log.
+Unlink at any time and the stored credential is removed; everything else keeps working exactly as
+it did before you linked.
+
 ---
 
 ## Read this before you install it
@@ -199,8 +218,11 @@ The account identifier and nonce are session credentials: they stay in memory, a
 validated in memory and not persisted. What lands on disk is your normalized collection snapshot,
 setup state and health metadata.
 
-No telemetry, no analytics, no remote account, no crash reporting. Network requests go to the
-pinned Warframe inventory origin, the pinned catalog source and warframe.market. Nothing else.
+No telemetry, no analytics, no crash reporting, and no account of the app's own. Network requests
+go to the pinned Warframe inventory origin, the pinned catalog source, and warframe.market. If you
+opt in to linking a warframe.market account, its credential and your orders are the only player
+data this application sends anywhere; nothing else leaves the device, and unlinking removes the
+stored credential.
 
 ## Process permissions
 

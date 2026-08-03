@@ -22,6 +22,23 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 - **Warframe's display mode is checked.** On Windows an exclusive-fullscreen game owns the display
   and nothing can draw over it, so the diagnostics panel now asks for Borderless when it cannot
   find the game window, instead of reporting a generic capture failure.
+- **Optional warframe.market account link.** Off by default. Sign in or paste a token from a
+  signed-in browser session, and see your orders next to your collection — total listed value,
+  fetch age, and any order that no longer matches what you own, fixable in one action. The
+  credential is kept in your OS keyring where one is available and in the local database
+  otherwise; unlinking removes it. Nothing else about the account is uploaded, and every other
+  feature keeps working without linking.
+- **Publish a sell listing**, from a collection card or from the orders screen. Price and quantity
+  are yours to set; the quantity cannot exceed what this device says you hold. Items whose listing
+  needs more than a price and a quantity — relics, sets, and anything with a rank — are not
+  offered, because TennoScope has no way to ask for the rest.
+- **Take down any listing**, not only the ones flagged as wrong. A listing nothing is wrong with
+  asks once before it goes, since taking it down is a change of mind rather than a repair.
+- **Set what warframe.market shows you as** — online, in game, invisible, or offline — held for as
+  long as TennoScope is running. "Follow the game" reports in game while Warframe is running and
+  online otherwise, and the row still names whichever status it settled on.
+- **Where to find your token**, on the screen that asks for one, along with what it is worth to
+  anyone holding it.
 
 ### Changed
 

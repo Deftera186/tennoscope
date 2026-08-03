@@ -755,3 +755,315 @@
   .register-status > * + * { padding-left: 0; border-left: 0; }
   .metals { gap: var(--tight); }
 }
+
+/* ------------------------------------------------------------------ orders */
+
+/* Sign-in and paste-token stand as equal columns -- same card, same weight, nothing marked
+   "recommended". The clause-pair grid already does this for the setup screen's two clauses.
+
+   Both cards are columns whose form fills the leftover height, so the two submit buttons strike
+   one line across the pair no matter that one card holds two fields and the other holds one. A
+   grid cell with no internal layout floats the shorter card's button up to meet its own last
+   field, which reads as the two paths being different sizes rather than equal choices. */
+.clause-pair article { display: flex; flex-direction: column; }
+.clause-pair article form { display: flex; flex: 1; flex-direction: column; }
+/* `align-self` because a flex column stretches its children: the stamp is a stamp, not a banner,
+   and it was shrink-to-fit in the block context this replaces. */
+.clause-pair form .dial-slot:last-of-type { margin-bottom: var(--step); }
+.clause-pair form .stamp { margin-top: auto; align-self: flex-start; }
+/* `flex: none` overrides the shared `.dial-slot` rule's `flex: 1 1 auto`, which is right in the
+   settings row it was written for and wrong in a column: it lets the fields absorb the free
+   height and drift apart from each other as the neighbouring card grows. The free space belongs
+   to one place -- above the button -- so the fields stay a group. */
+.clause-pair .dial-slot { flex: none; flex-direction: column; align-items: flex-start; gap: .3rem; width: 100%; margin-block: var(--hair); }
+.clause-pair .dial-slot > span:first-child {
+  font-family: var(--face-register); font-size: .62rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--platinum-deep);
+}
+.clause-pair .dial-slot input { width: 100%; padding: .55rem .7rem; border: 1px solid var(--rule); border-radius: 0; background: var(--plate); color: var(--platinum); font-family: var(--face-register); font-size: .78rem; }
+.clause-pair .dial-slot input:focus-visible { outline: 2px solid var(--platinum-deep); outline-offset: 1px; }
+
+/* The token instructions: needed once, by the people taking that path. Open, they push the form
+   down rather than covering it, so the field being explained stays on screen while the steps are
+   read. The marker is the product's own cartouche rather than the platform triangle. */
+.token-help { margin: var(--step) 0; }
+.token-help summary {
+  display: flex; align-items: center; gap: .45rem;
+  font-family: var(--face-register); font-size: .62rem; font-weight: 600;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--platinum-deep);
+  cursor: pointer; list-style: none; transition: color .12s ease;
+}
+.token-help summary::-webkit-details-marker { display: none; }
+.token-help summary::before {
+  flex: none; width: .5rem; height: .58rem; content: '';
+  background: var(--platinum-deep); clip-path: var(--cartouche);
+  transition: background .12s ease, transform .16s cubic-bezier(.16, 1, .3, 1);
+}
+.token-help summary:hover { color: var(--platinum); }
+.token-help summary:hover::before { background: var(--platinum); }
+.token-help summary:focus-visible { outline: 2px solid var(--platinum-deep); outline-offset: 3px; }
+.token-help[open] summary::before { transform: rotate(90deg); }
+.token-help ol {
+  margin: var(--step) 0 0; padding-left: 1.1rem;
+  color: var(--platinum-dim); font-size: .76rem; line-height: 1.7;
+}
+.token-help ol b { color: var(--platinum); font-weight: 600; }
+.token-help kbd {
+  padding: .05rem .3rem; border: 1px solid var(--rule);
+  background: var(--plate); color: var(--platinum);
+  font-family: var(--face-register); font-size: .68rem;
+}
+/* The one caution on the screen, in the tone the product reserves for a real consequence. */
+.token-help > p {
+  margin: var(--step) 0 0; padding-left: var(--step);
+  border-left: 1px solid var(--gold);
+  color: var(--platinum-deep); font-size: .74rem; line-height: 1.6;
+}
+
+/* A flagged listing needs to read as different at a glance without turning the whole row into a
+   warning: only the hallmark cartouche that states the claim takes the oxblood, the row itself
+   just gets a hairline in the same tone so it separates from the ordinary rows around it. */
+.entry.hallmark.doubt { border-left: 2px solid var(--oxblood); }
+
+
+/* ------------------------------------------------------------- the docket (orders)
+
+   An order is a ledger line, not a holding. It has no art to show, and its figures are read down
+   a column -- price against price, quantity against quantity -- so the columns are fixed rather
+   than flowed. The collection's card grid was the wrong container: it reserves 5.5rem for an
+   image well nothing fills, and drops the row's action outside its own two columns. */
+.docket {
+  display: grid; margin: 0; padding: 0; list-style: none;
+  border-top: 1px solid var(--rule);
+}
+.docket-line {
+  display: grid; align-items: center; gap: var(--step);
+  grid-template-columns: .6rem minmax(0, 1fr) auto auto minmax(0, 11rem) minmax(0, 17rem);
+  padding: var(--step) var(--step) var(--step) 0;
+  background: var(--touchstone); border-bottom: 1px solid var(--rule);
+  transition: background .12s ease;
+}
+.docket-line:hover { background: var(--plate); }
+
+/* The claim is struck as a shape as well as a colour, so a flagged row survives the hue being
+   removed. Same failed-assay mark the health rows use: this is the one place in the product that
+   says a listing is wrong, and it should say so in the vocabulary already established for it.
+   The slot is reserved on every row, so the names line up regardless. */
+.line-mark { width: .6rem; height: .7rem; }
+.line-mark.struck {
+  background: var(--oxblood);
+  clip-path: polygon(20% 0, 50% 34%, 80% 0, 100% 24%, 68% 56%, 100% 88%, 80% 100%, 50% 72%, 20% 100%, 0 88%, 32% 56%, 0 24%);
+}
+.docket-line.doubt { background: rgb(221 111 96 / 6%); }
+.docket-line.doubt:hover { background: rgb(221 111 96 / 9%); }
+
+.line-name {
+  margin: 0; min-width: 0; overflow: hidden;
+  font-family: var(--face-mark); font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em;
+  line-height: 1.15; text-transform: uppercase; color: var(--platinum);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Tabular, so the platinum figures form a column that can be scanned rather than read. The
+   multiplier sits back from the price: it qualifies the figure, it is not a second one. */
+.line-figure {
+  display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap;
+  font-family: var(--face-mark); font-size: 1rem; font-weight: 700; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; color: var(--platinum);
+}
+.line-metal { flex: none; height: 1.05rem; width: auto; user-select: none; }
+.line-figure i {
+  font-family: var(--face-register); font-style: normal; font-size: .58rem; font-weight: 600;
+  letter-spacing: .1em; color: var(--platinum-deep);
+}
+
+/* What this row puts into the headline total, in a quieter weight than the asking price: the price
+   is the thing the player set, this is the arithmetic done to it. A row contributing nothing says
+   which of the two reasons applies, in the register face the product strikes rather than writes. */
+.line-value {
+  display: inline-flex; align-items: center; gap: .3rem; justify-content: flex-end;
+  min-width: 4.5rem; white-space: nowrap;
+  font-family: var(--face-mark); font-size: .85rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--platinum-dim);
+}
+.line-value .line-metal { height: .9rem; }
+.line-value em {
+  font-family: var(--face-register); font-style: normal; font-size: .58rem; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--platinum-deep);
+}
+
+/* The row states its own case, in the register face the product uses for anything struck rather
+   than written. Empty on an ordinary row -- including an unverifiable one, which has nothing to
+   say -- and the column holds its width so the rows below do not shift. */
+.line-claim {
+  min-width: 0; overflow: hidden;
+  font-family: var(--face-register); font-size: .58rem; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--oxblood);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+/* Reserved whether or not a fix is offered. A button that appeared and vanished between refreshes
+   would move every row beneath it, and the refresh runs after every write. */
+.line-fix { display: flex; gap: var(--hair); justify-content: flex-end; min-width: 0; }
+.line-fix .stamp { white-space: nowrap; }
+/* A press away from destroying a listing the player did not flag. Oxblood is the product's word
+   for a claim against a listing, and this is the one moment an ordinary row makes one. */
+.line-fix .stamp.armed {
+  border-color: var(--oxblood);
+  color: var(--oxblood);
+}
+
+/* Three cells, not the collection's four: the band divides the width it is given. */
+.orders-band { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.band-cell.flagged .band-figure { color: var(--oxblood); }
+.band-cell.flagged[data-count="0"] .band-figure { color: var(--platinum-dim); }
+/* "Linked" is a word, not a reading; at the figure's full size it shouts across a band whose
+   other cells are counts. */
+.band-cell.backing .band-figure { font-size: clamp(1.5rem, 2.4vw, 2rem); color: var(--platinum-dim); }
+
+@media (max-width: 900px) {
+  /* The claim moves under the name rather than competing with it for a width neither can hold,
+     and the figure keeps its own column so the prices still align. */
+  .docket-line {
+    grid-template-columns: .6rem minmax(0, 1fr) auto auto;
+    row-gap: var(--tight);
+  }
+  .line-claim { grid-column: 2 / -1; }
+  .line-fix { grid-column: 2 / -1; justify-content: flex-start; }
+  /* The name is what the row is, so at this width it wraps rather than clipping. On the desktop
+     grid it holds a fixed column beside three others and the ellipsis is the right answer; here
+     it has the row to itself and there is nothing to protect it from. */
+  .line-name { overflow: visible; white-space: normal; text-overflow: clip; }
+  .orders-band { grid-template-columns: 1fr; }
+}
+
+/* The refusal and its remedy are one block, not two sections with a page fold between them. */
+.relink {
+  display: grid; gap: var(--step);
+  padding: var(--course); margin-bottom: var(--course);
+  border: 1px solid rgb(221 111 96 / 32%); background: rgb(221 111 96 / 5%);
+}
+.relink > h2 {
+  margin: 0; font-family: var(--face-mark); font-size: 1.4rem; font-weight: 700;
+  letter-spacing: -.015em; text-transform: uppercase; color: var(--oxblood);
+}
+/* The pair sits inside the block, so it drops the standalone margin it carries on the unlinked
+   screen and the hairline it would otherwise draw against the block's own border. */
+.relink .clause-pair { margin: 0; }
+
+/* ------------------------------------------------------------- sell listing */
+
+/* Publishing sits below the card's marks, not among them: the marks state what is held, and a
+   control that changes a real account elsewhere is not one more fact about the item. It appears
+   only on cards that can actually be listed, so the grid does not fill with disabled stamps. */
+.sell-open { align-self: flex-start; }
+
+/* The form takes the card's own width and rules itself off from the marks above. Two narrow
+   number fields sit on one line -- platinum and quantity are read together, as a price is. */
+.sell-form {
+  display: flex; flex-wrap: wrap; gap: var(--tight);
+  margin-top: var(--tight); padding-top: var(--tight); border-top: 1px solid var(--rule);
+}
+.sell-form .dial-slot { flex: 1 1 5.5rem; flex-direction: column; align-items: flex-start; gap: .3rem; min-width: 5rem; }
+.sell-form .dial-slot > span:first-child {
+  font-family: var(--face-register); font-size: .56rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--platinum-deep);
+}
+.sell-form .dial-slot input, .new-listing .dial-slot input {
+  width: 100%; padding: .45rem .6rem; border: 1px solid var(--rule); border-radius: 0;
+  background: var(--plate); color: var(--platinum);
+  font-family: var(--face-register); font-size: .74rem; font-variant-numeric: tabular-nums;
+}
+.sell-form .dial-slot input:focus-visible, .new-listing .dial-slot input:focus-visible { outline: 2px solid var(--platinum-deep); outline-offset: 1px; }
+.sell-visible {
+  display: flex; flex: 1 0 100%; align-items: center; gap: .45rem;
+  font-family: var(--face-register); font-size: .62rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--platinum-dim); cursor: pointer;
+}
+.sell-visible input { accent-color: var(--gold); }
+.sell-actions { display: flex; flex: 1 0 100%; gap: var(--hair); }
+
+/* On the orders screen the same form follows an item picker, in a ruled band of its own: it is
+   an action on the account rather than a row of it, so it does not sit inside the docket. */
+.new-listing {
+  display: flex; flex-direction: column; gap: var(--tight);
+  margin-block: var(--step); padding: var(--step); background: var(--touchstone);
+}
+.new-listing .dial-slot { flex: none; flex-direction: column; align-items: flex-start; gap: .3rem; }
+.new-listing .dial-slot > span:first-child {
+  font-family: var(--face-register); font-size: .62rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--platinum-deep);
+}
+.new-listing .sell-form { margin-top: 0; padding-top: 0; border-top: 0; }
+.new-listing-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--step); }
+.new-listing-head > h2 {
+  margin: 0; font-family: var(--face-register); font-size: .62rem; font-weight: 700;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--platinum-deep);
+}
+/* The chosen item is stated as a line of the register, not left implied by a filled field: the
+   form below asks for a price, and a price is meaningless without the name it is being set on. */
+.new-listing-chosen {
+  display: flex; align-items: baseline; gap: .5rem; margin: 0;
+  font-size: .86rem; color: var(--platinum);
+}
+.new-listing-chosen > i { color: var(--platinum-deep); font-size: .74rem; font-style: normal; }
+.link-button {
+  padding: 0; border: 0; background: none; color: var(--platinum-dim);
+  font: inherit; font-size: .74rem; text-decoration: underline;
+  text-underline-offset: .2em; cursor: pointer;
+}
+.link-button:hover:not(:disabled) { color: var(--gold); }
+.link-button:disabled { cursor: default; opacity: .5; }
+
+/* Matches, as ruled lines rather than a floating menu. There are at most eight, they appear
+   directly under the field that produced them, and nothing about them needs to overlay the page. */
+.pick-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.pick-list > li + li { border-top: 1px solid var(--rule); }
+.pick-list button {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--step);
+  width: 100%; padding: .5rem .6rem; border: 0; background: none; color: var(--platinum);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.pick-list button:hover:not(:disabled), .pick-list button:focus-visible {
+  outline: none; background: var(--platinum); color: var(--touchstone);
+}
+.pick-name { font-size: .86rem; }
+.pick-held {
+  flex: none; font-family: var(--face-register); font-size: .62rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--platinum-deep); font-variant-numeric: tabular-nums;
+}
+.pick-list button:hover:not(:disabled) .pick-held, .pick-list button:focus-visible .pick-held { color: var(--touchstone); }
+.pick-empty, .pick-more { margin: 0; color: var(--platinum-dim); font-size: .76rem; line-height: 1.5; }
+
+/* ---------------------------------------------------------------- presence */
+
+/* A row of struck choices rather than a dropdown: there are four, they are mutually exclusive,
+   and which one is current is the thing the player came here to read. A select hides that behind
+   a click. The struck stamp is the register's own way of saying "this one". */
+.presence {
+  display: flex; flex-direction: column; gap: var(--tight);
+  margin-block: var(--step); padding: var(--step); background: var(--touchstone);
+}
+/* The mode sits opposite the label, above the row it governs -- automatic is not a fifth status,
+   it is who is choosing among the four, so it is not offered as one more of them. */
+.presence-head { display: flex; align-items: center; justify-content: space-between; gap: var(--step); flex-wrap: wrap; }
+.presence-label {
+  font-family: var(--face-register); font-size: .62rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--platinum-deep);
+}
+.presence-auto {
+  display: flex; align-items: center; gap: .45rem;
+  font-family: var(--face-register); font-size: .62rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--platinum-dim); cursor: pointer;
+}
+.presence-auto input { accent-color: var(--gold); }
+.presence-choices { display: flex; flex-wrap: wrap; gap: var(--hair); }
+/* Under automatic the row still says which status is in force, but it is being reported rather
+   than offered -- so it reads as a readout, without the disabled controls going invisible. */
+.presence-choices[data-auto] .stamp:disabled { opacity: 1; }
+.presence-choices[data-auto] .stamp:disabled:not(.struck) { opacity: .45; }
+.presence-note { margin: 0; color: var(--platinum-dim); font-size: .76rem; line-height: 1.5; }
+/* The current choice is inverted, not merely tinted: `aria-pressed` carries it for a reader, and
+   a filled face carries it for everyone else without asking anyone to compare two greys. */
+.presence .stamp.struck { background: var(--platinum); border-color: var(--platinum); color: var(--touchstone); }
+.presence .stamp.struck:hover:not(:disabled) { background: var(--gold); border-color: var(--gold); }
+.presence-choices[data-auto] .stamp.struck:disabled { background: var(--gold); border-color: var(--gold); color: var(--touchstone); }

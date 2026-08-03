@@ -40,8 +40,8 @@ pub use inventory::{
 #[cfg(target_os = "linux")]
 pub use linux_proc::LinuxProc;
 pub use market::{
-    MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, WarframeMarketHttp,
-    WarmOutcome, lowest_sell_top, market_slug, slug_and_subtype,
+    MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, RequestPacer,
+    WarframeMarketHttp, WarmOutcome, lowest_sell_top, market_slug, slug_and_subtype,
 };
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 pub use relic_catalog::RelicRewardIndex;

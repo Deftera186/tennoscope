@@ -201,6 +201,42 @@ const PRICE_TTL: Duration = Duration::from_secs(15 * 60);
 /// 334ms is still nine requests a second arriving at the API.
 pub const MARKET_MIN_GAP: Duration = Duration::from_millis(334);
 
+/// When the last request left this process, shared by every caller so the documented three per
+/// second is the client's budget rather than each caller's own.
+///
+/// Held as a separate type rather than as a field on the price cache because the authenticated
+/// account client is a second caller against the same API and the same limit. Two callers each
+/// pacing themselves correctly still arrive together.
+#[derive(Clone, Default)]
+pub struct RequestPacer {
+    last_request: Arc<Mutex<Option<Instant>>>,
+}
+
+impl RequestPacer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Block until a request may be sent, then claim that slot.
+    ///
+    /// The claim is made under the lock and before the request is sent, so two threads arriving
+    /// together are spaced rather than both cleared: the second one waits out the first's slot.
+    pub fn take_slot(&self, gap: Duration) {
+        let gap = gap.max(MARKET_MIN_GAP);
+        let Ok(mut last) = self.last_request.lock() else {
+            // A poisoned lock is not a licence to flood the API.
+            std::thread::sleep(gap);
+            return;
+        };
+        if let Some(previous) = *last
+            && let Some(remaining) = gap.checked_sub(previous.elapsed())
+        {
+            std::thread::sleep(remaining);
+        }
+        *last = Some(Instant::now());
+    }
+}
+
 /// Prices already looked up, so the reward screen does not wait on requests that could have been
 /// made minutes earlier.
 ///
@@ -217,14 +253,25 @@ pub const MARKET_MIN_GAP: Duration = Duration::from_millis(334);
 #[derive(Clone, Default)]
 pub struct MarketPriceCache {
     entries: Arc<Mutex<HashMap<String, (u32, Instant)>>>,
-    /// When the last request left this process, shared by every caller so the rate limit is the
-    /// client's rather than each caller's own.
-    last_request: Arc<Mutex<Option<Instant>>>,
+    pacer: RequestPacer,
 }
 
 impl MarketPriceCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A cache sharing an existing clock, for a process that also makes authenticated requests.
+    pub fn with_pacer(pacer: RequestPacer) -> Self {
+        Self {
+            entries: Arc::default(),
+            pacer,
+        }
+    }
+
+    /// The clock this cache paces against, so another caller can share it.
+    pub fn pacer(&self) -> RequestPacer {
+        self.pacer.clone()
     }
 
     pub fn get(&self, name: &str) -> Option<u32> {
@@ -237,25 +284,6 @@ impl MarketPriceCache {
         if let Ok(mut entries) = self.entries.lock() {
             entries.insert(name.to_owned(), (price, Instant::now()));
         }
-    }
-
-    /// Block until a request may be sent, then claim that slot.
-    ///
-    /// The claim is made under the lock and before the request is sent, so two threads arriving
-    /// together are spaced rather than both cleared: the second one waits out the first's slot.
-    fn take_request_slot(&self, gap: Duration) {
-        let gap = gap.max(MARKET_MIN_GAP);
-        let Ok(mut last) = self.last_request.lock() else {
-            // A poisoned lock is not a licence to flood the API.
-            std::thread::sleep(gap);
-            return;
-        };
-        if let Some(previous) = *last
-            && let Some(remaining) = gap.checked_sub(previous.elapsed())
-        {
-            std::thread::sleep(remaining);
-        }
-        *last = Some(Instant::now());
     }
 
     /// Price every name not already held, keeping requests at least `gap` apart.
@@ -275,7 +303,7 @@ impl MarketPriceCache {
             if self.get(name).is_some() {
                 continue;
             }
-            self.take_request_slot(gap);
+            self.pacer.take_slot(gap);
             match source.lowest_sell(name) {
                 PriceLookup::Priced(price) => {
                     self.insert(name, price);

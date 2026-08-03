@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const backend = vi.hoisted(() => ({
   getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(), refreshPrices: vi.fn(),
+  marketStatus: vi.fn(), marketSignIn: vi.fn(), marketLinkToken: vi.fn(), marketSignOut: vi.fn(),
+  refreshOrders: vi.fn(), removeOrder: vi.fn(), setOrderQuantity: vi.fn(),
+  setMarketPresence: vi.fn(), createOrder: vi.fn(),
 }))
 const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverlay: vi.fn() }))
 vi.mock('./backend', () => backend)
@@ -42,6 +45,14 @@ const view: AppView = {
     best_value_index: 0,
     best_ducat_index: 3,
   },
+  market_account: {
+    link: 'unlinked',
+    orders: [],
+    listed_platinum: 0,
+    listable: [],
+    presence: { status: null, wanted: null, auto: false },
+    flagged: 0,
+  },
   health: {
     game_reader: { state: 'degraded', message: 'Warframe is not running', last_success: null },
     log_monitor: { state: 'ready', message: 'EE.log monitor ready', last_success: null },
@@ -50,6 +61,7 @@ const view: AppView = {
     market: { state: 'degraded', message: 'Market offline', last_success: null },
     collection_prices: { state: 'ready', message: 'Priced from the 2026-07-27 price dump (3 items)', last_success: '2026-07-27' },
     database: { state: 'ready', message: 'SQLite database available', last_success: null },
+    market_account: { state: 'idle', message: 'Not linked', last_success: null },
     acquisition_stages: [
       { stage: 'process_discovery', state: 'ready', message: 'Game process found' },
       { stage: 'memory_read', state: 'ready', message: 'Readable regions found' },
@@ -68,6 +80,15 @@ describe('MVP desktop interface', () => {
     backend.getView.mockResolvedValue(view)
     backend.refreshInventory.mockResolvedValue(view)
     backend.refreshPrices.mockResolvedValue(view)
+    backend.marketStatus.mockResolvedValue(view)
+    backend.marketSignIn.mockResolvedValue(view)
+    backend.marketLinkToken.mockResolvedValue(view)
+    backend.marketSignOut.mockResolvedValue(view)
+    backend.refreshOrders.mockResolvedValue(view)
+    backend.removeOrder.mockResolvedValue(view)
+    backend.setOrderQuantity.mockResolvedValue(view)
+    backend.setMarketPresence.mockResolvedValue(view)
+    backend.createOrder.mockResolvedValue(view)
     overlay.showRewardOverlay.mockResolvedValue(undefined)
     overlay.hideRewardOverlay.mockResolvedValue(undefined)
   })
@@ -175,7 +196,11 @@ describe('MVP desktop interface', () => {
     for (const label of ['Game reader', 'EE.log', 'Reward observer', 'Catalog', 'Market data', 'Database', 'Process discovery', 'Memory read', 'Authorization scan', 'Inventory fetch', 'Schema validation']) {
       expect(within(panel).getByText(label)).toBeInTheDocument()
     }
-    expect(within(panel).getByText('Last success: 1')).toBeInTheDocument()
+    // Rows keep their success time in their own source's format -- the market account writes Unix
+    // seconds -- so the row resolves it to something a reader can act on rather than printing the
+    // stamp it was handed.
+    expect(within(panel).getAllByText(/Last success: .*\d{4}/).length).toBeGreaterThan(0)
+    expect(within(panel).queryByText('Last success: 1')).not.toBeInTheDocument()
     expect(panel).not.toHaveTextContent(/accountId|nonce|authorization token/i)
     // Diagnostics reports live health; the overlay preview is a setup affordance and lives in Settings.
     expect(within(panel).queryByRole('button', { name: /reward overlay/i })).not.toBeInTheDocument()
@@ -543,5 +568,56 @@ describe('MVP desktop interface', () => {
 
     // Page 2 of 53 tradeable items (50 filler + 3 named) holds only the last 5, alphabetically.
     expect(backend.refreshPrices).toHaveBeenCalledWith(['filler-48', 'filler-49', 'lex-prime-receiver', 'lith-a1', 'zenith-prime-receiver'])
+  })
+
+  it('routes to the Orders section and counts flagged listings on the nav entry', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.marketStatus.mockResolvedValue({ ...view, market_account: { ...view.market_account, link: 'linked', flagged: 2 } })
+    render(<App/>)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    expect(await screen.findByText('2', { selector: '.punch-count' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Orders' }))
+    expect(await screen.findByRole('heading', { name: 'Market orders' })).toBeInTheDocument()
+  })
+
+  it('shows a listed-order badge on a collection item with a live sell order', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.marketStatus.mockResolvedValue({
+      ...view,
+      market_account: {
+        ...view.market_account,
+        link: 'linked',
+        orders: [{
+          order: { id: 'o1', item_id: 'rhino', kind: 'sell', platinum: 30, quantity: 1, per_trade: 1, visible: true },
+          name: 'Rhino',
+          status: { state: 'ok' },
+        }],
+      },
+    })
+    render(<App/>)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    expect(await screen.findByText(/listed 30p/i)).toBeInTheDocument()
+  })
+
+  /**
+   * A sell started from a card is answered on the card's own screen. The failure state lived only
+   * on the orders screen, so a refused listing from the collection told the player nothing at all
+   * -- the form simply closed and the item was not listed.
+   */
+  it('says so on the collection screen when a sell from a card is refused', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.marketStatus.mockResolvedValue({
+      ...view,
+      market_account: { ...view.market_account, link: 'linked', listable: ['lex-prime-receiver'] },
+    })
+    backend.createOrder.mockRejectedValue(new Error('refused'))
+    render(<App/>)
+    await screen.findByRole('heading', { name: 'Your collection' })
+
+    const card = await screen.findByRole('article', { name: 'Lex Prime Receiver' })
+    await userEvent.click(await within(card).findByRole('button', { name: 'Sell' }))
+    await userEvent.click(within(card).getByRole('button', { name: /list for sale/i }))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/could not publish that listing/i)
   })
 })

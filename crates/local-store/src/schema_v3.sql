@@ -11,11 +11,6 @@ CREATE TABLE inventory (
     max_rank INTEGER CHECK (max_rank IS NULL OR max_rank >= 0)
 );
 
-CREATE TABLE market_credential (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    token TEXT NOT NULL CHECK (length(trim(token)) > 0)
-);
-
 CREATE TABLE snapshot_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     observed_at TEXT NOT NULL CHECK (length(trim(observed_at)) > 0),

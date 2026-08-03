@@ -30,6 +30,8 @@ warframe-domain = { path = "../../crates/warframe-domain" }
 tauri-plugin-single-instance = "2"
 image = { version = "0.25", default-features = false, features = ["png", "pnm"] }
 xcap = { version = "0.9.7", features = ["image"] }
+warframe-market = { path = "../../crates/warframe-market" }
+warframe-status = { path = "../../crates/warframe-status" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"

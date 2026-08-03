@@ -13,9 +13,11 @@ use warframe_acquisition::{
     MarketPriceCache, PriceTable, StageState,
 };
 use warframe_domain::{
-    CatalogItem, Category, DomainError, InventoryEntry, InventorySnapshot, RewardAdvisor,
-    RewardCandidate, RewardView,
+    CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot,
+    RewardAdvisor, RewardCandidate, RewardView,
 };
+use warframe_market::{CredentialBacking, MarketItems, MarketOrder, OrderKind};
+use warframe_status::Presence;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -34,6 +36,8 @@ pub struct AppCore {
     prices: Option<Arc<PriceTable>>,
     live: Option<MarketPriceCache>,
     pricing: Option<PricingProgress>,
+    market_account: MarketAccountView,
+    presence: PresenceView,
 }
 
 pub trait AcquisitionPort {
@@ -91,6 +95,8 @@ impl AppCore {
             prices: None,
             live: None,
             pricing: None,
+            market_account: MarketAccountView::unlinked(),
+            presence: PresenceView::default(),
         })
     }
 
@@ -154,6 +160,63 @@ impl AppCore {
     /// overwriting it with something less true.
     pub fn health(&self) -> &HealthView {
         &self.health
+    }
+
+    pub fn market_account(&self) -> &MarketAccountView {
+        &self.market_account
+    }
+
+    /// Replace the presence the screen shows. Set from the socket's committed value, never from
+    /// what the switch was moved to: the server is the authority on what other players see.
+    pub fn set_presence(&mut self, presence: PresenceView) -> Result<AppView, AppError> {
+        self.presence = presence;
+        self.current_view()
+    }
+
+    /// Replace the account state and say so in the health row.
+    pub fn set_market_account(&mut self, account: MarketAccountView) -> Result<AppView, AppError> {
+        self.health.market_account = match account.link {
+            // Nothing carried forward: with no account linked there is no fetch for a timestamp
+            // to describe, and one left behind reads as though a link were still in place.
+            LinkState::Unlinked => BackendHealth::idle("No warframe.market account linked", None)?,
+            LinkState::NeedsRelink => {
+                BackendHealth::degraded("The warframe.market credential was refused")?
+            }
+            LinkState::Linked => {
+                let backing = match account.backing {
+                    Some(CredentialBacking::Keyring) => "the OS keyring",
+                    _ => "the local database",
+                };
+                BackendHealth::ready(
+                    format!("warframe.market account linked; credential held in {backing}"),
+                    account.fetched_at.clone(),
+                )?
+            }
+        };
+        self.market_account = account;
+        self.current_view()
+    }
+
+    /// A fetch failed. The orders already held stay: the list is still true as of when it was
+    /// fetched and its age is on the screen, and replacing a slightly old answer with none is not
+    /// an improvement.
+    pub fn record_market_account_failure(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        let last_success = self.health.market_account.last_success.clone();
+        self.health.market_account =
+            BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.current_view()
+    }
+
+    /// The stored collection, for a caller that has to join something against it.
+    pub fn collection_for_reconciliation(&self) -> Result<Collection, AppError> {
+        Ok(self.store.load_collection()?)
+    }
+
+    pub fn latest_snapshot_meta(&self) -> Result<Option<SnapshotMeta>, AppError> {
+        Ok(self.store.latest_snapshot_meta()?)
     }
 
     pub fn current_view(&self) -> Result<AppView, AppError> {
@@ -239,6 +302,10 @@ impl AppCore {
             },
             reward: self.reward.clone(),
             health,
+            market_account: MarketAccountView {
+                presence: self.presence,
+                ..self.market_account.clone()
+            },
         })
     }
 
@@ -520,6 +587,7 @@ pub struct AppView {
     collection: CollectionView,
     reward: RewardView,
     health: HealthView,
+    market_account: MarketAccountView,
 }
 
 impl AppView {
@@ -533,6 +601,10 @@ impl AppView {
 
     pub fn health(&self) -> &HealthView {
         &self.health
+    }
+
+    pub fn market_account(&self) -> &MarketAccountView {
+        &self.market_account
     }
 }
 
@@ -808,6 +880,10 @@ pub struct HealthView {
     collection_prices: BackendHealth,
     database: BackendHealth,
     acquisition_stages: Vec<AcquisitionStageView>,
+    /// The linked warframe.market account, kept apart from `market` -- that row answers "could we
+    /// reach warframe.market for a price", and this one answers "is an account connected". One
+    /// can be healthy while the other is not.
+    market_account: BackendHealth,
 }
 
 impl HealthView {
@@ -827,6 +903,7 @@ impl HealthView {
             )?,
             database: BackendHealth::ready("SQLite database available", None)?,
             acquisition_stages: Vec::new(),
+            market_account: BackendHealth::idle("No warframe.market account linked", None)?,
         })
     }
 
@@ -874,6 +951,10 @@ impl HealthView {
     pub fn acquisition_stages(&self) -> &[AcquisitionStageView] {
         &self.acquisition_stages
     }
+
+    pub fn market_account(&self) -> &BackendHealth {
+        &self.market_account
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -908,5 +989,367 @@ impl From<warframe_acquisition::StageHealth> for AcquisitionStageView {
             state,
             message: value.diagnostic().to_string(),
         }
+    }
+}
+
+/// What the collection says about one order.
+///
+/// Four states rather than a boolean because "we disagree" and "we cannot say" are different
+/// claims with different consequences, and collapsing them is how a stale snapshot turns into a
+/// screen of confident accusations.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "state")]
+pub enum OrderStatus {
+    Ok,
+    /// The collection holds none of this. The order outlived its item.
+    Missing,
+    /// The order lists more than the collection holds.
+    Overshoot {
+        owned: u32,
+    },
+    /// The comparison cannot be made, so no claim is offered and no fix is put on the row.
+    Unverifiable,
+}
+
+/// One order with the collection's opinion of it.
+#[derive(Clone, Debug, Serialize)]
+pub struct ReconciledOrder {
+    pub order: MarketOrder,
+    /// warframe.market's English name for the item, for the row. Absent only if the item table is
+    /// missing the entry entirely.
+    pub name: Option<String>,
+    pub status: OrderStatus,
+}
+
+/// Judge each order against the collection.
+///
+/// The rule: **a mismatch is claimed only when the snapshot is coherent and newer than the
+/// order.** Everything else is `Unverifiable`, which carries no flag and no fix.
+///
+/// That restraint is not caution for its own sake. The application's stated failure posture is to
+/// keep the last coherent inventory when the reader breaks, so a snapshot can be stale or absent
+/// while looking exactly like a current one from here. Judging against one produces confident
+/// accusations about orders that were never wrong -- each with a delete button beside it.
+pub fn reconcile_orders(
+    orders: &[MarketOrder],
+    items: &MarketItems,
+    collection: &Collection,
+    snapshot: Option<&SnapshotMeta>,
+) -> Vec<ReconciledOrder> {
+    // Quantity per card, summed across ranks. A card at two ranks is two entries in the
+    // collection and one listing on the market, so comparing against either entry alone would
+    // call a legitimate order an overshoot.
+    let mut owned: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for entry in collection.entries() {
+        *owned.entry(entry.item.id.catalog_path()).or_default() += entry.quantity;
+    }
+
+    orders
+        .iter()
+        .map(|order| ReconciledOrder {
+            order: order.clone(),
+            name: items.name(&order.item_id).map(str::to_owned),
+            status: status_for(order, items, &owned, snapshot),
+        })
+        .collect()
+}
+
+fn status_for(
+    order: &MarketOrder,
+    items: &MarketItems,
+    owned: &std::collections::HashMap<&str, u32>,
+    snapshot: Option<&SnapshotMeta>,
+) -> OrderStatus {
+    // Owning none of something is the ordinary state for something you are trying to buy.
+    if order.kind != OrderKind::Sell {
+        return OrderStatus::Unverifiable;
+    }
+    // A rank names a particular copy, and the collection stores each rank separately. Which copies
+    // the order means is not answerable from the order, so a maxed arcane listed at rank 5 is not
+    // evidence about the unranked stack of the same card.
+    if order.rank.is_some_and(|rank| rank > 0) {
+        return OrderStatus::Unverifiable;
+    }
+    let (Some(snapshot), Some(updated_at)) = (snapshot, order.updated_at.as_deref()) else {
+        return OrderStatus::Unverifiable;
+    };
+    // A snapshot older than the order describes a world before the order changed, and cannot
+    // contradict it. Both sides are reduced to an instant first: the two timestamps are not in the
+    // same format and comparing them as text is silently, permanently wrong -- production snapshot
+    // metadata carries Unix seconds ("1785507554") while orders carry RFC 3339
+    // ("2026-07-30T10:00:00Z"), and "1" sorts before "2", so a text comparison would mark every
+    // order unverifiable on every real installation and the feature would ship doing nothing.
+    let (Some(observed), Some(updated)) =
+        (instant_of(snapshot.observed_at()), instant_of(updated_at))
+    else {
+        return OrderStatus::Unverifiable;
+    };
+    if observed <= updated {
+        return OrderStatus::Unverifiable;
+    }
+    let Some(path) = items.catalog_path(&order.item_id) else {
+        return OrderStatus::Unverifiable;
+    };
+    // The path exists but does not name one collection row: a relic's base projection stands for
+    // four refinements the collection stores separately, and a set's path names the built item
+    // rather than the parts a seller actually holds. Asking whether either is owned always answers
+    // no, so an unguarded comparison would flag most of a real account's listings as missing and
+    // offer to delete them.
+    if !items.comparable(&order.item_id) {
+        return OrderStatus::Unverifiable;
+    }
+    match owned.get(path).copied().unwrap_or(0) {
+        0 => OrderStatus::Missing,
+        held if held < order.quantity => OrderStatus::Overshoot { owned: held },
+        _ => OrderStatus::Ok,
+    }
+}
+
+/// Whether an account is linked, and whether it still works.
+///
+/// `NeedsRelink` is separate from `Unlinked` because they call for different things from the
+/// player: one is an invitation, the other is a repair. Presenting a refused credential as an
+/// unlinked account also loses the fact that something used to work, which is the part worth
+/// reporting.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkState {
+    #[default]
+    Unlinked,
+    Linked,
+    NeedsRelink,
+}
+
+/// The account section's whole state.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct MarketAccountView {
+    pub link: LinkState,
+    /// Which credential store holds the token. Reported because a database file and a keyring are
+    /// not equally strong, and the player is entitled to know which one they got.
+    pub backing: Option<CredentialBacking>,
+    pub orders: Vec<ReconciledOrder>,
+    pub fetched_at: Option<String>,
+    /// What the visible sell orders are asking, in total.
+    pub listed_platinum: u32,
+    /// How many orders carry a claim. Not a count of orders worth looking at -- an unverifiable
+    /// order is not a problem, and counting one would put a false alarm on the navigation of every
+    /// machine that has not read the game yet.
+    pub flagged: usize,
+    /// The collection paths this account may publish a listing for.
+    ///
+    /// Sent rather than recomputed on the frontend because the rule is `path_is_comparable`, which
+    /// is measured against warframe.market's own table and lives in the crate that parses it. A
+    /// second implementation in TypeScript would be a copy of a rule that exists to keep two
+    /// vocabularies apart, and it would drift.
+    pub listable: Vec<String>,
+    /// What warframe.market shows this account as, and how it is being chosen.
+    ///
+    /// Not part of what `linked` computes: presence comes from a socket with its own lifetime, and
+    /// an order fetch that reset it would blank the switch every refresh. `current_view` stamps it
+    /// on instead, from the one place that holds it.
+    pub presence: PresenceView,
+}
+
+/// The presence switch, as the screen needs it.
+///
+/// Two statuses rather than one, because they genuinely differ for the second or two a fresh
+/// socket takes to be answered. Reporting only the committed one made the switch appear to ignore
+/// the press: the reply to the click still said offline, and the choice did not appear to take
+/// until the next poll seconds later.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PresenceView {
+    /// What the server last said it committed. `None` is offline: no socket, or one that has not
+    /// been answered yet.
+    pub status: Option<Presence>,
+    /// What was last asked for. The switch marks this, so a press registers on the press, while
+    /// `status` disagreeing is what the screen reports as not yet confirmed.
+    pub wanted: Option<Presence>,
+    /// Whether the status is being followed from the game reader rather than chosen by hand.
+    pub auto: bool,
+}
+
+impl MarketAccountView {
+    pub fn unlinked() -> Self {
+        Self::default()
+    }
+
+    pub fn needs_relink() -> Self {
+        Self {
+            link: LinkState::NeedsRelink,
+            ..Self::default()
+        }
+    }
+
+    pub fn linked(
+        backing: CredentialBacking,
+        orders: Vec<ReconciledOrder>,
+        fetched_at: String,
+    ) -> Self {
+        // A hidden order is offered to nobody and a buy order is money going out, so neither is
+        // part of what this account is asking for.
+        //
+        // `platinum` prices one trade rather than one unit: a bulk listing of 300 relics at 18p
+        // per six is asking 900p, not 5,400p. Measured against the live API, where roughly a third
+        // of the orders on a traded relic carry `perTrade: 6`, so multiplying the two figures
+        // straight together would overstate the headline number several times over.
+        let listed_platinum = orders
+            .iter()
+            .filter(|entry| entry.order.visible && entry.order.kind == OrderKind::Sell)
+            .map(|entry| {
+                entry
+                    .order
+                    .platinum
+                    .saturating_mul(entry.order.quantity / entry.order.per_trade.max(1))
+            })
+            .sum();
+        let flagged = orders
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.status,
+                    OrderStatus::Missing | OrderStatus::Overshoot { .. }
+                )
+            })
+            .count();
+        Self {
+            link: LinkState::Linked,
+            backing: Some(backing),
+            orders,
+            fetched_at: Some(fetched_at),
+            listed_platinum,
+            flagged,
+            listable: Vec::new(),
+            presence: PresenceView::default(),
+        }
+    }
+
+    /// Which of the collection's paths can be listed, computed once against the item table.
+    ///
+    /// Separate from `linked` because the two callers that build a view already hold the table and
+    /// the collection, and threading both through every construction site would make an argument
+    /// list out of what is one join.
+    #[must_use]
+    pub fn with_listable(mut self, items: &MarketItems, collection: &Collection) -> Self {
+        self.listable = collection
+            .entries()
+            .map(|entry| entry.item.id.catalog_path())
+            .filter(|path| items.market_id_for_path(path).is_some())
+            .map(str::to_owned)
+            .collect();
+        self.listable.dedup();
+        self
+    }
+}
+
+/// Seconds since the Unix epoch for either timestamp form this application produces.
+///
+/// Two forms exist and both are load-bearing. Production snapshot metadata records
+/// `SystemTime`-derived Unix seconds; `SnapshotMeta::fake` and warframe.market both use RFC 3339.
+/// The frontend already absorbs the same split in `freshness.ts`, which is how it went unnoticed.
+///
+/// Parsed by hand rather than by taking a date dependency for one inequality. Only the ordering
+/// matters here, so this needs to be monotonic rather than calendar-exact: leap seconds and the
+/// fractional part are ignored, and an offset other than `Z` is treated as unparseable rather than
+/// guessed at.
+fn instant_of(value: &str) -> Option<i64> {
+    /// Seconds the epoch form is allowed to name: 2001 to 2603. Wide enough that no real clock
+    /// leaves it, narrow enough that a millisecond value cannot pass as a second one.
+    const PLAUSIBLE: std::ops::RangeInclusive<i64> = 1_000_000_000..=20_000_000_000;
+
+    let value = value.trim();
+    if value.bytes().all(|byte| byte.is_ascii_digit()) {
+        // Bounded rather than parsed bare. A writer emitting milliseconds would otherwise read as
+        // an instant tens of thousands of years out, which is newer than every order there will
+        // ever be -- so a stale snapshot would judge, confidently and always.
+        return value
+            .parse()
+            .ok()
+            .filter(|seconds| PLAUSIBLE.contains(seconds));
+    }
+    let (date, rest) = value.split_once('T')?;
+    // Anything not stated in UTC is left unparsed. A wrong guess about an offset moves an order
+    // across the snapshot boundary, which turns "we cannot say" into a confident accusation.
+    if !rest.ends_with('Z') {
+        return None;
+    }
+    let time = rest.trim_end_matches('Z');
+    let mut date_parts = date.split('-');
+    let year: i64 = date_parts.next()?.parse().ok()?;
+    let month: i64 = date_parts.next()?.parse().ok()?;
+    let day: i64 = date_parts.next()?.parse().ok()?;
+    let mut time_parts = time.split(':');
+    let hour: i64 = time_parts.next()?.parse().ok()?;
+    let minute: i64 = time_parts.next()?.parse().ok()?;
+    let second: i64 = time_parts
+        .next()
+        .unwrap_or("0")
+        .split('.')
+        .next()?
+        .parse()
+        .ok()?;
+    // Hinnant's days-from-civil, the standard algorithm, exact for every date this will see.
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let yoe = year - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+#[cfg(test)]
+mod instant_tests {
+    use super::instant_of;
+
+    #[test]
+    fn epoch_seconds_are_taken_as_written() {
+        assert_eq!(instant_of("1785492000"), Some(1_785_492_000));
+    }
+
+    #[test]
+    fn rfc_3339_utc_is_the_same_instant_as_its_epoch_seconds() {
+        assert_eq!(instant_of("2026-07-31T10:00:00Z"), Some(1_785_492_000));
+    }
+
+    #[test]
+    fn a_fractional_second_is_dropped_rather_than_rejected() {
+        assert_eq!(instant_of("2026-07-31T10:00:00.482Z"), Some(1_785_492_000));
+    }
+
+    /// The branch that must never start guessing. An assumed offset moves an order across the
+    /// snapshot boundary, turning "we cannot say" into a confident accusation with a delete
+    /// button beside it.
+    #[test]
+    fn an_offset_other_than_utc_is_not_guessed_at() {
+        assert_eq!(instant_of("2026-07-31T10:00:00+02:00"), None);
+        assert_eq!(instant_of("2026-07-31T10:00:00-05:00"), None);
+    }
+
+    #[test]
+    fn a_missing_seconds_field_reads_as_the_minute() {
+        assert_eq!(instant_of("2026-07-31T10:00Z"), Some(1_785_492_000));
+    }
+
+    /// Milliseconds would otherwise parse as an instant tens of thousands of years out, which is
+    /// newer than every order there will ever be -- so a stale snapshot would judge, always.
+    #[test]
+    fn a_millisecond_value_is_refused_rather_than_read_as_seconds() {
+        assert_eq!(instant_of("1785492000123"), None);
+    }
+
+    #[test]
+    fn implausibly_small_digit_strings_are_refused() {
+        assert_eq!(instant_of("0"), None);
+        assert_eq!(instant_of("42"), None);
+    }
+
+    #[test]
+    fn malformed_input_yields_no_instant() {
+        assert_eq!(instant_of(""), None);
+        assert_eq!(instant_of("   "), None);
+        assert_eq!(instant_of("yesterday"), None);
+        assert_eq!(instant_of("2026-07-31"), None);
+        assert_eq!(instant_of("2026-07-31Tten o'clockZ"), None);
     }
 }

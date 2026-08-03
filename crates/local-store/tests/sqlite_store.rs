@@ -261,3 +261,95 @@ fn a_database_from_before_ranks_migrates_with_its_rows_intact() {
 
     assert_eq!(entries, vec![("Paris".to_owned(), 2, None)]);
 }
+
+/// The credential survives a close and reopen, which is the whole reason it is stored rather than
+/// held: a player links once, not once per launch.
+#[test]
+fn a_stored_market_credential_survives_a_reopen() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("store.sqlite3");
+    {
+        let mut store = SqliteStore::open(&path).expect("store opens");
+        store
+            .set_market_credential("fake-token-value")
+            .expect("credential stores");
+    }
+
+    let store = SqliteStore::open(&path).expect("store reopens");
+
+    assert_eq!(
+        store.market_credential().expect("credential reads"),
+        Some("fake-token-value".to_owned())
+    );
+}
+
+#[test]
+fn a_store_with_no_credential_holds_none() {
+    let store = SqliteStore::in_memory().expect("store opens");
+
+    assert_eq!(store.market_credential().expect("credential reads"), None);
+}
+
+/// Storing again replaces rather than accumulates. A renewed token arrives on every authenticated
+/// call, so a table that appended would grow without bound and leave the reader picking.
+#[test]
+fn storing_a_credential_replaces_the_previous_one() {
+    let mut store = SqliteStore::in_memory().expect("store opens");
+
+    store.set_market_credential("first-value").expect("stores");
+    store.set_market_credential("second-value").expect("stores");
+
+    assert_eq!(
+        store.market_credential().expect("credential reads"),
+        Some("second-value".to_owned())
+    );
+}
+
+/// Unlinking removes the credential rather than blanking it, so a player who unlinked has no
+/// credential left in the file rather than an empty one.
+#[test]
+fn clearing_removes_the_credential() {
+    let mut store = SqliteStore::in_memory().expect("store opens");
+    store
+        .set_market_credential("fake-token-value")
+        .expect("stores");
+
+    store.clear_market_credential().expect("clears");
+
+    assert_eq!(store.market_credential().expect("credential reads"), None);
+}
+
+/// A version 3 database opens and migrates rather than being rejected. Every existing installation
+/// is at version 3, so a migration that failed here would lose a working collection.
+#[test]
+fn a_version_three_database_migrates_to_four() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("store.sqlite3");
+    {
+        let connection = rusqlite::Connection::open(&path).expect("connection opens");
+        connection
+            .execute_batch(include_str!("../src/schema_v3.sql"))
+            .expect("v3 schema applies");
+        connection
+            .execute(
+                "INSERT INTO inventory (item_id, name, category, quantity, mastered)
+                 VALUES ('paris', 'Paris', 'weapon', 2, 1)",
+                [],
+            )
+            .expect("existing inventory row inserts");
+        connection
+            .pragma_update(None, "user_version", 3)
+            .expect("version set");
+    }
+
+    let store = SqliteStore::open(&path).expect("v3 database migrates");
+
+    assert_eq!(store.market_credential().expect("credential reads"), None);
+    assert_eq!(
+        store
+            .load_collection()
+            .expect("collection loads")
+            .quantity(&ItemId::new("paris").unwrap()),
+        2
+    );
+}

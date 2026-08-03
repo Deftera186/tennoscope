@@ -4,22 +4,35 @@ import {
   acceptRiskDisclosure,
   getSetupStatus,
   getView,
+  marketLinkToken,
+  marketSignIn,
+  marketSignOut,
+  marketStatus,
   refreshInventory,
+  refreshOrders,
   refreshPrices,
+  removeOrder,
+  createOrder,
+  setMarketPresence,
+  setOrderQuantity,
   type AppView,
   type BackendHealth,
   type CollectionItem,
   type HealthState,
   type ItemCategory,
+  type Presence,
 } from './backend'
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
 import { RewardCards } from './RewardCards'
 import { MetalMark } from './MetalMark'
+import { Orders } from './Orders'
+import { isListable, listedOrderFor } from './orders'
+import { SellForm, type SellHandler } from './SellForm'
 import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, writePriceFloor } from './settings'
 import { snapshotFreshness } from './freshness'
 
-type Page = 'collection' | 'rewards' | 'diagnostics' | 'settings' | 'about'
+type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
 type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'value-desc'
 
@@ -58,6 +71,7 @@ function shortDumpDate(isoDate: string): string {
 const pageLabel: Record<Page, string> = {
   collection: 'Collection',
   rewards: 'Rewards',
+  orders: 'Orders',
   diagnostics: 'Diagnostics',
   settings: 'Settings',
   about: 'About',
@@ -71,6 +85,7 @@ function Mark({ name, className = 'punch-glyph' }: { name: Page | 'refresh' | 's
   const paths = {
     collection: <><path d="M3 4h18M3 10h13M3 16h18M3 22h9"/></>,
     rewards: <><circle cx="12" cy="14.5" r="7.5"/><path d="M12 7V1.5M9 4h6"/></>,
+    orders: <><path d="M3 3h18v6H3z"/><path d="M6 9v12h12V9M10 13h4"/></>,
     diagnostics: <><path d="M2 21h20M6 21 14 3M11 21 19 3"/></>,
     settings: <><path d="M7 2h10l-2 9H9z"/><path d="M10 11h4v11h-4z"/></>,
     // The office's own hallmark cartouche, which is what this page is: the register's statement
@@ -91,6 +106,8 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
   const [priceFloor, setPriceFloor] = useState(readPriceFloor)
+  const [ordersBusy, setOrdersBusy] = useState(false)
+  const [ordersError, setOrdersError] = useState<string | null>(null)
   const viewGeneration = useRef(0)
   const foregroundInFlight = useRef(0)
 
@@ -113,14 +130,33 @@ function App() {
     finally { foregroundInFlight.current -= 1 }
   }, [])
 
+  const requestMarketStatus = useCallback(async () => {
+    try {
+      const next = await marketStatus()
+      // Merge rather than replace: `getView` at startup is the source of truth for everything
+      // else, and adopting only the fields this command owns keeps the two calls independent
+      // races instead of one clobbering the other's result.
+      setView(current => current ? { ...current, market_account: next.market_account, health: { ...current.health, market_account: next.health.market_account } } : next)
+    } catch {
+      // Startup already surfaces a failure via `getView` if the backend is down; a market-status
+      // miss on top of that would just repeat the same alert.
+    }
+  }, [])
+
   useEffect(() => {
     getSetupStatus()
       .then(async status => {
         setAccepted(status.risk_accepted)
-        if (status.risk_accepted) await requestView(getView, 'The local application backend is unavailable.')
+        if (status.risk_accepted) {
+          await requestView(getView, 'The local application backend is unavailable.')
+          // Populates the collection badges and nav count as soon as the app is usable, rather
+          // than leaving them blank until the player opens Orders. On an unlinked install this
+          // command makes no network request, so it costs nothing.
+          await requestMarketStatus()
+        }
       })
       .catch(() => setError('The local application backend is unavailable.'))
-  }, [requestView])
+  }, [requestView, requestMarketStatus])
 
   useEffect(() => {
     if (!accepted) return
@@ -185,6 +221,41 @@ function App() {
     setPricing(false)
   }
 
+  async function ordersOperation(operation: () => Promise<AppView>, failure: string) {
+    setOrdersBusy(true)
+    setOrdersError(null)
+    try {
+      const next = await operation()
+      setView(next)
+    } catch {
+      setOrdersError(failure)
+    } finally {
+      setOrdersBusy(false)
+    }
+  }
+
+  const ordersSignIn = (email: string, password: string) =>
+    ordersOperation(() => marketSignIn(email, password), 'Could not sign in to warframe.market.')
+  const ordersLinkToken = (token: string) =>
+    ordersOperation(() => marketLinkToken(token), 'Could not link with that token.')
+  const ordersSignOut = () =>
+    ordersOperation(marketSignOut, 'Could not unlink the account.')
+  const ordersRefresh = () =>
+    ordersOperation(refreshOrders, 'warframe.market could not be reached.')
+  const ordersRemove = (orderId: string) =>
+    ordersOperation(() => removeOrder(orderId), 'Could not remove that listing.')
+  const ordersLowerTo = (orderId: string, _quantity: number) =>
+    ordersOperation(() => setOrderQuantity(orderId), 'Could not lower that listing.')
+  const ordersPresence = (status: Presence | null, auto: boolean) =>
+    ordersOperation(() => setMarketPresence(status, auto), 'Could not change your market status.')
+  const ordersSell = (catalogPath: string, platinum: number, quantity: number, visible: boolean) =>
+    ordersOperation(() => createOrder(catalogPath, platinum, quantity, visible), 'Could not publish that listing.')
+
+  function openPage(next: Page) {
+    setPage(next)
+    if (next === 'orders') void ordersRefresh()
+  }
+
   if (accepted === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
   if (!accepted) return <SetupScreen busy={busy} error={error} onAccept={accept}/>
 
@@ -212,18 +283,19 @@ function App() {
         </div>
       </div>
       <nav className="hallmark-row" aria-label="Primary">
-        {(['collection', 'rewards', 'diagnostics', 'settings', 'about'] as const).map(item => <button
+        {(['collection', 'rewards', 'orders', 'diagnostics', 'settings', 'about'] as const).map(item => <button
           key={item}
           type="button"
           aria-label={pageLabel[item]}
           className={page === item ? 'punch struck' : 'punch'}
           aria-current={page === item ? 'page' : undefined}
-          onClick={() => setPage(item)}
+          onClick={() => openPage(item)}
         >
           <span className="punch-face">
             <Mark name={item}/>
             <span className="punch-name">{pageLabel[item]}</span>
             {item === 'rewards' && view?.reward.cards.length ? <em className="punch-count">{view.reward.cards.length}</em> : null}
+            {item === 'orders' && view?.market_account.flagged ? <em className="punch-count">{view.market_account.flagged}</em> : null}
           </span>
         </button>)}
       </nav>
@@ -231,9 +303,26 @@ function App() {
 
     <main className="sheet">
       {error && <p className="error-banner" role="alert">{error}</p>}
+      {/* A sell can be started from a collection card, and its failure has to be readable where it
+          was started. The orders screen renders this itself, in the block that owns the recovery. */}
+      {ordersError && page !== 'orders' && <p className="error-banner" role="alert">{ordersError}</p>}
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor}/>}
+        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} onSell={ordersSell} ordersBusy={ordersBusy}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
+        {page === 'orders' && <Orders
+          account={view.market_account}
+          onSignIn={ordersSignIn}
+          onLinkToken={ordersLinkToken}
+          onSignOut={ordersSignOut}
+          onRefresh={ordersRefresh}
+          onRemove={ordersRemove}
+          onLowerTo={ordersLowerTo}
+          onSell={ordersSell}
+          onPresence={ordersPresence}
+          items={view.collection.items}
+          busy={ordersBusy}
+          error={ordersError}
+        />}
         {page === 'diagnostics' && <DiagnosticsPage view={view}/>}
         {page === 'settings' && <SettingsPage view={view} priceFloor={priceFloor} onPriceFloor={floor => {
           setPriceFloor(floor)
@@ -286,7 +375,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, pricing, onPriceLive, priceFloor }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number }) {
+function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, ordersBusy }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number; onSell: SellHandler; ordersBusy: boolean }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -431,7 +520,7 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor }: { view: AppV
 
       {filtered.length
         ? <>
-          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item}/></li>)}</ul>
+          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} listedOrder={listedOrderFor(view.market_account.orders, item.id)} sellable={view.market_account.link === 'linked' && isListable(item, view.market_account.listable)} onSell={onSell} busy={ordersBusy}/></li>)}</ul>
           <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
         </>
         : <EmptyState
@@ -459,9 +548,10 @@ function BandCell({ kind, value, unit, aside, label, note }: { kind: string; val
   </div>
 }
 
-function CollectionEntry({ item }: { item: CollectionItem }) {
+function CollectionEntry({ item, listedOrder, sellable, onSell, busy }: { item: CollectionItem; listedOrder: ReturnType<typeof listedOrderFor>; sellable: boolean; onSell: SellHandler; busy: boolean }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
+  const [selling, setSelling] = useState(false)
   // The rank belongs in the accessible name, not only in the marks: a mod held at two ranks is two
   // cards headed the same word, and without it they are indistinguishable to anyone not reading
   // the cartouches.
@@ -481,6 +571,7 @@ function CollectionEntry({ item }: { item: CollectionItem }) {
           : <span className="hallmark owned">Owned ×{item.quantity}</span>}
         {rankLabel(item) && <span className={`hallmark rank${atMaxRank(item) ? ' maxed' : ''}`}>{rankLabel(item)}</span>}
         {item.mastered && <span className="hallmark mastered">Mastered</span>}
+        {listedOrder && <span className="hallmark">listed {listedOrder.platinum}p</span>}
         {item.platinum !== undefined && <span className={`price${item.live ? ' live' : ''}`}>
           <MetalMark metal="plat" alt="platinum "/>
           {item.platinum_ceiling === undefined
@@ -496,6 +587,11 @@ function CollectionEntry({ item }: { item: CollectionItem }) {
         </span>}
       </div>
       {item.live && <p className="freshness">checked live</p>}
+      {/* Nothing offered on a card that is already listed: the badge above says so, and a second
+          listing for the same item is not what "sell" meant. */}
+      {sellable && !listedOrder && (selling
+        ? <SellForm item={item} busy={busy} onSell={onSell} onDone={() => setSelling(false)}/>
+        : <button type="button" className="stamp sell-open" disabled={busy} onClick={() => setSelling(true)}><span>Sell</span></button>)}
     </div>
   </article>
 }
@@ -533,10 +629,20 @@ function AssayRow({ label, health }: { label: string; health: BackendHealth | { 
     <div>
       <h3>{label}</h3>
       <p>{health.message}</p>
-      {health.last_success && <small>Last success: {health.last_success}</small>}
+      {/* Rows record their success time in whatever form their own source keeps: the market
+          account writes Unix seconds, the price table an ISO date. Printed raw, one row reads
+          "Last success: 1785492000". `snapshotFreshness` already resolves both. */}
+      {health.last_success && <small>Last success: {healthSuccessLabel(health.last_success)}</small>}
     </div>
     <span className="assay-verdict">{health.state}</span>
   </article>
+}
+
+function healthSuccessLabel(value: string) {
+  const { label, detail } = snapshotFreshness({ observed_at: value, game_build: '', source: '' })
+  // The relative reading is the useful one on a health row; the exact stamp leads the detail, and
+  // is worth keeping for anyone comparing rows against a log.
+  return label === 'Sync time unavailable' ? value : `${label.replace(/^Synced /, '')} · ${detail.split(' · ')[0]}`
 }
 
 function DiagnosticsPage({ view }: { view: AppView }) {
@@ -548,6 +654,7 @@ function DiagnosticsPage({ view }: { view: AppView }) {
     ['Market data', view.health.market],
     ['Collection prices', view.health.collection_prices],
     ['Database', view.health.database],
+    ['Market account', view.health.market_account],
   ] as const
   return <div className="page">
     <div className="mark-head">

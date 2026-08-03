@@ -18,8 +18,12 @@ __pycache__/
 
 # Third-party tool output
 Extracted/
+
 # The Windows bundle's vendored Tesseract, fetched by scripts/vendor-windows-tesseract.ps1. The
 # directory itself is tracked because tauri.windows.conf.json globs it and a glob that matches
 # nothing is a build error, not an empty resource set.
 app/src-tauri/vendor/tesseract/*
 !app/src-tauri/vendor/tesseract/.gitkeep
+
+# Implementation plans are working notes, not part of the published history.
+docs/superpowers/plans/

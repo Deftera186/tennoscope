@@ -8,6 +8,20 @@ export interface CollectionItem { id: string; name: string; category: ItemCatego
 /** How far the live pricing pass the player asked for has got. */
 export interface PricingProgress { done: number; total: number }
 export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }
+export type LinkState = 'unlinked' | 'linked' | 'needs_relink'
+export type CredentialBacking = 'keyring' | 'database'
+export type Presence = 'online' | 'ingame' | 'invisible'
+/** `status: null` is offline — no socket held. */
+export interface PresenceView { status: Presence | null; wanted: Presence | null; auto: boolean }
+export type OrderStatus =
+  | { state: 'ok' }
+  | { state: 'missing' }
+  | { state: 'overshoot'; owned: number }
+  | { state: 'unverifiable' }
+export interface MarketOrder { id: string; item_id: string; kind: 'sell' | 'buy'; platinum: number; quantity: number; per_trade: number; rank?: number; subtype?: string; visible: boolean; updated_at?: string }
+export interface ReconciledOrder { order: MarketOrder; name?: string; status: OrderStatus }
+export interface MarketAccount { link: LinkState; backing?: CredentialBacking; orders: ReconciledOrder[]; fetched_at?: string; listed_platinum: number; flagged: number; listable: string[]; presence: PresenceView }
+
 export interface AppView {
   collection: {
     items: CollectionItem[]
@@ -16,6 +30,7 @@ export interface AppView {
     pricing?: PricingProgress | null
   }
   reward: { cards: RewardCard[]; best_value_index: number | null; best_ducat_index: number | null }
+  market_account: MarketAccount
   health: {
     game_reader: BackendHealth
     log_monitor: BackendHealth
@@ -24,6 +39,7 @@ export interface AppView {
     market: BackendHealth
     collection_prices: BackendHealth
     database: BackendHealth
+    market_account: BackendHealth
     acquisition_stages: AcquisitionStageHealth[]
   }
 }
@@ -54,3 +70,15 @@ export async function getSetupStatus(attempts = 12, delayMs = 250): Promise<Setu
   }
 }
 export const acceptRiskDisclosure = () => invoke<SetupStatus>('accept_risk_disclosure')
+
+export const marketStatus = () => invoke<AppView>('market_status')
+export const marketSignIn = (email: string, password: string) => invoke<AppView>('market_sign_in', { email, password })
+export const marketLinkToken = (token: string) => invoke<AppView>('market_link_token', { token })
+export const marketSignOut = () => invoke<AppView>('market_sign_out')
+export const refreshOrders = () => invoke<AppView>('refresh_orders')
+export const removeOrder = (orderId: string) => invoke<AppView>('remove_order', { orderId })
+export const setOrderQuantity = (orderId: string) => invoke<AppView>('set_order_quantity', { orderId })
+export const setMarketPresence = (status: Presence | null, auto: boolean) =>
+  invoke<AppView>('set_market_presence', { status, auto })
+export const createOrder = (catalogPath: string, platinum: number, quantity: number, visible: boolean) =>
+  invoke<AppView>('create_order', { catalogPath, platinum, quantity, visible })
