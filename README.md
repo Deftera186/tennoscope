@@ -58,6 +58,12 @@ listed value, how long ago they were fetched, and which ones no longer match wha
 order for something you sold, or for more than you still hold, is flagged and fixable in one
 action.
 
+You can also list something for sale — from a collection card or from the orders screen — take any
+listing down, and set what warframe.market shows you as: online, in game, invisible, or offline,
+held for as long as TennoScope is running. Listing is offered for items that need a price and a
+quantity and nothing else; relics, sets, and anything sold by rank are not offered, because
+warframe.market wants more about them than TennoScope asks you for.
+
 This is the one feature that sends anything off your device: your warframe.market credential, kept
 in your OS keyring where one is available and in the local database otherwise, never in a log.
 Unlink at any time and the stored credential is removed; everything else keeps working exactly as
