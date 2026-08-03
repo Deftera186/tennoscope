@@ -119,8 +119,8 @@ function OrderRow({ entry, busy, onRemove, onLowerTo }: {
   const flagged = isFlagged(entry.status)
   const label = statusLabel(entry)
   const fix = fixLabel(entry.status)
-  const { state } = entry.status
   const value = orderValue(entry.order)
+  const overshoot = entry.status.state === 'overshoot' ? entry.status.owned : null
   return <article className={`docket-line${flagged ? ' doubt' : ''}`} aria-label={entry.name ?? entry.order.item_id}>
     {/* The claim is struck as a shape as well as a colour: a row is legible as flagged with the
         hue removed, which is what keeps the whole thing readable to anyone who cannot separate
@@ -138,11 +138,13 @@ function OrderRow({ entry, busy, onRemove, onLowerTo }: {
       : <>{value}<MetalMark metal="plat" alt=" platinum" className="line-metal"/></>}</span>
     <span className="line-claim">{label}</span>
     <span className="line-fix">
-      {state === 'overshoot' && <button
+      {/* The count is read out here rather than inside the handler: a narrowing on a property
+          does not survive into a closure, so `entry.status.owned` there is not the overshoot's. */}
+      {overshoot !== null && <button
         type="button"
         className="stamp"
         disabled={busy}
-        onClick={() => onLowerTo(entry.order.id, entry.status.owned)}
+        onClick={() => onLowerTo(entry.order.id, overshoot)}
       ><span>{fix}</span></button>}
       <RemoveControl
         entry={entry}
