@@ -130,6 +130,23 @@ impl MarketItems {
             .is_some_and(|entry| entry.comparable)
     }
 
+    /// The market's id for a collection path, for the one direction selling needs.
+    ///
+    /// Only comparable entries answer. A path shared by several market items -- which is what
+    /// makes an entry incomparable -- has no single right answer here either, and guessing one
+    /// would post a listing against an item the player did not choose.
+    ///
+    /// ponytail: linear scan over a few thousand entries, run once per sell. A reverse map if a
+    /// caller ever needs this in a loop.
+    pub fn market_id_for_path(&self, catalog_path: &str) -> Option<&str> {
+        self.entries
+            .iter()
+            .find(|(_, entry)| {
+                entry.comparable && entry.catalog_path.as_deref() == Some(catalog_path)
+            })
+            .map(|(id, _)| id.as_str())
+    }
+
     pub fn name(&self, item_id: &str) -> Option<&str> {
         self.entries.get(item_id)?.name.as_deref()
     }

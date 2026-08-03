@@ -1122,6 +1122,13 @@ pub struct MarketAccountView {
     /// order is not a problem, and counting one would put a false alarm on the navigation of every
     /// machine that has not read the game yet.
     pub flagged: usize,
+    /// The collection paths this account may publish a listing for.
+    ///
+    /// Sent rather than recomputed on the frontend because the rule is `path_is_comparable`, which
+    /// is measured against warframe.market's own table and lives in the crate that parses it. A
+    /// second implementation in TypeScript would be a copy of a rule that exists to keep two
+    /// vocabularies apart, and it would drift.
+    pub listable: Vec<String>,
 }
 
 impl MarketAccountView {
@@ -1174,7 +1181,25 @@ impl MarketAccountView {
             fetched_at: Some(fetched_at),
             listed_platinum,
             flagged,
+            listable: Vec::new(),
         }
+    }
+
+    /// Which of the collection's paths can be listed, computed once against the item table.
+    ///
+    /// Separate from `linked` because the two callers that build a view already hold the table and
+    /// the collection, and threading both through every construction site would make an argument
+    /// list out of what is one join.
+    #[must_use]
+    pub fn with_listable(mut self, items: &MarketItems, collection: &Collection) -> Self {
+        self.listable = collection
+            .entries()
+            .map(|entry| entry.item.id.catalog_path())
+            .filter(|path| items.market_id_for_path(path).is_some())
+            .map(str::to_owned)
+            .collect();
+        self.listable.dedup();
+        self
     }
 }
 

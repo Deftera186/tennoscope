@@ -945,3 +945,48 @@
 /* The pair sits inside the block, so it drops the standalone margin it carries on the unlinked
    screen and the hairline it would otherwise draw against the block's own border. */
 .relink .clause-pair { margin: 0; }
+
+/* ------------------------------------------------------------- sell listing */
+
+/* Publishing sits below the card's marks, not among them: the marks state what is held, and a
+   control that changes a real account elsewhere is not one more fact about the item. It appears
+   only on cards that can actually be listed, so the grid does not fill with disabled stamps. */
+.sell-open { align-self: flex-start; }
+
+/* The form takes the card's own width and rules itself off from the marks above. Two narrow
+   number fields sit on one line -- platinum and quantity are read together, as a price is. */
+.sell-form {
+  display: flex; flex-wrap: wrap; gap: var(--tight);
+  margin-top: var(--tight); padding-top: var(--tight); border-top: 1px solid var(--rule);
+}
+.sell-form .dial-slot { flex: 1 1 5.5rem; flex-direction: column; align-items: flex-start; gap: .3rem; min-width: 5rem; }
+.sell-form .dial-slot > span:first-child {
+  font-family: var(--face-register); font-size: .56rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--platinum-deep);
+}
+.sell-form .dial-slot input, .new-listing select {
+  width: 100%; padding: .45rem .6rem; border: 1px solid var(--rule); border-radius: 0;
+  background: var(--plate); color: var(--platinum);
+  font-family: var(--face-register); font-size: .74rem; font-variant-numeric: tabular-nums;
+}
+.sell-form .dial-slot input:focus-visible, .new-listing select:focus-visible { outline: 2px solid var(--platinum-deep); outline-offset: 1px; }
+.sell-visible {
+  display: flex; flex: 1 0 100%; align-items: center; gap: .45rem;
+  font-family: var(--face-register); font-size: .62rem; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--platinum-dim); cursor: pointer;
+}
+.sell-visible input { accent-color: var(--gold); }
+.sell-actions { display: flex; flex: 1 0 100%; gap: var(--hair); }
+
+/* On the orders screen the same form follows an item picker, in a ruled band of its own: it is
+   an action on the account rather than a row of it, so it does not sit inside the docket. */
+.new-listing {
+  display: flex; flex-direction: column; gap: var(--tight);
+  margin-block: var(--step); padding: var(--step); background: var(--touchstone);
+}
+.new-listing .dial-slot { flex: none; flex-direction: column; align-items: flex-start; gap: .3rem; }
+.new-listing .dial-slot > span:first-child {
+  font-family: var(--face-register); font-size: .62rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--platinum-deep);
+}
+.new-listing .sell-form { margin-top: 0; padding-top: 0; border-top: 0; }

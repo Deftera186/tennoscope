@@ -100,11 +100,10 @@ pub fn account_view(
             // this function fails.
             session.adopt(renewed)?;
             let reconciled = reconcile_orders(&orders, &items, collection, snapshot);
-            Ok(MarketAccountView::linked(
-                backing,
-                reconciled,
-                now.to_owned(),
-            ))
+            Ok(
+                MarketAccountView::linked(backing, reconciled, now.to_owned())
+                    .with_listable(&items, collection),
+            )
         }
         // A refused credential is the account's own state rather than a failed request, and the
         // interface has a repair for it.
@@ -160,6 +159,40 @@ pub fn overshoot_quantity(view: &MarketAccountView, order_id: &str) -> Option<u3
         OrderStatus::Overshoot { owned } => Some(owned),
         _ => None,
     }
+}
+
+/// A sell was asked for on something this device does not hold.
+pub const ITEM_NOT_OWNED: &str = "This device's collection does not hold that item";
+
+/// A sell was asked for on an item whose market identity does not name one collection row.
+///
+/// The same items reconciliation declines to judge -- relics, sets, anything ranked or subtyped.
+/// They are also exactly the items whose create body needs contextual fields this application does
+/// not collect, so listing one would be refused by warframe.market anyway, after the request.
+pub const ITEM_NOT_LISTABLE: &str = "That item cannot be listed from TennoScope: warframe.market needs details this app does not ask for";
+
+/// The market id a sell may be posted against, or the reason it is refused.
+///
+/// Takes a collection path rather than a market id for the same reason `set_order_quantity`
+/// derives its own quantity: a market id supplied by the frontend is a value nothing checked, and
+/// this one addresses which item a real listing gets published for. The path is checked against
+/// the collection first -- offering to sell what the player does not have is the mirror of the
+/// `missing` flag this screen exists to raise -- and then resolved through the item table, which
+/// answers only for items whose path names one row.
+pub fn authorize_sell<'a>(
+    items: &'a MarketItems,
+    collection: &Collection,
+    catalog_path: &str,
+) -> Result<&'a str, &'static str> {
+    if !collection
+        .entries()
+        .any(|entry| entry.item.id.catalog_path() == catalog_path)
+    {
+        return Err(ITEM_NOT_OWNED);
+    }
+    items
+        .market_id_for_path(catalog_path)
+        .ok_or(ITEM_NOT_LISTABLE)
 }
 
 /// Whether a delete may proceed: only for an id the held view actually lists. Checked before any

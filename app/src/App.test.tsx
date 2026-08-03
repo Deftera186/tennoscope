@@ -48,6 +48,7 @@ const view: AppView = {
     link: 'unlinked',
     orders: [],
     listed_platinum: 0,
+    listable: [],
     flagged: 0,
   },
   health: {

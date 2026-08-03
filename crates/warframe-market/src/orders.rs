@@ -175,6 +175,45 @@ pub fn set_order_quantity(
     write_outcome(response, token)
 }
 
+/// Publish a sell listing.
+///
+/// Deliberately narrow. The API's create body carries `perTrade`, `rank`, `charges`, `subtype`,
+/// `amberStars` and `cyanStars`, each required for the items that support it and *forbidden* for
+/// the ones that do not -- a 400 either way. Rather than model that, callers offer this only for
+/// items `MarketItems::comparable` accepts, which is exactly the set whose path names one
+/// collection row: no relics, no sets, nothing ranked or subtyped. The guard that keeps
+/// reconciliation honest is the guard that keeps this body to four fields.
+///
+/// `visible` is sent explicitly because the API defaults it to `false`, and a listing nobody can
+/// see is not what someone pressing "sell" asked for -- as this account found out the hard way.
+pub fn create_order(
+    transport: &dyn MarketTransport,
+    token: &MarketToken,
+    item_id: &str,
+    platinum: u32,
+    quantity: u32,
+    visible: bool,
+) -> Result<MarketToken, MarketError> {
+    // The API's own bounds, checked before a request is spent finding out. An id with a quote or a
+    // backslash would break out of the JSON it is interpolated into, so it is refused rather than
+    // escaped: every id this takes comes from the item table, and none of them contain either.
+    if item_id.is_empty() || item_id.contains(['"', '\\']) {
+        return Err(MarketError::Rejected);
+    }
+    if !(1..=900_000).contains(&platinum) || !(1..=9_999).contains(&quantity) {
+        return Err(MarketError::Rejected);
+    }
+    let response = transport.send(MarketRequest {
+        method: Method::Post,
+        url: format!("{API_V2}/order"),
+        token: Some(token.expose().to_owned()),
+        body: Some(format!(
+            r#"{{"itemId":"{item_id}","type":"sell","platinum":{platinum},"quantity":{quantity},"visible":{visible}}}"#
+        )),
+    })?;
+    write_outcome(response, token)
+}
+
 fn write_outcome(
     response: crate::MarketResponse,
     token: &MarketToken,

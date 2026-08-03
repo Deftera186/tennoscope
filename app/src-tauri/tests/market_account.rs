@@ -2,12 +2,15 @@ use std::sync::Mutex;
 
 use app_core::{LinkState, MarketAccountView, OrderStatus, ReconciledOrder};
 use app_lib::market_account::{
-    MarketSession, account_view, authorize_quantity_write, authorize_removal, failure_message,
+    ITEM_NOT_LISTABLE, ITEM_NOT_OWNED, MarketSession, account_view, authorize_quantity_write,
+    authorize_removal, authorize_sell, failure_message,
 };
-use warframe_domain::Collection;
+use warframe_domain::{
+    CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
+};
 use warframe_market::{
-    CredentialBacking, CredentialStore, MarketError, MarketOrder, MarketRequest, MarketResponse,
-    MarketToken, MarketTransport, OrderKind,
+    CredentialBacking, CredentialStore, MarketError, MarketItems, MarketOrder, MarketRequest,
+    MarketResponse, MarketToken, MarketTransport, OrderKind,
 };
 
 /// A credential store that holds one token, so the session can be exercised without a keyring.
@@ -308,4 +311,75 @@ fn a_removal_is_authorized_for_an_id_on_the_held_list() {
     let result = authorize_removal(&view, "order-one");
 
     assert!(result.is_ok(), "a held id must be authorized");
+}
+
+/// The shape of `/v2/items`, in the two cases selling cares about: an ordinary part whose path
+/// names one collection row, and a relic whose one entry stands for four refinements.
+const SELLABLE_ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
+    {"id":"54a73e65e779893a797fff33","slug":"braton_prime_blueprint",
+     "gameRef":"/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+     "i18n":{"en":{"name":"Braton Prime Blueprint"}}},
+    {"id":"relic-id","slug":"lith_a1_relic",
+     "gameRef":"/Lotus/Types/Game/Projections/T1VoidProjectionBratonPrimeDBronze",
+     "subtypes":["intact","exceptional","flawless","radiant"],
+     "i18n":{"en":{"name":"Lith A1 Relic"}}}
+],"error":null}"#;
+
+fn collection_holding(paths: &[&str]) -> Collection {
+    let entries = paths
+        .iter()
+        .map(|path| {
+            let id = ItemId::new(*path).expect("item id");
+            let item = CatalogItem::new(id, "Item", Category::PrimePart).expect("catalog item");
+            InventoryEntry::new(item, 3)
+        })
+        .collect();
+    let mut collection = Collection::default();
+    collection.replace(InventorySnapshot::coherent(entries).expect("snapshot"));
+    collection
+}
+
+#[test]
+fn a_sell_resolves_the_collections_path_to_the_market_id_it_will_be_listed_against() {
+    let items = MarketItems::from_response(SELLABLE_ITEMS.as_bytes()).expect("items parse");
+    let collection = collection_holding(&["/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint"]);
+
+    let item_id = authorize_sell(
+        &items,
+        &collection,
+        "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+    )
+    .expect("an owned, comparable item can be listed");
+
+    assert_eq!(item_id, "54a73e65e779893a797fff33");
+}
+
+/// Offering to sell what the device does not hold is the mirror of the `missing` flag this whole
+/// screen exists to raise.
+#[test]
+fn a_sell_is_refused_for_something_this_device_does_not_hold() {
+    let items = MarketItems::from_response(SELLABLE_ITEMS.as_bytes()).expect("items parse");
+
+    let result = authorize_sell(
+        &items,
+        &Collection::default(),
+        "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+    );
+
+    assert_eq!(result, Err(ITEM_NOT_OWNED));
+}
+
+/// Refused on the backend and not merely hidden in the interface. A relic's create body needs a
+/// `subtype` this application never collects, so the request would come back 400 -- but the
+/// refusal belongs here, where a caller cannot route around it.
+#[test]
+fn a_sell_is_refused_for_an_item_whose_identity_names_no_single_row() {
+    let items = MarketItems::from_response(SELLABLE_ITEMS.as_bytes()).expect("items parse");
+    let path = "/Lotus/Types/Game/Projections/T1VoidProjectionBratonPrimeDBronze";
+    let collection = collection_holding(&[path]);
+
+    assert_eq!(
+        authorize_sell(&items, &collection, path),
+        Err(ITEM_NOT_LISTABLE)
+    );
 }

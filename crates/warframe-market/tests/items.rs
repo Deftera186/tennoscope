@@ -81,3 +81,36 @@ fn fetching_asks_the_items_route() {
     // on a request that does not need it.
     assert_eq!(seen[0].token, None);
 }
+
+/// Selling needs the opposite direction from reconciliation: the player picks a collection row,
+/// and the market wants an id for it.
+#[test]
+fn a_collection_path_resolves_back_to_the_market_id_that_can_be_listed() {
+    let items = MarketItems::from_response(ITEMS.as_bytes()).expect("items parse");
+
+    assert_eq!(
+        items.market_id_for_path("/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint"),
+        Some("54a73e65e779893a797fff33")
+    );
+    assert_eq!(items.market_id_for_path("/Lotus/Types/Nothing"), None);
+}
+
+/// Only comparable entries answer. An incomparable path is one that does not name a single
+/// collection row, so there is no single item it could list -- and posting a guess would publish a
+/// listing against something the player did not choose.
+#[test]
+fn a_path_that_names_no_single_row_offers_nothing_to_list() {
+    // A relic: one market entry standing for four refinements.
+    const RELIC: &str = r#"{"apiVersion":"0.25.0","data":[
+        {"id":"relic-id","slug":"lith_a1_relic","gameRef":"/Lotus/Types/Game/Projections/T1VoidProjectionBratonPrimeDBronze",
+         "subtypes":["intact","exceptional","flawless","radiant"],"i18n":{"en":{"name":"Lith A1 Relic"}}}
+    ],"error":null}"#;
+    let items = MarketItems::from_response(RELIC.as_bytes()).expect("items parse");
+
+    assert!(!items.comparable("relic-id"));
+    assert_eq!(
+        items
+            .market_id_for_path("/Lotus/Types/Game/Projections/T1VoidProjectionBratonPrimeDBronze"),
+        None
+    );
+}

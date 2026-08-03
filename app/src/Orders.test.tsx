@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { MarketAccount, ReconciledOrder } from './backend'
+import type { CollectionItem, MarketAccount, ReconciledOrder } from './backend'
 import { Orders } from './Orders'
 
 afterEach(() => {
@@ -36,12 +36,15 @@ function account(overrides: Partial<MarketAccount> = {}): MarketAccount {
     orders: [],
     fetched_at: '2026-07-31T12:00:00Z',
     listed_platinum: 0,
+    listable: [],
     flagged: 0,
     ...overrides,
   }
 }
 
 const handlers = {
+  items: [],
+  onSell: vi.fn(),
   onSignIn: vi.fn().mockResolvedValue(undefined),
   onLinkToken: vi.fn().mockResolvedValue(undefined),
   onSignOut: vi.fn().mockResolvedValue(undefined),
@@ -240,5 +243,61 @@ describe('failures', () => {
     await userEvent.type(screen.getByLabelText(/token/i), 'a-token')
     await userEvent.click(screen.getByRole('button', { name: /link with token/i }))
     expect(handlers.onLinkToken).toHaveBeenCalledWith('a-token')
+  })
+})
+
+const braton: CollectionItem = {
+  id: '/Lotus/Weapons/BratonPrime',
+  name: 'Braton Prime Blueprint',
+  category: 'prime_part',
+  quantity: 3,
+  mastered: false,
+  platinum: 14,
+  live: false,
+  priceable: true,
+}
+
+describe('publishing a listing', () => {
+  it('offers nothing when the account can list nothing', () => {
+    render(<Orders account={account()} {...handlers} items={[braton]} busy={false} error={null} />)
+    expect(screen.queryByRole('button', { name: /new listing/i })).toBeNull()
+  })
+
+  it('sends the price and quantity typed, for the item chosen', async () => {
+    const user = userEvent.setup()
+    render(
+      <Orders
+        account={account({ listable: [braton.id] })}
+        {...handlers}
+        items={[braton]}
+        busy={false}
+        error={null}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /new listing/i }))
+    await user.selectOptions(screen.getByLabelText('Item'), braton.id)
+    // The price prefills from the card's own quote, so only the quantity is typed here.
+    await user.clear(screen.getByLabelText('Quantity'))
+    await user.type(screen.getByLabelText('Quantity'), '2')
+    await user.click(screen.getByRole('button', { name: /list for sale/i }))
+    expect(handlers.onSell).toHaveBeenCalledWith(braton.id, 14, 2, true)
+  })
+
+  it('refuses to send more than this device holds', async () => {
+    const user = userEvent.setup()
+    render(
+      <Orders
+        account={account({ listable: [braton.id] })}
+        {...handlers}
+        items={[braton]}
+        busy={false}
+        error={null}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /new listing/i }))
+    await user.selectOptions(screen.getByLabelText('Item'), braton.id)
+    await user.clear(screen.getByLabelText('Quantity'))
+    await user.type(screen.getByLabelText('Quantity'), '9')
+    expect(screen.getByRole('button', { name: /list for sale/i })).toBeDisabled()
   })
 })

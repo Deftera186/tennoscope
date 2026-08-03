@@ -12,6 +12,7 @@ import {
   refreshOrders,
   refreshPrices,
   removeOrder,
+  createOrder,
   setOrderQuantity,
   type AppView,
   type BackendHealth,
@@ -24,6 +25,7 @@ import { RewardCards } from './RewardCards'
 import { MetalMark } from './MetalMark'
 import { Orders } from './Orders'
 import { listedOrderFor } from './orders'
+import { SellForm, isListable, type SellHandler } from './SellForm'
 import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, writePriceFloor } from './settings'
 import { snapshotFreshness } from './freshness'
@@ -242,6 +244,8 @@ function App() {
     ordersOperation(() => removeOrder(orderId), 'Could not remove that listing.')
   const ordersLowerTo = (orderId: string, _quantity: number) =>
     ordersOperation(() => setOrderQuantity(orderId), 'Could not lower that listing.')
+  const ordersSell = (catalogPath: string, platinum: number, quantity: number, visible: boolean) =>
+    ordersOperation(() => createOrder(catalogPath, platinum, quantity, visible), 'Could not publish that listing.')
 
   function openPage(next: Page) {
     setPage(next)
@@ -296,7 +300,7 @@ function App() {
     <main className="sheet">
       {error && <p className="error-banner" role="alert">{error}</p>}
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor}/>}
+        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} onSell={ordersSell} ordersBusy={ordersBusy}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
         {page === 'orders' && <Orders
           account={view.market_account}
@@ -306,6 +310,8 @@ function App() {
           onRefresh={ordersRefresh}
           onRemove={ordersRemove}
           onLowerTo={ordersLowerTo}
+          onSell={ordersSell}
+          items={view.collection.items}
           busy={ordersBusy}
           error={ordersError}
         />}
@@ -361,7 +367,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, pricing, onPriceLive, priceFloor }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number }) {
+function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, ordersBusy }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number; onSell: SellHandler; ordersBusy: boolean }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -506,7 +512,7 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor }: { view: AppV
 
       {filtered.length
         ? <>
-          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} listedOrder={listedOrderFor(view.market_account.orders, item.id)}/></li>)}</ul>
+          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} listedOrder={listedOrderFor(view.market_account.orders, item.id)} sellable={view.market_account.link === 'linked' && isListable(item, view.market_account.listable)} onSell={onSell} busy={ordersBusy}/></li>)}</ul>
           <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
         </>
         : <EmptyState
@@ -534,9 +540,10 @@ function BandCell({ kind, value, unit, aside, label, note }: { kind: string; val
   </div>
 }
 
-function CollectionEntry({ item, listedOrder }: { item: CollectionItem; listedOrder: ReturnType<typeof listedOrderFor> }) {
+function CollectionEntry({ item, listedOrder, sellable, onSell, busy }: { item: CollectionItem; listedOrder: ReturnType<typeof listedOrderFor>; sellable: boolean; onSell: SellHandler; busy: boolean }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
+  const [selling, setSelling] = useState(false)
   // The rank belongs in the accessible name, not only in the marks: a mod held at two ranks is two
   // cards headed the same word, and without it they are indistinguishable to anyone not reading
   // the cartouches.
@@ -572,6 +579,11 @@ function CollectionEntry({ item, listedOrder }: { item: CollectionItem; listedOr
         </span>}
       </div>
       {item.live && <p className="freshness">checked live</p>}
+      {/* Nothing offered on a card that is already listed: the badge above says so, and a second
+          listing for the same item is not what "sell" meant. */}
+      {sellable && !listedOrder && (selling
+        ? <SellForm item={item} busy={busy} onSell={onSell} onDone={() => setSelling(false)}/>
+        : <button type="button" className="stamp sell-open" disabled={busy} onClick={() => setSelling(true)}><span>Sell</span></button>)}
     </div>
   </article>
 }

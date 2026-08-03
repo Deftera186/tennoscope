@@ -475,10 +475,12 @@ fn fetch_account(
     match warframe_market::list_mine(transport, token) {
         Ok((orders, renewed)) => {
             let reconciled = app_core::reconcile_orders(&orders, &items, collection, snapshot);
+            let view = app_core::MarketAccountView::linked(backing, reconciled, now.to_owned())
+                .with_listable(&items, collection);
             Ok(FetchedAccount {
                 items,
                 renewed,
-                view: app_core::MarketAccountView::linked(backing, reconciled, now.to_owned()),
+                view,
             })
         }
         Err(warframe_market::MarketError::Unauthorized) => Ok(FetchedAccount {
@@ -629,6 +631,50 @@ async fn remove_order(
     })
     .await
     .map_err(|_| "order removal task failed".to_owned())?
+}
+
+/// Publish a sell listing for something in the collection.
+///
+/// The item is named by its collection path, never by a market id: a market id from the frontend
+/// is a value nothing checked, and it decides which item a real listing is published against.
+/// `authorize_sell` resolves it here, refusing anything this device does not hold and anything
+/// whose market identity does not name one collection row -- the latter being exactly the items
+/// whose create body would need rank, subtype or per-trade details this application never collects.
+///
+/// Price and quantity do come from the caller, because they are the two things the player is
+/// choosing. `create_order` bounds both against what the API accepts before spending a request.
+#[tauri::command]
+async fn create_order(
+    catalog_path: String,
+    platinum: u32,
+    quantity: u32,
+    visible: bool,
+    state: State<'_, SharedRuntime>,
+) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let item_id = {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            let items = runtime.market.cached_items().ok_or_else(|| {
+                market_account::failure_message(warframe_market::MarketError::Unreachable)
+                    .to_owned()
+            })?;
+            let collection = runtime
+                .core
+                .collection_for_reconciliation()
+                .map_err(|error| error.to_string())?;
+            market_account::authorize_sell(&items, &collection, &catalog_path)
+                .map_err(str::to_owned)?
+                .to_owned()
+        };
+        write_then_refresh(&shared, |transport, token| {
+            warframe_market::create_order(transport, token, &item_id, platinum, quantity, visible)
+        })
+    })
+    .await
+    .map_err(|_| "listing task failed".to_owned())?
 }
 
 /// Lower one order to the quantity the collection says is held.
@@ -2242,6 +2288,7 @@ pub fn run() {
             market_sign_out,
             refresh_orders,
             remove_order,
+            create_order,
             set_order_quantity
         ])
         .run(tauri::generate_context!())

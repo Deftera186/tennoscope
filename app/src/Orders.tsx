@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import type { MarketAccount } from './backend'
+import type { CollectionItem, MarketAccount } from './backend'
+import { SellForm, isListable, type SellHandler } from './SellForm'
 import { backingLabel, fixLabel, isFlagged, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
 import { snapshotFreshness } from './freshness'
 import { MetalMark } from './MetalMark'
@@ -12,6 +13,8 @@ type OrdersProps = {
   onRefresh: () => Promise<void>
   onRemove: (orderId: string) => Promise<void>
   onLowerTo: (orderId: string, quantity: number) => Promise<void>
+  onSell: SellHandler
+  items: CollectionItem[]
   busy: boolean
   error: string | null
 }
@@ -22,7 +25,7 @@ function fetchFreshness(fetchedAt: string | undefined, now = new Date()) {
   return snapshotFreshness(fetchedAt ? { observed_at: fetchedAt, game_build: '', source: 'warframe.market' } : null, now)
 }
 
-export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, busy, error }: OrdersProps) {
+export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, onSell, items, busy, error }: OrdersProps) {
   if (account.link === 'unlinked') {
     return <UnlinkedPanel onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} error={error} />
   }
@@ -81,6 +84,8 @@ export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, o
         <span>Unlink account</span>
       </button>
     </div>
+
+    {!needsRelink && <NewListing items={items} listable={account.listable} busy={busy} onSell={onSell}/>}
 
     {account.orders.length
       ? <ul className="docket" aria-label="Market orders">
@@ -172,6 +177,45 @@ function RemoveControl({ entry, busy, onRemove }: {
       setArmed(true)
     }}
   ><span>{armed ? 'Confirm remove' : 'Remove listing'}</span></button>
+}
+
+/**
+ * Publishing from the orders screen, where the player is looking at listings rather than at items.
+ *
+ * The picker is over the same collection the cards are drawn from and the same listable set the
+ * backend authorises against, so an item that cannot be sold from a card cannot be sold from here
+ * either -- the refusal lives in one place, on the backend, and neither surface offers what it
+ * would refuse.
+ */
+function NewListing({ items, listable, busy, onSell }: {
+  items: CollectionItem[]
+  listable: string[]
+  busy: boolean
+  onSell: SellHandler
+}) {
+  const [open, setOpen] = useState(false)
+  const [chosen, setChosen] = useState('')
+  const sellable = items.filter(item => isListable(item, listable))
+  if (!sellable.length) return null
+  const item = sellable.find(entry => entry.id === chosen)
+
+  if (!open) {
+    return <div className="register-controls">
+      <button type="button" className="stamp" disabled={busy} onClick={() => setOpen(true)}><span>New listing</span></button>
+    </div>
+  }
+  return <div className="new-listing">
+    <label className="dial-slot">
+      <span>Item</span>
+      <select aria-label="Item" value={chosen} onChange={event => setChosen(event.target.value)} disabled={busy}>
+        <option value="">Choose an item…</option>
+        {sellable.map(entry => <option key={entry.id} value={entry.id}>{entry.name} (×{entry.quantity})</option>)}
+      </select>
+    </label>
+    {item
+      ? <SellForm item={item} busy={busy} onSell={onSell} onDone={() => { setOpen(false); setChosen('') }}/>
+      : <button type="button" className="stamp" disabled={busy} onClick={() => setOpen(false)}><span>Cancel</span></button>}
+  </div>
 }
 
 function UnlinkedPanel({ onSignIn, onLinkToken, busy, error }: {

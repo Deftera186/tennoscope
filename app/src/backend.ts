@@ -17,7 +17,7 @@ export type OrderStatus =
   | { state: 'unverifiable' }
 export interface MarketOrder { id: string; item_id: string; kind: 'sell' | 'buy'; platinum: number; quantity: number; per_trade: number; rank?: number; subtype?: string; visible: boolean; updated_at?: string }
 export interface ReconciledOrder { order: MarketOrder; name?: string; status: OrderStatus }
-export interface MarketAccount { link: LinkState; backing?: CredentialBacking; orders: ReconciledOrder[]; fetched_at?: string; listed_platinum: number; flagged: number }
+export interface MarketAccount { link: LinkState; backing?: CredentialBacking; orders: ReconciledOrder[]; fetched_at?: string; listed_platinum: number; flagged: number; listable: string[] }
 
 export interface AppView {
   collection: {
@@ -56,3 +56,5 @@ export const marketSignOut = () => invoke<AppView>('market_sign_out')
 export const refreshOrders = () => invoke<AppView>('refresh_orders')
 export const removeOrder = (orderId: string) => invoke<AppView>('remove_order', { orderId })
 export const setOrderQuantity = (orderId: string) => invoke<AppView>('set_order_quantity', { orderId })
+export const createOrder = (catalogPath: string, platinum: number, quantity: number, visible: boolean) =>
+  invoke<AppView>('create_order', { catalogPath, platinum, quantity, visible })

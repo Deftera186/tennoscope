@@ -2,7 +2,8 @@ mod common;
 
 use common::{FakeTransport, ok, ok_with_token, status};
 use warframe_market::{
-    MarketError, MarketToken, Method, OrderKind, delete_order, list_mine, set_order_quantity,
+    MarketError, MarketToken, Method, OrderKind, create_order, delete_order, list_mine,
+    set_order_quantity,
 };
 
 const FAKE_TOKEN: &str = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.";
@@ -184,4 +185,76 @@ fn a_malformed_order_list_is_rejected() {
         list_mine(&transport, &token()).unwrap_err(),
         MarketError::Malformed
     );
+}
+
+/// The four fields, and no fifth. Everything the API calls contextual is absent by construction:
+/// callers only offer this for items whose path names one collection row, which is exactly the set
+/// with no `perTrade`, rank, subtype, charges or stars to declare.
+#[test]
+fn a_new_listing_sends_the_item_the_price_the_count_and_its_visibility() {
+    let transport = FakeTransport::new(vec![ok(
+        r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
+    )]);
+
+    create_order(
+        &transport,
+        &token(),
+        "54a73e65e779893a797fff33",
+        19,
+        3,
+        true,
+    )
+    .expect("listed");
+
+    let seen = transport.seen();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].method, Method::Post);
+    assert!(seen[0].url.ends_with("/order"), "got {}", seen[0].url);
+    assert_eq!(
+        seen[0].body.as_deref(),
+        Some(
+            r#"{"itemId":"54a73e65e779893a797fff33","type":"sell","platinum":19,"quantity":3,"visible":true}"#
+        )
+    );
+}
+
+/// Hidden is a real choice rather than an oversight: this account's whole order list was hidden,
+/// which is how the zero total came about in the first place.
+#[test]
+fn a_listing_can_be_published_hidden() {
+    let transport = FakeTransport::new(vec![ok(
+        r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
+    )]);
+
+    create_order(&transport, &token(), "item", 19, 1, false).expect("listed");
+
+    assert!(
+        transport.seen()[0]
+            .body
+            .as_deref()
+            .unwrap()
+            .contains(r#""visible":false"#)
+    );
+}
+
+/// Refused before a request is spent finding out, and before an id could break out of the JSON it
+/// is interpolated into.
+#[test]
+fn a_listing_outside_what_the_api_accepts_is_refused_without_asking() {
+    for (item, platinum, quantity) in [
+        ("item", 0, 1),
+        ("item", 900_001, 1),
+        ("item", 19, 0),
+        ("item", 19, 10_000),
+        ("", 19, 1),
+        (r#"a","type":"buy"#, 19, 1),
+    ] {
+        let transport = FakeTransport::new(vec![]);
+        assert_eq!(
+            create_order(&transport, &token(), item, platinum, quantity, true).unwrap_err(),
+            MarketError::Rejected,
+            "{item:?} {platinum} {quantity} should be refused"
+        );
+        assert!(transport.seen().is_empty(), "nothing should be sent");
+    }
 }
