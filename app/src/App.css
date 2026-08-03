@@ -929,6 +929,10 @@
   }
   .line-claim { grid-column: 2 / -1; }
   .line-fix { grid-column: 2 / -1; justify-content: flex-start; }
+  /* The name is what the row is, so at this width it wraps rather than clipping. On the desktop
+     grid it holds a fixed column beside three others and the ellipsis is the right answer; here
+     it has the row to itself and there is nothing to protect it from. */
+  .line-name { overflow: visible; white-space: normal; text-overflow: clip; }
   .orders-band { grid-template-columns: 1fr; }
 }
 
