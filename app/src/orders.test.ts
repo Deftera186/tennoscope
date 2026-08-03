@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ReconciledOrder } from './backend'
-import { backingLabel, fixLabel, isFlagged, listedOrderFor, sortOrders, statusLabel } from './orders'
+import { backingLabel, fixLabel, isFlagged, listedOrderFor, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
 
 function entry(
   id: string,
@@ -96,5 +96,23 @@ describe('credential backing', () => {
     expect(backingLabel('keyring')).toBe('System keyring')
     expect(backingLabel('database')).toBe('Local database file')
     expect(backingLabel(undefined)).toBe('Not stored')
+  })
+})
+
+describe('what a row contributes to the listed total', () => {
+  it('prices the trade, not the unit', () => {
+    // 12 units at 38p per six is asking 76p, not 456p.
+    expect(orderValue(entry('a', { state: 'ok' }, { platinum: 38, quantity: 12, per_trade: 6 }).order)).toBe(76)
+    expect(orderValue(entry('a', { state: 'ok' }, { quantity: 3 }).order)).toBe(36)
+  })
+
+  it('counts nothing from an order nobody can buy, and says which', () => {
+    const hidden = entry('a', { state: 'ok' }, { visible: false }).order
+    const buying = entry('a', { state: 'ok' }, { kind: 'buy' }).order
+    expect(orderValue(hidden)).toBeNull()
+    expect(uncountedReason(hidden)).toBe('Hidden')
+    expect(orderValue(buying)).toBeNull()
+    expect(uncountedReason(buying)).toBe('Buy order')
+    expect(uncountedReason(entry('a', { state: 'ok' }).order)).toBeNull()
   })
 })

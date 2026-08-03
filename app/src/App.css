@@ -838,7 +838,7 @@
 }
 .docket-line {
   display: grid; align-items: center; gap: var(--step);
-  grid-template-columns: .6rem minmax(0, 1fr) auto minmax(0, 15rem) minmax(0, 11rem);
+  grid-template-columns: .6rem minmax(0, 1fr) auto auto minmax(0, 13rem) minmax(0, 11rem);
   padding: var(--step) var(--step) var(--step) 0;
   background: var(--touchstone); border-bottom: 1px solid var(--rule);
   transition: background .12s ease;
@@ -877,6 +877,21 @@
   letter-spacing: .1em; color: var(--platinum-deep);
 }
 
+/* What this row puts into the headline total, in a quieter weight than the asking price: the price
+   is the thing the player set, this is the arithmetic done to it. A row contributing nothing says
+   which of the two reasons applies, in the register face the product strikes rather than writes. */
+.line-value {
+  display: inline-flex; align-items: center; gap: .3rem; justify-content: flex-end;
+  min-width: 4.5rem; white-space: nowrap;
+  font-family: var(--face-mark); font-size: .85rem; font-weight: 700;
+  font-variant-numeric: tabular-nums; color: var(--platinum-dim);
+}
+.line-value .line-metal { height: .9rem; }
+.line-value em {
+  font-family: var(--face-register); font-style: normal; font-size: .58rem; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--platinum-deep);
+}
+
 /* The row states its own case, in the register face the product uses for anything struck rather
    than written. Empty on an ordinary row -- including an unverifiable one, which has nothing to
    say -- and the column holds its width so the rows below do not shift. */
@@ -903,7 +918,7 @@
   /* The claim moves under the name rather than competing with it for a width neither can hold,
      and the figure keeps its own column so the prices still align. */
   .docket-line {
-    grid-template-columns: .6rem minmax(0, 1fr) auto;
+    grid-template-columns: .6rem minmax(0, 1fr) auto auto;
     row-gap: var(--tight);
   }
   .line-claim { grid-column: 2 / -1; }

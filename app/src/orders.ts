@@ -54,6 +54,27 @@ export function sortOrders(orders: readonly ReconciledOrder[]): ReconciledOrder[
 }
 
 /**
+ * What one order contributes to the listed total, and nothing when it contributes nothing.
+ *
+ * The same predicate the backend sums by, mirrored here so a row can show its own share. A total
+ * that no row accounts for reads as broken even when it is right: a screen of orders each priced
+ * above zero, headed by a zero, is only explicable if the screen says which rows it counted.
+ *
+ * `platinum` prices one trade of `per_trade` units, so a bulk listing of 12 at 38p per 6 is asking
+ * 76p, not 456p.
+ */
+export function orderValue(order: MarketOrder): number | null {
+  if (!order.visible || order.kind !== 'sell') return null
+  return order.platinum * Math.floor(order.quantity / Math.max(order.per_trade, 1))
+}
+
+/** Why a row contributes nothing, for the rows that do not. */
+export function uncountedReason(order: MarketOrder): string | null {
+  if (order.kind !== 'sell') return 'Buy order'
+  return order.visible ? null : 'Hidden'
+}
+
+/**
  * The live listing for a collection item, for the badge on its card.
  *
  * Hidden orders and buy orders are not listings anybody can see, so an item with only those is not

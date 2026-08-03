@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { MarketAccount } from './backend'
-import { backingLabel, fixLabel, isFlagged, sortOrders, statusLabel } from './orders'
+import { backingLabel, fixLabel, isFlagged, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
 import { snapshotFreshness } from './freshness'
 import { MetalMark } from './MetalMark'
 
@@ -40,7 +40,7 @@ export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, o
       <div className="band-cell orders" data-summary="orders">
         <span className="band-figure">{account.listed_platinum}<MetalMark metal="plat" alt=" platinum"/></span>
         <span className="band-label">Listed value</span>
-        <p className="band-note">{freshness.label}</p>
+        <p className="band-note">Visible sell listings only. {freshness.label}</p>
       </div>
       <div className="band-cell flagged" data-summary="flagged" data-count={account.flagged}>
         <span className="band-figure">{account.flagged}</span>
@@ -112,6 +112,7 @@ function OrderRow({ entry, busy, onRemove, onLowerTo }: {
   const label = statusLabel(entry)
   const fix = fixLabel(entry.status)
   const { state } = entry.status
+  const value = orderValue(entry.order)
   return <article className={`docket-line${flagged ? ' doubt' : ''}`} aria-label={entry.name ?? entry.order.item_id}>
     {/* The claim is struck as a shape as well as a colour: a row is legible as flagged with the
         hue removed, which is what keeps the whole thing readable to anyone who cannot separate
@@ -122,6 +123,11 @@ function OrderRow({ entry, busy, onRemove, onLowerTo }: {
       {entry.order.platinum}<MetalMark metal="plat" alt=" platinum" className="line-metal"/>
       <i>× {entry.order.quantity}</i>
     </span>
+    {/* Every row states its own share of the headline figure, or why it has none. The total is a
+        sum of these and nothing else, so it can be checked by reading down the column. */}
+    <span className="line-value">{value === null
+      ? <em>{uncountedReason(entry.order)}</em>
+      : <>{value}<MetalMark metal="plat" alt=" platinum" className="line-metal"/></>}</span>
     <span className="line-claim">{label}</span>
     <span className="line-fix">
       {fix && (state === 'missing' || state === 'overshoot') && <button
