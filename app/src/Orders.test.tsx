@@ -178,4 +178,21 @@ describe('failures', () => {
 
     expect(screen.getByText(/sign(ing)? in again|link again/i)).toBeInTheDocument()
   })
+
+  it('offers both ways back in from the needs_relink screen, without requiring an unlink first', async () => {
+    render(<Orders account={account({ link: 'needs_relink' })} {...handlers} busy={false} error={null} />)
+
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/token/i)).toBeInTheDocument()
+
+    await userEvent.type(screen.getByLabelText(/email/i), 'someone@example.com')
+    await userEvent.type(screen.getByLabelText(/password/i), 'a-password')
+    await userEvent.click(screen.getByRole('button', { name: /^sign in$/i }))
+    expect(handlers.onSignIn).toHaveBeenCalledWith('someone@example.com', 'a-password')
+
+    await userEvent.type(screen.getByLabelText(/token/i), 'a-token')
+    await userEvent.click(screen.getByRole('button', { name: /link with token/i }))
+    expect(handlers.onLinkToken).toHaveBeenCalledWith('a-token')
+  })
 })

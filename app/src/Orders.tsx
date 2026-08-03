@@ -59,6 +59,8 @@ export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, o
         </div>
       : null}
 
+    {needsRelink && <LinkForms onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} />}
+
     <div className="register-controls">
       <button type="button" className="stamp" onClick={onRefresh} disabled={busy}>
         <span>{busy ? 'Refreshing…' : 'Refresh orders'}</span>
@@ -118,10 +120,6 @@ function UnlinkedPanel({ onSignIn, onLinkToken, busy, error }: {
   busy: boolean
   error: string | null
 }) {
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [token, setToken] = useState('')
-
   return <section className="page" aria-labelledby="orders-title">
     <div className="mark-head">
       <h1 id="orders-title" className="mark">Market orders</h1>
@@ -134,33 +132,50 @@ function UnlinkedPanel({ onSignIn, onLinkToken, busy, error }: {
 
     {error && <p className="error-banner" role="alert">{error}</p>}
 
-    <div className="clause-pair">
-      <article>
-        <h2>Sign in</h2>
-        <p className="prose">Uses the market's own, undocumented sign-in route. It may stop working without notice.</p>
-        <form onSubmit={event => { event.preventDefault(); void onSignIn(email, password) }}>
-          <label className="dial-slot">
-            <span>Email</span>
-            <input type="email" aria-label="Email" value={email} onChange={event => setEmail(event.target.value)} disabled={busy} />
-          </label>
-          <label className="dial-slot">
-            <span>Password</span>
-            <input type="password" aria-label="Password" value={password} onChange={event => setPassword(event.target.value)} disabled={busy} />
-          </label>
-          <button type="submit" className="stamp" disabled={busy}><span>{busy ? 'Signing in…' : 'Sign in'}</span></button>
-        </form>
-      </article>
-      <article>
-        <h2>Paste a token</h2>
-        <p className="prose">Equally valid: paste a session token obtained directly from the market, without giving your password to this app.</p>
-        <form onSubmit={event => { event.preventDefault(); void onLinkToken(token) }}>
-          <label className="dial-slot">
-            <span>Token</span>
-            <input type="password" aria-label="Token" value={token} onChange={event => setToken(event.target.value)} disabled={busy} />
-          </label>
-          <button type="submit" className="stamp" disabled={busy}><span>{busy ? 'Linking…' : 'Link with token'}</span></button>
-        </form>
-      </article>
-    </div>
+    <LinkForms onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} />
   </section>
+}
+
+/**
+ * The two ways back in, of equal standing wherever they appear -- the unlinked screen, and the
+ * needs_relink screen where a refused credential leaves the player with no obvious next click.
+ * Extracted so a re-link is not a second, drifting copy of these two forms.
+ */
+function LinkForms({ onSignIn, onLinkToken, busy }: {
+  onSignIn: (email: string, password: string) => Promise<void>
+  onLinkToken: (token: string) => Promise<void>
+  busy: boolean
+}) {
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [token, setToken] = useState('')
+
+  return <div className="clause-pair">
+    <article>
+      <h2>Sign in</h2>
+      <p className="prose">Uses the market's own, undocumented sign-in route. It may stop working without notice.</p>
+      <form onSubmit={event => { event.preventDefault(); void onSignIn(email, password) }}>
+        <label className="dial-slot">
+          <span>Email</span>
+          <input type="email" aria-label="Email" value={email} onChange={event => setEmail(event.target.value)} disabled={busy} />
+        </label>
+        <label className="dial-slot">
+          <span>Password</span>
+          <input type="password" aria-label="Password" value={password} onChange={event => setPassword(event.target.value)} disabled={busy} />
+        </label>
+        <button type="submit" className="stamp" disabled={busy}><span>{busy ? 'Signing in…' : 'Sign in'}</span></button>
+      </form>
+    </article>
+    <article>
+      <h2>Paste a token</h2>
+      <p className="prose">Equally valid: paste a session token obtained directly from the market, without giving your password to this app.</p>
+      <form onSubmit={event => { event.preventDefault(); void onLinkToken(token) }}>
+        <label className="dial-slot">
+          <span>Token</span>
+          <input type="password" aria-label="Token" value={token} onChange={event => setToken(event.target.value)} disabled={busy} />
+        </label>
+        <button type="submit" className="stamp" disabled={busy}><span>{busy ? 'Linking…' : 'Link with token'}</span></button>
+      </form>
+    </article>
+  </div>
 }
