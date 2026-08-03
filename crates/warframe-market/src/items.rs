@@ -36,6 +36,16 @@ struct ItemRecord {
     /// entry with four refinements, and the collection holds each refinement separately.
     #[serde(default)]
     subtypes: Option<Vec<String>>,
+    /// The four fields that make a listing's shape contextual. Each is present exactly when the
+    /// item supports that dimension, and the POST that omits the matching field is rejected.
+    #[serde(default)]
+    max_rank: Option<u32>,
+    #[serde(default)]
+    max_amber_stars: Option<u32>,
+    #[serde(default)]
+    max_cyan_stars: Option<u32>,
+    #[serde(default)]
+    bulk_tradable: bool,
     #[serde(default)]
     i18n: HashMap<String, ItemNames>,
 }
@@ -58,6 +68,9 @@ struct ItemEntry {
     name: Option<String>,
     /// Whether this item's path can stand for one collection row. See `path_is_comparable`.
     comparable: bool,
+    /// Whether a listing for it can be published with price and quantity alone. See
+    /// `is_plainly_listable`.
+    plainly_listable: bool,
 }
 
 impl MarketItems {
@@ -73,18 +86,22 @@ impl MarketItems {
                     .get("en")
                     .map(|names| names.name.clone())
                     .filter(|name| !name.trim().is_empty());
+                // Read before `game_ref` is moved out below.
+                let plain_shape = is_plainly_shaped(&record);
                 let catalog_path = record.game_ref.filter(|path| path.starts_with("/Lotus/"));
                 let comparable = path_is_comparable(
                     catalog_path.as_deref(),
                     name.as_deref(),
                     record.subtypes.as_deref(),
                 );
+                let plainly_listable = comparable && plain_shape;
                 (
                     record.id,
                     ItemEntry {
                         catalog_path,
                         name,
                         comparable,
+                        plainly_listable,
                     },
                 )
             })
@@ -132,9 +149,9 @@ impl MarketItems {
 
     /// The market's id for a collection path, for the one direction selling needs.
     ///
-    /// Only comparable entries answer. A path shared by several market items -- which is what
-    /// makes an entry incomparable -- has no single right answer here either, and guessing one
-    /// would post a listing against an item the player did not choose.
+    /// Answers only for items a listing can be published for with price and quantity alone. That
+    /// is a narrower question than `comparable`, which asks whether an owned count can be read off
+    /// the collection -- and the two were conflated until a rare mod refused to list.
     ///
     /// ponytail: linear scan over a few thousand entries, run once per sell. A reverse map if a
     /// caller ever needs this in a loop.
@@ -142,7 +159,7 @@ impl MarketItems {
         self.entries
             .iter()
             .find(|(_, entry)| {
-                entry.comparable && entry.catalog_path.as_deref() == Some(catalog_path)
+                entry.plainly_listable && entry.catalog_path.as_deref() == Some(catalog_path)
             })
             .map(|(id, _)| id.as_str())
     }
@@ -198,4 +215,28 @@ fn path_is_comparable(path: Option<&str>, name: Option<&str>, subtypes: Option<&
         return false;
     }
     !name.is_some_and(|name| name.trim().ends_with(" Set"))
+}
+
+/// Whether an item is shaped so a listing needs price and quantity alone.
+///
+/// `POST /v2/order` takes contextual fields that are required exactly when the item supports the
+/// dimension and forbidden otherwise, and a 400 comes back either way. `maxRank` means the body
+/// must carry a `rank`; `maxAmberStars` and `maxCyanStars` mean an Ayatan sculpture wants its star
+/// counts; `bulkTradable` means `perTrade`. The sell form asks for price and quantity and nothing
+/// else, so it can only publish for items that need nothing else.
+///
+/// This was `comparable` until a rare mod refused to list. Measured against the live table, 1,487
+/// of the 2,721 comparable items carry a `maxRank` -- every mod and arcane in the game -- so the
+/// screen was offering a Sell button on more than half of what it could actually publish, and the
+/// failure arrived as a flat "could not publish" with no reason attached. Comparability answers
+/// whether an owned count can be read off the collection, which is a different question and stays
+/// as it is: those mods are still reconciled, still flagged, still removable.
+///
+/// The upgrade path is the sell form growing a rank field, which would recover the largest group
+/// by far. Left undone here because the fix owed today is that the button stops lying.
+fn is_plainly_shaped(record: &ItemRecord) -> bool {
+    record.max_rank.is_none()
+        && record.max_amber_stars.is_none()
+        && record.max_cyan_stars.is_none()
+        && !record.bulk_tradable
 }

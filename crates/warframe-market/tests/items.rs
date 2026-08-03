@@ -95,6 +95,24 @@ fn a_collection_path_resolves_back_to_the_market_id_that_can_be_listed() {
     assert_eq!(items.market_id_for_path("/Lotus/Types/Nothing"), None);
 }
 
+/// The distinction that made a Sell button lie. A ranked mod reconciles perfectly -- the market's
+/// path names exactly one collection row -- but `POST /v2/order` demands a `rank` for it, and the
+/// sell form has only price and quantity to give. Offering it produced a flat "could not publish"
+/// on more than half the collection.
+#[test]
+fn an_item_whose_listing_needs_a_rank_is_not_offered_for_sale() {
+    let items = MarketItems::from_response(ITEMS.as_bytes()).expect("items parse");
+
+    // Still reconciled, still flaggable, still removable -- comparability is a different question.
+    assert!(items.comparable("54ca39abe7798915c1c11e10"));
+    assert_eq!(
+        items.market_id_for_path(
+            "/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol"
+        ),
+        None
+    );
+}
+
 /// Only comparable entries answer. An incomparable path is one that does not name a single
 /// collection row, so there is no single item it could list -- and posting a guess would publish a
 /// listing against something the player did not choose.
