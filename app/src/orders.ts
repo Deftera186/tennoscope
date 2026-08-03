@@ -27,20 +27,13 @@ export function statusLabel(entry: ReconciledOrder): string | null {
 }
 
 /**
- * What the fix button does, named as the action rather than as "Fix".
+ * What the quantity repair does, named as the action rather than as "Fix".
  *
- * Both of these change a real listing on a real account, so the button says which one it is
- * before it is pressed.
+ * Removal is not here: every row offers it now, flagged or not, so it is not a repair a status
+ * chooses. Only the overshoot has a fix that depends on what the status carries.
  */
 export function fixLabel(status: OrderStatus): string | null {
-  switch (status.state) {
-    case 'missing':
-      return 'Remove listing'
-    case 'overshoot':
-      return `Lower to ${status.owned}`
-    default:
-      return null
-  }
+  return status.state === 'overshoot' ? `Lower to ${status.owned}` : null
 }
 
 /**

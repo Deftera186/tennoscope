@@ -4,7 +4,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MarketAccount, ReconciledOrder } from './backend'
 import { Orders } from './Orders'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  // The handlers are shared across every test in this file, so a call recorded by one is visible
+  // to the next. A test asserting something was *not* called is the one that catches this, and it
+  // catches it as a false failure somewhere unrelated.
+  vi.clearAllMocks()
+})
 
 function entry(id: string, status: ReconciledOrder['status'], quantity = 1): ReconciledOrder {
   return {
@@ -127,6 +133,26 @@ describe('the linked screen', () => {
     expect(handlers.onRemove).toHaveBeenCalledWith('gone')
   })
 
+  /**
+   * The row nobody flagged is the one that can be a misclick: it is currently selling something
+   * the player still owns, and the only reason to take it down is a change of mind.
+   */
+  it('asks again before removing a listing nothing is wrong with', async () => {
+    render(
+      <Orders
+        account={account({ orders: [entry('fine', { state: 'ok' })] })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: /remove listing/i }))
+    expect(handlers.onRemove).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: /confirm remove/i }))
+    expect(handlers.onRemove).toHaveBeenCalledWith('fine')
+  })
+
   it('offers to lower an order that lists more than is owned', async () => {
     render(
       <Orders
@@ -143,7 +169,8 @@ describe('the linked screen', () => {
   })
 
   /// The behaviour that makes the flags trustworthy, asserted at the screen: an order the backend
-  /// declined to judge looks like an ordinary row, with nothing to press.
+  /// declined to judge looks like an ordinary row, making no claim. It still offers removal --
+  /// every row does -- but nothing on it says anything is wrong.
   it('says nothing about an order it cannot verify', () => {
     render(
       <Orders
@@ -154,7 +181,7 @@ describe('the linked screen', () => {
       />,
     )
 
-    expect(screen.queryByRole('button', { name: /remove listing/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /lower to/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/no longer own/i)).not.toBeInTheDocument()
   })
 

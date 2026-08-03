@@ -43,9 +43,9 @@ describe('order flags', () => {
     expect(statusLabel(entry('d', { state: 'unverifiable' }))).toBeNull()
   })
 
-  it('names the fix as the action it performs', () => {
-    expect(fixLabel({ state: 'missing' })).toBe('Remove listing')
+  it('names the fix as the action it performs, and leaves removal to every row', () => {
     expect(fixLabel({ state: 'overshoot', owned: 1 })).toBe('Lower to 1')
+    expect(fixLabel({ state: 'missing' })).toBeNull()
     expect(fixLabel({ state: 'ok' })).toBeNull()
     expect(fixLabel({ state: 'unverifiable' })).toBeNull()
   })

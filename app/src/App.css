@@ -838,7 +838,7 @@
 }
 .docket-line {
   display: grid; align-items: center; gap: var(--step);
-  grid-template-columns: .6rem minmax(0, 1fr) auto auto minmax(0, 13rem) minmax(0, 11rem);
+  grid-template-columns: .6rem minmax(0, 1fr) auto auto minmax(0, 11rem) minmax(0, 17rem);
   padding: var(--step) var(--step) var(--step) 0;
   background: var(--touchstone); border-bottom: 1px solid var(--rule);
   transition: background .12s ease;
@@ -903,8 +903,14 @@
 }
 /* Reserved whether or not a fix is offered. A button that appeared and vanished between refreshes
    would move every row beneath it, and the refresh runs after every write. */
-.line-fix { display: flex; justify-content: flex-end; min-width: 0; }
+.line-fix { display: flex; gap: var(--hair); justify-content: flex-end; min-width: 0; }
 .line-fix .stamp { white-space: nowrap; }
+/* A press away from destroying a listing the player did not flag. Oxblood is the product's word
+   for a claim against a listing, and this is the one moment an ordinary row makes one. */
+.line-fix .stamp.armed {
+  border-color: var(--oxblood);
+  color: var(--oxblood);
+}
 
 /* Three cells, not the collection's four: the band divides the width it is given. */
 .orders-band { grid-template-columns: repeat(3, minmax(0, 1fr)); }

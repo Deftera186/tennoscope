@@ -130,14 +130,48 @@ function OrderRow({ entry, busy, onRemove, onLowerTo }: {
       : <>{value}<MetalMark metal="plat" alt=" platinum" className="line-metal"/></>}</span>
     <span className="line-claim">{label}</span>
     <span className="line-fix">
-      {fix && (state === 'missing' || state === 'overshoot') && <button
+      {state === 'overshoot' && <button
         type="button"
         className="stamp"
         disabled={busy}
-        onClick={() => state === 'missing' ? onRemove(entry.order.id) : onLowerTo(entry.order.id, entry.status.owned)}
+        onClick={() => onLowerTo(entry.order.id, entry.status.owned)}
       ><span>{fix}</span></button>}
+      <RemoveControl
+        entry={entry}
+        busy={busy}
+        onRemove={onRemove}
+      />
     </span>
   </article>
+}
+
+/**
+ * Taking a listing down, on any row rather than only the ones carrying a claim.
+ *
+ * A flagged row's removal is the repair the row is asking for and goes on one press. An ordinary
+ * row's is a change of mind about something that is currently selling, and only that one can be a
+ * misclick -- so it asks again, in place. A modal for this would be a heavier interruption than
+ * the action deserves, and would take the pointer away from the row it belongs to.
+ */
+function RemoveControl({ entry, busy, onRemove }: {
+  entry: ReturnType<typeof sortOrders>[number]
+  busy: boolean
+  onRemove: (orderId: string) => Promise<void>
+}) {
+  const [armed, setArmed] = useState(false)
+  const asked = entry.status.state === 'missing'
+  return <button
+    type="button"
+    className={`stamp${armed ? ' armed' : ''}`}
+    disabled={busy}
+    // The row list is rebuilt after every write, so an armed button that lost its row cannot
+    // fire on whatever slid into its place.
+    onBlur={() => setArmed(false)}
+    onClick={() => {
+      if (asked || armed) return void onRemove(entry.order.id)
+      setArmed(true)
+    }}
+  ><span>{armed ? 'Confirm remove' : 'Remove listing'}</span></button>
 }
 
 function UnlinkedPanel({ onSignIn, onLinkToken, busy, error }: {
