@@ -1,0 +1,181 @@
+import { cleanup, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { MarketAccount, ReconciledOrder } from './backend'
+import { Orders } from './Orders'
+
+afterEach(cleanup)
+
+function entry(id: string, status: ReconciledOrder['status'], quantity = 1): ReconciledOrder {
+  return {
+    order: {
+      id,
+      item_id: `item-${id}`,
+      kind: 'sell',
+      platinum: 12,
+      quantity,
+      per_trade: 1,
+      visible: true,
+      updated_at: '2026-07-30T10:00:00Z',
+    },
+    name: 'Braton Prime Blueprint',
+    status,
+  }
+}
+
+function account(overrides: Partial<MarketAccount> = {}): MarketAccount {
+  return {
+    link: 'linked',
+    backing: 'keyring',
+    orders: [],
+    fetched_at: '2026-07-31T12:00:00Z',
+    listed_platinum: 0,
+    flagged: 0,
+    ...overrides,
+  }
+}
+
+const handlers = {
+  onSignIn: vi.fn().mockResolvedValue(undefined),
+  onLinkToken: vi.fn().mockResolvedValue(undefined),
+  onSignOut: vi.fn().mockResolvedValue(undefined),
+  onRefresh: vi.fn().mockResolvedValue(undefined),
+  onRemove: vi.fn().mockResolvedValue(undefined),
+  onLowerTo: vi.fn().mockResolvedValue(undefined),
+}
+
+describe('the unlinked screen', () => {
+  it('explains what linking does before offering to do it', () => {
+    render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
+
+    // The consent statement is on this screen, at the moment the player decides -- not in a
+    // settings page they would have to go looking for afterwards.
+    expect(screen.getByText(/optional/i)).toBeInTheDocument()
+    expect(screen.getByText(/warframe\.market/i)).toBeInTheDocument()
+  })
+
+  it('offers both ways in, neither presented as the lesser', () => {
+    render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
+
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/token/i)).toBeInTheDocument()
+  })
+
+  it('never renders the password as readable text', async () => {
+    render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
+
+    const password = screen.getByLabelText(/password/i)
+    expect(password).toHaveAttribute('type', 'password')
+    await userEvent.type(password, 'not-a-real-password')
+    expect(document.body.textContent).not.toContain('not-a-real-password')
+  })
+})
+
+describe('the linked screen', () => {
+  it('states the total and the age of the list', () => {
+    render(
+      <Orders
+        account={account({ orders: [entry('a', { state: 'ok' })], listed_platinum: 24 })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+
+    expect(screen.getByText(/24/)).toBeInTheDocument()
+  })
+
+  it('shows where the credential is held, because the two are not equally strong', () => {
+    render(<Orders account={account({ backing: 'database' })} {...handlers} busy={false} error={null} />)
+
+    expect(screen.getByText(/local database file/i)).toBeInTheDocument()
+  })
+
+  it('never shows an email address', () => {
+    render(<Orders account={account()} {...handlers} busy={false} error={null} />)
+
+    expect(document.body.textContent).not.toContain('@')
+  })
+
+  it('flags an order for something unowned, and offers to remove it', async () => {
+    render(
+      <Orders
+        account={account({ orders: [entry('gone', { state: 'missing' })], flagged: 1 })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+
+    expect(screen.getByText(/no longer own this/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /remove listing/i }))
+    expect(handlers.onRemove).toHaveBeenCalledWith('gone')
+  })
+
+  it('offers to lower an order that lists more than is owned', async () => {
+    render(
+      <Orders
+        account={account({ orders: [entry('over', { state: 'overshoot', owned: 1 }, 3)], flagged: 1 })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+
+    expect(screen.getByText(/own 1 of 3 listed/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /lower to 1/i }))
+    expect(handlers.onLowerTo).toHaveBeenCalledWith('over', 1)
+  })
+
+  /// The behaviour that makes the flags trustworthy, asserted at the screen: an order the backend
+  /// declined to judge looks like an ordinary row, with nothing to press.
+  it('says nothing about an order it cannot verify', () => {
+    render(
+      <Orders
+        account={account({ orders: [entry('unknown', { state: 'unverifiable' })] })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: /remove listing/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/no longer own/i)).not.toBeInTheDocument()
+  })
+
+  it('disables the fixes while one is in flight, so a click is not sent twice', () => {
+    render(
+      <Orders
+        account={account({ orders: [entry('gone', { state: 'missing' })], flagged: 1 })}
+        {...handlers}
+        busy={true}
+        error={null}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /remove listing/i })).toBeDisabled()
+  })
+})
+
+describe('failures', () => {
+  it('shows what went wrong without losing the orders already listed', () => {
+    render(
+      <Orders
+        account={account({ orders: [entry('a', { state: 'ok' })] })}
+        {...handlers}
+        busy={false}
+        error="warframe.market could not be reached"
+      />,
+    )
+
+    expect(screen.getByText(/could not be reached/i)).toBeInTheDocument()
+    expect(screen.getByText(/Braton Prime Blueprint/)).toBeInTheDocument()
+  })
+
+  it('asks for a re-link when the credential was refused', () => {
+    render(<Orders account={account({ link: 'needs_relink' })} {...handlers} busy={false} error={null} />)
+
+    expect(screen.getByText(/sign(ing)? in again|link again/i)).toBeInTheDocument()
+  })
+})

@@ -755,3 +755,22 @@
   .register-status > * + * { padding-left: 0; border-left: 0; }
   .metals { gap: var(--tight); }
 }
+
+/* ------------------------------------------------------------------ orders */
+
+/* Sign-in and paste-token stand as equal columns -- same card, same weight, nothing marked
+   "recommended". The clause-pair grid already does this for the setup screen's two clauses. */
+.clause-pair .dial-slot { flex-direction: column; align-items: flex-start; gap: .3rem; width: 100%; margin-block: var(--hair); }
+.clause-pair .dial-slot > span:first-child {
+  font-family: var(--face-register); font-size: .62rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--platinum-deep);
+}
+.clause-pair .dial-slot input { width: 100%; padding: .55rem .7rem; border: 1px solid var(--rule); border-radius: 0; background: var(--plate); color: var(--platinum); font-family: var(--face-register); font-size: .78rem; }
+.clause-pair .dial-slot input:focus-visible { outline: 2px solid var(--platinum-deep); outline-offset: 1px; }
+.clause-pair form .stamp { margin-top: var(--step); }
+
+/* A flagged listing needs to read as different at a glance without turning the whole row into a
+   warning: only the hallmark cartouche that states the claim takes the oxblood, the row itself
+   just gets a hairline in the same tone so it separates from the ordinary rows around it. */
+.entry.hallmark.doubt { border-left: 2px solid var(--oxblood); }
+
