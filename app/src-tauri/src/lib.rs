@@ -143,6 +143,10 @@ struct Runtime {
     presence: Option<warframe_status::StatusLink>,
     /// Whether presence follows the game reader rather than a choice the player made.
     presence_auto: bool,
+    /// What the socket was last asked to hold. Kept beside the link rather than read back off it:
+    /// the link reports only what the server has confirmed, and that is `None` for the first
+    /// moment of every connection.
+    presence_wanted: Option<warframe_status::Presence>,
 }
 type SharedRuntime = Arc<Mutex<Runtime>>;
 
@@ -201,6 +205,7 @@ async fn set_market_presence(
                 }
             },
         }
+        runtime.presence_wanted = wanted;
         publish_presence(&mut runtime)
     })
     .await
@@ -224,9 +229,23 @@ fn auto_presence(runtime: &Runtime) -> warframe_status::Presence {
 
 /// Copy what the socket says onto the view. Read rather than assumed: the switch shows what other
 /// players see, which is the server's answer and not the request that was made.
+///
+/// Automatic mode is re-derived here rather than only when it is switched on. It maps the game
+/// reader's state, and that state changes on its own -- computing it once at the press would mean
+/// "follow the game" stopped following the moment Warframe was launched.
 fn publish_presence(runtime: &mut Runtime) -> Result<AppView, String> {
+    if runtime.presence_auto {
+        let wanted = auto_presence(runtime);
+        if runtime.presence_wanted != Some(wanted) {
+            runtime.presence_wanted = Some(wanted);
+            if let Some(link) = &runtime.presence {
+                link.set(wanted);
+            }
+        }
+    }
     let presence = app_core::PresenceView {
         status: runtime.presence.as_ref().and_then(|link| link.committed()),
+        wanted: runtime.presence_wanted,
         auto: runtime.presence_auto,
     };
     runtime
@@ -667,6 +686,7 @@ async fn market_sign_out(state: State<'_, SharedRuntime>) -> Result<AppView, Str
             // keep announcing an account the player has unlinked.
             runtime.presence = None;
             runtime.presence_auto = false;
+            runtime.presence_wanted = None;
         }
         shared
             .lock()
@@ -970,6 +990,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         market_generation: 0,
         presence: None,
         presence_auto: false,
+        presence_wanted: None,
     })))
 }
 
@@ -2433,6 +2454,7 @@ mod tests {
             market_generation: 0,
             presence: None,
             presence_auto: false,
+            presence_wanted: None,
         }))
     }
 

@@ -12,7 +12,7 @@ export type LinkState = 'unlinked' | 'linked' | 'needs_relink'
 export type CredentialBacking = 'keyring' | 'database'
 export type Presence = 'online' | 'ingame' | 'invisible'
 /** `status: null` is offline — no socket held. */
-export interface PresenceView { status: Presence | null; auto: boolean }
+export interface PresenceView { status: Presence | null; wanted: Presence | null; auto: boolean }
 export type OrderStatus =
   | { state: 'ok' }
   | { state: 'missing' }

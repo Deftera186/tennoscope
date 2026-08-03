@@ -37,7 +37,7 @@ function account(overrides: Partial<MarketAccount> = {}): MarketAccount {
     fetched_at: '2026-07-31T12:00:00Z',
     listed_platinum: 0,
     listable: [],
-    presence: { status: null, auto: false },
+    presence: { status: null, wanted: null, auto: false },
     flagged: 0,
     ...overrides,
   }
@@ -277,12 +277,31 @@ describe('publishing a listing', () => {
       />,
     )
     await user.click(screen.getByRole('button', { name: /new listing/i }))
-    await user.selectOptions(screen.getByLabelText('Item'), braton.id)
+    await user.type(screen.getByLabelText('Item'), 'brat')
+    await user.click(screen.getByRole('button', { name: /braton/i }))
     // The price prefills from the card's own quote, so only the quantity is typed here.
     await user.clear(screen.getByLabelText('Quantity'))
     await user.type(screen.getByLabelText('Quantity'), '2')
     await user.click(screen.getByRole('button', { name: /list for sale/i }))
     expect(handlers.onSell).toHaveBeenCalledWith(braton.id, 14, 2, true)
+  })
+
+  it('lists nothing until the query narrows the collection', async () => {
+    const user = userEvent.setup()
+    render(
+      <Orders
+        account={account({ listable: [braton.id] })}
+        {...handlers}
+        items={[braton]}
+        busy={false}
+        error={null}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /new listing/i }))
+    // An empty field offering the whole collection is the wall of names this control avoids.
+    expect(screen.queryByRole('button', { name: /braton/i })).toBeNull()
+    await user.type(screen.getByLabelText('Item'), 'zzz')
+    expect(screen.getByText(/nothing sellable here matches/i)).toBeInTheDocument()
   })
 
   it('refuses to send more than this device holds', async () => {
@@ -297,7 +316,8 @@ describe('publishing a listing', () => {
       />,
     )
     await user.click(screen.getByRole('button', { name: /new listing/i }))
-    await user.selectOptions(screen.getByLabelText('Item'), braton.id)
+    await user.type(screen.getByLabelText('Item'), 'brat')
+    await user.click(screen.getByRole('button', { name: /braton/i }))
     await user.clear(screen.getByLabelText('Quantity'))
     await user.type(screen.getByLabelText('Quantity'), '9')
     expect(screen.getByRole('button', { name: /list for sale/i })).toBeDisabled()
@@ -316,7 +336,7 @@ describe('the market status switch', () => {
     const user = userEvent.setup()
     render(
       <Orders
-        account={account({ presence: { status: 'online', auto: false } })}
+        account={account({ presence: { status: 'online', wanted: 'online', auto: false } })}
         {...handlers}
         busy={false}
         error={null}
@@ -327,10 +347,10 @@ describe('the market status switch', () => {
     expect(handlers.onPresence).toHaveBeenCalledWith(null, false)
   })
 
-  it('marks what the server committed, not what was pressed', () => {
+  it('marks what was asked for, so a press registers before the socket answers', () => {
     render(
       <Orders
-        account={account({ presence: { status: 'invisible', auto: false } })}
+        account={account({ presence: { status: null, wanted: 'invisible', auto: false } })}
         {...handlers}
         busy={false}
         error={null}
@@ -340,16 +360,46 @@ describe('the market status switch', () => {
     expect(screen.getByRole('button', { name: 'Online' })).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('marks the automatic choice as the one in force, whatever it settled on', () => {
+  it('says so while the server has not confirmed the choice', () => {
     render(
       <Orders
-        account={account({ presence: { status: 'ingame', auto: true } })}
+        account={account({ presence: { status: null, wanted: 'ingame', auto: false } })}
         {...handlers}
         busy={false}
         error={null}
       />,
     )
-    expect(screen.getByRole('button', { name: /follow the game/i })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'In game' })).toHaveAttribute('aria-pressed', 'false')
+    expect(screen.getByRole('status')).toHaveTextContent(/asking warframe\.market/i)
+  })
+
+  it('reports the status automatic mode settled on, in the same row', () => {
+    render(
+      <Orders
+        account={account({ presence: { status: 'ingame', wanted: 'ingame', auto: true } })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+    // Automatic is not a fifth status: the row still names which of the four is in force.
+    expect(screen.getByRole('button', { name: 'In game' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('checkbox', { name: /follow the game/i })).toBeChecked()
+    // Reporting, not offering -- pressing one would be undone by the next poll.
+    expect(screen.getByRole('button', { name: 'Online' })).toBeDisabled()
+  })
+
+  it('hands the choice back when automatic is switched off', async () => {
+    const user = userEvent.setup()
+    render(
+      <Orders
+        account={account({ presence: { status: 'ingame', wanted: 'ingame', auto: true } })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+    await user.click(screen.getByRole('checkbox', { name: /follow the game/i }))
+    // Whatever it had settled on is what is held, so switching off does not change what others see.
+    expect(handlers.onPresence).toHaveBeenCalledWith('ingame', false)
   })
 })

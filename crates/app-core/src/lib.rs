@@ -1151,12 +1151,20 @@ pub struct MarketAccountView {
 }
 
 /// The presence switch, as the screen needs it.
+///
+/// Two statuses rather than one, because they genuinely differ for the second or two a fresh
+/// socket takes to be answered. Reporting only the committed one made the switch appear to ignore
+/// the press: the reply to the click still said offline, and the choice did not appear to take
+/// until the next poll seconds later.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct PresenceView {
     /// What the server last said it committed. `None` is offline: no socket, or one that has not
     /// been answered yet.
     pub status: Option<Presence>,
+    /// What was last asked for. The switch marks this, so a press registers on the press, while
+    /// `status` disagreeing is what the screen reports as not yet confirmed.
+    pub wanted: Option<Presence>,
     /// Whether the status is being followed from the game reader rather than chosen by hand.
     pub auto: bool,
 }

@@ -191,8 +191,13 @@ function RemoveControl({ entry, busy, onRemove }: {
  * of them: warframe.market has no settable `offline`, and going offline means closing the socket,
  * so the control says the word the player means and the backend spells it as a disconnection.
  *
- * What is drawn is what the server committed, not what was pressed. A switch showing a state the
- * server declined is a switch that lies about what other players can see.
+ * Automatic is not a fifth choice beside them. It is how the choice is *made*, so it sits on its
+ * own line as a toggle, and the status it settles on is marked in the same row a hand-picked one
+ * would be -- the player still reads their status in one place either way.
+ *
+ * The row marks what was asked for, so a press registers on the press. What the server has
+ * actually committed is a separate claim, made in the note below: the socket takes a moment to
+ * answer, and a switch that stayed blank across that moment read as broken.
  */
 function PresenceSwitch({ presence, busy, onPresence }: {
   presence: MarketAccount['presence']
@@ -205,32 +210,47 @@ function PresenceSwitch({ presence, busy, onPresence }: {
     { value: 'ingame', label: 'In game' },
     { value: 'invisible', label: 'Invisible' },
   ]
-  const current = presence.auto ? undefined : presence.status ?? null
-  return <div className="presence" role="group" aria-label="Market status">
-    <span className="presence-label">Market status</span>
-    <div className="presence-choices">
+  const wanted = presence.wanted ?? null
+  const settled = presence.status === wanted
+  return <div className="presence">
+    <div className="presence-head">
+      <span className="presence-label" id="presence-label">Market status</span>
+      {/* A real checkbox: it is a mode with two states, a reader announces it as one without
+          being told to, and the space bar works on it for free. */}
+      <label className="presence-auto">
+        <input
+          type="checkbox"
+          checked={presence.auto}
+          disabled={busy}
+          onChange={event => onPresence(event.target.checked ? null : wanted, event.target.checked)}
+        />
+        <span>Follow the game</span>
+      </label>
+    </div>
+    <div className="presence-choices" role="group" aria-labelledby="presence-label" data-auto={presence.auto || undefined}>
       {choices.map(choice => <button
         key={choice.label}
         type="button"
-        className={`stamp${!presence.auto && current === choice.value ? ' struck' : ''}`}
-        aria-pressed={!presence.auto && current === choice.value}
-        disabled={busy}
+        className={`stamp${wanted === choice.value ? ' struck' : ''}`}
+        aria-pressed={wanted === choice.value}
+        // In automatic mode the row reports rather than accepts: pressing one would silently be
+        // overridden by the next poll, and a control that undoes itself is worse than a disabled one.
+        disabled={busy || presence.auto}
         onClick={() => onPresence(choice.value, false)}
       ><span>{choice.label}</span></button>)}
-      <button
-        type="button"
-        className={`stamp${presence.auto ? ' struck' : ''}`}
-        aria-pressed={presence.auto}
-        disabled={busy}
-        onClick={() => onPresence(null, true)}
-      ><span>Follow the game</span></button>
     </div>
-    <p className="presence-note">{presence.auto
-      ? `Following this device's Warframe process${presence.status ? `, currently ${presence.status === 'ingame' ? 'in game' : presence.status}` : ''}.`
-      : presence.status
-        ? 'Held for as long as TennoScope is running.'
-        : 'Nothing is announced to warframe.market while offline.'}</p>
+    <p className="presence-note" role="status">{
+      !settled ? 'Asking warframe.market…'
+        : presence.auto ? `Following this device's Warframe process. Others see you as ${statusWord(wanted)}.`
+          : wanted ? 'Held for as long as TennoScope is running.'
+            : 'Nothing is announced to warframe.market while offline.'
+    }</p>
   </div>
+}
+
+/** The status as it is said aloud in a sentence, rather than as the wire spells it. */
+function statusWord(status: Presence | null): string {
+  return status === 'ingame' ? 'in game' : status ?? 'offline'
 }
 
 /**
@@ -240,6 +260,10 @@ function PresenceSwitch({ presence, busy, onPresence }: {
  * backend authorises against, so an item that cannot be sold from a card cannot be sold from here
  * either -- the refusal lives in one place, on the backend, and neither surface offers what it
  * would refuse.
+ *
+ * Typed rather than picked from a list. A collection runs to a couple of thousand items, and no
+ * one scrolls a list that long to find the one they already have a name for -- so the field takes
+ * the name and the register answers with the few that match.
  */
 function NewListing({ items, listable, busy, onSell }: {
   items: CollectionItem[]
@@ -248,27 +272,70 @@ function NewListing({ items, listable, busy, onSell }: {
   onSell: SellHandler
 }) {
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const [chosen, setChosen] = useState('')
   const sellable = items.filter(item => isListable(item, listable))
   if (!sellable.length) return null
   const item = sellable.find(entry => entry.id === chosen)
+
+  function close() {
+    setOpen(false)
+    setQuery('')
+    setChosen('')
+  }
 
   if (!open) {
     return <div className="register-controls">
       <button type="button" className="stamp" disabled={busy} onClick={() => setOpen(true)}><span>New listing</span></button>
     </div>
   }
+
+  const needle = query.trim().toLowerCase()
+  // Shown only once the query narrows things: the whole collection listed under an empty field is
+  // the wall of names this control exists to avoid. The cap is on what is drawn, and the count
+  // below says how many were left out, so a too-broad query reads as too broad rather than as all
+  // there is.
+  const matches = needle ? sellable.filter(entry => entry.name.toLowerCase().includes(needle)) : []
+  const shown = matches.slice(0, 8)
+
   return <div className="new-listing">
-    <label className="dial-slot">
-      <span>Item</span>
-      <select aria-label="Item" value={chosen} onChange={event => setChosen(event.target.value)} disabled={busy}>
-        <option value="">Choose an item…</option>
-        {sellable.map(entry => <option key={entry.id} value={entry.id}>{entry.name} (×{entry.quantity})</option>)}
-      </select>
-    </label>
+    <div className="new-listing-head">
+      <h2>New listing</h2>
+      <button type="button" className="stamp" disabled={busy} onClick={close}><span>Cancel</span></button>
+    </div>
     {item
-      ? <SellForm item={item} busy={busy} onSell={onSell} onDone={() => { setOpen(false); setChosen('') }}/>
-      : <button type="button" className="stamp" disabled={busy} onClick={() => setOpen(false)}><span>Cancel</span></button>}
+      ? <>
+        <p className="new-listing-chosen">
+          <b>{item.name}</b> <i>· {item.quantity} held</i>
+          <button type="button" className="link-button" disabled={busy} onClick={() => setChosen('')}>Choose another</button>
+        </p>
+        <SellForm item={item} busy={busy} onSell={onSell} onDone={close}/>
+      </>
+      : <>
+        <label className="dial-slot">
+          <span>Item</span>
+          <input
+            type="search"
+            aria-label="Item"
+            placeholder="Type part of a name…"
+            value={query}
+            autoFocus
+            onChange={event => setQuery(event.target.value)}
+            disabled={busy}
+          />
+        </label>
+        {needle && (shown.length
+          ? <ul className="pick-list">
+            {shown.map(entry => <li key={entry.id}>
+              <button type="button" disabled={busy} onClick={() => setChosen(entry.id)}>
+                <span className="pick-name">{entry.name}</span>
+                <span className="pick-held">{entry.quantity} held</span>
+              </button>
+            </li>)}
+          </ul>
+          : <p className="pick-empty">Nothing sellable here matches that. Relics, sets and ranked items cannot be listed from TennoScope.</p>)}
+        {matches.length > shown.length && <p className="pick-more">{matches.length - shown.length} more match — keep typing to narrow it.</p>}
+      </>}
   </div>
 }
 
