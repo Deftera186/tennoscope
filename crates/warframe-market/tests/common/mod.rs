@@ -1,3 +1,8 @@
+// Every integration test binary compiles this module separately, so a helper used by one binary
+// is dead code in the others. The alternative is a per-binary set of `#[allow]`s that has to be
+// re-tuned whenever a test moves between files.
+#![allow(dead_code)]
+
 use std::sync::Mutex;
 
 use warframe_market::{MarketError, MarketRequest, MarketResponse, MarketTransport};
