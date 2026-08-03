@@ -18,7 +18,12 @@ struct MemoryStore {
 
 impl CredentialStore for MemoryStore {
     fn load(&self) -> Result<Option<MarketToken>, MarketError> {
-        Ok(self.held.lock().expect("lock").clone().map(MarketToken::new))
+        Ok(self
+            .held
+            .lock()
+            .expect("lock")
+            .clone()
+            .map(MarketToken::new))
     }
     fn store(&self, token: &MarketToken) -> Result<(), MarketError> {
         *self.held.lock().expect("lock") = Some(token.expose().to_owned());
@@ -254,7 +259,10 @@ fn a_quantity_write_derives_the_owned_count_from_the_overshoot() {
 
     let quantity = authorize_quantity_write(&view, "order-one").expect("overshoot authorizes");
 
-    assert_eq!(quantity, 2, "the caller's own desired value never enters this path");
+    assert_eq!(
+        quantity, 2,
+        "the caller's own desired value never enters this path"
+    );
 }
 
 /// An id absent from the currently held view is refused for a quantity write, the same as an id
@@ -301,4 +309,3 @@ fn a_removal_is_authorized_for_an_id_on_the_held_list() {
 
     assert!(result.is_ok(), "a held id must be authorized");
 }
-

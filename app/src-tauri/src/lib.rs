@@ -133,6 +133,10 @@ struct Runtime {
     // a pool warmed mid-mission also prices those items in the browser.
     live_prices: MarketPriceCache,
     market: market_account::MarketSession,
+    // Bumped on every write to the linked account (forget, or a successful order write) so an
+    // in-flight `publish_account` fetch that started before the change can recognize its result is
+    // stale and drop it instead of republishing over a newer state.
+    market_generation: u64,
 }
 type SharedRuntime = Arc<Mutex<Runtime>>;
 
@@ -324,8 +328,24 @@ fn now_unix_seconds() -> String {
 /// wait -- would freeze that poll, and with it the whole interface, for as long as warframe.market
 /// takes to answer. Cheap state is read under the first lock and carried out by value; the network
 /// happens with no lock held; the result is published under a final lock taken only to write it.
+/// If a write or a sign-out happened while this fetch was unlocked, `generation` is now stale:
+/// whatever the fetch found is older than what is already published, and must be dropped rather
+/// than clobbering the newer state -- for a sign-out in particular, rather than resurrecting
+/// `items` that `forget` just cleared. Returns the current view in that case, unchanged.
+fn discard_if_stale(runtime: &mut Runtime, generation: u64) -> Option<Result<AppView, String>> {
+    if runtime.market_generation == generation {
+        return None;
+    }
+    Some(
+        runtime
+            .core
+            .current_view()
+            .map_err(|_| "application view is unavailable".to_owned()),
+    )
+}
+
 fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
-    let (pacer, token, backing, cached_items, collection, snapshot) = {
+    let (pacer, token, backing, cached_items, collection, snapshot, generation) = {
         let runtime = shared
             .lock()
             .map_err(|_| "application state is unavailable".to_owned())?;
@@ -348,6 +368,7 @@ fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
             runtime.market.cached_items(),
             collection,
             snapshot,
+            runtime.market_generation,
         )
     };
 
@@ -355,6 +376,9 @@ fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
         let mut runtime = shared
             .lock()
             .map_err(|_| "application state is unavailable".to_owned())?;
+        if let Some(result) = discard_if_stale(&mut runtime, generation) {
+            return result;
+        }
         return runtime
             .core
             .set_market_account(app_core::MarketAccountView::unlinked())
@@ -364,6 +388,9 @@ fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
         let mut runtime = shared
             .lock()
             .map_err(|_| "application state is unavailable".to_owned())?;
+        if let Some(result) = discard_if_stale(&mut runtime, generation) {
+            return result;
+        }
         return runtime
             .core
             .record_market_account_failure(market_account::failure_message(
@@ -375,11 +402,22 @@ fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
 
     // Unlocked from here: an item fetch (only on the first call after launch) and `list_mine` are
     // both real network round trips.
-    let outcome = fetch_account(&transport, &token, backing, cached_items, &collection, snapshot.as_ref(), &now);
+    let outcome = fetch_account(
+        &transport,
+        &token,
+        backing,
+        cached_items,
+        &collection,
+        snapshot.as_ref(),
+        &now,
+    );
 
     let mut runtime = shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?;
+    if let Some(result) = discard_if_stale(&mut runtime, generation) {
+        return result;
+    }
     match outcome {
         Ok(FetchedAccount {
             items,
@@ -542,6 +580,7 @@ async fn market_sign_out(state: State<'_, SharedRuntime>) -> Result<AppView, Str
                 .market
                 .forget()
                 .map_err(|error| market_account::failure_message(error).to_owned())?;
+            runtime.market_generation = runtime.market_generation.wrapping_add(1);
         }
         shared
             .lock()
@@ -647,8 +686,9 @@ where
         )
     };
     let Some(token) = token else {
-        return Err(market_account::failure_message(warframe_market::MarketError::Unauthorized)
-            .to_owned());
+        return Err(
+            market_account::failure_message(warframe_market::MarketError::Unauthorized).to_owned(),
+        );
     };
     let transport = warframe_market::MarketHttp::new(pacer).map_err(|_| {
         market_account::failure_message(warframe_market::MarketError::Unreachable).to_owned()
@@ -658,11 +698,15 @@ where
     // Not propagated on failure: the write already happened on the account, and returning early
     // here would leave the list on screen out of date with no way back except pressing the same
     // button again. `publish_account` re-reads the token itself and reports whatever it finds.
-    let _ = shared
-        .lock()
-        .map_err(|_| "application state is unavailable".to_owned())?
-        .market
-        .adopt(renewed);
+    let _ = {
+        let mut runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        // The write changed the account: any fetch already in flight is now reading a state that
+        // is about to be superseded, so bump the generation before it can re-lock and publish.
+        runtime.market_generation = runtime.market_generation.wrapping_add(1);
+        runtime.market.adopt(renewed)
+    };
     publish_account(shared)
 }
 
@@ -793,6 +837,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         market: market_account::MarketSession::new(warframe_market::open_credential_store(
             paths.database.clone(),
         )),
+        market_generation: 0,
     })))
 }
 
@@ -2201,4 +2246,102 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+    use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
+
+    /// A credential store that holds one token in memory, so `publish_account` can be exercised
+    /// with no keyring and no network.
+    #[derive(Default)]
+    struct MemoryStore {
+        held: StdMutex<Option<String>>,
+    }
+
+    impl CredentialStore for MemoryStore {
+        fn load(&self) -> Result<Option<MarketToken>, MarketError> {
+            Ok(self
+                .held
+                .lock()
+                .expect("lock")
+                .clone()
+                .map(MarketToken::new))
+        }
+        fn store(&self, token: &MarketToken) -> Result<(), MarketError> {
+            *self.held.lock().expect("lock") = Some(token.expose().to_owned());
+            Ok(())
+        }
+        fn clear(&self) -> Result<(), MarketError> {
+            *self.held.lock().expect("lock") = None;
+            Ok(())
+        }
+        fn backing(&self) -> CredentialBacking {
+            CredentialBacking::Database
+        }
+    }
+
+    fn test_runtime(directory: &Path) -> SharedRuntime {
+        let core = AppCore::open(&directory.join("test.sqlite3")).expect("core opens");
+        Arc::new(Mutex::new(Runtime {
+            core,
+            app_data: directory.to_path_buf(),
+            setup_path: directory.join("setup.json"),
+            setup: SetupStatus::default(),
+            last_refresh_started: None,
+            refresh_in_flight: false,
+            overlay_preview_until: None,
+            monitor_started: false,
+            live_prices: MarketPriceCache::new(),
+            market: market_account::MarketSession::new(Box::new(MemoryStore::default())),
+            market_generation: 0,
+        }))
+    }
+
+    /// A fetch that is still in flight when a sign-out happens must not publish over it: a stale
+    /// generation is discarded rather than resurrecting a linked view the sign-out just cleared.
+    #[test]
+    fn a_stale_fetch_does_not_overwrite_a_sign_out() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+
+        // A token is present when the fetch reads its generation, standing in for the moment
+        // `publish_account` has already released its first lock and is about to go unlocked for
+        // the network.
+        shared
+            .lock()
+            .expect("lock")
+            .market
+            .adopt(MarketToken::new("fake-token".to_owned()))
+            .expect("token stores");
+        let generation = shared.lock().expect("lock").market_generation;
+
+        // The sign-out that would race a slow fetch in production: forget the credential and bump
+        // the generation, exactly as `market_sign_out` does.
+        {
+            let mut runtime = shared.lock().expect("lock");
+            runtime.market.forget().expect("forget clears");
+            runtime.market_generation = runtime.market_generation.wrapping_add(1);
+            runtime
+                .core
+                .set_market_account(app_core::MarketAccountView::unlinked())
+                .expect("unlinked view publishes");
+        }
+
+        // The delayed fetch now re-locks with the generation it captured before the sign-out, and
+        // must discard rather than publish its (now stale) result.
+        let mut runtime = shared.lock().expect("lock");
+        let outcome = discard_if_stale(&mut runtime, generation);
+        let view = outcome
+            .expect("a stale generation is caught")
+            .expect("view reads");
+
+        assert_eq!(
+            view.market_account().link,
+            app_core::LinkState::Unlinked,
+            "the sign-out's view must survive a late fetch from before it"
+        );
+    }
 }

@@ -62,7 +62,10 @@ impl MarketSession {
         self.items = Some(items);
     }
 
-    pub fn items(&mut self, transport: &dyn MarketTransport) -> Result<Arc<MarketItems>, MarketError> {
+    pub fn items(
+        &mut self,
+        transport: &dyn MarketTransport,
+    ) -> Result<Arc<MarketItems>, MarketError> {
         if self.items.is_none() {
             self.items = Some(Arc::new(MarketItems::fetch(transport)?));
         }
