@@ -13,12 +13,14 @@ import {
   refreshPrices,
   removeOrder,
   createOrder,
+  setMarketPresence,
   setOrderQuantity,
   type AppView,
   type BackendHealth,
   type CollectionItem,
   type HealthState,
   type ItemCategory,
+  type Presence,
 } from './backend'
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
 import { RewardCards } from './RewardCards'
@@ -244,6 +246,8 @@ function App() {
     ordersOperation(() => removeOrder(orderId), 'Could not remove that listing.')
   const ordersLowerTo = (orderId: string, _quantity: number) =>
     ordersOperation(() => setOrderQuantity(orderId), 'Could not lower that listing.')
+  const ordersPresence = (status: Presence | null, auto: boolean) =>
+    ordersOperation(() => setMarketPresence(status, auto), 'Could not change your market status.')
   const ordersSell = (catalogPath: string, platinum: number, quantity: number, visible: boolean) =>
     ordersOperation(() => createOrder(catalogPath, platinum, quantity, visible), 'Could not publish that listing.')
 
@@ -311,6 +315,7 @@ function App() {
           onRemove={ordersRemove}
           onLowerTo={ordersLowerTo}
           onSell={ordersSell}
+          onPresence={ordersPresence}
           items={view.collection.items}
           busy={ordersBusy}
           error={ordersError}

@@ -17,6 +17,7 @@ use warframe_domain::{
     RewardAdvisor, RewardCandidate, RewardView,
 };
 use warframe_market::{CredentialBacking, MarketItems, MarketOrder, OrderKind};
+use warframe_status::Presence;
 
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -36,6 +37,7 @@ pub struct AppCore {
     live: Option<MarketPriceCache>,
     pricing: Option<PricingProgress>,
     market_account: MarketAccountView,
+    presence: PresenceView,
 }
 
 pub trait AcquisitionPort {
@@ -94,6 +96,7 @@ impl AppCore {
             live: None,
             pricing: None,
             market_account: MarketAccountView::unlinked(),
+            presence: PresenceView::default(),
         })
     }
 
@@ -161,6 +164,13 @@ impl AppCore {
 
     pub fn market_account(&self) -> &MarketAccountView {
         &self.market_account
+    }
+
+    /// Replace the presence the screen shows. Set from the socket's committed value, never from
+    /// what the switch was moved to: the server is the authority on what other players see.
+    pub fn set_presence(&mut self, presence: PresenceView) -> Result<AppView, AppError> {
+        self.presence = presence;
+        self.current_view()
     }
 
     /// Replace the account state and say so in the health row.
@@ -292,7 +302,10 @@ impl AppCore {
             },
             reward: self.reward.clone(),
             health,
-            market_account: self.market_account.clone(),
+            market_account: MarketAccountView {
+                presence: self.presence,
+                ..self.market_account.clone()
+            },
         })
     }
 
@@ -1129,6 +1142,23 @@ pub struct MarketAccountView {
     /// second implementation in TypeScript would be a copy of a rule that exists to keep two
     /// vocabularies apart, and it would drift.
     pub listable: Vec<String>,
+    /// What warframe.market shows this account as, and how it is being chosen.
+    ///
+    /// Not part of what `linked` computes: presence comes from a socket with its own lifetime, and
+    /// an order fetch that reset it would blank the switch every refresh. `current_view` stamps it
+    /// on instead, from the one place that holds it.
+    pub presence: PresenceView,
+}
+
+/// The presence switch, as the screen needs it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct PresenceView {
+    /// What the server last said it committed. `None` is offline: no socket, or one that has not
+    /// been answered yet.
+    pub status: Option<Presence>,
+    /// Whether the status is being followed from the game reader rather than chosen by hand.
+    pub auto: bool,
 }
 
 impl MarketAccountView {
@@ -1182,6 +1212,7 @@ impl MarketAccountView {
             listed_platinum,
             flagged,
             listable: Vec::new(),
+            presence: PresenceView::default(),
         }
     }
 

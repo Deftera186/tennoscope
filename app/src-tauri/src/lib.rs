@@ -137,6 +137,12 @@ struct Runtime {
     // in-flight `publish_account` fetch that started before the change can recognize its result is
     // stale and drop it instead of republishing over a newer state.
     market_generation: u64,
+    /// The presence socket, open only while a status is being held. Dropping it is how this
+    /// application goes offline: warframe.market has no settable `offline`, and a client that
+    /// stays connected claiming `invisible` is still a client the server counts as connected.
+    presence: Option<warframe_status::StatusLink>,
+    /// Whether presence follows the game reader rather than a choice the player made.
+    presence_auto: bool,
 }
 type SharedRuntime = Arc<Mutex<Runtime>>;
 
@@ -144,15 +150,89 @@ type SharedRuntime = Arc<Mutex<Runtime>>;
 async fn get_view(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     let shared = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        shared
+        let mut runtime = shared
             .lock()
-            .map_err(|_| "application state is unavailable".to_owned())?
-            .core
-            .current_view()
-            .map_err(|_| "application view is unavailable".to_owned())
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        // The socket commits a status some milliseconds after it is asked to, on its own thread.
+        // Reading it here means the switch settles on the next poll the frontend already makes,
+        // rather than needing an event channel of its own for one field.
+        publish_presence(&mut runtime)
     })
     .await
     .map_err(|_| "application view task failed".to_owned())?
+}
+
+/// What the presence switch is asked for, including going offline.
+///
+/// `None` is offline, and offline is the socket closing rather than a value sent over it: the
+/// server has no settable `offline`, and a connection held open claiming otherwise is still a
+/// connection.
+#[tauri::command]
+async fn set_market_presence(
+    state: State<'_, SharedRuntime>,
+    status: Option<warframe_status::Presence>,
+    auto: bool,
+) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        runtime.presence_auto = auto;
+        let wanted = if auto {
+            Some(auto_presence(&runtime))
+        } else {
+            status
+        };
+        match wanted {
+            None => runtime.presence = None,
+            Some(status) => match &runtime.presence {
+                Some(link) => link.set(status),
+                None => {
+                    let token = runtime
+                        .market
+                        .token()
+                        .map_err(|error| market_account::failure_message(error).to_owned())?
+                        .ok_or_else(|| "No warframe.market account is linked".to_owned())?;
+                    runtime.presence = Some(warframe_status::StatusLink::connect(
+                        token.expose().to_owned(),
+                        status,
+                    ));
+                }
+            },
+        }
+        publish_presence(&mut runtime)
+    })
+    .await
+    .map_err(|_| "presence task failed".to_owned())?
+}
+
+/// ponytail: the game reader's own health, mapped straight across -- `ready` means the process is
+/// open, which is as much as this application currently knows. The upgrade is EE.log activity,
+/// which is also what would let the `activity` object the API accepts be filled in.
+fn auto_presence(runtime: &Runtime) -> warframe_status::Presence {
+    let ready = runtime
+        .core
+        .current_view()
+        .is_ok_and(|view| view.health().game_reader().state() == app_core::HealthState::Ready);
+    if ready {
+        warframe_status::Presence::Ingame
+    } else {
+        warframe_status::Presence::Online
+    }
+}
+
+/// Copy what the socket says onto the view. Read rather than assumed: the switch shows what other
+/// players see, which is the server's answer and not the request that was made.
+fn publish_presence(runtime: &mut Runtime) -> Result<AppView, String> {
+    let presence = app_core::PresenceView {
+        status: runtime.presence.as_ref().and_then(|link| link.committed()),
+        auto: runtime.presence_auto,
+    };
+    runtime
+        .core
+        .set_presence(presence)
+        .map_err(|_| "application view is unavailable".to_owned())
 }
 
 #[tauri::command]
@@ -583,6 +663,10 @@ async fn market_sign_out(state: State<'_, SharedRuntime>) -> Result<AppView, Str
                 .forget()
                 .map_err(|error| market_account::failure_message(error).to_owned())?;
             runtime.market_generation = runtime.market_generation.wrapping_add(1);
+            // The socket authenticated with the credential just discarded. Holding it open would
+            // keep announcing an account the player has unlinked.
+            runtime.presence = None;
+            runtime.presence_auto = false;
         }
         shared
             .lock()
@@ -884,6 +968,8 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
             paths.database.clone(),
         )),
         market_generation: 0,
+        presence: None,
+        presence_auto: false,
     })))
 }
 
@@ -2287,6 +2373,7 @@ pub fn run() {
             market_link_token,
             market_sign_out,
             refresh_orders,
+            set_market_presence,
             remove_order,
             create_order,
             set_order_quantity
@@ -2344,6 +2431,8 @@ mod tests {
             live_prices: MarketPriceCache::new(),
             market: market_account::MarketSession::new(Box::new(MemoryStore::default())),
             market_generation: 0,
+            presence: None,
+            presence_auto: false,
         }))
     }
 

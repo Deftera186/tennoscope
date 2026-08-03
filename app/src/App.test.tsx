@@ -49,6 +49,7 @@ const view: AppView = {
     orders: [],
     listed_platinum: 0,
     listable: [],
+    presence: { status: null, auto: false },
     flagged: 0,
   },
   health: {

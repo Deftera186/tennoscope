@@ -6,6 +6,7 @@ members = [
   "crates/warframe-acquisition",
   "crates/warframe-domain",
   "crates/warframe-market",
+  "crates/warframe-status",
 ]
 resolver = "2"
 

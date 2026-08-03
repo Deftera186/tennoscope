@@ -37,6 +37,7 @@ function account(overrides: Partial<MarketAccount> = {}): MarketAccount {
     fetched_at: '2026-07-31T12:00:00Z',
     listed_platinum: 0,
     listable: [],
+    presence: { status: null, auto: false },
     flagged: 0,
     ...overrides,
   }
@@ -45,6 +46,7 @@ function account(overrides: Partial<MarketAccount> = {}): MarketAccount {
 const handlers = {
   items: [],
   onSell: vi.fn(),
+  onPresence: vi.fn().mockResolvedValue(undefined),
   onSignIn: vi.fn().mockResolvedValue(undefined),
   onLinkToken: vi.fn().mockResolvedValue(undefined),
   onSignOut: vi.fn().mockResolvedValue(undefined),
@@ -299,5 +301,55 @@ describe('publishing a listing', () => {
     await user.clear(screen.getByLabelText('Quantity'))
     await user.type(screen.getByLabelText('Quantity'), '9')
     expect(screen.getByRole('button', { name: /list for sale/i })).toBeDisabled()
+  })
+})
+
+describe('the market status switch', () => {
+  it('asks for a status the server accepts, chosen by hand', async () => {
+    const user = userEvent.setup()
+    render(<Orders account={account()} {...handlers} busy={false} error={null} />)
+    await user.click(screen.getByRole('button', { name: 'In game' }))
+    expect(handlers.onPresence).toHaveBeenCalledWith('ingame', false)
+  })
+
+  it('spells offline as no status at all', async () => {
+    const user = userEvent.setup()
+    render(
+      <Orders
+        account={account({ presence: { status: 'online', auto: false } })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: 'Offline' }))
+    // warframe.market has no settable `offline`: the backend closes the socket instead.
+    expect(handlers.onPresence).toHaveBeenCalledWith(null, false)
+  })
+
+  it('marks what the server committed, not what was pressed', () => {
+    render(
+      <Orders
+        account={account({ presence: { status: 'invisible', auto: false } })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+    expect(screen.getByRole('button', { name: 'Invisible' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Online' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('marks the automatic choice as the one in force, whatever it settled on', () => {
+    render(
+      <Orders
+        account={account({ presence: { status: 'ingame', auto: true } })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+    expect(screen.getByRole('button', { name: /follow the game/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'In game' })).toHaveAttribute('aria-pressed', 'false')
   })
 })

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { CollectionItem, MarketAccount } from './backend'
+import type { CollectionItem, MarketAccount, Presence } from './backend'
 import { SellForm, isListable, type SellHandler } from './SellForm'
 import { backingLabel, fixLabel, isFlagged, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
 import { snapshotFreshness } from './freshness'
@@ -14,6 +14,7 @@ type OrdersProps = {
   onRemove: (orderId: string) => Promise<void>
   onLowerTo: (orderId: string, quantity: number) => Promise<void>
   onSell: SellHandler
+  onPresence: (status: Presence | null, auto: boolean) => Promise<void>
   items: CollectionItem[]
   busy: boolean
   error: string | null
@@ -25,7 +26,7 @@ function fetchFreshness(fetchedAt: string | undefined, now = new Date()) {
   return snapshotFreshness(fetchedAt ? { observed_at: fetchedAt, game_build: '', source: 'warframe.market' } : null, now)
 }
 
-export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, onSell, items, busy, error }: OrdersProps) {
+export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, onSell, onPresence, items, busy, error }: OrdersProps) {
   if (account.link === 'unlinked') {
     return <UnlinkedPanel onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} error={error} />
   }
@@ -84,6 +85,8 @@ export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, o
         <span>Unlink account</span>
       </button>
     </div>
+
+    {!needsRelink && <PresenceSwitch presence={account.presence} busy={busy} onPresence={onPresence}/>}
 
     {!needsRelink && <NewListing items={items} listable={account.listable} busy={busy} onSell={onSell}/>}
 
@@ -177,6 +180,55 @@ function RemoveControl({ entry, busy, onRemove }: {
       setArmed(true)
     }}
   ><span>{armed ? 'Confirm remove' : 'Remove listing'}</span></button>
+}
+
+/**
+ * What warframe.market shows this account as.
+ *
+ * Four choices, three of which are values the server accepts. Offline is the fourth and is not one
+ * of them: warframe.market has no settable `offline`, and going offline means closing the socket,
+ * so the control says the word the player means and the backend spells it as a disconnection.
+ *
+ * What is drawn is what the server committed, not what was pressed. A switch showing a state the
+ * server declined is a switch that lies about what other players can see.
+ */
+function PresenceSwitch({ presence, busy, onPresence }: {
+  presence: MarketAccount['presence']
+  busy: boolean
+  onPresence: (status: Presence | null, auto: boolean) => Promise<void>
+}) {
+  const choices: { value: Presence | null; label: string }[] = [
+    { value: null, label: 'Offline' },
+    { value: 'online', label: 'Online' },
+    { value: 'ingame', label: 'In game' },
+    { value: 'invisible', label: 'Invisible' },
+  ]
+  const current = presence.auto ? undefined : presence.status ?? null
+  return <div className="presence" role="group" aria-label="Market status">
+    <span className="presence-label">Market status</span>
+    <div className="presence-choices">
+      {choices.map(choice => <button
+        key={choice.label}
+        type="button"
+        className={`stamp${!presence.auto && current === choice.value ? ' struck' : ''}`}
+        aria-pressed={!presence.auto && current === choice.value}
+        disabled={busy}
+        onClick={() => onPresence(choice.value, false)}
+      ><span>{choice.label}</span></button>)}
+      <button
+        type="button"
+        className={`stamp${presence.auto ? ' struck' : ''}`}
+        aria-pressed={presence.auto}
+        disabled={busy}
+        onClick={() => onPresence(null, true)}
+      ><span>Follow the game</span></button>
+    </div>
+    <p className="presence-note">{presence.auto
+      ? `Following this device's Warframe process${presence.status ? `, currently ${presence.status === 'ingame' ? 'in game' : presence.status}` : ''}.`
+      : presence.status
+        ? 'Held for as long as TennoScope is running.'
+        : 'Nothing is announced to warframe.market while offline.'}</p>
+  </div>
 }
 
 /**

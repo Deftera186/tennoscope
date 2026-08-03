@@ -16,6 +16,7 @@ local-store = { path = "../local-store" }
 warframe-domain = { path = "../warframe-domain" }
 warframe-acquisition = { path = "../warframe-acquisition" }
 warframe-market = { path = "../warframe-market" }
+warframe-status = { path = "../warframe-status" }
 
 [dev-dependencies]
 serde_json = "1"
