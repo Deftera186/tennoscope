@@ -173,7 +173,7 @@ function LinkForms({ onSignIn, onLinkToken, busy }: {
   return <div className="clause-pair">
     <article>
       <h2>Sign in</h2>
-      <p className="prose">Uses the market's own, undocumented sign-in route. It may stop working without notice.</p>
+      <p className="prose">Your warframe.market email and password. They are sent once to warframe.market and never stored on this device.</p>
       <form onSubmit={event => { event.preventDefault(); void onSignIn(email, password) }}>
         <label className="dial-slot">
           <span>Email</span>
@@ -187,8 +187,21 @@ function LinkForms({ onSignIn, onLinkToken, busy }: {
       </form>
     </article>
     <article>
-      <h2>Paste a token</h2>
-      <p className="prose">Equally valid: paste a session token obtained directly from the market, without giving your password to this app.</p>
+      <h2>Use a token instead</h2>
+      <p className="prose">Sign in on the warframe.market website and paste the token your browser was given. Your password never reaches TennoScope.</p>
+      {/* A native disclosure: the steps are needed once, by the people who want this path, and
+          they are long enough that leaving them open would bury the field they explain. No
+          popover library for something `<details>` already does with a keyboard and a reader. */}
+      <details className="token-help">
+        <summary>Where do I find the token?</summary>
+        <ol>
+          <li>Sign in at <b>warframe.market</b> in your browser.</li>
+          <li>Open developer tools with <kbd>F12</kbd>.</li>
+          <li>Go to <b>Application</b> (Chrome) or <b>Storage</b> (Firefox), then <b>Cookies → warframe.market</b>.</li>
+          <li>Copy the value of the cookie named <b>JWT</b>.</li>
+        </ol>
+        <p>Treat that value like a password: anyone holding it can post and delete orders on your account. TennoScope stores it in your system keyring where one is available, and in its local database file otherwise — the Status panel says which you got.</p>
+      </details>
       <form onSubmit={event => { event.preventDefault(); void onLinkToken(token) }}>
         <label className="dial-slot">
           <span>Token</span>

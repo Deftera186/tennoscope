@@ -49,9 +49,10 @@ describe('the unlinked screen', () => {
     render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
 
     // The consent statement is on this screen, at the moment the player decides -- not in a
-    // settings page they would have to go looking for afterwards.
-    expect(screen.getByText(/optional/i)).toBeInTheDocument()
-    expect(screen.getByText(/warframe\.market/i)).toBeInTheDocument()
+    // settings page they would have to go looking for afterwards. Matched as one statement rather
+    // than as two loose words: the screen now names warframe.market in several places, and an
+    // assertion that any of them exists would pass on a screen that had lost the consent notice.
+    expect(screen.getByText(/optional.*warframe\.market/is)).toBeInTheDocument()
   })
 
   it('offers both ways in, neither presented as the lesser', () => {
@@ -60,6 +61,19 @@ describe('the unlinked screen', () => {
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/token/i)).toBeInTheDocument()
+  })
+
+  it('says where the token comes from, and what it is worth to whoever holds it', () => {
+    render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
+
+    // The token path is unusable without these steps, and asking the player to go and find them
+    // elsewhere is what makes an optional feature the one nobody links. Behind a disclosure
+    // because they are read once; asserted here because a collapsed `details` still renders its
+    // contents, and a reader can reach them.
+    expect(screen.getByText(/cookie named/i)).toBeInTheDocument()
+    expect(screen.getByText(/JWT/)).toBeInTheDocument()
+    // A token is a credential. The screen that asks for one says so.
+    expect(screen.getByText(/like a password/i)).toBeInTheDocument()
   })
 
   it('never renders the password as readable text', async () => {
