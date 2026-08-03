@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { CollectionItem } from './backend'
+import { catalogPath } from './orders'
 
 /**
  * Publishing one sell listing, from wherever the player is standing.
@@ -61,14 +62,4 @@ export function SellForm({ item, busy, onSell, onDone }: {
       <button type="button" className="stamp" disabled={busy} onClick={onDone}><span>Cancel</span></button>
     </div>
   </form>
-}
-
-/** The collection id without the rank suffix the market never sees. */
-export function catalogPath(id: string): string {
-  return id.split('#')[0]
-}
-
-/** Whether this item can be listed from here at all: held, and on the account's listable set. */
-export function isListable(item: CollectionItem, listable: readonly string[]): boolean {
-  return item.quantity > 0 && listable.includes(catalogPath(item.id))
 }

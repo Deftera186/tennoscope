@@ -7,7 +7,7 @@
  * machine that has never read the game would be an accusation nothing supports, sitting next to a
  * button that deletes a listing the player wanted.
  */
-import type { CredentialBacking, MarketOrder, OrderStatus, ReconciledOrder } from './backend'
+import type { CollectionItem, CredentialBacking, MarketOrder, OrderStatus, ReconciledOrder } from './backend'
 
 /** Whether the backend is making a claim about this order, as opposed to declining to. */
 export function isFlagged(status: OrderStatus): boolean {
@@ -84,4 +84,14 @@ export function listedOrderFor(orders: readonly ReconciledOrder[], itemId: strin
 export function backingLabel(backing: CredentialBacking | undefined): string {
   if (backing === 'keyring') return 'System keyring'
   return backing === 'database' ? 'Local database file' : 'Not stored'
+}
+
+/** The collection id without the rank suffix the market never sees. */
+export function catalogPath(id: string): string {
+  return id.split('#')[0]
+}
+
+/** Whether this item can be listed from here at all: held, and on the account's listable set. */
+export function isListable(item: CollectionItem, listable: readonly string[]): boolean {
+  return item.quantity > 0 && listable.includes(catalogPath(item.id))
 }

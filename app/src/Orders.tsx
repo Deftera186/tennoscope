@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { CollectionItem, MarketAccount, Presence } from './backend'
-import { SellForm, isListable, type SellHandler } from './SellForm'
-import { backingLabel, fixLabel, isFlagged, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
+import { SellForm, type SellHandler } from './SellForm'
+import { backingLabel, fixLabel, isFlagged, isListable, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
 import { snapshotFreshness } from './freshness'
 import { MetalMark } from './MetalMark'
 
