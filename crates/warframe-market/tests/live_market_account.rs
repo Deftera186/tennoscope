@@ -36,10 +36,13 @@ fn live_market_account_reads_without_changing_anything() {
     println!("orders={}", orders.len());
     let resolvable = orders
         .iter()
-        .filter(|order| items.catalog_path(&order.item_id).is_some())
+        .filter(|order| items.comparable(&order.item_id))
         .count();
     // The measurement that matters: how much of a real account's order list can be reconciled at
-    // all. Anything unresolvable is reported as unverifiable rather than flagged, so a low number
-    // is a quiet feature rather than a wrong one -- but it is worth knowing.
+    // all. Counted by `comparable` rather than by whether a path exists, because a relic and a set
+    // both publish a path that names a row the collection never carries -- counting those would
+    // report as judgeable exactly the orders reconciliation declines to judge. Anything left over
+    // is reported as unverifiable rather than flagged, so a low number is a quiet feature rather
+    // than a wrong one -- but it is worth knowing.
     println!("orders_resolvable_to_a_collection_item={resolvable}");
 }

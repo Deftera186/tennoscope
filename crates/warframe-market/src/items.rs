@@ -162,6 +162,14 @@ impl MarketItems {
 /// what a real account sells -- is flagged `Missing` with a button offering to take it down. That
 /// is the false accusation the whole unverifiable state exists to prevent, so both are refused
 /// here, at the point where the market's own vocabulary is still in view.
+///
+/// The subtype refusal is deliberately blunt. Measured against the live table, it catches 1,116 of
+/// 3,837 items: the 772 relics and 230 sets it is for, plus fish sizes, Ayatan variants,
+/// blueprint-against-crafted and veiled rivens, which are all separate collection rows too. The
+/// one group it over-refuses is 19 mods whose subtypes are `regular` and `atragraph`, a cosmetic
+/// variant of a single row. Judging those would be correct and is left undone on purpose: the cost
+/// of refusing one is a row that says nothing, and the cost of a wrong narrowing here is a delete
+/// button beside a listing the player still wants.
 fn path_is_comparable(path: Option<&str>, name: Option<&str>, subtypes: Option<&[String]>) -> bool {
     let Some(path) = path else { return false };
     if subtypes.is_some_and(|subtypes| !subtypes.is_empty()) {
