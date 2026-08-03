@@ -69,6 +69,18 @@ pub fn set_status_frame(status: Presence) -> String {
     .to_string()
 }
 
+/// Whether this frame is the server refusing the credential.
+///
+/// It answers a bad token with an error frame and then leaves the connection open, so nothing
+/// about the socket itself says the sign-in failed. A client that only watched for the success
+/// event would sit on that connection forever, signed in to nothing.
+pub fn is_signin_refusal(frame: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(frame)
+        .ok()
+        .and_then(|parsed| Some(parsed.get("route")?.as_str()?.to_owned()))
+        .is_some_and(|route| route == "@wfm|cmd/auth/signIn:error")
+}
+
 /// The status the server says it committed, from a frame that carries one.
 ///
 /// The server is the source of truth here, and the docs are explicit that the first
@@ -149,7 +161,10 @@ fn run(
     let mut wanted = initial;
     let mut backoff = Duration::from_secs(1);
     loop {
-        // A clean exit is the caller dropping the link. Nothing to reconnect to.
+        // A clean exit is the caller dropping the link, and a refused credential is just as final:
+        // reconnecting with the same token that was refused would hammer the server to be told the
+        // same thing, and the token only changes by the player linking again, which builds a new
+        // link anyway.
         if session(token, &mut wanted, inbox, committed).is_ok() {
             return;
         }
@@ -182,6 +197,10 @@ fn session(
         )
         .body(())
         .map_err(|_| ())?;
+    // rustls panics on the first connection if no process-wide provider has been chosen, and
+    // nothing else in this binary installs one at a point this crate can rely on. Idempotent: a
+    // second call returns Err and is ignored, so this is safe from any thread on any reconnect.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let (mut socket, _) = tungstenite::connect(request).map_err(|_| ())?;
     // Reads would otherwise block until the server says something, which can be minutes -- and a
     // close asked for in the meantime would sit unsent that whole time. A one-second read timeout
@@ -226,6 +245,10 @@ fn session(
             }
             Err(_) => return Err(()),
         };
+        if is_signin_refusal(&text) {
+            let _ = socket.close(None);
+            return Ok(());
+        }
         if let Some(status) = committed_status(&text) {
             *committed.lock().expect("status mutex poisoned") = Some(status);
             // The docs say to wait for this event before sending anything. The first one is the

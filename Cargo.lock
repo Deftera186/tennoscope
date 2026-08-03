@@ -4852,6 +4852,7 @@ dependencies = [
 name = "warframe-status"
 version = "0.4.1"
 dependencies = [
+ "rustls",
  "serde",
  "serde_json",
  "tungstenite",

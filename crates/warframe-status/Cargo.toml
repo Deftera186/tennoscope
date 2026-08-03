@@ -14,3 +14,8 @@ serde_json = "1"
 # Blocking, and rustls to match the TLS backend `reqwest` is already pinned to in warframe-market:
 # a second TLS stack in one binary is two certificate stores to keep straight.
 tungstenite = { version = "0.28", default-features = false, features = ["rustls-tls-webpki-roots", "handshake"] }
+# rustls 0.23 refuses to guess a crypto provider and panics at the first connection if none is
+# installed -- which tungstenite's own features do not do. Named explicitly, and `ring` rather than
+# aws-lc-rs because that is what the rest of this binary already links through reqwest and keyring:
+# two providers in one process is two of everything to audit.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
