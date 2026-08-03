@@ -191,7 +191,11 @@ describe('MVP desktop interface', () => {
     for (const label of ['Game reader', 'EE.log', 'Reward observer', 'Catalog', 'Market data', 'Database', 'Process discovery', 'Memory read', 'Authorization scan', 'Inventory fetch', 'Schema validation']) {
       expect(within(panel).getByText(label)).toBeInTheDocument()
     }
-    expect(within(panel).getByText('Last success: 1')).toBeInTheDocument()
+    // Rows keep their success time in their own source's format -- the market account writes Unix
+    // seconds -- so the row resolves it to something a reader can act on rather than printing the
+    // stamp it was handed.
+    expect(within(panel).getAllByText(/Last success: .*\d{4}/).length).toBeGreaterThan(0)
+    expect(within(panel).queryByText('Last success: 1')).not.toBeInTheDocument()
     expect(panel).not.toHaveTextContent(/accountId|nonce|authorization token/i)
     // Diagnostics reports live health; the overlay preview is a setup affordance and lives in Settings.
     expect(within(panel).queryByRole('button', { name: /reward overlay/i })).not.toBeInTheDocument()

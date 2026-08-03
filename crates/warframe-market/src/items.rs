@@ -32,6 +32,10 @@ struct ItemRecord {
     /// The `/Lotus/` path. Absent for retired items that no longer exist in the game.
     #[serde(default)]
     game_ref: Option<String>,
+    /// Present when one market item stands for several collection rows -- a relic publishes one
+    /// entry with four refinements, and the collection holds each refinement separately.
+    #[serde(default)]
+    subtypes: Option<Vec<String>>,
     #[serde(default)]
     i18n: HashMap<String, ItemNames>,
 }
@@ -52,6 +56,8 @@ pub struct MarketItems {
 struct ItemEntry {
     catalog_path: Option<String>,
     name: Option<String>,
+    /// Whether this item's path can stand for one collection row. See `path_is_comparable`.
+    comparable: bool,
 }
 
 impl MarketItems {
@@ -67,11 +73,18 @@ impl MarketItems {
                     .get("en")
                     .map(|names| names.name.clone())
                     .filter(|name| !name.trim().is_empty());
+                let catalog_path = record.game_ref.filter(|path| path.starts_with("/Lotus/"));
+                let comparable = path_is_comparable(
+                    catalog_path.as_deref(),
+                    name.as_deref(),
+                    record.subtypes.as_deref(),
+                );
                 (
                     record.id,
                     ItemEntry {
-                        catalog_path: record.game_ref.filter(|path| path.starts_with("/Lotus/")),
+                        catalog_path,
                         name,
+                        comparable,
                     },
                 )
             })
@@ -106,6 +119,17 @@ impl MarketItems {
         self.entries.get(item_id)?.catalog_path.as_deref()
     }
 
+    /// Whether an owned quantity for this item can be read off the collection at all.
+    ///
+    /// `false` is not an error and not a missing entry: it says the market's identity for this
+    /// item and the collection's identity for a row are not the same kind of thing, so no
+    /// comparison between them means anything. The caller owes such an order `Unverifiable`.
+    pub fn comparable(&self, item_id: &str) -> bool {
+        self.entries
+            .get(item_id)
+            .is_some_and(|entry| entry.comparable)
+    }
+
     pub fn name(&self, item_id: &str) -> Option<&str> {
         self.entries.get(item_id)?.name.as_deref()
     }
@@ -117,4 +141,36 @@ impl MarketItems {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+/// Whether a market item's `gameRef` names the same thing a collection row names.
+///
+/// It usually does, and where it does the join is exact. Two published shapes break it, and both
+/// were measured against the live table rather than reasoned about:
+///
+/// A **relic** publishes one entry carrying the base projection path and separates its four
+/// refinements by `subtype` -- `Axi A1 Relic` is `/Lotus/Types/Game/Projections/T4VoidProjectionE`
+/// with `['intact', 'exceptional', 'flawless', 'radiant']`. The collection holds each refinement
+/// as its own row, suffixed (`…T4VoidProjectionEBronze`). The base path is therefore a row the
+/// collection never has, and asking whether it is held always answers no.
+///
+/// A **set** publishes the path of the *built* item -- `Braton Prime Set` is
+/// `/Lotus/Weapons/Tenno/Rifle/BratonPrime`. What a player selling a set actually holds is the
+/// four `/Lotus/Types/Recipes/…` parts. Again the path names a row the collection does not carry.
+///
+/// Left unhandled, both answer "owned: 0" and every relic and set listing -- between them most of
+/// what a real account sells -- is flagged `Missing` with a button offering to take it down. That
+/// is the false accusation the whole unverifiable state exists to prevent, so both are refused
+/// here, at the point where the market's own vocabulary is still in view.
+fn path_is_comparable(path: Option<&str>, name: Option<&str>, subtypes: Option<&[String]>) -> bool {
+    let Some(path) = path else { return false };
+    if subtypes.is_some_and(|subtypes| !subtypes.is_empty()) {
+        return false;
+    }
+    // Checked as well as the subtype list: a relic entry that ever ships without one is still a
+    // base projection path, and the collection still holds only suffixed refinements.
+    if path.contains("/Projections/") {
+        return false;
+    }
+    !name.is_some_and(|name| name.trim().ends_with(" Set"))
 }

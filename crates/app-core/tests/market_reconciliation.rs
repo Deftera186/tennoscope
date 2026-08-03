@@ -11,6 +11,12 @@ const MOD_PATH: &str = "/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChance
 const MOD_ID: &str = "54ca39abe7798915c1c11e10";
 /// A market item with no `gameRef`, of which the live table carries 35.
 const RETIRED_ID: &str = "5program0000000000000000";
+/// A relic and a set, both taken verbatim from `GET /v2/items` on 2026-08-03. Their published
+/// paths name rows the collection never carries -- the relic's four refinements are stored
+/// suffixed, and a set's parts are `/Recipes/` rows rather than the built item -- which is why
+/// neither can be compared against an owned quantity.
+const RELIC_ID: &str = "56783f24cbfa8f0432dd89a2";
+const SET_ID: &str = "54a73e65e779893a797ffef1";
 
 const ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
     {"id":"54a73e65e779893a797fff33",
@@ -19,6 +25,13 @@ const ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
     {"id":"54ca39abe7798915c1c11e10",
      "gameRef":"/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol",
      "i18n":{"en":{"name":"Creeping Bullseye"}}},
+    {"id":"56783f24cbfa8f0432dd89a2",
+     "gameRef":"/Lotus/Types/Game/Projections/T4VoidProjectionE",
+     "subtypes":["intact","exceptional","flawless","radiant"],
+     "i18n":{"en":{"name":"Axi A1 Relic"}}},
+    {"id":"54a73e65e779893a797ffef1",
+     "gameRef":"/Lotus/Weapons/Tenno/Rifle/BratonPrime",
+     "i18n":{"en":{"name":"Braton Prime Set"}}},
     {"id":"5program0000000000000000","i18n":{"en":{"name":"Legendary Fusion Core"}}}
 ],"error":null}"#;
 
@@ -261,4 +274,48 @@ fn an_epoch_seconds_snapshot_is_compared_against_an_rfc_3339_order() {
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Missing);
+}
+
+/// A relic listing is not evidence about the collection. warframe.market publishes one entry per
+/// relic carrying the base projection path, with the four refinements as subtypes; the collection
+/// stores each refinement as its own suffixed row. The base path is a row it never holds, so
+/// comparing against it answers "owned: none" for every relic anyone has ever listed.
+#[test]
+fn a_relic_order_is_unverifiable_rather_than_missing() {
+    let orders = vec![sell_order(RELIC_ID, 1, "2026-07-30T10:00:00Z")];
+
+    let reconciled = reconcile_orders(
+        &orders,
+        &items(),
+        // The refinement the player actually holds, under the name the collection gives it.
+        &collection_holding(vec![(
+            "/Lotus/Types/Game/Projections/T4VoidProjectionEBronze",
+            3,
+            None,
+        )]),
+        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+    );
+
+    assert_eq!(
+        reconciled[0].status,
+        OrderStatus::Unverifiable,
+        "a relic listing must never be offered a delete button on the strength of a path the \
+         collection cannot carry"
+    );
+}
+
+/// A set listing names the built item; what the seller holds is the parts. Left uncaught, every
+/// set on the account -- the most common thing there is to sell -- reads as missing.
+#[test]
+fn a_set_order_is_unverifiable_rather_than_missing() {
+    let orders = vec![sell_order(SET_ID, 1, "2026-07-30T10:00:00Z")];
+
+    let reconciled = reconcile_orders(
+        &orders,
+        &items(),
+        &collection_holding(vec![(BRATON_PATH, 1, None)]),
+        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+    );
+
+    assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
 }

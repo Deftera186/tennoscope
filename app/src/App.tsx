@@ -609,10 +609,20 @@ function AssayRow({ label, health }: { label: string; health: BackendHealth | { 
     <div>
       <h3>{label}</h3>
       <p>{health.message}</p>
-      {health.last_success && <small>Last success: {health.last_success}</small>}
+      {/* Rows record their success time in whatever form their own source keeps: the market
+          account writes Unix seconds, the price table an ISO date. Printed raw, one row reads
+          "Last success: 1785492000". `snapshotFreshness` already resolves both. */}
+      {health.last_success && <small>Last success: {healthSuccessLabel(health.last_success)}</small>}
     </div>
     <span className="assay-verdict">{health.state}</span>
   </article>
+}
+
+function healthSuccessLabel(value: string) {
+  const { label, detail } = snapshotFreshness({ observed_at: value, game_build: '', source: '' })
+  // The relative reading is the useful one on a health row; the exact stamp leads the detail, and
+  // is worth keeping for anyone comparing rows against a log.
+  return label === 'Sync time unavailable' ? value : `${label.replace(/^Synced /, '')} · ${detail.split(' · ')[0]}`
 }
 
 function DiagnosticsPage({ view }: { view: AppView }) {

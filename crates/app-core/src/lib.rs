@@ -1077,6 +1077,14 @@ fn status_for(
     let Some(path) = items.catalog_path(&order.item_id) else {
         return OrderStatus::Unverifiable;
     };
+    // The path exists but does not name one collection row: a relic's base projection stands for
+    // four refinements the collection stores separately, and a set's path names the built item
+    // rather than the parts a seller actually holds. Asking whether either is owned always answers
+    // no, so an unguarded comparison would flag most of a real account's listings as missing and
+    // offer to delete them.
+    if !items.comparable(&order.item_id) {
+        return OrderStatus::Unverifiable;
+    }
     match owned.get(path).copied().unwrap_or(0) {
         0 => OrderStatus::Missing,
         held if held < order.quantity => OrderStatus::Overshoot { owned: held },
@@ -1135,10 +1143,20 @@ impl MarketAccountView {
     ) -> Self {
         // A hidden order is offered to nobody and a buy order is money going out, so neither is
         // part of what this account is asking for.
+        //
+        // `platinum` prices one trade rather than one unit: a bulk listing of 300 relics at 18p
+        // per six is asking 900p, not 5,400p. Measured against the live API, where roughly a third
+        // of the orders on a traded relic carry `perTrade: 6`, so multiplying the two figures
+        // straight together would overstate the headline number several times over.
         let listed_platinum = orders
             .iter()
             .filter(|entry| entry.order.visible && entry.order.kind == OrderKind::Sell)
-            .map(|entry| entry.order.platinum.saturating_mul(entry.order.quantity))
+            .map(|entry| {
+                entry
+                    .order
+                    .platinum
+                    .saturating_mul(entry.order.quantity / entry.order.per_trade.max(1))
+            })
             .sum();
         let flagged = orders
             .iter()

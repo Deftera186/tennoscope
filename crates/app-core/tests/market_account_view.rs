@@ -170,3 +170,21 @@ fn unlinking_clears_the_orders() {
     // linked" describes a fetch for an account the player disconnected.
     assert_eq!(view.health().market_account().last_success(), None);
 }
+
+/// A bulk listing prices one trade, not one unit. Measured against the live API, where a traded
+/// relic carries `perTrade: 6` on roughly a third of its orders -- 300 listed at 18p per six is
+/// asking 900p, and multiplying the two figures together would put 5,400p at the top of the
+/// screen.
+#[test]
+fn listed_value_prices_a_trade_rather_than_a_unit() {
+    let mut bulk = order("bulk", 18, 300, true);
+    bulk.per_trade = 6;
+
+    let view = MarketAccountView::linked(
+        CredentialBacking::Keyring,
+        vec![reconciled(bulk, OrderStatus::Ok)],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+
+    assert_eq!(view.listed_platinum, 900);
+}
