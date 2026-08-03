@@ -94,7 +94,10 @@ fn only_claims_are_counted_as_flagged() {
         vec![
             reconciled(order("one", 12, 1, true), OrderStatus::Ok),
             reconciled(order("two", 12, 1, true), OrderStatus::Missing),
-            reconciled(order("three", 12, 3, true), OrderStatus::Overshoot { owned: 1 }),
+            reconciled(
+                order("three", 12, 3, true),
+                OrderStatus::Overshoot { owned: 1 },
+            ),
             reconciled(order("four", 12, 1, true), OrderStatus::Unverifiable),
         ],
         "2026-07-31T12:00:00Z".to_owned(),

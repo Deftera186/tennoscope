@@ -293,7 +293,10 @@ impl SqliteStore {
             .connection
             .prepare("SELECT token FROM market_credential WHERE id = 1")?;
         let mut rows = statement.query([])?;
-        rows.next()?.map(|row| row.get(0)).transpose().map_err(Into::into)
+        rows.next()?
+            .map(|row| row.get(0))
+            .transpose()
+            .map_err(Into::into)
     }
 
     pub fn set_market_credential(&mut self, token: &str) -> Result<(), StoreError> {

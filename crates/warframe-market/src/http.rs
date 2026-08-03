@@ -100,7 +100,11 @@ fn apply_token(builder: RequestBuilder, token: Option<&str>, url: &str) -> Reque
     let Some(token) = token else {
         return builder;
     };
-    let scheme = if url.contains("/v1/") { "JWT" } else { "Bearer" };
+    let scheme = if url.contains("/v1/") {
+        "JWT"
+    } else {
+        "Bearer"
+    };
     builder.header(
         reqwest::header::AUTHORIZATION,
         format!("{scheme} {token}").trim().to_owned(),

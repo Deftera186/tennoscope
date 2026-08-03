@@ -82,7 +82,9 @@ fn a_signin_without_a_token_is_malformed() {
 /// the paste box rather than at the next action.
 #[test]
 fn a_pasted_token_is_verified_against_the_account_route() {
-    let transport = FakeTransport::new(vec![ok(r#"{"apiVersion":"0.25.0","data":{},"error":null}"#)]);
+    let transport = FakeTransport::new(vec![ok(
+        r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
+    )]);
 
     let token = verify_token(&transport, &MarketToken::new(FAKE_TOKEN.to_owned()))
         .expect("a valid token verifies");
@@ -127,7 +129,10 @@ fn neither_the_token_nor_the_password_survives_into_a_rendering() {
 
     let rendered = format!("{token:?}");
     assert!(!rendered.contains(FAKE_TOKEN), "token leaked: {rendered}");
-    assert!(rendered.contains("redacted"), "unhelpful rendering: {rendered}");
+    assert!(
+        rendered.contains("redacted"),
+        "unhelpful rendering: {rendered}"
+    );
 
     let transport = FakeTransport::new(vec![status(401)]);
     let error = sign_in(&transport, "player@example.invalid", password).unwrap_err();
@@ -145,7 +150,9 @@ fn neither_the_token_nor_the_password_survives_into_a_rendering() {
         method: Method::Post,
         url: "https://api.warframe.market/v1/auth/signin".to_owned(),
         token: Some(FAKE_TOKEN.to_owned()),
-        body: Some(format!(r#"{{"email":"player@example.invalid","password":"{password}"}}"#)),
+        body: Some(format!(
+            r#"{{"email":"player@example.invalid","password":"{password}"}}"#
+        )),
     };
     let rendered = format!("{request:?}");
     assert!(!rendered.contains(FAKE_TOKEN), "token leaked: {rendered}");

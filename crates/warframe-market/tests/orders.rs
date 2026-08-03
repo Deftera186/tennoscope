@@ -53,7 +53,11 @@ fn listing_sends_the_credential_to_the_account_route() {
     list_mine(&transport, &token()).expect("orders load");
 
     let seen = transport.seen();
-    assert!(seen[0].url.ends_with("/v2/orders/my"), "url: {}", seen[0].url);
+    assert!(
+        seen[0].url.ends_with("/v2/orders/my"),
+        "url: {}",
+        seen[0].url
+    );
     assert_eq!(seen[0].token.as_deref(), Some(FAKE_TOKEN));
     assert_eq!(seen[0].method, Method::Get);
 }
@@ -79,24 +83,36 @@ fn rate_limiting_is_reported_as_itself() {
 
 #[test]
 fn deleting_an_order_names_it_in_the_path() {
-    let transport = FakeTransport::new(vec![ok(r#"{"apiVersion":"0.25.0","data":{},"error":null}"#)]);
+    let transport = FakeTransport::new(vec![ok(
+        r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
+    )]);
 
     delete_order(&transport, &token(), "order-one").expect("delete succeeds");
 
     let seen = transport.seen();
     assert_eq!(seen[0].method, Method::Delete);
-    assert!(seen[0].url.ends_with("/v2/order/order-one"), "url: {}", seen[0].url);
+    assert!(
+        seen[0].url.ends_with("/v2/order/order-one"),
+        "url: {}",
+        seen[0].url
+    );
 }
 
 #[test]
 fn lowering_a_quantity_patches_only_the_quantity() {
-    let transport = FakeTransport::new(vec![ok(r#"{"apiVersion":"0.25.0","data":{},"error":null}"#)]);
+    let transport = FakeTransport::new(vec![ok(
+        r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
+    )]);
 
     set_order_quantity(&transport, &token(), "order-one", 1).expect("patch succeeds");
 
     let seen = transport.seen();
     assert_eq!(seen[0].method, Method::Patch);
-    assert!(seen[0].url.ends_with("/v2/order/order-one"), "url: {}", seen[0].url);
+    assert!(
+        seen[0].url.ends_with("/v2/order/order-one"),
+        "url: {}",
+        seen[0].url
+    );
     let body = seen[0].body.as_deref().expect("patch sends a body");
     assert!(body.contains("\"quantity\":1"), "body: {body}");
     // Nothing else is touched. A patch that also sent the price would silently reprice an order
@@ -114,7 +130,10 @@ fn a_quantity_of_zero_is_refused() {
     let outcome = set_order_quantity(&transport, &token(), "order-one", 0);
 
     assert_eq!(outcome.unwrap_err(), MarketError::Rejected);
-    assert!(transport.seen().is_empty(), "no request should have been sent");
+    assert!(
+        transport.seen().is_empty(),
+        "no request should have been sent"
+    );
 }
 
 /// An id carrying a `/` would address something other than one order in the interpolated path.
@@ -126,7 +145,10 @@ fn deleting_with_a_slash_in_the_id_is_refused() {
     let outcome = delete_order(&transport, &token(), "order/one");
 
     assert_eq!(outcome.unwrap_err(), MarketError::Rejected);
-    assert!(transport.seen().is_empty(), "no request should have been sent");
+    assert!(
+        transport.seen().is_empty(),
+        "no request should have been sent"
+    );
 }
 
 #[test]
@@ -136,7 +158,10 @@ fn patching_with_a_slash_in_the_id_is_refused() {
     let outcome = set_order_quantity(&transport, &token(), "order/one", 1);
 
     assert_eq!(outcome.unwrap_err(), MarketError::Rejected);
-    assert!(transport.seen().is_empty(), "no request should have been sent");
+    assert!(
+        transport.seen().is_empty(),
+        "no request should have been sent"
+    );
 }
 
 /// Every authenticated call may reissue the token, and the writes are authenticated calls. Missing

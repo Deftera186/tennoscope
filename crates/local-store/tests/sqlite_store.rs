@@ -310,7 +310,9 @@ fn storing_a_credential_replaces_the_previous_one() {
 #[test]
 fn clearing_removes_the_credential() {
     let mut store = SqliteStore::in_memory().expect("store opens");
-    store.set_market_credential("fake-token-value").expect("stores");
+    store
+        .set_market_credential("fake-token-value")
+        .expect("stores");
 
     store.clear_market_credential().expect("clears");
 

@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 
-use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
 use warframe_market::DatabaseStore;
+use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
 
 const FAKE_TOKEN: &str = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.";
 
@@ -54,13 +54,21 @@ fn a_stored_token_comes_back() {
         .store(&MarketToken::new(FAKE_TOKEN.to_owned()))
         .expect("store succeeds");
 
-    let loaded = store.load().expect("load succeeds").expect("a token is held");
+    let loaded = store
+        .load()
+        .expect("load succeeds")
+        .expect("a token is held");
     assert_eq!(loaded.expose(), FAKE_TOKEN);
 }
 
 #[test]
 fn an_empty_store_holds_nothing() {
-    assert!(MemoryStore::default().load().expect("load succeeds").is_none());
+    assert!(
+        MemoryStore::default()
+            .load()
+            .expect("load succeeds")
+            .is_none()
+    );
 }
 
 /// Unlinking must actually remove the credential, not merely stop using it. A token left behind
