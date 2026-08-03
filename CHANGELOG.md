@@ -11,6 +11,15 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Added
+
+- **Optional warframe.market account link.** Off by default. Sign in or paste a token from a
+  signed-in browser session, and see your orders next to your collection — total listed value,
+  fetch age, and any order that no longer matches what you own, fixable in one action. The
+  credential is kept in your OS keyring where one is available and in the local database
+  otherwise; unlinking removes it. Nothing else about the account is uploaded, and every other
+  feature keeps working without linking.
+
 ## [0.4.1] - 2026-07-31
 
 ### Fixed

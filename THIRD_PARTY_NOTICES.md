@@ -30,3 +30,5 @@ The detailed source review and pinned references are recorded in [`docs/research
 ## Rust and JavaScript dependencies
 
 The application is built from third-party crates and npm packages under their respective licenses. `Cargo.lock` and `app/pnpm-lock.yaml` record the resolved dependency graph. Binary distributors are responsible for producing any dependency-license bundle required by their distribution.
+
+`keyring` 4.1.5 (MIT OR Apache-2.0) is called out individually: it is what stores the warframe.market credential in the platform's own secret store where one is available, and its license is GPL-3.0-compatible.

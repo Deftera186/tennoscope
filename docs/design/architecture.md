@@ -19,7 +19,7 @@ The first release provides:
 - English UI recognition, with locale-independent catalog identities in storage; and
 - native packaging for Arch, Gentoo, Debian/Ubuntu, and Fedora, plus an AppImage fallback.
 
-The MVP excludes Windows and macOS support, Flatpak, accounts, telemetry, cloud synchronization, trade automation, builds, farming planners, and non-English recognition.
+The MVP excludes Windows and macOS support, Flatpak, accounts, telemetry, cloud synchronization, automated trading, builds, farming planners, and non-English recognition.
 
 ## User Experience
 
@@ -86,6 +86,30 @@ The Local Store owns SQLite schema, transactions, migrations, current state, aut
 
 External Data adapters fetch the public Warframe item catalog and market pricing. They normalize remote representations into catalog identities and timestamped price observations. The Warframe Library receives normalized data through an injected interface; tests use deterministic in-memory adapters.
 
+#### warframe.market Account
+
+TennoScope has no accounts. Linking a warframe.market account is a separate, opt-in connection to
+a third party: it is off by default, every other feature works without it, and it is the one place
+in the application where player data leaves the device. Inventory, mastery, and reward history stay
+local and are never uploaded.
+
+The account module hides the credential lifecycle, the order endpoints, and credential storage
+behind interfaces that take a transport. Its observable outputs are an order list and a link
+state. Callers never see the token, which is held in a keyring where one is available and in the
+local database where none is, with the choice reported in the health panel.
+
+Authentication has one route available to third parties. `/v2/auth/signin` requires a Firebase App
+Check header only first-party clients can produce, and OAuth 2.0 registration is closed, so the
+v1 signin route is used -- which warframe.market's own documentation directs integrations to. That
+route is undocumented in the sense that matters: it can be withdrawn without notice. Linking with
+a token pasted from a signed-in browser session is therefore offered as an equal path rather than
+as a fallback.
+
+Reconciliation is the Warframe Library's, not this module's: it joins an order list to an
+inventory snapshot, and the account module has no concept of a collection. A mismatch is claimed
+only when the snapshot is coherent and newer than the order; every other case is reported as
+unverifiable and carries no claim.
+
 #### Presentation
 
 The Tauri presentation layer owns the collection window, reward overlay, setup, and diagnostics. It consumes immutable application views and sends user intents. It never reads game memory or SQLite directly and contains no inventory reconciliation or recommendation rules.
@@ -139,7 +163,10 @@ Routine game changes should require only a reader-definition update. A major int
 - Reader-definition updates require a valid project signature and monotonic compatible version.
 - Distribution packages are updated through their package managers. AppImage users receive release notifications; application binaries are not silently replaced.
 - In-app updating is limited to signed reader definitions and public catalog/price data.
-- The product has no accounts, telemetry, analytics, cloud storage, or background upload.
+- The product has no accounts of its own, and no telemetry, analytics, cloud storage, or
+  background upload. A warframe.market account may be linked by explicit opt-in; doing so sends
+  that account's credential and, from phase 2, order contents the player chooses to publish.
+  Nothing else leaves the device.
 - All persistent application data is local and deletable by the user.
 
 ## Packaging and Platform Support
