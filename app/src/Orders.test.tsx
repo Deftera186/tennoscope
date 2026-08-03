@@ -176,7 +176,12 @@ describe('failures', () => {
   it('asks for a re-link when the credential was refused', () => {
     render(<Orders account={account({ link: 'needs_relink' })} {...handlers} busy={false} error={null} />)
 
-    expect(screen.getByText(/sign(ing)? in again|link again/i)).toBeInTheDocument()
+    // The block that owns the recovery, not the band note that summarises it -- both say to sign
+    // in again, and only this one carries the forms that let the player do it.
+    expect(screen.getByRole('heading', { name: /credential refused/i })).toBeInTheDocument()
+    expect(screen.getByText(/refused the stored credential/i)).toBeInTheDocument()
+    // The status cell must not still read "Linked" while the credential is being refused.
+    expect(screen.queryByText('Linked')).not.toBeInTheDocument()
   })
 
   it('offers both ways back in from the needs_relink screen, without requiring an unlink first', async () => {

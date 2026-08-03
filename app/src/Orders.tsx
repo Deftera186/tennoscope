@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type { MarketAccount } from './backend'
 import { backingLabel, fixLabel, isFlagged, sortOrders, statusLabel } from './orders'
 import { snapshotFreshness } from './freshness'
+import { MetalMark } from './MetalMark'
 
 type OrdersProps = {
   account: MarketAccount
@@ -35,31 +36,42 @@ export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, o
       <p className="prose">Sell listings on your linked warframe.market account, checked against this device's inventory.</p>
     </div>
 
-    <div className="assay-band">
+    <div className="assay-band orders-band">
       <div className="band-cell orders" data-summary="orders">
-        <span className="band-figure">{account.listed_platinum}<span className="metal plat" data-metal="plat" /></span>
+        <span className="band-figure">{account.listed_platinum}<MetalMark metal="plat" alt=" platinum"/></span>
         <span className="band-label">Listed value</span>
         <p className="band-note">{freshness.label}</p>
       </div>
+      <div className="band-cell flagged" data-summary="flagged" data-count={account.flagged}>
+        <span className="band-figure">{account.flagged}</span>
+        <span className="band-label">Need attention</span>
+        <p className="band-note">{account.flagged
+          ? 'Listed above what this device says you hold'
+          : 'Every listing matches the collection'}</p>
+      </div>
       <div className="band-cell backing" data-summary="backing">
-        <span className="band-figure">Linked</span>
+        {/* A refused credential is not a linked account. Reading "Linked" beside a refusal notice
+            is the band contradicting the screen it heads. */}
+        <span className="band-figure">{needsRelink ? 'Refused' : 'Linked'}</span>
         <span className="band-label">Status</span>
-        <p className="band-note">{backingLabel(account.backing)}</p>
+        <p className="band-note">{needsRelink
+          ? 'Sign in again, or link a fresh token'
+          : `Credential held in ${backingLabel(account.backing).toLowerCase()}`}</p>
       </div>
     </div>
 
-    {error && <p className="error-banner" role="alert">{error}</p>}
+    {/* Suppressed while the relink block is up: that block already names the refusal and offers
+        the way out, and a banner above it saying the same thing twice is noise, not emphasis. */}
+    {error && !needsRelink && <p className="error-banner" role="alert">{error}</p>}
 
-    {needsRelink
-      ? <div className="setting">
-          <div>
-            <h3>Credential refused</h3>
-            <p className="prose">warframe.market refused the stored credential. Sign in again, or link again with a fresh token, to keep listings up to date.</p>
-          </div>
-        </div>
-      : null}
-
-    {needsRelink && <LinkForms onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} />}
+    {/* The refusal states its case and the two ways back in follow immediately, as one block: a
+        heading whose instruction is answered a screen further down is an instruction nobody
+        follows. */}
+    {needsRelink && <div className="relink">
+      <h2>Credential refused</h2>
+      <p className="prose">warframe.market refused the stored credential. The listings below are the last that were fetched; sign in again, or link a fresh token, to bring them up to date.</p>
+      <LinkForms onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} />
+    </div>}
 
     <div className="register-controls">
       <button type="button" className="stamp" onClick={onRefresh} disabled={busy}>
@@ -71,7 +83,7 @@ export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, o
     </div>
 
     {account.orders.length
-      ? <ul className="collection-grid" aria-label="Market orders">
+      ? <ul className="docket" aria-label="Market orders">
         {sortOrders(account.orders).map(entry => <li key={entry.order.id}>
           <OrderRow entry={entry} busy={busy} onRemove={onRemove} onLowerTo={onLowerTo} />
         </li>)}
@@ -84,6 +96,12 @@ export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, o
   </section>
 }
 
+/**
+ * One order, as a ledger line rather than a collection card. An order has no art to show and its
+ * figures are read down a column -- price against price, quantity against quantity -- so the
+ * columns are fixed and the fix button sits in a reserved slot that stays empty on the rows that
+ * need nothing. A row whose button appeared and vanished would shift the rows beneath it.
+ */
 function OrderRow({ entry, busy, onRemove, onLowerTo }: {
   entry: ReturnType<typeof sortOrders>[number]
   busy: boolean
@@ -93,24 +111,26 @@ function OrderRow({ entry, busy, onRemove, onLowerTo }: {
   const flagged = isFlagged(entry.status)
   const label = statusLabel(entry)
   const fix = fixLabel(entry.status)
-  return <article className={`entry${flagged ? ' hallmark doubt' : ''}`} aria-label={entry.name ?? entry.order.item_id}>
-    <div className="entry-body">
-      <h2 className="entry-name">{entry.name ?? entry.order.item_id}</h2>
-      <div className="marks">
-        <span className="hallmark owned">{entry.order.platinum}p × {entry.order.quantity}</span>
-        {label && <span className="hallmark doubt">{label}</span>}
-      </div>
-    </div>
-    {fix && entry.status.state !== 'ok' && entry.status.state !== 'unverifiable' && <button
-      type="button"
-      className="stamp"
-      disabled={busy}
-      onClick={() => entry.status.state === 'missing'
-        ? onRemove(entry.order.id)
-        : entry.status.state === 'overshoot'
-          ? onLowerTo(entry.order.id, entry.status.owned)
-          : undefined}
-    ><span>{fix}</span></button>}
+  const { state } = entry.status
+  return <article className={`docket-line${flagged ? ' doubt' : ''}`} aria-label={entry.name ?? entry.order.item_id}>
+    {/* The claim is struck as a shape as well as a colour: a row is legible as flagged with the
+        hue removed, which is what keeps the whole thing readable to anyone who cannot separate
+        oxblood from platinum. Ordinary rows keep the slot so the names still line up. */}
+    <span className={`line-mark${flagged ? ' struck' : ''}`} aria-hidden="true" />
+    <h2 className="line-name">{entry.name ?? entry.order.item_id}</h2>
+    <span className="line-figure">
+      {entry.order.platinum}<MetalMark metal="plat" alt=" platinum" className="line-metal"/>
+      <i>× {entry.order.quantity}</i>
+    </span>
+    <span className="line-claim">{label}</span>
+    <span className="line-fix">
+      {fix && (state === 'missing' || state === 'overshoot') && <button
+        type="button"
+        className="stamp"
+        disabled={busy}
+        onClick={() => state === 'missing' ? onRemove(entry.order.id) : onLowerTo(entry.order.id, entry.status.owned)}
+      ><span>{fix}</span></button>}
+    </span>
   </article>
 }
 

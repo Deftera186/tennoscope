@@ -774,3 +774,102 @@
    just gets a hairline in the same tone so it separates from the ordinary rows around it. */
 .entry.hallmark.doubt { border-left: 2px solid var(--oxblood); }
 
+
+/* ------------------------------------------------------------- the docket (orders)
+
+   An order is a ledger line, not a holding. It has no art to show, and its figures are read down
+   a column -- price against price, quantity against quantity -- so the columns are fixed rather
+   than flowed. The collection's card grid was the wrong container: it reserves 5.5rem for an
+   image well nothing fills, and drops the row's action outside its own two columns. */
+.docket {
+  display: grid; margin: 0; padding: 0; list-style: none;
+  border-top: 1px solid var(--rule);
+}
+.docket-line {
+  display: grid; align-items: center; gap: var(--step);
+  grid-template-columns: .6rem minmax(0, 1fr) auto minmax(0, 15rem) minmax(0, 11rem);
+  padding: var(--step) var(--step) var(--step) 0;
+  background: var(--touchstone); border-bottom: 1px solid var(--rule);
+  transition: background .12s ease;
+}
+.docket-line:hover { background: var(--plate); }
+
+/* The claim is struck as a shape as well as a colour, so a flagged row survives the hue being
+   removed. Same failed-assay mark the health rows use: this is the one place in the product that
+   says a listing is wrong, and it should say so in the vocabulary already established for it.
+   The slot is reserved on every row, so the names line up regardless. */
+.line-mark { width: .6rem; height: .7rem; }
+.line-mark.struck {
+  background: var(--oxblood);
+  clip-path: polygon(20% 0, 50% 34%, 80% 0, 100% 24%, 68% 56%, 100% 88%, 80% 100%, 50% 72%, 20% 100%, 0 88%, 32% 56%, 0 24%);
+}
+.docket-line.doubt { background: rgb(221 111 96 / 6%); }
+.docket-line.doubt:hover { background: rgb(221 111 96 / 9%); }
+
+.line-name {
+  margin: 0; min-width: 0; overflow: hidden;
+  font-family: var(--face-mark); font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em;
+  line-height: 1.15; text-transform: uppercase; color: var(--platinum);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Tabular, so the platinum figures form a column that can be scanned rather than read. The
+   multiplier sits back from the price: it qualifies the figure, it is not a second one. */
+.line-figure {
+  display: inline-flex; align-items: center; gap: .3rem; white-space: nowrap;
+  font-family: var(--face-mark); font-size: 1rem; font-weight: 700; letter-spacing: -.01em;
+  font-variant-numeric: tabular-nums; color: var(--platinum);
+}
+.line-metal { flex: none; height: 1.05rem; width: auto; user-select: none; }
+.line-figure i {
+  font-family: var(--face-register); font-style: normal; font-size: .58rem; font-weight: 600;
+  letter-spacing: .1em; color: var(--platinum-deep);
+}
+
+/* The row states its own case, in the register face the product uses for anything struck rather
+   than written. Empty on an ordinary row -- including an unverifiable one, which has nothing to
+   say -- and the column holds its width so the rows below do not shift. */
+.line-claim {
+  min-width: 0; overflow: hidden;
+  font-family: var(--face-register); font-size: .58rem; font-weight: 700; letter-spacing: .1em;
+  text-transform: uppercase; color: var(--oxblood);
+  text-overflow: ellipsis; white-space: nowrap;
+}
+/* Reserved whether or not a fix is offered. A button that appeared and vanished between refreshes
+   would move every row beneath it, and the refresh runs after every write. */
+.line-fix { display: flex; justify-content: flex-end; min-width: 0; }
+.line-fix .stamp { white-space: nowrap; }
+
+/* Three cells, not the collection's four: the band divides the width it is given. */
+.orders-band { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.band-cell.flagged .band-figure { color: var(--oxblood); }
+.band-cell.flagged[data-count="0"] .band-figure { color: var(--platinum-dim); }
+/* "Linked" is a word, not a reading; at the figure's full size it shouts across a band whose
+   other cells are counts. */
+.band-cell.backing .band-figure { font-size: clamp(1.5rem, 2.4vw, 2rem); color: var(--platinum-dim); }
+
+@media (max-width: 900px) {
+  /* The claim moves under the name rather than competing with it for a width neither can hold,
+     and the figure keeps its own column so the prices still align. */
+  .docket-line {
+    grid-template-columns: .6rem minmax(0, 1fr) auto;
+    row-gap: var(--tight);
+  }
+  .line-claim { grid-column: 2 / -1; }
+  .line-fix { grid-column: 2 / -1; justify-content: flex-start; }
+  .orders-band { grid-template-columns: 1fr; }
+}
+
+/* The refusal and its remedy are one block, not two sections with a page fold between them. */
+.relink {
+  display: grid; gap: var(--step);
+  padding: var(--course); margin-bottom: var(--course);
+  border: 1px solid rgb(221 111 96 / 32%); background: rgb(221 111 96 / 5%);
+}
+.relink > h2 {
+  margin: 0; font-family: var(--face-mark); font-size: 1.4rem; font-weight: 700;
+  letter-spacing: -.015em; text-transform: uppercase; color: var(--oxblood);
+}
+/* The pair sits inside the block, so it drops the standalone margin it carries on the unlinked
+   screen and the hairline it would otherwise draw against the block's own border. */
+.relink .clause-pair { margin: 0; }
