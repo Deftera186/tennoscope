@@ -11,56 +11,53 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-04
+
 ### Added
 
-- **Windows support.** TennoScope now runs on Windows 10 and 11 against the native game client,
-  with the same collection browser, the same reward overlay and the same local-only storage. The
-  installer is a per-user NSIS package: no administrator prompt, no prerequisites, and it carries
-  its own copy of Tesseract so there is nothing else to install. It is not code-signed, so
-  SmartScreen warns on first run. Support is best-effort: the Windows build is compiled and
-  unit-tested in CI, but no Windows machine runs it before a release.
-- **Warframe's display mode is checked.** On Windows an exclusive-fullscreen game owns the display
-  and nothing can draw over it, so the diagnostics panel now asks for Borderless when it cannot
-  find the game window, instead of reporting a generic capture failure.
-- **Optional warframe.market account link.** Off by default. Sign in or paste a token from a
-  signed-in browser session, and see your orders next to your collection — total listed value,
-  fetch age, and any order that no longer matches what you own, fixable in one action. The
-  credential is kept in your OS keyring where one is available and in the local database
-  otherwise; unlinking removes it. Nothing else about the account is uploaded, and every other
-  feature keeps working without linking.
-- **Publish a sell listing**, from a collection card or from the orders screen. Price and quantity
-  are yours to set; the quantity cannot exceed what this device says you hold. Items whose listing
-  needs more than a price and a quantity — relics, sets, and anything with a rank — are not
-  offered, because TennoScope has no way to ask for the rest.
-- **Take down any listing**, not only the ones flagged as wrong. A listing nothing is wrong with
-  asks once before it goes, since taking it down is a change of mind rather than a repair.
-- **Set what warframe.market shows you as** — online, in game, invisible, or offline — held for as
-  long as TennoScope is running. "Follow the game" reports in game while Warframe is running and
-  online otherwise, and the row still names whichever status it settled on.
-- **Where to find your token**, on the screen that asks for one, along with what it is worth to
-  anyone holding it.
+- **Windows support.** TennoScope runs on Windows 10 and 11 against the native client, with the
+  same collection browser, reward overlay and local-only storage. The installer is a per-user NSIS
+  package — no admin prompt, no prerequisites, its own Tesseract — but it is unsigned, so
+  SmartScreen warns on first run. Support is best-effort: it is run before a release, but Linux is
+  the first-class platform and nothing is guaranteed.
+- **Warframe's display mode is checked.** Exclusive fullscreen owns the display on Windows, so the
+  diagnostics panel asks for Borderless when it cannot find the game window instead of reporting a
+  generic capture failure.
+- **Optional warframe.market account link.** Off by default. Sign in or paste a token and see your
+  orders beside the collection — total listed value, fetch age, and any order that no longer
+  matches what you own, fixable in one action. The credential is kept in your OS keyring (the
+  local database where there is no keyring); unlinking removes it. Nothing else about the account
+  is uploaded.
+- **Publish a sell listing**, from a collection card or the orders screen. Price and quantity are
+  yours to set; quantity cannot exceed what this device says you hold. Items needing more than a
+  price and a quantity — relics, sets, anything with a rank — are not offered.
+- **Take down any listing**, not only ones flagged as wrong. A listing nothing is wrong with asks
+  once before it goes.
+- **Set what warframe.market shows you as** — online, in game, invisible or offline — while
+  TennoScope runs. "Follow the game" reports in game while Warframe is running and online
+  otherwise.
+- **Where to find your token**, on the screen that asks for one, and what it is worth to anyone
+  holding it.
 
 ### Changed
 
-- **The reward reader no longer shells out to anything but Tesseract.** Screen capture, cropping,
-  contrast normalisation and thresholding are all in-process Rust now. On Linux that means
-  `xwininfo` and ImageMagick are no longer needed at all — packages have dropped them from their
-  recommended dependencies — and every read is one process spawn instead of four.
+- **The reward reader no longer shells out to anything but Tesseract.** Capture, cropping, contrast
+  and thresholding are in-process Rust now — `xwininfo` and ImageMagick drop off the Linux
+  recommended dependencies, and every read is one process spawn instead of four.
 
 ### Fixed
 
-- **A mistyped password no longer locks acquisition out for the session.** Every login a running
-  game has performed leaves its credentials in memory, so a failed attempt followed by a
-  successful one left two behind and the reader refused to choose between them — "multiple
-  inventory authorizations were found", with nothing but restarting the game to clear it. It now
-  takes the newest one for an account, which is the live session. Two *different* accounts still
-  refuse, because that case has no right answer.
+- **A mistyped password no longer locks acquisition out for the session.** Failed and successful
+  logins both leave credentials in memory, so two existed and the reader refused to choose —
+  "multiple inventory authorizations were found", cleared only by a restart. It now takes the
+  newest, which is the live session. Two *different* accounts still refuse, because that case has
+  no right answer.
 - **Pre-release builds no longer open a console window beside the app.** They keep debug
-  assertions on so their tracing survives, and the Windows console was suppressed by the absence
-  of exactly that flag rather than by the build profile it should have followed.
-- **A slow first start no longer reports the backend as unavailable.** The window is created
-  before the backend finishes opening its database, and the first status call could arrive in
-  that gap; it now waits for the backend rather than declaring it missing.
+  assertions on so tracing survives; the console was suppressed by the absence of a flag rather
+  than the build profile it should have followed.
+- **A slow first start no longer reports the backend as unavailable.** The window opens before the
+  backend finishes with its database, and the first status call could arrive in that gap; it now
+  waits.
 
 ## [0.4.1] - 2026-07-31
 
@@ -242,7 +239,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Deftera186/tennoscope/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Deftera186/tennoscope/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Deftera186/tennoscope/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/Deftera186/tennoscope/compare/v0.3.0...v0.3.1
