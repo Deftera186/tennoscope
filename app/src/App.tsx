@@ -25,7 +25,7 @@ import {
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
 import { RewardCards } from './RewardCards'
 import { MetalMark } from './MetalMark'
-import { Orders } from './Orders'
+import { OrdersView } from './OrdersView'
 import { isListable, listedOrderFor } from './orders'
 import { SellForm, type SellHandler } from './SellForm'
 import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
@@ -309,7 +309,7 @@ function App() {
       {!view ? <LoadingView/> : <>
         {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} onSell={ordersSell} ordersBusy={ordersBusy}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
-        {page === 'orders' && <Orders
+        {page === 'orders' && <OrdersView
           account={view.market_account}
           onSignIn={ordersSignIn}
           onLinkToken={ordersLinkToken}

@@ -5,7 +5,7 @@ import { backingLabel, fixLabel, isFlagged, isListable, orderValue, sortOrders, 
 import { snapshotFreshness } from './freshness'
 import { MetalMark } from './MetalMark'
 
-type OrdersProps = {
+type OrdersViewProps = {
   account: MarketAccount
   onSignIn: (email: string, password: string) => Promise<void>
   onLinkToken: (token: string) => Promise<void>
@@ -26,7 +26,7 @@ function fetchFreshness(fetchedAt: string | undefined, now = new Date()) {
   return snapshotFreshness(fetchedAt ? { observed_at: fetchedAt, game_build: '', source: 'warframe.market' } : null, now)
 }
 
-export function Orders({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, onSell, onPresence, items, busy, error }: OrdersProps) {
+export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, onSell, onPresence, items, busy, error }: OrdersViewProps) {
   if (account.link === 'unlinked') {
     return <UnlinkedPanel onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} error={error} />
   }

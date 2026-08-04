@@ -2,7 +2,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CollectionItem, MarketAccount, ReconciledOrder } from './backend'
-import { Orders } from './Orders'
+import { OrdersView } from './OrdersView'
 
 afterEach(() => {
   cleanup()
@@ -57,7 +57,7 @@ const handlers = {
 
 describe('the unlinked screen', () => {
   it('explains what linking does before offering to do it', () => {
-    render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
 
     // The consent statement is on this screen, at the moment the player decides -- not in a
     // settings page they would have to go looking for afterwards. Matched as one statement rather
@@ -67,7 +67,7 @@ describe('the unlinked screen', () => {
   })
 
   it('offers both ways in, neither presented as the lesser', () => {
-    render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
 
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
@@ -75,7 +75,7 @@ describe('the unlinked screen', () => {
   })
 
   it('says where the token comes from, and what it is worth to whoever holds it', () => {
-    render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
 
     // The token path is unusable without these steps, and asking the player to go and find them
     // elsewhere is what makes an optional feature the one nobody links. Behind a disclosure
@@ -88,7 +88,7 @@ describe('the unlinked screen', () => {
   })
 
   it('never renders the password as readable text', async () => {
-    render(<Orders account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
 
     const password = screen.getByLabelText(/password/i)
     expect(password).toHaveAttribute('type', 'password')
@@ -100,7 +100,7 @@ describe('the unlinked screen', () => {
 describe('the linked screen', () => {
   it('states the total and the age of the list', () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ orders: [entry('a', { state: 'ok' })], listed_platinum: 24 })}
         {...handlers}
         busy={false}
@@ -112,20 +112,20 @@ describe('the linked screen', () => {
   })
 
   it('shows where the credential is held, because the two are not equally strong', () => {
-    render(<Orders account={account({ backing: 'database' })} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account({ backing: 'database' })} {...handlers} busy={false} error={null} />)
 
     expect(screen.getByText(/local database file/i)).toBeInTheDocument()
   })
 
   it('never shows an email address', () => {
-    render(<Orders account={account()} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account()} {...handlers} busy={false} error={null} />)
 
     expect(document.body.textContent).not.toContain('@')
   })
 
   it('flags an order for something unowned, and offers to remove it', async () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ orders: [entry('gone', { state: 'missing' })], flagged: 1 })}
         {...handlers}
         busy={false}
@@ -144,7 +144,7 @@ describe('the linked screen', () => {
    */
   it('asks again before removing a listing nothing is wrong with', async () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ orders: [entry('fine', { state: 'ok' })] })}
         {...handlers}
         busy={false}
@@ -160,7 +160,7 @@ describe('the linked screen', () => {
 
   it('offers to lower an order that lists more than is owned', async () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ orders: [entry('over', { state: 'overshoot', owned: 1 }, 3)], flagged: 1 })}
         {...handlers}
         busy={false}
@@ -178,7 +178,7 @@ describe('the linked screen', () => {
   /// every row does -- but nothing on it says anything is wrong.
   it('says nothing about an order it cannot verify', () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ orders: [entry('unknown', { state: 'unverifiable' })] })}
         {...handlers}
         busy={false}
@@ -192,7 +192,7 @@ describe('the linked screen', () => {
 
   it('disables the fixes while one is in flight, so a click is not sent twice', () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ orders: [entry('gone', { state: 'missing' })], flagged: 1 })}
         {...handlers}
         busy={true}
@@ -207,7 +207,7 @@ describe('the linked screen', () => {
 describe('failures', () => {
   it('shows what went wrong without losing the orders already listed', () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ orders: [entry('a', { state: 'ok' })] })}
         {...handlers}
         busy={false}
@@ -220,7 +220,7 @@ describe('failures', () => {
   })
 
   it('asks for a re-link when the credential was refused', () => {
-    render(<Orders account={account({ link: 'needs_relink' })} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account({ link: 'needs_relink' })} {...handlers} busy={false} error={null} />)
 
     // The block that owns the recovery, not the band note that summarises it -- both say to sign
     // in again, and only this one carries the forms that let the player do it.
@@ -231,7 +231,7 @@ describe('failures', () => {
   })
 
   it('offers both ways back in from the needs_relink screen, without requiring an unlink first', async () => {
-    render(<Orders account={account({ link: 'needs_relink' })} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account({ link: 'needs_relink' })} {...handlers} busy={false} error={null} />)
 
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
     expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
@@ -261,14 +261,14 @@ const braton: CollectionItem = {
 
 describe('publishing a listing', () => {
   it('offers nothing when the account can list nothing', () => {
-    render(<Orders account={account()} {...handlers} items={[braton]} busy={false} error={null} />)
+    render(<OrdersView account={account()} {...handlers} items={[braton]} busy={false} error={null} />)
     expect(screen.queryByRole('button', { name: /new listing/i })).toBeNull()
   })
 
   it('sends the price and quantity typed, for the item chosen', async () => {
     const user = userEvent.setup()
     render(
-      <Orders
+      <OrdersView
         account={account({ listable: [braton.id] })}
         {...handlers}
         items={[braton]}
@@ -289,7 +289,7 @@ describe('publishing a listing', () => {
   it('lists nothing until the query narrows the collection', async () => {
     const user = userEvent.setup()
     render(
-      <Orders
+      <OrdersView
         account={account({ listable: [braton.id] })}
         {...handlers}
         items={[braton]}
@@ -307,7 +307,7 @@ describe('publishing a listing', () => {
   it('refuses to send more than this device holds', async () => {
     const user = userEvent.setup()
     render(
-      <Orders
+      <OrdersView
         account={account({ listable: [braton.id] })}
         {...handlers}
         items={[braton]}
@@ -327,7 +327,7 @@ describe('publishing a listing', () => {
 describe('the market status switch', () => {
   it('asks for a status the server accepts, chosen by hand', async () => {
     const user = userEvent.setup()
-    render(<Orders account={account()} {...handlers} busy={false} error={null} />)
+    render(<OrdersView account={account()} {...handlers} busy={false} error={null} />)
     await user.click(screen.getByRole('button', { name: 'In game' }))
     expect(handlers.onPresence).toHaveBeenCalledWith('ingame', false)
   })
@@ -335,7 +335,7 @@ describe('the market status switch', () => {
   it('spells offline as no status at all', async () => {
     const user = userEvent.setup()
     render(
-      <Orders
+      <OrdersView
         account={account({ presence: { status: 'online', wanted: 'online', auto: false } })}
         {...handlers}
         busy={false}
@@ -349,7 +349,7 @@ describe('the market status switch', () => {
 
   it('marks what was asked for, so a press registers before the socket answers', () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ presence: { status: null, wanted: 'invisible', auto: false } })}
         {...handlers}
         busy={false}
@@ -362,7 +362,7 @@ describe('the market status switch', () => {
 
   it('says so while the server has not confirmed the choice', () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ presence: { status: null, wanted: 'ingame', auto: false } })}
         {...handlers}
         busy={false}
@@ -374,7 +374,7 @@ describe('the market status switch', () => {
 
   it('reports the status automatic mode settled on, in the same row', () => {
     render(
-      <Orders
+      <OrdersView
         account={account({ presence: { status: 'ingame', wanted: 'ingame', auto: true } })}
         {...handlers}
         busy={false}
@@ -391,7 +391,7 @@ describe('the market status switch', () => {
   it('hands the choice back when automatic is switched off', async () => {
     const user = userEvent.setup()
     render(
-      <Orders
+      <OrdersView
         account={account({ presence: { status: 'ingame', wanted: 'ingame', auto: true } })}
         {...handlers}
         busy={false}
