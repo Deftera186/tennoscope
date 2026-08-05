@@ -226,15 +226,14 @@ fn read_cards_at(
             .is_none_or(|(_, score)| *score < CROP_KEEP_BELOW);
         #[cfg(not(debug_assertions))]
         let keep_crop = false;
-        #[cfg(debug_assertions)]
-        warframe_acquisition::append_debug_line(&format!(
+        log::debug!(
             "[DEBUG-card] cards={cards} slot={slot} raw={text:?} match={matched:?} crop={}",
             if keep_crop {
                 crop.display().to_string()
             } else {
                 "-".to_owned()
             }
-        ));
+        );
         if !keep_crop {
             let _ = std::fs::remove_file(&crop);
         }

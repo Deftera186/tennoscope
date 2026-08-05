@@ -1627,15 +1627,11 @@ where
     // fissure that needed it had even started.
     let pool_size = pool.lock().map(|pool| pool.len()).unwrap_or(0);
     if pool_size == 0 {
-        #[cfg(debug_assertions)]
-        warframe_acquisition::append_debug_line("[DEBUG-poller] arm declined: empty pool");
+        log::debug!("[DEBUG-poller] arm declined: empty pool");
         return None;
     }
     let already_running = visual_polling.swap(true, Ordering::AcqRel);
-    #[cfg(debug_assertions)]
-    warframe_acquisition::append_debug_line(&format!(
-        "[DEBUG-poller] arm pool={pool_size} already_running={already_running}"
-    ));
+    log::debug!("[DEBUG-poller] arm pool={pool_size} already_running={already_running}");
     if already_running {
         return None;
     }
@@ -1661,11 +1657,8 @@ where
                 continue;
             }
             let outcome = VisualRewardSource::choices(&mut source, &current);
-            #[cfg(debug_assertions)]
             if let Err(reason) = &outcome {
-                warframe_acquisition::append_debug_line(&format!(
-                    "[DEBUG-poller] poll failed: {reason}"
-                ));
+                log::warn!("[DEBUG-poller] poll failed: {reason}");
             }
             match outcome {
                 // However many cards the screen has -- the reader reports the layout it found, and
@@ -1684,10 +1677,7 @@ where
                 _ if found => {
                     misses += 1;
                     if misses >= POLLER_GONE_STREAK {
-                        #[cfg(debug_assertions)]
-                        warframe_acquisition::append_debug_line(
-                            "[DEBUG-poller] reward screen gone",
-                        );
+                        log::debug!("[DEBUG-poller] reward screen gone");
                         visual_screen_gone.store(true, Ordering::Release);
                         break;
                     }
@@ -1763,7 +1753,6 @@ fn spawn_player_record_scan(
                     .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
             },
         );
-        #[cfg(debug_assertions)]
         trace_responder_reward_scan(&identity, started.elapsed(), &resolution);
         store_player_record_if_current(
             expected_generation,
@@ -1860,7 +1849,6 @@ pub fn scan_player_record_until_ready(
     warframe_acquisition::RewardResolution::Incomplete
 }
 
-#[cfg(debug_assertions)]
 fn trace_responder_reward_scan(
     identity: &str,
     elapsed: Duration,
@@ -1869,10 +1857,10 @@ fn trace_responder_reward_scan(
     let suffix = identity
         .get(identity.len().saturating_sub(6)..)
         .unwrap_or(identity);
-    warframe_acquisition::append_debug_line(&format!(
+    log::debug!(
         "[DEBUG-responder] identity=…{suffix} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
-    ));
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
