@@ -215,7 +215,12 @@ async fn set_market_presence(
             },
         }
         runtime.presence_wanted = wanted;
-        publish_presence(&mut runtime)
+        let outcome = publish_presence(&mut runtime);
+        match &outcome {
+            Ok(_) => log::info!("market: presence ok"),
+            Err(error) => log::warn!("market: presence failed: {error}"),
+        }
+        outcome
     })
     .await
     .map_err(|_| "presence task failed".to_owned())?
@@ -711,9 +716,16 @@ async fn market_sign_out(state: State<'_, SharedRuntime>) -> Result<AppView, Str
 #[tauri::command]
 async fn refresh_orders(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     let shared = Arc::clone(state.inner());
-    tauri::async_runtime::spawn_blocking(move || publish_account(&shared))
-        .await
-        .map_err(|_| "order refresh task failed".to_owned())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = publish_account(&shared);
+        match &outcome {
+            Ok(_) => log::info!("market: order refresh ok"),
+            Err(error) => log::warn!("market: order refresh failed: {error}"),
+        }
+        outcome
+    })
+    .await
+    .map_err(|_| "order refresh task failed".to_owned())?
 }
 
 /// Take one order down, then refresh so the list reflects what the account now holds.
@@ -738,7 +750,7 @@ async fn remove_order(
                 return Err(message.to_owned());
             }
         }
-        write_then_refresh(&shared, |transport, token| {
+        write_then_refresh(&shared, "remove", |transport, token| {
             warframe_market::delete_order(transport, token, &order_id)
         })
     })
@@ -782,7 +794,7 @@ async fn create_order(
                 .map_err(str::to_owned)?
                 .to_owned()
         };
-        write_then_refresh(&shared, |transport, token| {
+        write_then_refresh(&shared, "create", |transport, token| {
             warframe_market::create_order(transport, token, &item_id, platinum, quantity, visible)
         })
     })
@@ -811,7 +823,7 @@ async fn set_order_quantity(
             market_account::authorize_quantity_write(runtime.core.market_account(), &order_id)
                 .map_err(|message| message.to_owned())?
         };
-        write_then_refresh(&shared, |transport, token| {
+        write_then_refresh(&shared, "quantity", |transport, token| {
             warframe_market::set_order_quantity(transport, token, &order_id, quantity)
         })
     })
@@ -825,7 +837,11 @@ async fn set_order_quantity(
 /// account and left the list showing the old state would invite the player to press the same
 /// button again; a credential that failed to store is instead surfaced through the health row on
 /// the next fetch, when `token()` finds nothing and the account reads as unlinked or refused.
-fn write_then_refresh<F>(shared: &SharedRuntime, write: F) -> Result<AppView, String>
+fn write_then_refresh<F>(
+    shared: &SharedRuntime,
+    kind: &'static str,
+    write: F,
+) -> Result<AppView, String>
 where
     F: FnOnce(
         &dyn warframe_market::MarketTransport,
@@ -852,8 +868,16 @@ where
     let transport = warframe_market::MarketHttp::new(pacer).map_err(|_| {
         market_account::failure_message(warframe_market::MarketError::Unreachable).to_owned()
     })?;
-    let renewed = write(&transport, &token)
-        .map_err(|error| market_account::failure_message(error).to_owned())?;
+    let renewed = match write(&transport, &token) {
+        Ok(renewed) => {
+            log::info!("market: order {kind} ok");
+            renewed
+        }
+        Err(error) => {
+            log::warn!("market: order {kind} failed: {error}");
+            return Err(market_account::failure_message(error).to_owned());
+        }
+    };
     // Not propagated on failure: the write already happened on the account, and returning early
     // here would leave the list on screen out of date with no way back except pressing the same
     // button again. `publish_account` re-reads the token itself and reports whatever it finds.
@@ -2086,12 +2110,17 @@ pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
 }
 
 fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (MonitorInput, Vec<u8>) {
-    let Some(path) = inventory_log_path(pid) else {
+    let path = inventory_log_path(pid);
+    log::debug!("monitor: EE.log path resolution pid={pid} found={}", path.is_some());
+    let Some(path) = path else {
         return (MonitorInput::running(now, pid, None), Vec::new());
     };
     let metadata = match fs::metadata(&path) {
         Ok(metadata) => metadata,
-        Err(_) => return (MonitorInput::running_with_log_error(now, pid), Vec::new()),
+        Err(error) => {
+            log::warn!("monitor: EE.log open failed: {error}");
+            return (MonitorInput::running_with_log_error(now, pid), Vec::new());
+        }
     };
     let identity = log_identity(&path, &metadata);
     if machine.process_pid() != Some(pid) {
@@ -2123,7 +2152,10 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
     }
     let mut file = match fs::File::open(path) {
         Ok(file) => file,
-        Err(_) => return (MonitorInput::running_with_log_error(now, pid), Vec::new()),
+        Err(error) => {
+            log::warn!("monitor: EE.log open failed: {error}");
+            return (MonitorInput::running_with_log_error(now, pid), Vec::new());
+        }
     };
     if file.seek(SeekFrom::Start(offset)).is_err() {
         return (MonitorInput::running_with_log_error(now, pid), Vec::new());

@@ -40,12 +40,18 @@ impl MarketSession {
 
     /// Keep a token, including one a response renewed.
     pub fn adopt(&mut self, token: MarketToken) -> Result<(), MarketError> {
-        self.store.store(&token)
+        self.store
+            .store(&token)
+            .inspect(|_| log::info!("market: sign in ok"))
+            .inspect_err(|error| log::warn!("market: sign in failed: {error}"))
     }
 
     pub fn forget(&mut self) -> Result<(), MarketError> {
         self.items = None;
-        self.store.clear()
+        self.store
+            .clear()
+            .inspect(|_| log::info!("market: sign out ok"))
+            .inspect_err(|error| log::warn!("market: sign out failed: {error}"))
     }
 
     /// The item table already held, if a fetch has happened since launch.

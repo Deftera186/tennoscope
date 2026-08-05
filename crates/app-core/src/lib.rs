@@ -204,9 +204,10 @@ impl AppCore {
         &mut self,
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let message = message.into();
+        log::warn!("health: market account degraded — {message}");
         let last_success = self.health.market_account.last_success.clone();
-        self.health.market_account =
-            BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.health.market_account = BackendHealth::new(HealthState::Degraded, message, last_success)?;
         self.current_view()
     }
 
@@ -458,6 +459,8 @@ impl AppCore {
         &mut self,
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let message = message.into();
+        log::warn!("health: catalog failed — {message}");
         self.health.catalog = BackendHealth::failed(message)?;
         self.current_view()
     }
@@ -466,6 +469,8 @@ impl AppCore {
         &mut self,
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let message = message.into();
+        log::warn!("health: log monitor failed — {message}");
         self.health.log_monitor = BackendHealth::failed(message)?;
         self.current_view()
     }
@@ -474,16 +479,20 @@ impl AppCore {
         &mut self,
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let message = message.into();
+        log::warn!("health: log monitor degraded — {message}");
         self.health.log_monitor = BackendHealth::degraded(message)?;
         self.current_view()
     }
 
     pub fn record_log_monitor_ready(&mut self) -> Result<AppView, AppError> {
+        log::info!("health: log monitor ready");
         self.health.log_monitor = BackendHealth::ready("EE.log monitor ready", None)?;
         self.current_view()
     }
 
     pub fn record_game_process_ready(&mut self) -> Result<AppView, AppError> {
+        log::info!("health: game process ready");
         let last_success = self.health.game_reader.last_success.clone();
         self.health.game_reader = BackendHealth::new(
             HealthState::Ready,
@@ -497,8 +506,10 @@ impl AppCore {
         &mut self,
         observed_at: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let observed_at = observed_at.into();
+        log::info!("health: capture ready — {observed_at}");
         self.health.capture =
-            BackendHealth::ready("Reward screen observer ready", Some(observed_at.into()))?;
+            BackendHealth::ready("Reward screen observer ready", Some(observed_at))?;
         self.current_view()
     }
 
@@ -508,14 +519,16 @@ impl AppCore {
         elapsed_ms: u128,
         observed_at: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let observed_at = observed_at.into();
         let source = if source.eq_ignore_ascii_case("memory") {
             "Memory"
         } else {
             "OCR"
         };
+        log::info!("health: capture ready — {source} ({elapsed_ms} ms) — {observed_at}");
         self.health.capture = BackendHealth::ready(
             format!("{source} reward observer ready ({elapsed_ms} ms)"),
-            Some(observed_at.into()),
+            Some(observed_at),
         )?;
         self.current_view()
     }
@@ -527,9 +540,11 @@ impl AppCore {
         priced: usize,
         observed_at: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let observed_at = observed_at.into();
+        log::info!("health: market ready — {priced} priced — {observed_at}");
         self.health.market = BackendHealth::ready(
             format!("warframe.market pricing ready ({priced} priced)"),
-            Some(observed_at.into()),
+            Some(observed_at),
         )?;
         self.current_view()
     }
@@ -538,6 +553,8 @@ impl AppCore {
         &mut self,
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let message = message.into();
+        log::warn!("health: market degraded — {message}");
         let last_success = self.health.market.last_success.clone();
         self.health.market = BackendHealth::new(HealthState::Degraded, message, last_success)?;
         self.current_view()
@@ -555,6 +572,7 @@ impl AppCore {
         dump_date: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let dump_date = dump_date.into();
+        log::info!("health: collection prices ready — {dump_date} — {priced} items");
         self.health.collection_prices = BackendHealth::ready(
             format!("Priced from the {dump_date} price dump ({priced} items)"),
             Some(dump_date),
@@ -566,6 +584,8 @@ impl AppCore {
         &mut self,
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let message = message.into();
+        log::warn!("health: collection prices degraded — {message}");
         let last_success = self.health.collection_prices.last_success.clone();
         self.health.collection_prices =
             BackendHealth::new(HealthState::Degraded, message, last_success)?;
@@ -576,6 +596,8 @@ impl AppCore {
         &mut self,
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
+        let message = message.into();
+        log::warn!("health: capture degraded — {message}");
         let last_success = self.health.capture.last_success.clone();
         self.health.capture = BackendHealth::new(HealthState::Degraded, message, last_success)?;
         self.current_view()
