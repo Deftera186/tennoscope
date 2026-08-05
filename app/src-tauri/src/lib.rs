@@ -2443,13 +2443,24 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            let mut targets = vec![tauri_plugin_log::Target::new(
+                tauri_plugin_log::TargetKind::LogDir {
+                    file_name: Some("tennoscope.log".to_owned()),
+                },
+            )];
             if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+                targets.push(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stdout,
+                ));
             }
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Debug)
+                    .max_file_size(5 * 1024 * 1024)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+                    .targets(targets)
+                    .build(),
+            )?;
             // Before anything can read a reward screen: the NSIS bundle ships Tesseract under the
             // resource directory so a Windows player installs one thing, not two.
             if let Ok(resources) = app.path().resource_dir() {
