@@ -23,6 +23,7 @@ import {
   type Presence,
 } from './backend'
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
+import { copyReport, openIssue, saveReport } from './report'
 import { RewardCards } from './RewardCards'
 import { MetalMark } from './MetalMark'
 import { OrdersView } from './OrdersView'
@@ -645,6 +646,52 @@ function healthSuccessLabel(value: string) {
   return label === 'Sync time unavailable' ? value : `${label.replace(/^Synced /, '')} · ${detail.split(' · ')[0]}`
 }
 
+type ReportStatus =
+  | { kind: 'idle' }
+  | { kind: 'busy' }
+  | { kind: 'done'; message: string }
+
+function stageBroken(value: unknown): value is { state: HealthState } {
+  return typeof value === 'object' && value !== null && 'state' in value
+}
+
+function ReportBlock({ health }: { health: AppView['health'] }) {
+  const [status, setStatus] = useState<ReportStatus>({ kind: 'idle' })
+  const broken = Object.values(health).some(value =>
+    Array.isArray(value)
+      ? value.some(stage => stage.state === 'degraded' || stage.state === 'failed')
+      : stageBroken(value) && (value.state === 'degraded' || value.state === 'failed'),
+  )
+  if (!broken) return null
+  const run = async (action: () => Promise<void | { folder_path: string; ee_log_included: boolean }>, done: (result: { folder_path: string; ee_log_included: boolean } | null) => string) => {
+    setStatus({ kind: 'busy' })
+    try {
+      const result = await action()
+      const resultOrNull = result && typeof result === 'object' ? result : null
+      setStatus({ kind: 'done', message: done(resultOrNull) })
+    } catch (error) {
+      setStatus({ kind: 'done', message: String(error) })
+    }
+  }
+  return (
+    <section className="report-plate" role="group" aria-label="Report a problem">
+      <div className="report-head">
+        <span className="state-mark failed" aria-hidden="true"/>
+        <h2 className="report-title">Report this reading</h2>
+        <p className="prose">Strike a record of what failed. Review it before it leaves this machine — nothing is sent anywhere.</p>
+      </div>
+      <div className="report-actions">
+        <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(openIssue, () => 'OPENED THE ISSUE FORM IN YOUR BROWSER.')}>Open an issue</button>
+        <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(copyReport, () => 'COPIED — PASTE IT INTO THE ISSUE FORM.')}>Copy report</button>
+        <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(saveReport, result =>
+          `SAVED TO ${result?.folder_path ?? '…'}${result?.ee_log_included ? ' — EE.LOG INCLUDED (SENSITIVE) — SEND IT TO THE MAINTAINER ON DISCORD, NOT TO THE ISSUE.' : ''}`,
+        )}>Save logs</button>
+      </div>
+      {status.kind === 'done' && <p className="report-status" role="status">{status.message}</p>}
+    </section>
+  )
+}
+
 function DiagnosticsPage({ view }: { view: AppView }) {
   const systems = [
     ['Game reader', view.health.game_reader],
@@ -661,6 +708,7 @@ function DiagnosticsPage({ view }: { view: AppView }) {
       <h1 id="diagnostics-title" className="mark">Diagnostics</h1>
       <p className="prose">Status messages are deliberately scrubbed of temporary access values.</p>
     </div>
+    <ReportBlock health={view.health}/>
     <section aria-label="Diagnostics">
       <div className="procedure-head">
         <h2 className="column-head">Core services</h2>

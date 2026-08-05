@@ -461,6 +461,24 @@
 /* -------------------------------------------------------- the assay procedure */
 
 .procedure-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--step); flex-wrap: wrap; padding-bottom: var(--step); border-bottom: 1px solid var(--rule); }
+/* The failed reading gets a struck record: a ruled plate offering the three
+   ways the evidence leaves the machine -- by the player's own hand. No new
+   visual language: the failure mark, the register labels, the office stamp. */
+.report-plate {
+  display: grid; gap: var(--course);
+  padding: var(--course) 0;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+.report-head { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--step); align-items: center; }
+.report-head .state-mark { width: 1.1rem; height: 1.25rem; clip-path: var(--cartouche); background: var(--oxblood); }
+.report-head .prose { grid-column: 2; max-width: 68ch; margin: .2rem 0 0; }
+.report-title {
+  margin: 0; font-family: var(--face-mark); font-size: 1.5rem; font-weight: 700;
+  letter-spacing: -.015em; text-transform: uppercase; color: var(--oxblood);
+}
+.report-actions { display: flex; flex-wrap: wrap; gap: var(--step); padding-left: calc(1.1rem + var(--step)); }
+.report-status { margin: 0; padding-left: calc(1.1rem + var(--step)); font-family: var(--face-register); font-size: .58rem; letter-spacing: .1em; color: var(--platinum-dim); }
 .procedure-head.second { margin-top: clamp(var(--course), 5vh, var(--field)); }
 .column-head { margin: 0; font-family: var(--face-register); font-size: .62rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: var(--platinum-dim); }
 
