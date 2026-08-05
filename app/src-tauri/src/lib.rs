@@ -54,6 +54,7 @@ const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 pub mod market_account;
 mod monitor;
 mod overlay_window;
+pub mod report;
 mod reward_log;
 mod reward_observer;
 mod reward_ocr;
