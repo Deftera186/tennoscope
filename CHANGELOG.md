@@ -11,6 +11,16 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-08-05
+
+### Fixed
+
+- **Your collection reads on an account that does not own everything yet.** If you had no
+  Necramech, no Amp, or nothing at all in any one category, the read failed outright — "reader
+  failed", and a collection of zeroes — even though everything else about it had worked. Warframe
+  leaves a category out of its reply when you own nothing in it, and TennoScope was treating that
+  as a broken reply rather than an empty shelf.
+
 ## [0.5.0] - 2026-08-04
 
 ### Added
@@ -239,7 +249,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Deftera186/tennoscope/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Deftera186/tennoscope/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Deftera186/tennoscope/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Deftera186/tennoscope/compare/v0.3.1...v0.4.0
