@@ -173,9 +173,21 @@ struct AccumulatedEntry {
 
 impl SnapshotDecoder for InventoryJsonDecoder<'_> {
     fn decode(&self, response: &[u8]) -> Result<InventorySnapshot, AcquisitionError> {
-        let raw: RawInventory =
-            serde_json::from_slice(response).map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        let raw: RawInventory = match serde_json::from_slice(response) {
+            Ok(raw) => raw,
+            Err(error) => {
+                log::warn!(
+                    "inventory decode failed: {error} payload_bytes={}",
+                    response.len()
+                );
+                return Err(AcquisitionError::SnapshotInvalid);
+            }
+        };
         if raw.last_inventory_sync.is_null() {
+            log::warn!(
+                "inventory sync timestamp missing payload_bytes={}",
+                response.len()
+            );
             return Err(AcquisitionError::SnapshotInvalid);
         }
         let mut entries = BTreeMap::<String, AccumulatedEntry>::new();
@@ -274,17 +286,40 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
                 let name = accumulated
                     .name
                     .unwrap_or(display_label(&accumulated.path)?);
-                let id = ItemId::new(path).map_err(|_| AcquisitionError::SnapshotInvalid)?;
-                let item = CatalogItem::new(id, name, accumulated.category)
-                    .map_err(|_| AcquisitionError::SnapshotInvalid)?;
+                let id = match ItemId::new(path) {
+                    Ok(id) => id,
+                    Err(error) => {
+                        log::warn!("inventory entry rejected: invalid catalog path ({error})");
+                        return Err(AcquisitionError::SnapshotInvalid);
+                    }
+                };
+                let item = match CatalogItem::new(id, name, accumulated.category) {
+                    Ok(item) => item,
+                    Err(error) => {
+                        log::warn!("inventory entry rejected: catalog item invalid ({error})");
+                        return Err(AcquisitionError::SnapshotInvalid);
+                    }
+                };
                 let item = match accumulated.image_name {
-                    Some(image_name) => item
-                        .with_image_name(image_name)
-                        .map_err(|_| AcquisitionError::SnapshotInvalid)?,
+                    Some(image_name) => match item.with_image_name(image_name) {
+                        Ok(item) => item,
+                        Err(error) => {
+                            log::warn!("inventory entry rejected: image name invalid ({error})");
+                            return Err(AcquisitionError::SnapshotInvalid);
+                        }
+                    },
                     None => item,
                 };
-                let quantity = u32::try_from(accumulated.quantity)
-                    .map_err(|_| AcquisitionError::SnapshotInvalid)?;
+                let quantity = match u32::try_from(accumulated.quantity) {
+                    Ok(quantity) => quantity,
+                    Err(_) => {
+                        log::warn!(
+                            "inventory entry rejected: unsafe quantity {}",
+                            accumulated.quantity
+                        );
+                        return Err(AcquisitionError::SnapshotInvalid);
+                    }
+                };
                 let entry = InventoryEntry::new(item, quantity).with_mastered(accumulated.mastered);
                 Ok(match accumulated.rank {
                     Some(rank) => entry.with_rank(rank, accumulated.fusion_limit),
@@ -368,10 +403,13 @@ fn add_ranked_copy(
     // The key, not the path: the path is what the catalogue is asked about, and several rows share
     // it. `#` cannot occur in an item path, which `validate_item_type` has already established.
     let entry = output.entry(format!("{path}#{rank}")).or_insert(resolved);
-    entry.quantity = entry
-        .quantity
-        .checked_add(1)
-        .ok_or(AcquisitionError::SnapshotInvalid)?;
+    entry.quantity = match entry.quantity.checked_add(1) {
+        Some(quantity) => quantity,
+        None => {
+            log::warn!("inventory entry rejected: quantity overflow");
+            return Err(AcquisitionError::SnapshotInvalid);
+        }
+    };
     Ok(())
 }
 
@@ -386,10 +424,13 @@ fn add_unique_section(
         let path = item.item_type;
         let resolved = accumulated_entry(&path, category, catalog);
         let entry = output.entry(path).or_insert(resolved);
-        entry.quantity = entry
-            .quantity
-            .checked_add(1)
-            .ok_or(AcquisitionError::SnapshotInvalid)?;
+        entry.quantity = match entry.quantity.checked_add(1) {
+            Some(quantity) => quantity,
+            None => {
+                log::warn!("inventory entry rejected: quantity overflow");
+                return Err(AcquisitionError::SnapshotInvalid);
+            }
+        };
     }
     Ok(())
 }
@@ -417,6 +458,7 @@ fn add_stackable_item(
     validate_item_type(&item.item_type)?;
     let quantity = item.item_count.unwrap_or(1);
     if quantity < 0 {
+        log::warn!("inventory entry rejected: negative quantity");
         return Err(AcquisitionError::SnapshotInvalid);
     }
     if quantity == 0 {
@@ -425,13 +467,20 @@ fn add_stackable_item(
     let path = item.item_type;
     let resolved = accumulated_entry(&path, category, catalog);
     let entry = output.entry(path).or_insert(resolved);
-    let delta = quantity
-        .checked_mul(direction)
-        .ok_or(AcquisitionError::SnapshotInvalid)?;
-    entry.quantity = entry
-        .quantity
-        .checked_add(delta)
-        .ok_or(AcquisitionError::SnapshotInvalid)?;
+    let delta = match quantity.checked_mul(direction) {
+        Some(delta) => delta,
+        None => {
+            log::warn!("inventory entry rejected: quantity overflow");
+            return Err(AcquisitionError::SnapshotInvalid);
+        }
+    };
+    entry.quantity = match entry.quantity.checked_add(delta) {
+        Some(quantity) => quantity,
+        None => {
+            log::warn!("inventory entry rejected: quantity overflow");
+            return Err(AcquisitionError::SnapshotInvalid);
+        }
+    };
     Ok(())
 }
 
@@ -448,6 +497,7 @@ fn validate_item_type(path: &str) -> Result<(), AcquisitionError> {
     {
         Ok(())
     } else {
+        log::warn!("inventory entry rejected: invalid item type");
         Err(AcquisitionError::SnapshotInvalid)
     }
 }
@@ -542,9 +592,13 @@ fn display_label(path: &str) -> Result<String, AcquisitionError> {
         }
     }
     let label = label.trim().to_owned();
-    (!label.is_empty())
-        .then_some(label)
-        .ok_or(AcquisitionError::SnapshotInvalid)
+    match (!label.is_empty()).then_some(label) {
+        Some(label) => Ok(label),
+        None => {
+            log::warn!("inventory entry rejected: empty display label");
+            Err(AcquisitionError::SnapshotInvalid)
+        }
+    }
 }
 
 #[cfg(test)]

@@ -49,6 +49,12 @@ impl AuthorizationScanner {
     ) -> Result<InventoryAuthorization, AcquisitionError> {
         let mut regions = memory.readable_regions(process)?;
         regions.sort_by_key(|region| (Reverse(region.scan_priority()), region.start()));
+        log::debug!(
+            "authorization scan: regions={} preferred_bytes={} fallback_bytes={}",
+            regions.len(),
+            policy.preferred_bytes,
+            policy.fallback_bytes
+        );
         let mut candidates = CandidateAccumulator::default();
         let mut read_buffer = Zeroizing::new(vec![0_u8; self.chunk_size]);
         let mut fallback = Vec::with_capacity(regions.len());
@@ -116,7 +122,13 @@ impl AuthorizationScanner {
             fallback.push_back(cursor);
         }
 
-        select_candidate(candidates)
+        match select_candidate(candidates) {
+            Ok(authorization) => Ok(authorization),
+            Err(error) => {
+                log::warn!("authorization scan: {error}");
+                Err(error)
+            }
+        }
     }
 }
 
