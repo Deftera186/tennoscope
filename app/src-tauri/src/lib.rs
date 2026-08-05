@@ -176,6 +176,108 @@ async fn get_view(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     .map_err(|_| "application view task failed".to_owned())?
 }
 
+/// Assemble the GitHub-safe report text only (used by "Copy report").
+#[tauri::command]
+async fn collect_report_text(
+    state: State<'_, SharedRuntime>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        let view = runtime
+            .core
+            .current_view()
+            .map_err(|_| "application view is unavailable".to_owned())?;
+        let health_json = serde_json::to_string_pretty(&view.health())
+            .map_err(|_| "health could not be serialized".to_owned())?;
+        let request = build_report_request(&app, &runtime, &health_json, false);
+        report::assemble_report_text(&request.meta, &request.health_json, false)
+    })
+    .await
+    .map_err(|_| "report task failed".to_owned())?
+}
+
+/// Write the report folder and return the text plus the folder path.
+#[tauri::command]
+async fn collect_report(
+    state: State<'_, SharedRuntime>,
+    app: AppHandle,
+) -> Result<report::CollectedReport, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        let view = runtime
+            .core
+            .current_view()
+            .map_err(|_| "application view is unavailable".to_owned())?;
+        let health_json = serde_json::to_string_pretty(&view.health())
+            .map_err(|_| "health could not be serialized".to_owned())?;
+        let request = build_report_request(&app, &runtime, &health_json, true);
+        report::collect_report(&request)
+    })
+    .await
+    .map_err(|_| "report task failed".to_owned())?
+}
+
+fn build_report_request(
+    app: &AppHandle,
+    runtime: &Runtime,
+    health_json: &str,
+    want_ee_log: bool,
+) -> report::ReportRequest {
+    let os_arch = format!("{}/{}", std::env::consts::OS, std::env::consts::ARCH);
+    let profile = if cfg!(debug_assertions) {
+        "pre-release".to_owned()
+    } else {
+        "stable".to_owned()
+    };
+    let version = app.package_info().version.to_string();
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .unwrap_or_else(|_| runtime.app_data.clone());
+    let ee_log_wanted = want_ee_log
+        && runtime
+            .core
+            .current_view()
+            .ok()
+            .is_some_and(|view| {
+                view.health().acquisition_stages().iter().any(|stage| {
+                    matches!(
+                        stage.state(),
+                        app_core::HealthState::Degraded | app_core::HealthState::Failed
+                    )
+                })
+            });
+    let ee_log_path = if ee_log_wanted {
+        GameMemory::new()
+            .discover()
+            .ok()
+            .flatten()
+            .and_then(|process| inventory_log_path(process.pid()))
+    } else {
+        None
+    };
+    report::ReportRequest {
+        meta: report::ReportMeta {
+            version,
+            profile,
+            os_arch,
+            timestamp: report::utc_stamp(),
+            log_dir,
+            app_data: runtime.app_data.clone(),
+        },
+        health_json: health_json.to_owned(),
+        ee_log_wanted,
+        ee_log_path,
+    }
+}
+
 /// What the presence switch is asked for, including going offline.
 ///
 /// `None` is offline, and offline is the socket closing rather than a value sent over it: the
@@ -2433,6 +2535,8 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         // `reward-overlay` is only ever hidden, never destroyed, so Tauri still holds a live window
         // once the main window closes and the app stays up: tailing the log and drawing the overlay
         // over the game with no UI left to close it by.
@@ -2497,6 +2601,8 @@ pub fn run() {
             market_sign_out,
             refresh_orders,
             set_market_presence,
+            collect_report,
+            collect_report_text,
             remove_order,
             create_order,
             set_order_quantity

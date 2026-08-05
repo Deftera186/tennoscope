@@ -9,6 +9,9 @@
   "permissions": [
     "core:default",
     "core:window:allow-hide",
-    "core:window:allow-show"
+    "core:window:allow-show",
+    "opener:allow-open-url",
+    "opener:allow-reveal-item-in-dir",
+    "clipboard-manager:allow-write-text"
   ]
 }
