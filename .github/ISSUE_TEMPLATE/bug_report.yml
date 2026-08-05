@@ -8,8 +8,13 @@ body:
         Before filing, please check **Diagnostics** in the app — it names which stage failed, which
         is usually most of the answer.
 
-        **Do not paste account identifiers, nonces, or other players' handles.** If you attach a
-        screenshot of a reward screen, crop out the names underneath the cards.
+        If Diagnostics shows a **Report block**, use **Copy report** and paste it into the fields
+        below, and attach the `report.txt` from the saved report folder if you used **Save logs**.
+
+        **Do not attach EE.log to a public issue.** It contains IPs, email addresses and account
+        handles — send it to the maintainer on Discord (@deftera) instead. Do not paste account
+        identifiers, nonces, or other players' handles either; if you attach a screenshot of a
+        reward screen, crop out the names underneath the cards.
 
   - type: textarea
     id: what-happened
@@ -51,6 +56,12 @@ body:
       description: >
         The Diagnostics page, verbatim. It reports subsystem health without any account data.
       render: text
+
+  - type: input
+    id: report-folder
+    attributes:
+      label: Report folder
+      description: If you saved a report folder from Diagnostics, attach report.txt here or give the folder's path.
 
   - type: input
     id: environment

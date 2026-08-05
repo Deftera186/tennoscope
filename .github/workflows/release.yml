@@ -12,10 +12,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # A pre-release tag (`v0.4.2-rc1`) builds with debug assertions on, which is what makes the
-  # `[DEBUG-…]` tracing exist at all -- every one of those lines is `cfg(debug_assertions)`, so a
-  # normal release binary handed to a tester reports nothing when something goes wrong. Stable
-  # tags are unaffected: `-` in the tag is the whole switch.
+  # A pre-release tag (`v0.4.2-rc1`) builds with debug assertions on. The `[DEBUG-…]` log
+  # channel is always compiled now, and a debug build also prints to stdout and keeps the
+  # remaining `cfg(debug_assertions)` site: the reward OCR's crop retention (`CROP_KEEP_BELOW`
+  # keeps low-confidence crops on disk for forensics). Persistent logging always writes the
+  # platform log directory regardless of this switch -- the tag only decides how much extra
+  # debugging aid the binary carries.
   CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
 
 jobs:
