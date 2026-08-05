@@ -312,9 +312,11 @@ fn ranked_copies_carry_the_ceiling_the_catalogue_can_vouch_for() {
 /// nothing in one of them must still sync. Only the sections that were always authoritative are
 /// allowed to reject a snapshot by their absence.
 #[test]
-fn every_authoritative_section_and_sync_marker_is_required() {
-    let required = [
-        "LastInventorySync",
+fn a_section_the_account_has_nothing_in_is_omitted_not_broken() {
+    // `inventory.php` leaves a section out entirely when the account holds nothing in it: no
+    // Necramech means no `MechSuits`, no Amp means no `OperatorAmps`. Requiring every section
+    // turned "this player has not reached Deimos yet" into a whole failed read.
+    let optional = [
         "Suits",
         "LongGuns",
         "Pistols",
@@ -332,15 +334,53 @@ fn every_authoritative_section_and_sync_marker_is_required() {
         "OperatorAmps",
         "MechSuits",
     ];
-    for field in required {
+    for field in optional {
         let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
         payload.as_object_mut().unwrap().remove(field);
-        assert_eq!(
-            InventoryJsonDecoder::default().decode(&serde_json::to_vec(&payload).unwrap()),
-            Err(AcquisitionError::SnapshotInvalid),
-            "omitting {field} must reject the whole snapshot"
+        let snapshot = InventoryJsonDecoder::default()
+            .decode(&serde_json::to_vec(&payload).unwrap())
+            .unwrap_or_else(|error| panic!("omitting {field} must still decode, got {error:?}"));
+        assert!(
+            !snapshot.entries().is_empty(),
+            "omitting {field} must keep every other section"
         );
     }
+
+    // The one section this account genuinely has nothing in.
+    let no_mechs: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    let with_mechs = InventoryJsonDecoder::default()
+        .decode(&serde_json::to_vec(&no_mechs).unwrap())
+        .unwrap();
+    let mut stripped = no_mechs;
+    stripped.as_object_mut().unwrap().remove("MechSuits");
+    assert_eq!(
+        InventoryJsonDecoder::default()
+            .decode(&serde_json::to_vec(&stripped).unwrap())
+            .unwrap()
+            .entries(),
+        with_mechs.entries(),
+        "an omitted empty section decodes the same as an explicitly empty one"
+    );
+}
+
+#[test]
+fn the_sync_marker_is_required_and_a_snapshot_holding_nothing_is_not_believed() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload.as_object_mut().unwrap().remove("LastInventorySync");
+    assert_eq!(
+        InventoryJsonDecoder::default().decode(&serde_json::to_vec(&payload).unwrap()),
+        Err(AcquisitionError::SnapshotInvalid),
+        "without the sync marker this is not an inventory response"
+    );
+
+    // Sections are optional one at a time, not all at once: no logged-in account owns nothing, so
+    // a response that decodes to an empty collection is a response that was not understood.
+    assert_eq!(
+        InventoryJsonDecoder::default()
+            .decode(br#"{"LastInventorySync":{"$date":{"$numberLong":"1753392000000"}}}"#),
+        Err(AcquisitionError::SnapshotInvalid),
+        "a snapshot with no holdings at all must not read as an empty collection"
+    );
 }
 
 #[test]

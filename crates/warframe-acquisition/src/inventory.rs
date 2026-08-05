@@ -119,29 +119,50 @@ struct RawXpEntry {
     xp: u64,
 }
 
+/// One inventory response.
+///
+/// Every section but the sync marker is defaulted: `inventory.php` omits a section entirely when
+/// the account holds nothing in it -- no Necramech means no `MechSuits`, no Amp means no
+/// `OperatorAmps` -- and requiring them turned "this player has not reached Deimos yet" into a
+/// failed read of the whole snapshot. The sync marker stays required because it is what
+/// distinguishes an inventory response from any other JSON the endpoint could return; a payload
+/// that decodes to no holdings at all is refused in `decode` rather than here.
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct RawInventory {
     last_inventory_sync: serde_json::Value,
+    #[serde(default)]
     suits: Vec<RawEntry>,
+    #[serde(default)]
     long_guns: Vec<RawEntry>,
+    #[serde(default)]
     pistols: Vec<RawEntry>,
+    #[serde(default)]
     melee: Vec<RawEntry>,
+    #[serde(default)]
     sentinels: Vec<RawEntry>,
+    #[serde(default)]
     misc_items: Vec<RawEntry>,
+    #[serde(default)]
     recipes: Vec<RawEntry>,
+    #[serde(default)]
     pending_recipes: Vec<RawEntry>,
-    #[serde(rename = "XPInfo")]
+    #[serde(rename = "XPInfo", default)]
     xp_info: Vec<RawXpEntry>,
+    #[serde(default)]
     space_suits: Vec<RawEntry>,
+    #[serde(default)]
     space_melee: Vec<RawEntry>,
+    #[serde(default)]
     space_guns: Vec<RawEntry>,
+    #[serde(default)]
     sentinel_weapons: Vec<RawEntry>,
+    #[serde(default)]
     kubrow_pets: Vec<RawEntry>,
+    #[serde(default)]
     operator_amps: Vec<RawEntry>,
+    #[serde(default)]
     mech_suits: Vec<RawEntry>,
-    // Defaulted, unlike every section above, because these were added to the decoder later and a
-    // response that omits one is a section the account has nothing in -- not a broken snapshot.
     /// Unranked mods and arcanes, stacked by type. The largest holding in the response by value.
     #[serde(default)]
     raw_upgrades: Vec<RawEntry>,
@@ -292,6 +313,12 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
                 })
             })
             .collect::<Result<Vec<_>, AcquisitionError>>()?;
+        // Every section being optional is what lets a young account read at all, but it also means
+        // a response whose shape we stopped understanding would decode quietly to nothing. No
+        // logged-in account owns nothing, so an empty snapshot is a failed read, not a poor one.
+        if domain_entries.is_empty() {
+            return Err(AcquisitionError::SnapshotInvalid);
+        }
         InventorySnapshot::coherent(domain_entries).map_err(|_| AcquisitionError::SnapshotInvalid)
     }
 }
