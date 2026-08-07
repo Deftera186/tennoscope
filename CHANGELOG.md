@@ -11,6 +11,17 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-08-07
+
+### Fixed
+
+- **Presence switches no longer hang on "Asking warframe.market…".** The first status change
+  on a connection went through and every later one waited on the ask, even though the site had
+  applied it. The site confirms a change twice — in its reply to the change itself, and, once
+  per connection, as the status it last recorded — and TennoScope was reading only the second,
+  announcing at the start of a connection. It now reads the reply too, and a change that gets
+  no reply at all asks again, reconnecting after a quiet connection instead of waiting forever.
+
 ## [0.5.1] - 2026-08-05
 
 ### Fixed
@@ -249,7 +260,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/Deftera186/tennoscope/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Deftera186/tennoscope/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Deftera186/tennoscope/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Deftera186/tennoscope/compare/v0.4.0...v0.4.1
