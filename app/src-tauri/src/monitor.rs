@@ -95,10 +95,12 @@ impl MonitorMachine {
     }
 
     pub fn tick(&mut self, input: MonitorInput) -> MonitorResult {
-        log::debug!("monitor: tick discovery={:?}", input.discovery);
         let pid = match input.discovery {
             Ok(Some(pid)) => pid,
             Ok(None) => {
+                if self.process.is_some() {
+                    log::info!("monitor: game process gone, resetting");
+                }
                 self.reset_process();
                 return MonitorResult {
                     refresh: false,
@@ -193,7 +195,6 @@ impl MonitorMachine {
     }
 
     fn reset_process(&mut self) {
-        log::info!("monitor: game process gone, resetting");
         self.process = None;
         self.log_identity = None;
         self.log_offset = 0;

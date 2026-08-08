@@ -36,9 +36,7 @@ where
         let authorization = AuthorizationScanner::new(SCAN_CHUNK_BYTES)
             .scan(&self.memory, &process)
             .map_err(AcquisitionFailure::from_error)?;
-        log::info!(
-            "acquisition: authorization scan chunks=1 bytes={SCAN_CHUNK_BYTES}"
-        );
+        log::info!("acquisition: authorization scan chunks=1 bytes={SCAN_CHUNK_BYTES}");
         let body = self
             .transport
             .fetch(&authorization)

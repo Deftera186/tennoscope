@@ -12,7 +12,12 @@ struct MemoryStore {
 
 impl CredentialStore for MemoryStore {
     fn load(&self) -> Result<Option<MarketToken>, MarketError> {
-        Ok(self.token.lock().expect("lock").clone().map(MarketToken::new))
+        Ok(self
+            .token
+            .lock()
+            .expect("lock")
+            .clone()
+            .map(MarketToken::new))
     }
     fn store(&self, token: &MarketToken) -> Result<(), MarketError> {
         *self.token.lock().expect("lock") = Some(token.expose().to_owned());

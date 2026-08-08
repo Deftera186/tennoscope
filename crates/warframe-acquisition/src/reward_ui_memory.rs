@@ -109,7 +109,8 @@ impl PersistentRewardResolver {
                 for (index, container) in containers.iter().take(16).enumerate() {
                     log::debug!(
                         "[DEBUG-ui-candidate] depth={depth} index={index} stride={} choices={:?}",
-                        container.stride, container.choices
+                        container.stride,
+                        container.choices
                     );
                 }
                 #[cfg(debug_assertions)]

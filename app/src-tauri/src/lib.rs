@@ -194,7 +194,11 @@ async fn collect_report_text(
         let health_json = serde_json::to_string_pretty(&view.health())
             .map_err(|_| "health could not be serialized".to_owned())?;
         let request = build_report_request(&app, &runtime, &health_json, false);
-        report::assemble_report_text(&request.meta, &request.health_json, report::EeLogState::NotRequested)
+        report::assemble_report_text(
+            &request.meta,
+            &request.health_json,
+            report::EeLogState::NotRequested,
+        )
     })
     .await
     .map_err(|_| "report task failed".to_owned())?
@@ -242,18 +246,14 @@ fn build_report_request(
         .app_log_dir()
         .unwrap_or_else(|_| runtime.app_data.clone());
     let ee_log_wanted = want_ee_log
-        && runtime
-            .core
-            .current_view()
-            .ok()
-            .is_some_and(|view| {
-                view.health().acquisition_stages().iter().any(|stage| {
-                    matches!(
-                        stage.state(),
-                        app_core::HealthState::Degraded | app_core::HealthState::Failed
-                    )
-                })
-            });
+        && runtime.core.current_view().ok().is_some_and(|view| {
+            view.health().acquisition_stages().iter().any(|stage| {
+                matches!(
+                    stage.state(),
+                    app_core::HealthState::Degraded | app_core::HealthState::Failed
+                )
+            })
+        });
     let ee_log_path = if ee_log_wanted {
         GameMemory::new()
             .discover()
@@ -2214,7 +2214,10 @@ pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
 
 fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (MonitorInput, Vec<u8>) {
     let path = inventory_log_path(pid);
-    log::debug!("monitor: EE.log path resolution pid={pid} found={}", path.is_some());
+    log::debug!(
+        "monitor: EE.log path resolution pid={pid} found={}",
+        path.is_some()
+    );
     let Some(path) = path else {
         return (MonitorInput::running(now, pid, None), Vec::new());
     };

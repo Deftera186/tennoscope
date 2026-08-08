@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use app_lib::report::{
-    assemble_report_text, collect_report, log_files, sanitize, utc_stamp, EeLogState,
-    ReportMeta, ReportRequest,
+    EeLogState, ReportMeta, ReportRequest, assemble_report_text, collect_report, log_files,
+    sanitize, utc_stamp,
 };
 
 fn meta(app_data: &std::path::Path, log_dir: &std::path::Path) -> ReportMeta {
@@ -21,12 +21,30 @@ fn meta(app_data: &std::path::Path, log_dir: &std::path::Path) -> ReportMeta {
 
 #[test]
 fn sanitize_replaces_home_and_username() {
-    assert_eq!(sanitize("in /home/alice/.steam and alice@host", std::path::Path::new("/home/alice"), Some("alice")),
-        "in ~/.steam and <user>@host");
-    assert_eq!(sanitize("nothing to see", std::path::Path::new("/home/alice"), Some("alice")),
-        "nothing to see");
-    assert_eq!(sanitize("no home on windows", std::path::Path::new("/nonexistent"), Some("bob")),
-        "no home on windows");
+    assert_eq!(
+        sanitize(
+            "in /home/alice/.steam and alice@host",
+            std::path::Path::new("/home/alice"),
+            Some("alice")
+        ),
+        "in ~/.steam and <user>@host"
+    );
+    assert_eq!(
+        sanitize(
+            "nothing to see",
+            std::path::Path::new("/home/alice"),
+            Some("alice")
+        ),
+        "nothing to see"
+    );
+    assert_eq!(
+        sanitize(
+            "no home on windows",
+            std::path::Path::new("/nonexistent"),
+            Some("bob")
+        ),
+        "no home on windows"
+    );
 }
 
 #[test]
@@ -38,7 +56,11 @@ fn sanitize_ignores_embedded_fragments() {
         "username only scrubbed at word boundaries"
     );
     assert_eq!(
-        sanitize("/home/alicebackup and /home/alice/store", home, Some("alice")),
+        sanitize(
+            "/home/alicebackup and /home/alice/store",
+            home,
+            Some("alice")
+        ),
         "/home/alicebackup and ~/store",
         "home only scrubbed when followed by a separator or the end"
     );
@@ -97,10 +119,16 @@ fn collect_writes_folder_with_report_and_log_copy() {
     assert!(folder.starts_with(app_data.join("reports")));
     assert!(folder.join("report.txt").is_file(), "report.txt written");
     assert!(folder.join("tennoscope.log").is_file(), "log copied");
-    assert!(folder.join("tennoscope.log.1").is_file(), "rotated log copied");
+    assert!(
+        folder.join("tennoscope.log.1").is_file(),
+        "rotated log copied"
+    );
     assert!(!result.ee_log_included, "no EE.log when path is None");
     let text = fs::read_to_string(folder.join("report.txt")).expect("report reads");
-    assert!(text.contains("Diagnostics"), "report has a diagnostics section");
+    assert!(
+        text.contains("Diagnostics"),
+        "report has a diagnostics section"
+    );
     assert!(text.contains("line one"), "report embeds the log excerpt");
 }
 
@@ -127,7 +155,10 @@ fn ee_log_copied_only_when_path_resolves() {
     let sensitive = fs::read_to_string(folder.join("EE.log (sensitive)")).expect("ee copy");
     assert_eq!(sensitive, "session secrets\n");
     let text = fs::read_to_string(folder.join("report.txt")).expect("report reads");
-    assert!(text.contains("Do not attach it to a public issue"), "sensitivity note present");
+    assert!(
+        text.contains("Do not attach it to a public issue"),
+        "sensitivity note present"
+    );
 }
 
 #[test]
@@ -139,8 +170,14 @@ fn github_text_never_contains_ee_log_lines() {
     let meta = meta(dir.path(), &log_dir);
     let text = assemble_report_text(&meta, "{\"stage\":\"failed\"}", EeLogState::Included)
         .expect("text assembles");
-    assert!(!text.contains("session secrets"), "EE.log content must never reach report text");
-    assert!(text.contains("Discord"), "the Discord routing instruction is present when EE.log is included");
+    assert!(
+        !text.contains("session secrets"),
+        "EE.log content must never reach report text"
+    );
+    assert!(
+        text.contains("Discord"),
+        "the Discord routing instruction is present when EE.log is included"
+    );
 }
 
 #[test]
@@ -156,7 +193,10 @@ fn report_text_scrubs_home_and_username_when_under_home() {
     let text = assemble_report_text(&meta, "{}", EeLogState::NotRequested).expect("text assembles");
     let _ = fs::remove_dir_all(&log_dir);
     let home_str = home.to_string_lossy().into_owned();
-    assert!(!text.contains(&home_str), "the raw home path must be scrubbed from report text");
+    assert!(
+        !text.contains(&home_str),
+        "the raw home path must be scrubbed from report text"
+    );
     assert!(text.contains('~'), "home is replaced with ~ in report text");
     if let Some(user) = std::env::var_os("USER").and_then(|user| user.into_string().ok()) {
         let raw_appears = text.contains(&user);

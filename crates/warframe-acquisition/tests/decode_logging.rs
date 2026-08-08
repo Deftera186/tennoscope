@@ -24,16 +24,17 @@ impl log::Log for CaptureLog {
 
 fn install_capture_logger() -> Arc<Mutex<Vec<String>>> {
     static LINES: std::sync::OnceLock<Arc<Mutex<Vec<String>>>> = std::sync::OnceLock::new();
-    LINES.get_or_init(|| {
-        let lines = Arc::new(Mutex::new(Vec::<String>::new()));
-        log::set_boxed_logger(Box::new(CaptureLog {
-            lines: Arc::clone(&lines),
-        }))
-        .expect("logger installs once");
-        log::set_max_level(log::LevelFilter::Debug);
-        lines
-    })
-    .clone()
+    LINES
+        .get_or_init(|| {
+            let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+            log::set_boxed_logger(Box::new(CaptureLog {
+                lines: Arc::clone(&lines),
+            }))
+            .expect("logger installs once");
+            log::set_max_level(log::LevelFilter::Debug);
+            lines
+        })
+        .clone()
 }
 
 #[test]
@@ -45,12 +46,29 @@ fn decode_failure_logs_the_real_serde_error_and_length_but_not_contents() {
 
     let result = decoder.decode(payload);
 
-    assert!(matches!(result, Err(warframe_acquisition::AcquisitionError::SnapshotInvalid)));
+    assert!(matches!(
+        result,
+        Err(warframe_acquisition::AcquisitionError::SnapshotInvalid)
+    ));
     let captured = lines.lock().expect("lock").clone();
-    assert!(captured.iter().any(|line| line.contains("inventory decode failed")), "a decode failure line must be logged, got: {captured:?}");
-    let line = captured.iter().find(|line| line.contains("inventory decode failed")).expect("line exists");
-    assert!(line.contains("payload_bytes=44"), "payload length must be logged: {line}");
-    assert!(!line.contains(r#""Suits""#), "payload contents must never be logged: {line}");
+    assert!(
+        captured
+            .iter()
+            .any(|line| line.contains("inventory decode failed")),
+        "a decode failure line must be logged, got: {captured:?}"
+    );
+    let line = captured
+        .iter()
+        .find(|line| line.contains("inventory decode failed"))
+        .expect("line exists");
+    assert!(
+        line.contains("payload_bytes=44"),
+        "payload length must be logged: {line}"
+    );
+    assert!(
+        !line.contains(r#""Suits""#),
+        "payload contents must never be logged: {line}"
+    );
 }
 
 #[test]

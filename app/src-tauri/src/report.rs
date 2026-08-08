@@ -116,11 +116,7 @@ pub fn assemble_report_text(
         "TennoScope report — {} ({}) — {} — {}\n\n",
         meta.version, meta.profile, meta.os_arch, meta.timestamp
     );
-    let log_path = meta
-        .log_dir
-        .join("tennoscope.log")
-        .display()
-        .to_string();
+    let log_path = meta.log_dir.join("tennoscope.log").display().to_string();
     text.push_str(&format!(
         "Log file: {}\n\n",
         sanitize(
@@ -229,9 +225,7 @@ fn replace_bounded(text: &str, needle: &str, replacement: &str) -> String {
 /// folders instead of silently overwriting each other.
 pub fn utc_stamp() -> String {
     let (year, month, day, hour, minute, second, millis) = utc_parts();
-    format!(
-        "{year:04}-{month:02}-{day:02}-{hour:02}{minute:02}{second:02}{millis:03}"
-    )
+    format!("{year:04}-{month:02}-{day:02}-{hour:02}{minute:02}{second:02}{millis:03}")
 }
 
 /// Civil date time `YYYY-MM-DD HH:MM:SS UTC`, for the report header.
@@ -241,7 +235,11 @@ pub fn utc_civil() -> String {
 }
 
 fn utc_parts() -> (u32, u32, u32, u32, u32, u32, u32) {
-    parts_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default())
+    parts_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default(),
+    )
 }
 
 fn parts_from(elapsed: std::time::Duration) -> (u32, u32, u32, u32, u32, u32, u32) {
@@ -263,14 +261,23 @@ fn parts_from(elapsed: std::time::Duration) -> (u32, u32, u32, u32, u32, u32, u3
 /// Days since 1970-01-01 to civil date. Howard Hinnant's algorithm.
 fn civil_from_days(days: i64) -> (i64, u32, u32) {
     let shifted = days + 719_468;
-    let era = if shifted >= 0 { shifted } else { shifted - 146_096 } / 146_097;
+    let era = if shifted >= 0 {
+        shifted
+    } else {
+        shifted - 146_096
+    } / 146_097;
     let day_of_era = (shifted - era * 146_097) as u64;
-    let year_of_era = (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
     let year = year_of_era as i64 + era * 400;
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_prime = (5 * day_of_year + 2) / 153;
     let day = (day_of_year - (153 * month_prime + 2) / 5 + 1) as u32;
-    let month = if month_prime < 10 { month_prime + 3 } else { month_prime - 9 } as u32;
+    let month = if month_prime < 10 {
+        month_prime + 3
+    } else {
+        month_prime - 9
+    } as u32;
     let year = if month <= 2 { year + 1 } else { year };
     (year, month, day)
 }
@@ -303,9 +310,18 @@ mod tests {
     fn utc_stamp_matches_the_clock() {
         let clock = || {
             let (year, month, day, hour, minute, second, _) = super::parts_from(
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default(),
             );
-            (year as i32, month as i32, day as i32, hour as i32, minute as i32, second as i32)
+            (
+                year as i32,
+                month as i32,
+                day as i32,
+                hour as i32,
+                minute as i32,
+                second as i32,
+            )
         };
         let before = clock();
         let stamp = super::utc_stamp();

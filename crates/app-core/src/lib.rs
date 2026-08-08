@@ -207,7 +207,8 @@ impl AppCore {
         let message = message.into();
         log::warn!("health: market account degraded — {message}");
         let last_success = self.health.market_account.last_success.clone();
-        self.health.market_account = BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.health.market_account =
+            BackendHealth::new(HealthState::Degraded, message, last_success)?;
         self.current_view()
     }
 
@@ -470,7 +471,10 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: log monitor failed — {message}");
+        // The monitor thread re-records this every poll; log only the transition into the state.
+        if self.health.log_monitor.state() != HealthState::Failed {
+            log::warn!("health: log monitor failed — {message}");
+        }
         self.health.log_monitor = BackendHealth::failed(message)?;
         self.current_view()
     }
@@ -480,13 +484,17 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: log monitor degraded — {message}");
+        if self.health.log_monitor.state() != HealthState::Degraded {
+            log::warn!("health: log monitor degraded — {message}");
+        }
         self.health.log_monitor = BackendHealth::degraded(message)?;
         self.current_view()
     }
 
     pub fn record_log_monitor_ready(&mut self) -> Result<AppView, AppError> {
-        log::info!("health: log monitor ready");
+        if self.health.log_monitor.state() != HealthState::Ready {
+            log::info!("health: log monitor ready");
+        }
         self.health.log_monitor = BackendHealth::ready("EE.log monitor ready", None)?;
         self.current_view()
     }
