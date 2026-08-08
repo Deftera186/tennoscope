@@ -31,6 +31,11 @@ describe('reportBlockVisible', () => {
     expect(reportBlockVisible(h)).toBe(false)
   })
 
+  it('reports a failed game row even when the game is not running', () => {
+    const h = health({ game_reader: { state: 'failed', message: 'reader crashed', last_success: null } })
+    expect(reportBlockVisible(h)).toBe(true)
+  })
+
   it('reports a degraded game row while the game is running', () => {
     const h = health({
       game_reader: { state: 'ready', message: 'ok', last_success: null },
