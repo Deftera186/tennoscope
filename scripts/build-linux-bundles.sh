@@ -79,9 +79,7 @@ cd "$repo_root"
 if [ "$skip_gates" = false ]; then
   cargo test --workspace
   cargo clippy --workspace --all-targets -- -D warnings
-
-  cd "$repo_root/app"
-  pnpm check
+  ( cd "$repo_root/app" && pnpm check )
 fi
 
 cd "$repo_root/app"
