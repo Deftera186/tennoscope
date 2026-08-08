@@ -102,15 +102,15 @@ describe('report block on Diagnostics', () => {
     expect(screen.queryByRole('group', { name: 'Report a problem' })).toBeNull()
   })
 
-  it('copy shows the COPIED status', async () => {
+  it('copy shows the COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD status', async () => {
     const health = readyHealth()
     health.market = { state: 'failed', message: 'market offline', last_success: null }
     backend.getView.mockResolvedValue(makeView(health))
     report.copyReport.mockResolvedValue(undefined)
     const user = await openDiagnostics()
-    await user.click(within(screen.getByRole('group', { name: 'Report a problem' })).getByRole('button', { name: 'Copy report' }))
+    await user.click(within(screen.getByRole('group', { name: 'Report a problem' })).getByRole('button', { name: 'Copy diagnostics' }))
     expect(report.copyReport).toHaveBeenCalledOnce()
-    expect(screen.getByText('COPIED — PASTE IT INTO THE ISSUE FORM.')).toBeVisible()
+    expect(screen.getByText('COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD OF THE ISSUE FORM.')).toBeVisible()
   })
 
   it('save shows the folder path and the Discord note when EE.log is included', async () => {
