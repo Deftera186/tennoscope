@@ -9,7 +9,9 @@ body:
         is usually most of the answer.
 
         If Diagnostics shows a **Report block**, use **Copy report** and paste it into the fields
-        below, and attach the `report.txt` from the saved report folder if you used **Save logs**.
+        below — it carries the fault summary and the recent warnings, not the full log. The full
+        record (raw log excerpt and rotated logs) lives in the **Save logs** folder — attach
+        `report.txt` from there if the issue needs it.
 
         **Do not attach EE.log to a public issue.** It contains IPs, email addresses and account
         handles — send it to the maintainer on Discord (@deftera) instead. Do not paste account
