@@ -52,6 +52,12 @@ Be honest about the size of this win. Cargo fingerprints the profile, so CI's `t
 objects do not satisfy a `release` build. What actually carries over is the registry and the
 source downloads, not the codegen. This is the smallest of the three fixes.
 
+Naming the Linux cache costs one cold run. CI's Linux job id is `rust`, so its prefix moves from
+`v0-rust-rust-Linux-x64` to `v0-rust-linux-Linux-x64` and the first run after merge rebuilds from
+scratch before repopulating under the new name. Windows is unaffected -- its job id was already
+`windows`, so the prefix does not move, which the PR run confirmed by hitting its cache and
+finishing in 6m14 against a historical 10m35.
+
 ## Design
 
 Four jobs. The gate blocks both builds; the builds run concurrently; publishing is its own step
