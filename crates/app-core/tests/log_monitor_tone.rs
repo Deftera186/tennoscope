@@ -12,6 +12,7 @@ struct Capture;
 
 static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static INSTALL: Once = Once::new();
+static SERIAL: Mutex<()> = Mutex::new(());
 
 impl log::Log for Capture {
     fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
@@ -44,6 +45,7 @@ fn count(haystack: &[String], needle: &str) -> usize {
 
 #[test]
 fn log_monitor_health_logs_only_on_state_transitions() {
+    let _serial = SERIAL.lock().expect("serial lock");
     install_capture();
     let mut core = AppCore::in_memory().unwrap();
 
@@ -83,5 +85,34 @@ fn log_monitor_health_logs_only_on_state_transitions() {
         count(&lines, "log monitor failed"),
         1,
         "repeated failure recordings must not repeat the warning: {lines:?}"
+    );
+}
+
+#[test]
+fn log_monitor_ready_stamps_a_last_success_and_degraded_keeps_it() {
+    let _serial = SERIAL.lock().expect("serial lock");
+    let mut core = AppCore::in_memory().unwrap();
+    let ready = core.record_log_monitor_ready().unwrap();
+    let stamp = ready.health().log_monitor().last_success().unwrap().to_owned();
+
+    let degraded = core.record_log_monitor_degraded("EE.log not found; retrying").unwrap();
+    assert_eq!(
+        degraded.health().log_monitor().last_success(),
+        Some(stamp.as_str()),
+        "degrading after a ready keeps the same success stamp"
+    );
+}
+
+#[test]
+fn log_monitor_boot_degradation_stays_stamp_free() {
+    let _serial = SERIAL.lock().expect("serial lock");
+    let mut core = AppCore::in_memory().unwrap();
+    let view = core
+        .record_log_monitor_degraded("EE.log not found; retrying")
+        .unwrap();
+    assert_eq!(
+        view.health().log_monitor().last_success(),
+        None,
+        "a boot baseline must not look like a worked-then-broke row"
     );
 }

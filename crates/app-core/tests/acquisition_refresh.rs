@@ -133,3 +133,30 @@ fn log_monitor_failure_never_overwrites_successful_acquisition_health() {
     assert_eq!(view.health().log_monitor().state(), HealthState::Failed);
     assert!(view.health().log_monitor().message().contains("EE.log"));
 }
+
+#[test]
+fn catalog_fetch_failure_keeps_the_prior_stamp() {
+    let mut core = AppCore::in_memory().unwrap();
+    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let result = AcquisitionResult::new(snapshot("prior"), AcquisitionHealth::successful()).unwrap();
+    core.refresh_from(&FakePort(InventoryRefreshOutcome::success(
+        result,
+        meta,
+        CatalogLoadSource::Network,
+        100,
+    )))
+    .unwrap();
+
+    let view = core
+        .finish_inventory_refresh(
+            Err(AcquisitionFailure::for_test(AcquisitionError::AuthorizationNotFound)),
+            None,
+        )
+        .unwrap();
+    assert_eq!(view.health().catalog().state(), HealthState::Degraded);
+    assert_eq!(
+        view.health().catalog().last_success(),
+        Some("100"),
+        "a refresh whose catalog never loads keeps the last fetched stamp"
+    );
+}
