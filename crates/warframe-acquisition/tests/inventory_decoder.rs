@@ -312,9 +312,11 @@ fn ranked_copies_carry_the_ceiling_the_catalogue_can_vouch_for() {
 /// nothing in one of them must still sync. Only the sections that were always authoritative are
 /// allowed to reject a snapshot by their absence.
 #[test]
-fn every_authoritative_section_and_sync_marker_is_required() {
-    let required = [
-        "LastInventorySync",
+fn a_section_the_account_has_nothing_in_is_omitted_not_broken() {
+    // `inventory.php` leaves a section out entirely when the account holds nothing in it: no
+    // Necramech means no `MechSuits`, no Amp means no `OperatorAmps`. Requiring every section
+    // turned "this player has not reached Deimos yet" into a whole failed read.
+    let optional = [
         "Suits",
         "LongGuns",
         "Pistols",
@@ -332,35 +334,118 @@ fn every_authoritative_section_and_sync_marker_is_required() {
         "OperatorAmps",
         "MechSuits",
     ];
-    for field in required {
+    for field in optional {
         let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
         payload.as_object_mut().unwrap().remove(field);
+        let snapshot = InventoryJsonDecoder::default()
+            .decode(&serde_json::to_vec(&payload).unwrap())
+            .unwrap_or_else(|error| panic!("omitting {field} must still decode, got {error:?}"));
+        assert!(
+            !snapshot.entries().is_empty(),
+            "omitting {field} must keep every other section"
+        );
+    }
+
+    // The one section this account genuinely has nothing in.
+    let no_mechs: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    let with_mechs = InventoryJsonDecoder::default()
+        .decode(&serde_json::to_vec(&no_mechs).unwrap())
+        .unwrap();
+    let mut stripped = no_mechs;
+    stripped.as_object_mut().unwrap().remove("MechSuits");
+    assert_eq!(
+        InventoryJsonDecoder::default()
+            .decode(&serde_json::to_vec(&stripped).unwrap())
+            .unwrap()
+            .entries(),
+        with_mechs.entries(),
+        "an omitted empty section decodes the same as an explicitly empty one"
+    );
+}
+
+#[test]
+fn the_sync_marker_is_required_and_a_snapshot_holding_nothing_is_not_believed() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload.as_object_mut().unwrap().remove("LastInventorySync");
+    assert_eq!(
+        InventoryJsonDecoder::default().decode(&serde_json::to_vec(&payload).unwrap()),
+        Err(AcquisitionError::SnapshotInvalid),
+        "without the sync marker this is not an inventory response"
+    );
+
+    // Sections are optional one at a time, not all at once: no logged-in account owns nothing, so
+    // a response that decodes to an empty collection is a response that was not understood.
+    assert_eq!(
+        InventoryJsonDecoder::default()
+            .decode(br#"{"LastInventorySync":{"$date":{"$numberLong":"1753392000000"}}}"#),
+        Err(AcquisitionError::SnapshotInvalid),
+        "a snapshot with no holdings at all must not read as an empty collection"
+    );
+}
+
+/// One unreadable row must cost that row, not the account.
+///
+/// The game's own client logs `Inventory has NULL item` against the same response it hands us and
+/// carries on; a reported Steam Deck read failed the whole snapshot on exactly that. `ItemType`
+/// being explicitly `null` is not a missing key, so `#[serde(default)]` never covered it.
+#[test]
+fn one_unreadable_row_is_skipped_rather_than_failing_the_account() {
+    let decoder = InventoryJsonDecoder::default();
+    let unreadable_rows = [
+        r#"{"ItemType":null}"#,
+        "null",
+        r#"{"ItemCount":3}"#,
+        r#"{"ItemType":"not-a-canonical-item-path"}"#,
+        r#"{"ItemType":"/Lotus/Types/Items/MiscItems/Negative","ItemCount":-1}"#,
+        r#"{"ItemType":"/Lotus/Types/Items/MiscItems/Wrong","ItemCount":"four"}"#,
+    ];
+    for row in unreadable_rows {
+        let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+        payload["MiscItems"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::from_str(row).unwrap());
+        let snapshot = decoder
+            .decode(&serde_json::to_vec(&payload).unwrap())
+            .unwrap_or_else(|error| panic!("row {row} must be skipped, got {error:?}"));
         assert_eq!(
-            InventoryJsonDecoder::default().decode(&serde_json::to_vec(&payload).unwrap()),
-            Err(AcquisitionError::SnapshotInvalid),
-            "omitting {field} must reject the whole snapshot"
+            snapshot.entries().len(),
+            8,
+            "row {row} must cost only itself"
         );
     }
 }
 
+/// A section that is `null` rather than absent or empty is still just that section.
 #[test]
-fn malformed_entries_or_unsafe_counts_reject_the_whole_snapshot() {
+fn a_null_section_reads_as_an_empty_one() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["MechSuits"] = serde_json::Value::Null;
+    payload["Pistols"] = serde_json::Value::Null;
+
+    let snapshot = InventoryJsonDecoder::default()
+        .decode(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+
+    assert_eq!(snapshot.entries().len(), 8);
+}
+
+/// Row-level tolerance must not become document-level tolerance: a body that is not an inventory
+/// response at all, or one we understood nothing in, is still a failed read.
+#[test]
+fn a_wholly_unreadable_document_is_still_rejected() {
     let decoder = InventoryJsonDecoder::default();
-    let malformed_path = String::from_utf8(complete_payload()).unwrap().replace(
-        "/Lotus/Weapons/Tenno/Rifle/Braton",
-        "not-a-canonical-item-path",
-    );
+    let truncated = &complete_payload()[..complete_payload().len() - 3];
     assert_eq!(
-        decoder.decode(malformed_path.as_bytes()),
+        decoder.decode(truncated),
         Err(AcquisitionError::SnapshotInvalid)
     );
 
-    let negative_count = String::from_utf8(complete_payload())
-        .unwrap()
-        .replace("\"ItemCount\":4", "\"ItemCount\":-1");
+    let every_row_unreadable = br#"{"LastInventorySync":1,"Suits":[{"ItemType":null},null],"MiscItems":[{"ItemType":"nope"}]}"#;
     assert_eq!(
-        decoder.decode(negative_count.as_bytes()),
-        Err(AcquisitionError::SnapshotInvalid)
+        decoder.decode(every_row_unreadable),
+        Err(AcquisitionError::SnapshotInvalid),
+        "understanding no row at all is a failed read, not an empty account"
     );
 }
 

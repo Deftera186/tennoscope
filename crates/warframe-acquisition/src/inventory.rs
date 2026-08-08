@@ -119,41 +119,136 @@ struct RawXpEntry {
     xp: u64,
 }
 
+/// One inventory response.
+///
+/// Every section is defaulted *and* holds raw rows rather than decoded ones. `inventory.php` omits
+/// a section entirely when the account holds nothing in it -- no Necramech means no `MechSuits` --
+/// and it also emits rows the game's own client refuses: a Steam Deck report carried
+/// `Inventory has NULL item` in Warframe's `EE.log` against the very response we were reading, and
+/// one `"ItemType": null` failed the entire account's snapshot. The client skips such a row and
+/// carries on, so we do too; each row is converted in `add_*` where a failure costs that row only.
+///
+/// The sync marker stays required because it is what distinguishes an inventory response from any
+/// other JSON the endpoint could return; a payload that decodes to no holdings at all is refused in
+/// `decode` rather than here.
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct RawInventory {
     last_inventory_sync: serde_json::Value,
-    suits: Vec<RawEntry>,
-    long_guns: Vec<RawEntry>,
-    pistols: Vec<RawEntry>,
-    melee: Vec<RawEntry>,
-    sentinels: Vec<RawEntry>,
-    misc_items: Vec<RawEntry>,
-    recipes: Vec<RawEntry>,
-    pending_recipes: Vec<RawEntry>,
-    #[serde(rename = "XPInfo")]
-    xp_info: Vec<RawXpEntry>,
-    space_suits: Vec<RawEntry>,
-    space_melee: Vec<RawEntry>,
-    space_guns: Vec<RawEntry>,
-    sentinel_weapons: Vec<RawEntry>,
-    kubrow_pets: Vec<RawEntry>,
-    operator_amps: Vec<RawEntry>,
-    mech_suits: Vec<RawEntry>,
-    // Defaulted, unlike every section above, because these were added to the decoder later and a
-    // response that omits one is a section the account has nothing in -- not a broken snapshot.
+    #[serde(default, deserialize_with = "rows")]
+    suits: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    long_guns: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    pistols: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    melee: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    sentinels: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    misc_items: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    recipes: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    pending_recipes: Vec<serde_json::Value>,
+    #[serde(rename = "XPInfo", default, deserialize_with = "rows")]
+    xp_info: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    space_suits: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    space_melee: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    space_guns: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    sentinel_weapons: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    kubrow_pets: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    operator_amps: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    mech_suits: Vec<serde_json::Value>,
     /// Unranked mods and arcanes, stacked by type. The largest holding in the response by value.
-    #[serde(default)]
-    raw_upgrades: Vec<RawEntry>,
+    #[serde(default, deserialize_with = "rows")]
+    raw_upgrades: Vec<serde_json::Value>,
     /// Mods and arcanes carrying a rank, plus rivens: one row per copy, no `ItemCount`.
-    #[serde(default)]
-    upgrades: Vec<RawEntry>,
+    #[serde(default, deserialize_with = "rows")]
+    upgrades: Vec<serde_json::Value>,
     /// Ayatan sculptures and stars.
-    #[serde(default)]
-    fusion_treasures: Vec<RawEntry>,
+    #[serde(default, deserialize_with = "rows")]
+    fusion_treasures: Vec<serde_json::Value>,
     /// Built Railjack armaments.
-    #[serde(default)]
-    crew_ship_weapons: Vec<RawEntry>,
+    #[serde(default, deserialize_with = "rows")]
+    crew_ship_weapons: Vec<serde_json::Value>,
+}
+
+/// A section, tolerating the two shapes that are not a list of rows.
+///
+/// `null` is not the same as absent to serde -- `#[serde(default)]` covers a missing key and
+/// nothing else -- and the endpoint emits both. Anything that is neither a list nor null is a
+/// section we did not understand, and reads as empty rather than failing its nineteen siblings.
+fn rows<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<serde_json::Value>, D::Error> {
+    Ok(match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Array(rows) => rows,
+        _ => Vec::new(),
+    })
+}
+
+/// What a decode had to throw away, so a failed read can be explained without the payload.
+///
+/// Counts and paths only: the response is one account's holdings, and the credential that fetched
+/// it never reaches here at all.
+#[derive(Default)]
+struct DecodeReport {
+    rows_seen: usize,
+    rows_skipped: usize,
+    first_skip: Option<String>,
+}
+
+impl DecodeReport {
+    fn skip(&mut self, reason: &str, row: &serde_json::Value) {
+        self.rows_skipped += 1;
+        if self.first_skip.is_none() {
+            self.first_skip = Some(format!("{reason} ({})", row_label(row)));
+        }
+    }
+
+    fn summary(&self) -> String {
+        let first = self.first_skip.as_deref().unwrap_or("none");
+        format!(
+            "rows_seen={} rows_skipped={} first_skip={first}",
+            self.rows_seen, self.rows_skipped
+        )
+    }
+}
+
+/// A skipped row named by its `ItemType` alone.
+///
+/// The rest of a row can carry a riven's rolled stats or a trade's counterparty, so only the item
+/// path -- which is game content, identical for every account that owns one -- is ever quoted.
+fn row_label(row: &serde_json::Value) -> String {
+    match row.get("ItemType").and_then(serde_json::Value::as_str) {
+        Some(path) if path.len() <= 128 => format!("ItemType={path}"),
+        Some(_) => "ItemType=<overlong>".to_owned(),
+        None => "ItemType absent".to_owned(),
+    }
+}
+
+/// One row, or the reason it cannot be one.
+fn parse_entry(row: serde_json::Value, report: &mut DecodeReport) -> Option<RawEntry> {
+    report.rows_seen += 1;
+    match serde_json::from_value::<RawEntry>(row.clone()) {
+        Ok(entry) if validate_item_type(&entry.item_type) => Some(entry),
+        Ok(_) => {
+            report.skip("item path is not canonical", &row);
+            None
+        }
+        Err(_) => {
+            report.skip("row does not have an item type", &row);
+            None
+        }
+    }
 }
 
 struct AccumulatedEntry {
@@ -191,79 +286,139 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
             return Err(AcquisitionError::SnapshotInvalid);
         }
         let mut entries = BTreeMap::<String, AccumulatedEntry>::new();
+        let report = &mut DecodeReport::default();
 
-        add_unique_section(&mut entries, raw.suits, Category::Frame, self.catalog)?;
-        add_unique_section(&mut entries, raw.long_guns, Category::Weapon, self.catalog)?;
-        add_unique_section(&mut entries, raw.pistols, Category::Weapon, self.catalog)?;
-        add_unique_section(&mut entries, raw.melee, Category::Weapon, self.catalog)?;
+        add_unique_section(
+            &mut entries,
+            raw.suits,
+            Category::Frame,
+            self.catalog,
+            report,
+        );
+        add_unique_section(
+            &mut entries,
+            raw.long_guns,
+            Category::Weapon,
+            self.catalog,
+            report,
+        );
+        add_unique_section(
+            &mut entries,
+            raw.pistols,
+            Category::Weapon,
+            self.catalog,
+            report,
+        );
+        add_unique_section(
+            &mut entries,
+            raw.melee,
+            Category::Weapon,
+            self.catalog,
+            report,
+        );
         add_unique_section(
             &mut entries,
             raw.sentinels,
             Category::Companion,
             self.catalog,
-        )?;
-        add_misc_section(&mut entries, raw.misc_items, self.catalog)?;
+            report,
+        );
+        add_misc_section(&mut entries, raw.misc_items, self.catalog, report);
         add_stackable_section(
             &mut entries,
             raw.recipes,
             Category::Blueprint,
             1,
             self.catalog,
-        )?;
+            report,
+        );
         add_stackable_section(
             &mut entries,
             raw.pending_recipes,
             Category::Blueprint,
             -1,
             self.catalog,
-        )?;
-        add_unique_section(&mut entries, raw.space_suits, Category::Frame, self.catalog)?;
+            report,
+        );
+        add_unique_section(
+            &mut entries,
+            raw.space_suits,
+            Category::Frame,
+            self.catalog,
+            report,
+        );
         add_unique_section(
             &mut entries,
             raw.space_melee,
             Category::Weapon,
             self.catalog,
-        )?;
-        add_unique_section(&mut entries, raw.space_guns, Category::Weapon, self.catalog)?;
+            report,
+        );
+        add_unique_section(
+            &mut entries,
+            raw.space_guns,
+            Category::Weapon,
+            self.catalog,
+            report,
+        );
         add_unique_section(
             &mut entries,
             raw.sentinel_weapons,
             Category::Weapon,
             self.catalog,
-        )?;
+            report,
+        );
         add_unique_section(
             &mut entries,
             raw.kubrow_pets,
             Category::Companion,
             self.catalog,
-        )?;
+            report,
+        );
         add_unique_section(
             &mut entries,
             raw.operator_amps,
             Category::Weapon,
             self.catalog,
-        )?;
-        add_unique_section(&mut entries, raw.mech_suits, Category::Frame, self.catalog)?;
-        add_upgrade_section(&mut entries, raw.raw_upgrades, self.catalog)?;
+            report,
+        );
+        add_unique_section(
+            &mut entries,
+            raw.mech_suits,
+            Category::Frame,
+            self.catalog,
+            report,
+        );
+        add_upgrade_section(&mut entries, raw.raw_upgrades, self.catalog, report);
         // One row per copy and no `ItemCount`. Copies that carry a rank get a row per rank rather
         // than joining the unranked stack, because the market prices the ranks separately.
-        add_upgrade_section(&mut entries, raw.upgrades, self.catalog)?;
+        add_upgrade_section(&mut entries, raw.upgrades, self.catalog, report);
         add_stackable_section(
             &mut entries,
             raw.fusion_treasures,
             Category::Resource,
             1,
             self.catalog,
-        )?;
+            report,
+        );
         add_unique_section(
             &mut entries,
             raw.crew_ship_weapons,
             Category::Weapon,
             self.catalog,
-        )?;
+            report,
+        );
 
-        for xp in raw.xp_info {
-            validate_item_type(&xp.item_type)?;
+        for row in raw.xp_info {
+            report.rows_seen += 1;
+            let Ok(xp) = serde_json::from_value::<RawXpEntry>(row.clone()) else {
+                report.skip("row does not have an item type and XP", &row);
+                continue;
+            };
+            if !validate_item_type(&xp.item_type) {
+                report.skip("item path is not canonical", &row);
+                continue;
+            }
             let path = xp.item_type;
             let fallback = category_from_path(&path);
             let entry = entries
@@ -282,69 +437,72 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
         let domain_entries = entries
             .into_iter()
             .filter(|(_, accumulated)| accumulated.quantity >= 0)
-            .map(|(path, accumulated)| {
-                let name = accumulated
-                    .name
-                    .unwrap_or(display_label(&accumulated.path)?);
-                let id = match ItemId::new(path) {
-                    Ok(id) => id,
-                    Err(error) => {
-                        log::warn!("inventory entry rejected: invalid catalog path ({error})");
-                        return Err(AcquisitionError::SnapshotInvalid);
-                    }
-                };
-                let item = match CatalogItem::new(id, name, accumulated.category) {
-                    Ok(item) => item,
-                    Err(error) => {
-                        log::warn!("inventory entry rejected: catalog item invalid ({error})");
-                        return Err(AcquisitionError::SnapshotInvalid);
-                    }
-                };
-                let item = match accumulated.image_name {
-                    Some(image_name) => match item.with_image_name(image_name) {
-                        Ok(item) => item,
-                        Err(error) => {
-                            log::warn!("inventory entry rejected: image name invalid ({error})");
-                            return Err(AcquisitionError::SnapshotInvalid);
-                        }
-                    },
-                    None => item,
-                };
-                let quantity = match u32::try_from(accumulated.quantity) {
-                    Ok(quantity) => quantity,
-                    Err(_) => {
-                        log::warn!(
-                            "inventory entry rejected: unsafe quantity {}",
-                            accumulated.quantity
-                        );
-                        return Err(AcquisitionError::SnapshotInvalid);
-                    }
-                };
-                let entry = InventoryEntry::new(item, quantity).with_mastered(accumulated.mastered);
-                Ok(match accumulated.rank {
-                    Some(rank) => entry.with_rank(rank, accumulated.fusion_limit),
-                    None => entry,
+            .filter_map(|(path, accumulated)| {
+                build_entry(path, accumulated).or_else(|| {
+                    report.rows_skipped += 1;
+                    None
                 })
             })
-            .collect::<Result<Vec<_>, AcquisitionError>>()?;
+            .collect::<Vec<_>>();
+        // Every section being optional is what lets a young account read at all, but it also means
+        // a response whose shape we stopped understanding would decode quietly to nothing. No
+        // logged-in account owns nothing, so an empty snapshot is a failed read, not a poor one.
+        if domain_entries.is_empty() {
+            trace_decode(&format!("[decode] rejected empty: {}", report.summary()));
+            return Err(AcquisitionError::SnapshotInvalid);
+        }
+        if report.rows_skipped != 0 {
+            trace_decode(&format!("[decode] tolerated: {}", report.summary()));
+        }
         InventorySnapshot::coherent(domain_entries).map_err(|_| AcquisitionError::SnapshotInvalid)
     }
 }
 
+/// One accumulated holding as a domain entry, or nothing if it cannot become one.
+fn build_entry(path: String, accumulated: AccumulatedEntry) -> Option<InventoryEntry> {
+    let name = match accumulated.name {
+        Some(name) => name,
+        None => display_label(&accumulated.path)?,
+    };
+    let item = CatalogItem::new(ItemId::new(path).ok()?, name, accumulated.category).ok()?;
+    let item = match accumulated.image_name {
+        Some(image_name) => item.with_image_name(image_name).ok()?,
+        None => item,
+    };
+    let entry = InventoryEntry::new(item, u32::try_from(accumulated.quantity).ok()?)
+        .with_mastered(accumulated.mastered);
+    Some(match accumulated.rank {
+        Some(rank) => entry.with_rank(rank, accumulated.fusion_limit),
+        None => entry,
+    })
+}
+
+/// One line about what a decode had to throw away.
+///
+/// A failed read reaches the player as "Inventory snapshot was invalid" and reaches us as nothing
+/// at all: the serde error was discarded at the parse, so the one report that mattered could not
+/// be answered from the app's own output. This is counts and item paths only -- see `row_label`.
+fn trace_decode(line: &str) {
+    log::warn!("{line}");
+}
+
 fn add_misc_section(
     output: &mut BTreeMap<String, AccumulatedEntry>,
-    items: Vec<RawEntry>,
+    rows: Vec<serde_json::Value>,
     catalog: Option<&CatalogIndex>,
-) -> Result<(), AcquisitionError> {
-    for item in items {
+    report: &mut DecodeReport,
+) {
+    for row in rows {
+        let Some(item) = parse_entry(row, report) else {
+            continue;
+        };
         let category = if item.item_type.contains("/Projections/") {
             Category::Relic
         } else {
             Category::Resource
         };
-        add_stackable_item(output, item, category, 1, catalog)?;
+        add_stackable_item(output, item, category, 1, catalog, report);
     }
-    Ok(())
 }
 
 /// Mods, arcanes and rivens, whether they carry a rank or not.
@@ -355,21 +513,24 @@ fn add_misc_section(
 /// than "a resource".
 fn add_upgrade_section(
     output: &mut BTreeMap<String, AccumulatedEntry>,
-    items: Vec<RawEntry>,
+    rows: Vec<serde_json::Value>,
     catalog: Option<&CatalogIndex>,
-) -> Result<(), AcquisitionError> {
-    for item in items {
+    report: &mut DecodeReport,
+) {
+    for row in rows {
+        let Some(item) = parse_entry(row, report) else {
+            continue;
+        };
         let category = if item.item_type.contains("/CosmeticEnhancers/") {
             Category::Arcane
         } else {
             Category::Mod
         };
         match fused_rank(item.upgrade_fingerprint.as_deref()) {
-            0 => add_stackable_item(output, item, category, 1, catalog)?,
-            rank => add_ranked_copy(output, item.item_type, category, rank, catalog)?,
+            0 => add_stackable_item(output, item, category, 1, catalog, report),
+            rank => add_ranked_copy(output, item.item_type, category, rank, catalog),
         }
     }
-    Ok(())
 }
 
 /// The rank a copy was fused to, from the fingerprint the game stores it in.
@@ -396,56 +557,47 @@ fn add_ranked_copy(
     category: Category,
     rank: u32,
     catalog: Option<&CatalogIndex>,
-) -> Result<(), AcquisitionError> {
-    validate_item_type(&path)?;
+) {
     let mut resolved = accumulated_entry(&path, category, catalog);
     resolved.rank = Some(rank);
     // The key, not the path: the path is what the catalogue is asked about, and several rows share
     // it. `#` cannot occur in an item path, which `validate_item_type` has already established.
     let entry = output.entry(format!("{path}#{rank}")).or_insert(resolved);
-    entry.quantity = match entry.quantity.checked_add(1) {
-        Some(quantity) => quantity,
-        None => {
-            log::warn!("inventory entry rejected: quantity overflow");
-            return Err(AcquisitionError::SnapshotInvalid);
-        }
-    };
-    Ok(())
+    entry.quantity = entry.quantity.saturating_add(1);
 }
 
 fn add_unique_section(
     output: &mut BTreeMap<String, AccumulatedEntry>,
-    items: Vec<RawEntry>,
+    rows: Vec<serde_json::Value>,
     category: Category,
     catalog: Option<&CatalogIndex>,
-) -> Result<(), AcquisitionError> {
-    for item in items {
-        validate_item_type(&item.item_type)?;
+    report: &mut DecodeReport,
+) {
+    for row in rows {
+        let Some(item) = parse_entry(row, report) else {
+            continue;
+        };
         let path = item.item_type;
         let resolved = accumulated_entry(&path, category, catalog);
         let entry = output.entry(path).or_insert(resolved);
-        entry.quantity = match entry.quantity.checked_add(1) {
-            Some(quantity) => quantity,
-            None => {
-                log::warn!("inventory entry rejected: quantity overflow");
-                return Err(AcquisitionError::SnapshotInvalid);
-            }
-        };
+        entry.quantity = entry.quantity.saturating_add(1);
     }
-    Ok(())
 }
 
 fn add_stackable_section(
     output: &mut BTreeMap<String, AccumulatedEntry>,
-    items: Vec<RawEntry>,
+    rows: Vec<serde_json::Value>,
     category: Category,
     direction: i64,
     catalog: Option<&CatalogIndex>,
-) -> Result<(), AcquisitionError> {
-    for item in items {
-        add_stackable_item(output, item, category, direction, catalog)?;
+    report: &mut DecodeReport,
+) {
+    for row in rows {
+        let Some(item) = parse_entry(row, report) else {
+            continue;
+        };
+        add_stackable_item(output, item, category, direction, catalog, report);
     }
-    Ok(())
 }
 
 fn add_stackable_item(
@@ -454,38 +606,33 @@ fn add_stackable_item(
     category: Category,
     direction: i64,
     catalog: Option<&CatalogIndex>,
-) -> Result<(), AcquisitionError> {
-    validate_item_type(&item.item_type)?;
+    report: &mut DecodeReport,
+) {
     let quantity = item.item_count.unwrap_or(1);
     if quantity < 0 {
-        log::warn!("inventory entry rejected: negative quantity");
-        return Err(AcquisitionError::SnapshotInvalid);
+        report.skip(
+            "negative count",
+            &serde_json::json!({"ItemType": item.item_type}),
+        );
+        return;
     }
     if quantity == 0 {
-        return Ok(());
+        return;
     }
     let path = item.item_type;
     let resolved = accumulated_entry(&path, category, catalog);
     let entry = output.entry(path).or_insert(resolved);
-    let delta = match quantity.checked_mul(direction) {
-        Some(delta) => delta,
-        None => {
-            log::warn!("inventory entry rejected: quantity overflow");
-            return Err(AcquisitionError::SnapshotInvalid);
-        }
-    };
-    entry.quantity = match entry.quantity.checked_add(delta) {
-        Some(quantity) => quantity,
-        None => {
-            log::warn!("inventory entry rejected: quantity overflow");
-            return Err(AcquisitionError::SnapshotInvalid);
-        }
-    };
-    Ok(())
+    entry.quantity = entry
+        .quantity
+        .saturating_add(quantity.saturating_mul(direction));
 }
 
-fn validate_item_type(path: &str) -> Result<(), AcquisitionError> {
-    if path.starts_with("/Lotus/")
+/// Whether a path is one the game could have written.
+///
+/// A row failing this is a row we cannot key, name, or price, so it is dropped -- but the account
+/// around it is untouched. Rejecting the snapshot over one such path is what a real read hit.
+fn validate_item_type(path: &str) -> bool {
+    path.starts_with("/Lotus/")
         && path.len() <= 512
         && path
             .bytes()
@@ -494,12 +641,6 @@ fn validate_item_type(path: &str) -> Result<(), AcquisitionError> {
             .rsplit('/')
             .next()
             .is_some_and(|segment| !segment.is_empty())
-    {
-        Ok(())
-    } else {
-        log::warn!("inventory entry rejected: invalid item type");
-        Err(AcquisitionError::SnapshotInvalid)
-    }
 }
 
 fn category_from_path(path: &str) -> Category {
@@ -564,11 +705,8 @@ fn accumulated_entry(
     }
 }
 
-fn display_label(path: &str) -> Result<String, AcquisitionError> {
-    let segment = path
-        .rsplit('/')
-        .next()
-        .ok_or(AcquisitionError::SnapshotInvalid)?;
+fn display_label(path: &str) -> Option<String> {
+    let segment = path.rsplit('/').next()?;
     let chars: Vec<char> = segment.chars().collect();
     let mut label = String::with_capacity(segment.len() + 8);
     for (index, &current) in chars.iter().enumerate() {
@@ -592,13 +730,7 @@ fn display_label(path: &str) -> Result<String, AcquisitionError> {
         }
     }
     let label = label.trim().to_owned();
-    match (!label.is_empty()).then_some(label) {
-        Some(label) => Ok(label),
-        None => {
-            log::warn!("inventory entry rejected: empty display label");
-            Err(AcquisitionError::SnapshotInvalid)
-        }
-    }
+    (!label.is_empty()).then_some(label)
 }
 
 #[cfg(test)]

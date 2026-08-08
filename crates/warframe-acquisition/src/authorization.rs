@@ -55,6 +55,7 @@ impl AuthorizationScanner {
             policy.preferred_bytes,
             policy.fallback_bytes
         );
+        let region_count = regions.len();
         let mut candidates = CandidateAccumulator::default();
         let mut read_buffer = Zeroizing::new(vec![0_u8; self.chunk_size]);
         let mut fallback = Vec::with_capacity(regions.len());
@@ -93,8 +94,62 @@ impl AuthorizationScanner {
             .into_iter()
             .map(FallbackCursor::new)
             .collect::<VecDeque<_>>();
-        let mut fallback_remaining = policy.fallback_bytes;
-        while fallback_remaining > 0 {
+        let mut sampled = self.drain_fallback(
+            memory,
+            process,
+            &mut fallback,
+            &mut read_buffer,
+            &mut candidates,
+            policy,
+            policy.fallback_bytes,
+        )?;
+
+        // A budget is a guess about where the credential sits, and on a small-memory machine the
+        // guess misses: the same session read fine once and then reported "not found" on the retry
+        // because the sampler simply never looked at the page holding it. Nothing found at all is
+        // not evidence of absence, so spend the rest of the address space rather than report a
+        // conclusion we did not earn. A found-but-ambiguous result is a real answer and stops here.
+        let exhaustive = candidates.is_empty();
+        if exhaustive {
+            sampled += self.drain_fallback(
+                memory,
+                process,
+                &mut fallback,
+                &mut read_buffer,
+                &mut candidates,
+                policy,
+                usize::MAX,
+            )?;
+        }
+
+        trace_scan(&format!(
+            "[authorization] regions={region_count} sampled_bytes={sampled} exhaustive={exhaustive} url={} login={}",
+            candidates.url.candidates.len(),
+            candidates.login.candidates.len(),
+        ));
+        let selected = select_candidate(candidates);
+        if let Err(error) = &selected {
+            log::warn!("authorization scan: {error}");
+        }
+        selected
+    }
+
+    /// Sample fallback ranges round-robin until `budget` bytes are read or every cursor is spent.
+    ///
+    /// Returns the bytes actually read, which is less than the budget once the cursors run dry.
+    #[allow(clippy::too_many_arguments)]
+    fn drain_fallback(
+        &self,
+        memory: &dyn MemoryReader,
+        process: &GameProcess,
+        fallback: &mut VecDeque<FallbackCursor>,
+        read_buffer: &mut Zeroizing<Vec<u8>>,
+        candidates: &mut CandidateAccumulator,
+        policy: ScanPolicy,
+        budget: usize,
+    ) -> Result<usize, AcquisitionError> {
+        let mut remaining = budget;
+        while remaining > 0 {
             let Some(mut cursor) = fallback.pop_front() else {
                 break;
             };
@@ -105,7 +160,7 @@ impl AuthorizationScanner {
             let sample_len = policy
                 .fallback_sample_bytes
                 .min(cursor.range.len - sample_offset)
-                .min(fallback_remaining);
+                .min(remaining);
             scan_range(
                 memory,
                 process,
@@ -114,21 +169,15 @@ impl AuthorizationScanner {
                     cursor.range.offset + sample_offset,
                     sample_len,
                 ),
-                &mut read_buffer,
-                &mut candidates,
+                read_buffer,
+                candidates,
                 self.chunk_size,
             )?;
-            fallback_remaining -= sample_len;
+            remaining -= sample_len;
             fallback.push_back(cursor);
         }
 
-        match select_candidate(candidates) {
-            Ok(authorization) => Ok(authorization),
-            Err(error) => {
-                log::warn!("authorization scan: {error}");
-                Err(error)
-            }
-        }
+        Ok(budget - remaining)
     }
 }
 
@@ -394,6 +443,13 @@ impl CandidateAccumulator {
         Some(self.url.candidates.swap_remove(index).authorization)
     }
 
+    fn is_empty(&self) -> bool {
+        self.login.candidates.is_empty()
+            && self.url.candidates.is_empty()
+            && !self.login.overflowed
+            && !self.url.overflowed
+    }
+
     #[cfg(test)]
     fn retained_candidate_count(&self) -> usize {
         self.login.candidates.len() + self.url.candidates.len()
@@ -572,6 +628,11 @@ fn numeric_value_end(bytes: &[u8], start: usize) -> Option<usize> {
 
 fn is_value_terminator(byte: u8) -> bool {
     matches!(byte, b'&' | b'}' | b',' | b'"' | 0) || byte.is_ascii_whitespace()
+}
+
+/// Counts only: how much was looked at and how many distinct pairs were seen, never their bytes.
+fn trace_scan(line: &str) {
+    log::debug!("{line}");
 }
 
 fn wipe_bytes(bytes: &mut [u8]) {

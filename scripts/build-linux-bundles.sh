@@ -4,6 +4,17 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/.." && pwd)
 
+# CI already ran the test suite, clippy and `pnpm check` against this very commit, and the release
+# workflow refuses to build a tag whose CI did not pass -- so repeating them here costs about
+# fifteen minutes to learn what is already known. `--skip-gates` is for that caller and no other:
+# it drops only the checks CI duplicates, never the two that inspect the AppImage itself, because
+# nothing but this script looks at those. Off by default, so running this by hand still gates.
+skip_gates=false
+if [ "${1-}" = "--skip-gates" ]; then
+  skip_gates=true
+  shift
+fi
+
 if [ "$#" -eq 0 ]; then
   set -- appimage
 fi
@@ -65,11 +76,13 @@ drop_bundled_wayland_client() {
 }
 
 cd "$repo_root"
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+if [ "$skip_gates" = false ]; then
+  cargo test --workspace
+  cargo clippy --workspace --all-targets -- -D warnings
+  ( cd "$repo_root/app" && pnpm check )
+fi
 
 cd "$repo_root/app"
-pnpm check
 
 for bundle in "$@"; do
   if [ "$bundle" = appimage ]; then

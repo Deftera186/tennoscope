@@ -11,6 +11,48 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-08
+
+### Fixed
+
+- **One unreadable item no longer fails your whole collection.** The inventory response can
+  contain a row the game's own client refuses — it logs `Inventory has NULL item` and carries
+  on — and TennoScope turned that single row into "Inventory snapshot was invalid" for the
+  entire account. Unreadable rows are now skipped the way the game skips them; a response with
+  no readable holdings at all is still refused.
+- **A credential the first pass misses is now searched for.** Warframe's memory is sampled
+  within a budget, and on a smaller machine the credential can sit outside what the budget
+  reached — the same session read fine once and reported "inventory authorization was not
+  found" on the retry. Finding nothing now widens the search to the rest of the process rather
+  than reporting an answer it had not earned.
+
+### Changed
+
+- Debug builds record what a read had to throw away — how many rows were skipped and which
+  item path was first, how many bytes of memory were sampled and how many candidates were seen
+  — so a failed read can be explained. Counts and item paths only; no account data.
+
+## [0.5.2] - 2026-08-07
+
+### Fixed
+
+- **Presence switches no longer hang on "Asking warframe.market…".** The first status change
+  on a connection went through and every later one waited on the ask, even though the site had
+  applied it. The site confirms a change twice — in its reply to the change itself, and, once
+  per connection, as the status it last recorded — and TennoScope was reading only the second,
+  announcing at the start of a connection. It now reads the reply too, and a change that gets
+  no reply at all asks again, reconnecting after a quiet connection instead of waiting forever.
+
+## [0.5.1] - 2026-08-05
+
+### Fixed
+
+- **Your collection reads on an account that does not own everything yet.** If you had no
+  Necramech, no Amp, or nothing at all in any one category, the read failed outright — "reader
+  failed", and a collection of zeroes — even though everything else about it had worked. Warframe
+  leaves a category out of its reply when you own nothing in it, and TennoScope was treating that
+  as a broken reply rather than an empty shelf.
+
 ## [0.5.0] - 2026-08-04
 
 ### Added
@@ -239,7 +281,10 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/Deftera186/tennoscope/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/Deftera186/tennoscope/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/Deftera186/tennoscope/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Deftera186/tennoscope/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/Deftera186/tennoscope/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Deftera186/tennoscope/compare/v0.3.1...v0.4.0

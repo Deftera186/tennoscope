@@ -70,10 +70,12 @@ Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
 
 ## Packaging
 
-The bundles the workflow attaches are built by `scripts/build-linux-bundles.sh`, which runs the
-test suite and asserts the AppImage still forces `GDK_BACKEND=x11` before anything is uploaded.
-The Arch `PKGBUILD` and the overlay ebuilds fetch the tag's own archive, so they only work once
-the tag is pushed.
+The bundles the workflow attaches are built by `scripts/build-linux-bundles.sh`. Run by hand it
+gates on the test suite, clippy and `pnpm check` first; the release workflow passes `--skip-gates`
+because it refuses to start until CI has passed on that very commit. Either way the script asserts
+the AppImage still forces `GDK_BACKEND=x11` before anything is uploaded -- that check runs against
+the artifact itself and nothing else covers it. The Arch `PKGBUILD` and the overlay ebuilds fetch
+the tag's own archive, so they only work once the tag is pushed.
 
 ## Yanking
 
