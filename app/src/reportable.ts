@@ -14,8 +14,9 @@ export function reportBlockVisible(health: AppView['health']): boolean {
     const row = value as { state: HealthState; last_success: string | null }
     return row.state === 'failed' || (row.state === 'degraded' && row.last_success !== null)
   })
-  const stagesBroken = health.acquisition_stages.some(
-    (stage) => stage.state === 'degraded' || stage.state === 'failed',
-  )
+  const stagesBroken = health.acquisition_stages.some((stage) => {
+    if (stage.state === 'failed') return true
+    return stage.state === 'degraded' && health.game_reader.last_success !== null
+  })
   return rowsBroken || stagesBroken
 }

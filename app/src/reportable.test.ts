@@ -49,8 +49,19 @@ describe('reportBlockVisible', () => {
     expect(reportBlockVisible(health({ game_reader: { state: 'failed', message: 'reader crashed', last_success: null } }))).toBe(true)
   })
 
-  it('reports degraded or failed acquisition stages', () => {
+  it('reports a failed acquisition stage even without a game session', () => {
     expect(reportBlockVisible(health({ acquisition_stages: [{ stage: 'schema_validation', state: 'failed', message: 'bad' }] }))).toBe(true)
-    expect(reportBlockVisible(health({ acquisition_stages: [{ stage: 'memory_permission', state: 'degraded', message: 'locked' }] }))).toBe(true)
+  })
+
+  it('hides a degraded acquisition stage before the game has ever worked', () => {
+    expect(reportBlockVisible(health({ acquisition_stages: [{ stage: 'game_discovery', state: 'degraded', message: 'Warframe is not running' }] }))).toBe(false)
+  })
+
+  it('reports a degraded acquisition stage once the game has worked this session', () => {
+    const h = health({
+      game_reader: { state: 'ready', message: 'ok', last_success: '123' },
+      acquisition_stages: [{ stage: 'game_discovery', state: 'degraded', message: 'Warframe is not running' }],
+    })
+    expect(reportBlockVisible(h)).toBe(true)
   })
 })
