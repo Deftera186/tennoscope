@@ -383,24 +383,69 @@ fn the_sync_marker_is_required_and_a_snapshot_holding_nothing_is_not_believed() 
     );
 }
 
+/// One unreadable row must cost that row, not the account.
+///
+/// The game's own client logs `Inventory has NULL item` against the same response it hands us and
+/// carries on; a reported Steam Deck read failed the whole snapshot on exactly that. `ItemType`
+/// being explicitly `null` is not a missing key, so `#[serde(default)]` never covered it.
 #[test]
-fn malformed_entries_or_unsafe_counts_reject_the_whole_snapshot() {
+fn one_unreadable_row_is_skipped_rather_than_failing_the_account() {
     let decoder = InventoryJsonDecoder::default();
-    let malformed_path = String::from_utf8(complete_payload()).unwrap().replace(
-        "/Lotus/Weapons/Tenno/Rifle/Braton",
-        "not-a-canonical-item-path",
-    );
+    let unreadable_rows = [
+        r#"{"ItemType":null}"#,
+        "null",
+        r#"{"ItemCount":3}"#,
+        r#"{"ItemType":"not-a-canonical-item-path"}"#,
+        r#"{"ItemType":"/Lotus/Types/Items/MiscItems/Negative","ItemCount":-1}"#,
+        r#"{"ItemType":"/Lotus/Types/Items/MiscItems/Wrong","ItemCount":"four"}"#,
+    ];
+    for row in unreadable_rows {
+        let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+        payload["MiscItems"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::from_str(row).unwrap());
+        let snapshot = decoder
+            .decode(&serde_json::to_vec(&payload).unwrap())
+            .unwrap_or_else(|error| panic!("row {row} must be skipped, got {error:?}"));
+        assert_eq!(
+            snapshot.entries().len(),
+            8,
+            "row {row} must cost only itself"
+        );
+    }
+}
+
+/// A section that is `null` rather than absent or empty is still just that section.
+#[test]
+fn a_null_section_reads_as_an_empty_one() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["MechSuits"] = serde_json::Value::Null;
+    payload["Pistols"] = serde_json::Value::Null;
+
+    let snapshot = InventoryJsonDecoder::default()
+        .decode(&serde_json::to_vec(&payload).unwrap())
+        .unwrap();
+
+    assert_eq!(snapshot.entries().len(), 8);
+}
+
+/// Row-level tolerance must not become document-level tolerance: a body that is not an inventory
+/// response at all, or one we understood nothing in, is still a failed read.
+#[test]
+fn a_wholly_unreadable_document_is_still_rejected() {
+    let decoder = InventoryJsonDecoder::default();
+    let truncated = &complete_payload()[..complete_payload().len() - 3];
     assert_eq!(
-        decoder.decode(malformed_path.as_bytes()),
+        decoder.decode(truncated),
         Err(AcquisitionError::SnapshotInvalid)
     );
 
-    let negative_count = String::from_utf8(complete_payload())
-        .unwrap()
-        .replace("\"ItemCount\":4", "\"ItemCount\":-1");
+    let every_row_unreadable = br#"{"LastInventorySync":1,"Suits":[{"ItemType":null},null],"MiscItems":[{"ItemType":"nope"}]}"#;
     assert_eq!(
-        decoder.decode(negative_count.as_bytes()),
-        Err(AcquisitionError::SnapshotInvalid)
+        decoder.decode(every_row_unreadable),
+        Err(AcquisitionError::SnapshotInvalid),
+        "understanding no row at all is a failed read, not an empty account"
     );
 }
 

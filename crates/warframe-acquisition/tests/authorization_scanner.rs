@@ -382,6 +382,76 @@ fn fallback_finds_a_candidate_only_in_a_file_backed_region() {
     assert_eq!(memory.reads.into_inner().unwrap(), vec![0x5000]);
 }
 
+/// A credential that only the tail of a large process holds must still be found.
+///
+/// The budget is a fixed number of bytes over an address space far larger than it, and where the
+/// account/nonce pair happens to sit varies per launch. A Steam Deck report saw a read succeed and
+/// then fail with `AuthorizationNotFound` on the retry, same session -- the sampler simply missed.
+/// Giving up after one pass turned "we did not look there" into "your game has no credential".
+#[test]
+fn a_credential_the_first_pass_misses_is_still_found() {
+    let confident = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();
+    let region_len = 512 * 1024 * 1024;
+    let candidate_offset = 200 * 1024 * 1024;
+
+    struct SparseMemory {
+        len: usize,
+        candidate_offset: usize,
+        candidate: Vec<u8>,
+        reads: Mutex<usize>,
+    }
+
+    impl MemoryReader for SparseMemory {
+        fn readable_regions(
+            &self,
+            _process: &GameProcess,
+        ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+            Ok(vec![ReadableRegion::classified(
+                0x10_0000,
+                self.len,
+                RegionScanPriority::WritableAnonymous,
+            )])
+        }
+
+        fn read_at(
+            &self,
+            _process: &GameProcess,
+            address: u64,
+            buffer: &mut [u8],
+        ) -> Result<usize, AcquisitionError> {
+            *self.reads.lock().unwrap() += 1;
+            let read_start = usize::try_from(address - 0x10_0000).unwrap();
+            let read_end = read_start + buffer.len();
+            let candidate_end = self.candidate_offset + self.candidate.len();
+            buffer.fill(0);
+            let overlap_start = read_start.max(self.candidate_offset);
+            let overlap_end = read_end.min(candidate_end);
+            if overlap_start < overlap_end {
+                let source = overlap_start - self.candidate_offset;
+                let destination = overlap_start - read_start;
+                let len = overlap_end - overlap_start;
+                buffer[destination..destination + len]
+                    .copy_from_slice(&self.candidate[source..source + len]);
+            }
+            Ok(buffer.len())
+        }
+    }
+
+    let memory = SparseMemory {
+        len: region_len,
+        candidate_offset,
+        candidate: confident,
+        reads: Mutex::new(0),
+    };
+
+    let rendered = AuthorizationScanner::new(1024 * 1024)
+        .scan(&memory, &GameProcess::new(7))
+        .map(|authorization| format!("{authorization:?}"))
+        .expect("a credential inside a readable region must be found");
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+}
+
 #[test]
 fn fallback_samples_a_giant_anonymous_region() {
     let confident = [URL_FIXTURE, URL_FIXTURE, URL_FIXTURE].concat();

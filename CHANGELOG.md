@@ -11,6 +11,25 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Fixed
+
+- **One unreadable item no longer fails your whole collection.** The inventory response can
+  contain a row the game's own client refuses — it logs `Inventory has NULL item` and carries
+  on — and TennoScope turned that single row into "Inventory snapshot was invalid" for the
+  entire account. Unreadable rows are now skipped the way the game skips them; a response with
+  no readable holdings at all is still refused.
+- **A credential the first pass misses is now searched for.** Warframe's memory is sampled
+  within a budget, and on a smaller machine the credential can sit outside what the budget
+  reached — the same session read fine once and reported "inventory authorization was not
+  found" on the retry. Finding nothing now widens the search to the rest of the process rather
+  than reporting an answer it had not earned.
+
+### Changed
+
+- Debug builds record what a read had to throw away — how many rows were skipped and which
+  item path was first, how many bytes of memory were sampled and how many candidates were seen
+  — so a failed read can be explained. Counts and item paths only; no account data.
+
 ## [0.5.2] - 2026-08-07
 
 ### Fixed
