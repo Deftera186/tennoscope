@@ -13,35 +13,40 @@ function health(overrides: Partial<AppView['health']> = {}): AppView['health'] {
 }
 
 describe('reportBlockVisible', () => {
-  it('is false when everything is ready or idle', () => {
+  it('is false when every row is ready or idle', () => {
     const h = health({ market_account: { state: 'idle', message: 'not linked', last_success: null } })
     expect(reportBlockVisible(h)).toBe(false)
   })
 
-  it('is true when any game-independent row is degraded', () => {
-    expect(reportBlockVisible(health({ market: { state: 'degraded', message: 'offline', last_success: null } }))).toBe(true)
-  })
-
-  it('is true when any row has failed', () => {
-    expect(reportBlockVisible(health({ catalog: { state: 'failed', message: 'no catalog', last_success: null } }))).toBe(true)
-  })
-
-  it('ignores a degraded game row when the game is not running', () => {
-    const h = health({ game_reader: { state: 'degraded', message: 'waiting', last_success: null } })
+  it('ignores the whole fresh baseline: no game, no log, catalog still loading', () => {
+    const h = health({
+      game_reader: { state: 'degraded', message: 'Warframe is not running', last_success: null },
+      log_monitor: { state: 'degraded', message: 'EE.log not found; retrying', last_success: null },
+      catalog: { state: 'degraded', message: 'Item catalog has not loaded yet', last_success: null },
+      collection_prices: { state: 'degraded', message: 'Collection price dump has not loaded yet', last_success: null },
+    })
     expect(reportBlockVisible(h)).toBe(false)
   })
 
-  it('reports a failed game row even when the game is not running', () => {
-    const h = health({ game_reader: { state: 'failed', message: 'reader crashed', last_success: null } })
-    expect(reportBlockVisible(h)).toBe(true)
+  it('reports a degraded row that has worked this session', () => {
+    expect(reportBlockVisible(health({ market: { state: 'degraded', message: 'Market offline', last_success: '2026-07-27' } }))).toBe(true)
   })
 
-  it('reports a degraded game row while the game is running', () => {
+  it('does not report a degraded row that never worked, even with the game running', () => {
     const h = health({
       game_reader: { state: 'ready', message: 'ok', last_success: null },
       log_monitor: { state: 'degraded', message: 'EE.log not found', last_success: null },
     })
-    expect(reportBlockVisible(h)).toBe(true)
+    expect(reportBlockVisible(h)).toBe(false)
+  })
+
+  it('reports a game row that worked then degraded mid-session', () => {
+    expect(reportBlockVisible(health({ game_reader: { state: 'degraded', message: 'Warframe is not running', last_success: '123' } }))).toBe(true)
+  })
+
+  it('reports any row that failed', () => {
+    expect(reportBlockVisible(health({ catalog: { state: 'failed', message: 'no catalog', last_success: null } }))).toBe(true)
+    expect(reportBlockVisible(health({ game_reader: { state: 'failed', message: 'reader crashed', last_success: null } }))).toBe(true)
   })
 
   it('reports degraded or failed acquisition stages', () => {

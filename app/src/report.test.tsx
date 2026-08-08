@@ -77,7 +77,7 @@ describe('report block on Diagnostics', () => {
 
   it('appears when a system is degraded', async () => {
     const health = readyHealth()
-    health.market = { state: 'degraded', message: 'market offline', last_success: null }
+    health.market = { state: 'degraded', message: 'market offline', last_success: '2026-07-27' }
     backend.getView.mockResolvedValue(makeView(health))
     await openDiagnostics()
     expect(screen.getByRole('group', { name: 'Report a problem' })).toBeVisible()
@@ -93,7 +93,7 @@ describe('report block on Diagnostics', () => {
     expect(screen.getByRole('group', { name: 'Report a problem' })).toBeVisible()
   })
 
-  it('is hidden when the only broken states are game-gated with no game', async () => {
+  it('is hidden when the only broken rows have never worked this session', async () => {
     const health = readyHealth()
     health.game_reader = { state: 'degraded', message: 'waiting', last_success: null }
     health.log_monitor = { state: 'degraded', message: 'EE.log not found', last_success: null }
