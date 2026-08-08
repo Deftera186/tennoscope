@@ -57,6 +57,12 @@ jobs:
       # No toolchain action: rust-toolchain.toml pins the channel and components, and rustup on
       # the runner installs it on the first cargo call. One source of truth for the version.
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Names the cache after the platform instead of the job id, so the release workflow --
+          # whose jobs are called something else -- can read what this one saves. Caches on the
+          # default branch are readable from every ref; caches saved on a tag are not, which is
+          # why this side is the one that writes.
+          shared-key: linux
 
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
@@ -82,6 +88,9 @@ jobs:
         shell: pwsh
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # See the Linux job: the release workflow reads this.
+          shared-key: windows
 
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
