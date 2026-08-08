@@ -438,12 +438,6 @@ impl AppCore {
                             last_success,
                         )?,
                     };
-                let last_success = self.health.catalog.last_success.clone();
-                self.health.catalog = BackendHealth::new(
-                    HealthState::Degraded,
-                    "Catalog status unavailable",
-                    last_success,
-                )?;
             }
         }
         self.current_view()
