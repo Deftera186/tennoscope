@@ -40,6 +40,10 @@ jobs:
           # deadlocks until the six-hour job timeout. `running-workflow-name` does not prevent it:
           # it drops check runs whose *name* equals the string, so it excludes this one job and
           # leaves the builds in the set.
+          #
+          # Keep this in step with the `name:` of every job in ci.yml. The step below asserts the
+          # count, because this filter only selects: a renamed job would silently fall out of the
+          # allowlist and stop gating anything.
           check-regexp: ^(Rust|Rust \(Windows\)|Frontend)$
           # `success` only. The default admits `skipped`, which would let a CI job that never ran
           # stand in for one that passed.
@@ -48,6 +52,26 @@ jobs:
           # A tag pushed at a commit with no CI at all fails here rather than building. Checks are
           # created a moment after the push, so give discovery longer than its 60s default.
           checks-discovery-timeout: 300
+
+      # The step above proves every check it *matched* passed. It cannot notice one that stopped
+      # matching -- it fails only when the filtered set is entirely empty. Rename `Frontend` to
+      # `Web` and the gate quietly waits on two jobs instead of three, and a release ships with a
+      # frontend nothing checked. This is the only thing that would say so.
+      - name: CI gated on every job it should have
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          expected=3
+          found=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            --paginate --jq '.check_runs[]
+              | select(.name | test("^(Rust|Rust \\(Windows\\)|Frontend)$"))
+              | select(.conclusion == "success")
+              | .name' | sort -u | wc -l)
+          if [ "$found" -ne "$expected" ]; then
+            echo "gated on $found CI jobs, expected $expected -- was a job in ci.yml renamed?" >&2
+            exit 1
+          fi
+          echo "gated on all $expected CI jobs"
 
       # `check-versions.sh` proves the four in-tree version declarations agree with each other.
       # Nothing has ever proved they agree with the tag being built, because only this workflow
@@ -71,6 +95,10 @@ jobs:
     name: Windows installer
     needs: gate
     runs-on: windows-latest
+    # Only the `release` job writes anything. These two build from a shared cache, so the
+    # narrower token is worth the two lines.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
 
@@ -130,6 +158,10 @@ jobs:
     name: Linux bundles
     needs: gate
     runs-on: ubuntu-latest
+    # Only the `release` job writes anything. These two build from a shared cache, so the
+    # narrower token is worth the two lines.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
 

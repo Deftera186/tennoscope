@@ -7,8 +7,14 @@ on:
   workflow_dispatch:
 
 # A second push to the same branch cancels the first. Nothing here needs to finish twice.
+#
+# Except on main, where a release gate is watching. A tag is cut on a main commit, and the release
+# workflow refuses to build until this run concludes `success` on that exact SHA -- so cancelling
+# it because another commit landed a minute later would fail the release for a reason that has
+# nothing to do with the release. Grouping main by SHA means each commit's run is its own group and
+# survives; branches and pull requests still collapse to the newest push.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
