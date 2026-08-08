@@ -93,9 +93,16 @@ fn log_monitor_ready_stamps_a_last_success_and_degraded_keeps_it() {
     let _serial = SERIAL.lock().expect("serial lock");
     let mut core = AppCore::in_memory().unwrap();
     let ready = core.record_log_monitor_ready().unwrap();
-    let stamp = ready.health().log_monitor().last_success().unwrap().to_owned();
+    let stamp = ready
+        .health()
+        .log_monitor()
+        .last_success()
+        .unwrap()
+        .to_owned();
 
-    let degraded = core.record_log_monitor_degraded("EE.log not found; retrying").unwrap();
+    let degraded = core
+        .record_log_monitor_degraded("EE.log not found; retrying")
+        .unwrap();
     assert_eq!(
         degraded.health().log_monitor().last_success(),
         Some(stamp.as_str()),
