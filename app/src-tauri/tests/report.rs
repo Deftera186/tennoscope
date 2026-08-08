@@ -129,7 +129,15 @@ fn collect_writes_folder_with_report_and_log_copy() {
         text.contains("Diagnostics"),
         "report has a diagnostics section"
     );
-    assert!(text.contains("line one"), "report embeds the log excerpt");
+    assert!(
+        !text.contains("line one"),
+        "report.txt no longer embeds the log body; the raw log sits beside it"
+    );
+    assert_eq!(
+        fs::read_to_string(folder.join("tennoscope.log")).unwrap(),
+        "line one\nline two\n",
+        "the raw log is still copied into the folder"
+    );
 }
 
 #[test]
@@ -168,13 +176,8 @@ fn github_text_never_contains_ee_log_lines() {
     fs::create_dir_all(&log_dir).expect("logs");
     fs::write(log_dir.join("tennoscope.log"), "app line\n").expect("log");
     let meta = meta(dir.path(), &log_dir);
-    let text = assemble_report_text(
-        &meta,
-        "{\"stage\":\"failed\"}",
-        EeLogState::Included,
-        app_lib::report::LogBody::FullExcerpt,
-    )
-    .expect("text assembles");
+    let text = assemble_report_text(&meta, "{\"stage\":\"failed\"}", EeLogState::Included)
+        .expect("text assembles");
     assert!(
         !text.contains("session secrets"),
         "EE.log content must never reach report text"
@@ -193,15 +196,14 @@ fn report_text_scrubs_home_and_username_when_under_home() {
     let home = PathBuf::from(home);
     let log_dir = home.join(format!(".tennoscope-report-test-{}", std::process::id()));
     fs::create_dir_all(&log_dir).expect("dir under home");
-    fs::write(log_dir.join("tennoscope.log"), "home is here\n").expect("log");
-    let meta = meta(home.parent().expect("home parent"), &log_dir);
-    let text = assemble_report_text(
-        &meta,
-        "{}",
-        EeLogState::NotRequested,
-        app_lib::report::LogBody::FullExcerpt,
+    fs::write(
+        log_dir.join("tennoscope.log"),
+        format!("[WARN] app log lives under {}\n", log_dir.display()),
     )
-    .expect("text assembles");
+    .expect("log");
+    let meta = meta(home.parent().expect("home parent"), &log_dir);
+    let text = assemble_report_text(&meta, "{}", EeLogState::NotRequested)
+        .expect("text assembles");
     let _ = fs::remove_dir_all(&log_dir);
     let home_str = home.to_string_lossy().into_owned();
     assert!(
@@ -297,7 +299,7 @@ fn error_tail_caps_at_twenty_lines_and_reads_the_last_window() {
 #[test]
 fn error_tail_window_starts_at_a_line_boundary() {
     let dir = std::env::temp_dir().join(format!("report-tail-boundary-{}", std::process::id()));
-    let mut content = "x".repeat(app_lib::report::LOG_EXCERPT_BYTES + 1);
+    let mut content = "x".repeat(app_lib::report::LOG_TAIL_WINDOW_BYTES + 1);
     content.push_str("[WARN] junk embedded in a giant line");
     content.push('\n');
     content.push_str("[2026-08-08][10:00:01][app][WARN] capture unreachable");
@@ -308,59 +310,6 @@ fn error_tail_window_starts_at_a_line_boundary() {
         tail,
         vec!["[2026-08-08][10:00:01][app][WARN] capture unreachable".to_owned()],
         "a window cut inside a line must not leak a truncated fragment"
-    );
-}
-
-#[test]
-fn assemble_report_text_switches_on_log_body() {
-    let home = std::env::temp_dir();
-    let log_dir = home.join(format!("assemble-tail-{}", std::process::id()));
-    std::fs::create_dir_all(&log_dir).unwrap();
-    std::fs::write(
-        log_dir.join("tennoscope.log"),
-        "[2026-08-08][10:00:01][app][WARN] capture unreachable\n",
-    )
-    .unwrap();
-    let meta_row_test = meta(&home, &log_dir);
-    let text = app_lib::report::assemble_report_text(
-        &meta_row_test,
-        "{\"state\":\"degraded\"}",
-        app_lib::report::EeLogState::NotRequested,
-        app_lib::report::LogBody::Tail,
-    )
-    .expect("copy text builds");
-    std::fs::remove_dir_all(&log_dir).unwrap();
-    assert!(
-        text.contains("capture unreachable"),
-        "the copy carries a warn line"
-    );
-    assert!(
-        !text.contains("Log excerpt"),
-        "the copy must not carry the full excerpt header"
-    );
-}
-
-#[test]
-fn assemble_report_text_full_body_keeps_the_excerpt() {
-    let home = std::env::temp_dir();
-    let log_dir = home.join(format!("assemble-full-{}", std::process::id()));
-    std::fs::create_dir_all(&log_dir).unwrap();
-    std::fs::write(log_dir.join("tennoscope.log"), "INFO line\n").unwrap();
-    let text = app_lib::report::assemble_report_text(
-        &meta(&home, &log_dir),
-        "{\"state\":\"ready\"}",
-        app_lib::report::EeLogState::Included,
-        app_lib::report::LogBody::FullExcerpt,
-    )
-    .expect("full text builds");
-    std::fs::remove_dir_all(&log_dir).unwrap();
-    assert!(
-        text.contains("Log excerpt"),
-        "the saved report keeps its log excerpt"
-    );
-    assert!(
-        text.contains("EE.log is included"),
-        "the EE.log note only appears in the full text path"
     );
 }
 
@@ -380,22 +329,81 @@ fn ee_log_is_only_wanted_for_failed_stages() {
     assert!(!app_lib::report::ee_log_wanted_for(&states(&[])));
 }
 
+const ROW_JSON: &str = r#"{
+  "game_reader": {"state": "degraded", "message": "Warframe is not running", "last_success": null},
+  "log_monitor": {"state": "degraded", "message": "EE.log not found; retrying", "last_success": null},
+  "capture": {"state": "ready", "message": "Reward observer ready", "last_success": null},
+  "catalog": {"state": "ready", "message": "Catalog ready", "last_success": "2026-07-27T00:00:00Z"},
+  "market": {"state": "ready", "message": "Market ready", "last_success": null},
+  "collection_prices": {"state": "degraded", "message": "Collection price dump has not loaded yet", "last_success": null},
+  "database": {"state": "ready", "message": "SQLite database available", "last_success": null},
+  "market_account": {"state": "idle", "message": "Not linked", "last_success": null},
+  "acquisition_stages": [
+    {"stage": "schema_validation", "state": "failed", "message": "Inventory snapshot was invalid"},
+    {"stage": "memory_permission", "state": "ready", "message": "memory read ready"}
+  ]
+}"#;
+
 #[test]
-fn assemble_report_text_tail_is_silent_when_the_log_is_quiet() {
+fn assemble_report_text_renders_human_readable_rows_only() {
     let home = std::env::temp_dir();
-    let log_dir = home.join(format!("assemble-quiet-{}", std::process::id()));
+    let log_dir = home.join(format!("assemble-rows-{}", std::process::id()));
     std::fs::create_dir_all(&log_dir).unwrap();
-    std::fs::write(log_dir.join("tennoscope.log"), "[INFO] nothing wrong\n").unwrap();
     let text = app_lib::report::assemble_report_text(
         &meta(&home, &log_dir),
-        "{\"state\":\"ready\"}",
+        ROW_JSON,
         app_lib::report::EeLogState::NotRequested,
-        app_lib::report::LogBody::Tail,
+    )
+    .expect("text builds");
+    let _ = std::fs::remove_dir_all(&log_dir);
+    assert!(text.contains("Game reader: degraded — Warframe is not running"));
+    assert!(text.contains("EE.log: degraded — EE.log not found; retrying"));
+    assert!(text.contains("Catalog: ready — Catalog ready"));
+    assert!(text.contains("Market account: idle — Not linked"));
+    assert!(!text.contains("game_reader"), "raw keys must not appear");
+    assert!(!text.contains("last_success"), "the stamp is a report row, not a dump");
+    assert!(text.contains("Diagnostics"));
+    assert!(!text.contains("Log file:"), "no filesystem provenance in the paste");
+}
+
+#[test]
+fn assemble_report_text_lists_only_broken_acquisition_stages() {
+    let home = std::env::temp_dir();
+    let log_dir = home.join(format!("assemble-stages-{}", std::process::id()));
+    std::fs::create_dir_all(&log_dir).unwrap();
+    let text = app_lib::report::assemble_report_text(
+        &meta(&home, &log_dir),
+        ROW_JSON,
+        app_lib::report::EeLogState::NotRequested,
+    )
+    .expect("text builds");
+    std::fs::remove_dir_all(&log_dir).unwrap();
+    assert!(text.contains("schema_validation: failed — Inventory snapshot was invalid"));
+    assert!(
+        !text.contains("memory_permission"),
+        "ready stages stay out of the report"
+    );
+}
+
+#[test]
+fn assemble_report_text_only_mentions_ee_log_when_included() {
+    let home = std::env::temp_dir();
+    let log_dir = home.join(format!("assemble-ee-note-{}", std::process::id()));
+    std::fs::create_dir_all(&log_dir).unwrap();
+    let quiet = app_lib::report::assemble_report_text(
+        &meta(&home, &log_dir),
+        ROW_JSON,
+        app_lib::report::EeLogState::NotRequested,
     )
     .expect("copy text builds");
+    assert!(!quiet.contains("Notes"), "copy text carries no notes section");
+
+    let included = app_lib::report::assemble_report_text(
+        &meta(&home, &log_dir),
+        ROW_JSON,
+        app_lib::report::EeLogState::Included,
+    )
+    .expect("folder text builds");
     std::fs::remove_dir_all(&log_dir).unwrap();
-    assert!(
-        text.contains("no warnings or errors"),
-        "a quiet log gets a one-line note in the tail section"
-    );
+    assert!(included.contains("EE.log is included in the report folder"));
 }

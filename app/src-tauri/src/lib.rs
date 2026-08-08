@@ -176,7 +176,7 @@ async fn get_view(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     .map_err(|_| "application view task failed".to_owned())?
 }
 
-/// Assemble the GitHub-safe report text only (used by "Copy report").
+/// Assemble the GitHub-safe report text only (used by "Copy diagnostics").
 #[tauri::command]
 async fn collect_report_text(
     state: State<'_, SharedRuntime>,
@@ -198,7 +198,6 @@ async fn collect_report_text(
             &request.meta,
             &request.health_json,
             report::EeLogState::NotRequested,
-            report::LogBody::Tail,
         )
     })
     .await

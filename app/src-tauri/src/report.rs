@@ -14,7 +14,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-pub const LOG_EXCERPT_BYTES: usize = 256 * 1024;
+/// How much of the app log's tail the warnings view reads before deduping,
+/// and how many of those lines the report carries. Enough to show the shape
+/// of a failure without turning the paste into a log file.
+pub const LOG_TAIL_WINDOW_BYTES: usize = 256 * 1024;
 
 /// How many WARN/ERROR lines the copy report carries. Enough to show the
 /// shape of a failure without turning the paste into a log file.
@@ -69,17 +72,6 @@ impl EeLogState {
     }
 }
 
-/// Which part of the app log a report carries.
-///
-/// The clipboard copy is a summary — provenance plus the shape of the fault —
-/// and the tail is the sharpest history to include without dumping a file.
-/// The saved folder carries the full excerpt instead, because it is the record.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LogBody {
-    FullExcerpt,
-    Tail,
-}
-
 pub fn collect_report(request: &ReportRequest) -> Result<CollectedReport, String> {
     let folder = request.meta.app_data.join("reports").join(utc_stamp());
     fs::create_dir_all(&folder)
@@ -101,12 +93,7 @@ pub fn collect_report(request: &ReportRequest) -> Result<CollectedReport, String
     } else {
         EeLogState::NotRequested
     };
-    let report_text = assemble_report_text(
-        &request.meta,
-        &request.health_json,
-        ee_log_state,
-        LogBody::FullExcerpt,
-    )?;
+    let report_text = assemble_report_text(&request.meta, &request.health_json, ee_log_state)?;
     fs::write(folder.join("report.txt"), &report_text)
         .map_err(|error| format!("could not write report.txt: {error}"))?;
     for file in log_files(&request.meta.log_dir) {
@@ -135,79 +122,94 @@ pub fn assemble_report_text(
     meta: &ReportMeta,
     health_json: &str,
     ee_log_state: EeLogState,
-    body: LogBody,
 ) -> Result<String, String> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let username = std::env::var_os("USER").and_then(|user| user.into_string().ok());
     let mut text = format!(
-        "TennoScope report — {} ({}) — {} — {}\n\n",
+        "TennoScope {} ({}) — {} — {}\n\n",
         meta.version, meta.profile, meta.os_arch, meta.timestamp
     );
-    let log_path = meta.log_dir.join("tennoscope.log").display().to_string();
-    text.push_str(&format!(
-        "Log file: {}\n\n",
-        sanitize(
-            &log_path,
-            home.as_deref().unwrap_or(Path::new("")),
-            username.as_deref()
-        )
-    ));
-    text.push_str("--- Diagnostics ---\n");
-    text.push_str(health_json);
+    text.push_str("Diagnostics\n");
+    text.push_str(&diagnostics_rows(health_json)?);
     text.push('\n');
-    match body {
-        LogBody::FullExcerpt => {
-            let excerpt = log_excerpt(&meta.log_dir);
-            text.push_str(&format!(
-                "\n--- Log excerpt (last {} KiB) ---\n",
-                LOG_EXCERPT_BYTES / 1024
-            ));
-            text.push_str(&sanitize(
-                &excerpt,
-                home.as_deref().unwrap_or(Path::new("")),
-                username.as_deref(),
-            ));
+    text.push_str("Recent warnings and errors\n");
+    let tail = log_error_tail(&meta.log_dir);
+    if tail.is_empty() {
+        text.push_str("(no warnings or errors logged this session)\n");
+    } else {
+        for line in tail {
+            text.push_str(&line);
             text.push('\n');
-        }
-        LogBody::Tail => {
-            let tail = log_error_tail(&meta.log_dir);
-            text.push('\n');
-            text.push_str("--- Recent warnings and errors ---\n");
-            if tail.is_empty() {
-                text.push_str("(no warnings or errors logged this session)\n");
-            } else {
-                for line in tail {
-                    text.push_str(&sanitize(
-                        &line,
-                        home.as_deref().unwrap_or(Path::new("")),
-                        username.as_deref(),
-                    ));
-                    text.push('\n');
-                }
-            }
         }
     }
-    text.push_str("\n--- Notes ---\n");
-    text.push_str("Attach the saved report folder if you used Save logs. Nothing is sent anywhere — this text only leaves the machine by your own paste or attach.\n");
     match ee_log_state {
         EeLogState::NotRequested => {}
         EeLogState::Included => {
+            text.push_str("\nNotes\n");
             text.push_str("EE.log is included in the report folder. It contains IPs, email addresses and account handles. Do not attach it to a public issue — send it to the maintainer on Discord (@deftera).\n");
         }
         EeLogState::CopyFailed => {
+            text.push_str("\nNotes\n");
             text.push_str("EE.log was requested but could not be copied (the game usually keeps it locked) — it is not in this report. If the acquisition issue is urgent, send the report folder to the maintainer on Discord (@deftera) and mention the missing EE.log.\n");
         }
     }
-    Ok(text)
+    Ok(sanitize(
+        &text,
+        home.as_deref().unwrap_or(Path::new("")),
+        username.as_deref(),
+    ))
 }
 
-fn log_excerpt(log_dir: &Path) -> String {
-    let path = log_dir.join("tennoscope.log");
-    let Ok(bytes) = fs::read(&path) else {
-        return "(no log file yet — nothing has been logged this session)".to_owned();
-    };
-    let start = bytes.len().saturating_sub(LOG_EXCERPT_BYTES);
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
+/// Row labels in the exact order of the frontend Diagnostics page.
+/// Keep these strings in lockstep with `DiagnosticsPage` in `app/src/App.tsx`.
+const ROW_LABELS: &[(&str, &str)] = &[
+    ("game_reader", "Game reader"),
+    ("log_monitor", "EE.log"),
+    ("capture", "Reward observer"),
+    ("catalog", "Catalog"),
+    ("market", "Market data"),
+    ("collection_prices", "Collection prices"),
+    ("database", "Database"),
+    ("market_account", "Market account"),
+];
+
+/// One `Label: state — message` line per health row, then an `Acquisition`
+/// section with only the degraded or failed stages.
+fn diagnostics_rows(health_json: &str) -> Result<String, String> {
+    use serde_json::Value;
+    let health: Value = serde_json::from_str(health_json)
+        .map_err(|error| format!("health could not be parsed for the report: {error}"))?;
+    let mut rows = String::new();
+    for (key, label) in ROW_LABELS {
+        let Some(row) = health.get(*key) else { continue };
+        let state = row.get("state").and_then(Value::as_str).unwrap_or("unknown");
+        let message = row.get("message").and_then(Value::as_str).unwrap_or("");
+        rows.push_str(&format!("{label}: {state} — {message}\n"));
+    }
+    let stages: Vec<String> = health
+        .get("acquisition_stages")
+        .and_then(Value::as_array)
+        .map(|stages| {
+            stages
+                .iter()
+                .filter_map(|stage| {
+                    let state = stage.get("state").and_then(Value::as_str)?;
+                    if state != "degraded" && state != "failed" {
+                        return None;
+                    }
+                    let name = stage.get("stage").and_then(Value::as_str).unwrap_or("stage");
+                    let message = stage.get("message").and_then(Value::as_str).unwrap_or("");
+                    Some(format!("{name}: {state} — {message}"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if !stages.is_empty() {
+        rows.push('\n');
+        rows.push_str(&format!("Acquisition\n{}", stages.join("\n")));
+        rows.push('\n');
+    }
+    Ok(rows)
 }
 
 pub fn log_files(log_dir: &Path) -> Vec<PathBuf> {
@@ -334,15 +336,16 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// The last WARN/ERROR lines of the app log, consecutive duplicates
 /// collapsed, kept in file order. A warning that repeats every second differs
 /// only in its timestamp and level prefix, so collapsing keys on the message,
-/// not the whole line. `log_dir` is `ReportMeta::log_dir` and
-/// `tennoscope.log` lives there; a missing file yields an empty list (the
-/// copy section explains itself when empty).
+/// not the whole line. Reads the last `LOG_TAIL_WINDOW_BYTES` of the log so a
+/// 256 KiB shock absorber keeps the read bounded. `log_dir` is
+/// `ReportMeta::log_dir` and `tennoscope.log` lives there; a missing file
+/// yields an empty list (the report section explains itself when empty).
 pub fn log_error_tail(log_dir: &Path) -> Vec<String> {
     let path = log_dir.join("tennoscope.log");
     let Ok(bytes) = fs::read(&path) else {
         return Vec::new();
     };
-    let mut start = bytes.len().saturating_sub(LOG_EXCERPT_BYTES);
+    let mut start = bytes.len().saturating_sub(LOG_TAIL_WINDOW_BYTES);
     if start > 0 {
         start = bytes[start..]
             .iter()
