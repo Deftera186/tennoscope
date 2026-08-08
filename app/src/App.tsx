@@ -32,6 +32,7 @@ import { SellForm, type SellHandler } from './SellForm'
 import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, writePriceFloor } from './settings'
 import { snapshotFreshness } from './freshness'
+import { reportBlockVisible } from './reportable'
 
 type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
@@ -651,17 +652,9 @@ type ReportStatus =
   | { kind: 'busy' }
   | { kind: 'done'; message: string }
 
-function stageBroken(value: unknown): value is { state: HealthState } {
-  return typeof value === 'object' && value !== null && 'state' in value
-}
-
 function ReportBlock({ health }: { health: AppView['health'] }) {
   const [status, setStatus] = useState<ReportStatus>({ kind: 'idle' })
-  const broken = Object.values(health).some(value =>
-    Array.isArray(value)
-      ? value.some(stage => stage.state === 'degraded' || stage.state === 'failed')
-      : stageBroken(value) && (value.state === 'degraded' || value.state === 'failed'),
-  )
+  const broken = reportBlockVisible(health)
   if (!broken) return null
   const run = async (action: () => Promise<void | { folder_path: string; ee_log_included: boolean }>, done: (result: { folder_path: string; ee_log_included: boolean } | null) => string) => {
     setStatus({ kind: 'busy' })

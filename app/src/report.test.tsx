@@ -93,6 +93,15 @@ describe('report block on Diagnostics', () => {
     expect(screen.getByRole('group', { name: 'Report a problem' })).toBeVisible()
   })
 
+  it('is hidden when the only broken states are game-gated with no game', async () => {
+    const health = readyHealth()
+    health.game_reader = { state: 'degraded', message: 'waiting', last_success: null }
+    health.log_monitor = { state: 'degraded', message: 'EE.log not found', last_success: null }
+    backend.getView.mockResolvedValue(makeView(health))
+    await openDiagnostics()
+    expect(screen.queryByRole('group', { name: 'Report a problem' })).toBeNull()
+  })
+
   it('copy shows the COPIED status', async () => {
     const health = readyHealth()
     health.market = { state: 'failed', message: 'market offline', last_success: null }
