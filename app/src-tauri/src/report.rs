@@ -62,6 +62,17 @@ impl EeLogState {
     }
 }
 
+/// Which part of the app log a report carries.
+///
+/// The clipboard copy is a summary — provenance plus the shape of the fault —
+/// and the tail is the sharpest history to include without dumping a file.
+/// The saved folder carries the full excerpt instead, because it is the record.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LogBody {
+    FullExcerpt,
+    Tail,
+}
+
 pub fn collect_report(request: &ReportRequest) -> Result<CollectedReport, String> {
     let folder = request.meta.app_data.join("reports").join(utc_stamp());
     fs::create_dir_all(&folder)
@@ -83,7 +94,12 @@ pub fn collect_report(request: &ReportRequest) -> Result<CollectedReport, String
     } else {
         EeLogState::NotRequested
     };
-    let report_text = assemble_report_text(&request.meta, &request.health_json, ee_log_state)?;
+    let report_text = assemble_report_text(
+        &request.meta,
+        &request.health_json,
+        ee_log_state,
+        LogBody::FullExcerpt,
+    )?;
     fs::write(folder.join("report.txt"), &report_text)
         .map_err(|error| format!("could not write report.txt: {error}"))?;
     for file in log_files(&request.meta.log_dir) {
@@ -112,10 +128,10 @@ pub fn assemble_report_text(
     meta: &ReportMeta,
     health_json: &str,
     ee_log_state: EeLogState,
+    body: LogBody,
 ) -> Result<String, String> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let username = std::env::var_os("USER").and_then(|user| user.into_string().ok());
-    let excerpt = log_excerpt(&meta.log_dir);
     let mut text = format!(
         "TennoScope report — {} ({}) — {} — {}\n\n",
         meta.version, meta.profile, meta.os_arch, meta.timestamp
@@ -132,16 +148,38 @@ pub fn assemble_report_text(
     text.push_str("--- Diagnostics ---\n");
     text.push_str(health_json);
     text.push('\n');
-    text.push_str(&format!(
-        "\n--- Log excerpt (last {} KiB) ---\n",
-        LOG_EXCERPT_BYTES / 1024
-    ));
-    text.push_str(&sanitize(
-        &excerpt,
-        home.as_deref().unwrap_or(Path::new("")),
-        username.as_deref(),
-    ));
-    text.push('\n');
+    match body {
+        LogBody::FullExcerpt => {
+            let excerpt = log_excerpt(&meta.log_dir);
+            text.push_str(&format!(
+                "\n--- Log excerpt (last {} KiB) ---\n",
+                LOG_EXCERPT_BYTES / 1024
+            ));
+            text.push_str(&sanitize(
+                &excerpt,
+                home.as_deref().unwrap_or(Path::new("")),
+                username.as_deref(),
+            ));
+            text.push('\n');
+        }
+        LogBody::Tail => {
+            let tail = log_error_tail(&meta.log_dir);
+            text.push('\n');
+            text.push_str("--- Recent warnings and errors ---\n");
+            if tail.is_empty() {
+                text.push_str("(no warnings or errors logged this session)\n");
+            } else {
+                for line in tail {
+                    text.push_str(&sanitize(
+                        &line,
+                        home.as_deref().unwrap_or(Path::new("")),
+                        username.as_deref(),
+                    ));
+                    text.push('\n');
+                }
+            }
+        }
+    }
     text.push_str("\n--- Notes ---\n");
     text.push_str("Attach the saved report folder if you used Save logs. Nothing is sent anywhere — this text only leaves the machine by your own paste or attach.\n");
     match ee_log_state {

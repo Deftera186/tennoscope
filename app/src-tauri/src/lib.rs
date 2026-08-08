@@ -198,6 +198,7 @@ async fn collect_report_text(
             &request.meta,
             &request.health_json,
             report::EeLogState::NotRequested,
+            report::LogBody::Tail,
         )
     })
     .await

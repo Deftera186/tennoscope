@@ -168,8 +168,13 @@ fn github_text_never_contains_ee_log_lines() {
     fs::create_dir_all(&log_dir).expect("logs");
     fs::write(log_dir.join("tennoscope.log"), "app line\n").expect("log");
     let meta = meta(dir.path(), &log_dir);
-    let text = assemble_report_text(&meta, "{\"stage\":\"failed\"}", EeLogState::Included)
-        .expect("text assembles");
+    let text = assemble_report_text(
+        &meta,
+        "{\"stage\":\"failed\"}",
+        EeLogState::Included,
+        app_lib::report::LogBody::FullExcerpt,
+    )
+    .expect("text assembles");
     assert!(
         !text.contains("session secrets"),
         "EE.log content must never reach report text"
@@ -190,7 +195,13 @@ fn report_text_scrubs_home_and_username_when_under_home() {
     fs::create_dir_all(&log_dir).expect("dir under home");
     fs::write(log_dir.join("tennoscope.log"), "home is here\n").expect("log");
     let meta = meta(home.parent().expect("home parent"), &log_dir);
-    let text = assemble_report_text(&meta, "{}", EeLogState::NotRequested).expect("text assembles");
+    let text = assemble_report_text(
+        &meta,
+        "{}",
+        EeLogState::NotRequested,
+        app_lib::report::LogBody::FullExcerpt,
+    )
+    .expect("text assembles");
     let _ = fs::remove_dir_all(&log_dir);
     let home_str = home.to_string_lossy().into_owned();
     assert!(
@@ -280,5 +291,78 @@ fn error_tail_caps_at_twenty_lines_and_reads_the_last_window() {
     assert!(
         tail.last().unwrap().ends_with("fault 24"),
         "the newest line is the last in the returned list"
+    );
+}
+
+#[test]
+fn assemble_report_text_switches_on_log_body() {
+    let home = std::env::temp_dir();
+    let log_dir = home.join(format!("assemble-tail-{}", std::process::id()));
+    std::fs::create_dir_all(&log_dir).unwrap();
+    std::fs::write(
+        log_dir.join("tennoscope.log"),
+        "[2026-08-08][10:00:01][app][WARN] capture unreachable\n",
+    )
+    .unwrap();
+    let meta_row_test = meta(&home, &log_dir);
+    let text = app_lib::report::assemble_report_text(
+        &meta_row_test,
+        "{\"state\":\"degraded\"}",
+        app_lib::report::EeLogState::NotRequested,
+        app_lib::report::LogBody::Tail,
+    )
+    .expect("copy text builds");
+    std::fs::remove_dir_all(&log_dir).unwrap();
+    assert!(
+        text.contains("capture unreachable"),
+        "the copy carries a warn line"
+    );
+    assert!(
+        !text.contains("Log excerpt"),
+        "the copy must not carry the full excerpt header"
+    );
+}
+
+#[test]
+fn assemble_report_text_full_body_keeps_the_excerpt() {
+    let home = std::env::temp_dir();
+    let log_dir = home.join(format!("assemble-full-{}", std::process::id()));
+    std::fs::create_dir_all(&log_dir).unwrap();
+    std::fs::write(log_dir.join("tennoscope.log"), "INFO line\n").unwrap();
+    let text = app_lib::report::assemble_report_text(
+        &meta(&home, &log_dir),
+        "{\"state\":\"ready\"}",
+        app_lib::report::EeLogState::Included,
+        app_lib::report::LogBody::FullExcerpt,
+    )
+    .expect("full text builds");
+    std::fs::remove_dir_all(&log_dir).unwrap();
+    assert!(
+        text.contains("Log excerpt"),
+        "the saved report keeps its log excerpt"
+    );
+    assert!(
+        text.contains("EE.log is included"),
+        "the EE.log note only appears in the full text path"
+    );
+}
+
+#[test]
+fn assemble_report_text_tail_is_silent_when_the_log_is_quiet() {
+    let home = std::env::temp_dir();
+    let log_dir = home.join(format!("assemble-quiet-{}", std::process::id()));
+    std::fs::create_dir_all(&log_dir).unwrap();
+    std::fs::write(log_dir.join("tennoscope.log"), "[INFO] nothing wrong\n").unwrap();
+    let text = app_lib::report::assemble_report_text(
+        &meta(&home, &log_dir),
+        "{\"state\":\"ready\"}",
+        app_lib::report::EeLogState::NotRequested,
+        app_lib::report::LogBody::Tail,
+    )
+    .expect("copy text builds");
+    std::fs::remove_dir_all(&log_dir).unwrap();
+    assert!(
+        text.contains("no warnings or errors"),
+        "a quiet log gets a one-line note in the tail section"
     );
 }
