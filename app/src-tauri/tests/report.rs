@@ -217,3 +217,68 @@ fn log_files_lists_only_tennoscope_logs() {
     let files = log_files(dir.path());
     assert_eq!(files.len(), 2);
 }
+
+fn write_log(log_dir: &std::path::Path, lines: &[&str]) {
+    std::fs::create_dir_all(log_dir).unwrap();
+    std::fs::write(log_dir.join("tennoscope.log"), lines.join("\n")).unwrap();
+}
+
+#[test]
+fn error_tail_keeps_only_warn_and_error_lines_in_order() {
+    let dir = std::env::temp_dir().join(format!("report-tail-order-{}", std::process::id()));
+    write_log(
+        &dir,
+        &[
+            "[2026-08-08][10:00:00][app][INFO] reader ready",
+            "[2026-08-08][10:00:01][app][WARN] capture unreachable",
+            "[2026-08-08][10:00:02][app][ERROR] schema_validation failed",
+            "[2026-08-08][10:00:03][app][DEBUG] probing window",
+        ],
+    );
+    let tail = app_lib::report::log_error_tail(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        tail,
+        vec![
+            "[2026-08-08][10:00:01][app][WARN] capture unreachable".to_owned(),
+            "[2026-08-08][10:00:02][app][ERROR] schema_validation failed".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn error_tail_collapses_consecutive_duplicates() {
+    let dir = std::env::temp_dir().join(format!("report-tail-dedupe-{}", std::process::id()));
+    write_log(
+        &dir,
+        &[
+            "[2026-08-08][10:00:01][monitor][WARN] EE.log not found; retrying",
+            "[2026-08-08][10:00:02][monitor][WARN] EE.log not found; retrying",
+            "[2026-08-08][10:00:03][monitor][WARN] EE.log not found; retrying",
+            "[2026-08-08][10:00:04][monitor][WARN] EE.log not found; retrying",
+        ],
+    );
+    let tail = app_lib::report::log_error_tail(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        tail.len(),
+        1,
+        "per-second warnings collapse to a single line"
+    );
+}
+
+#[test]
+fn error_tail_caps_at_twenty_lines_and_reads_the_last_window() {
+    let dir = std::env::temp_dir().join(format!("report-tail-cap-{}", std::process::id()));
+    let lines: Vec<String> = (0..25)
+        .map(|i| format!("[2026-08-08][10:00:{i:02}][app][WARN] fault {i}"))
+        .collect();
+    write_log(&dir, &lines.iter().map(String::as_str).collect::<Vec<_>>());
+    let tail = app_lib::report::log_error_tail(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(tail.len(), app_lib::report::LOG_TAIL_LINES);
+    assert!(
+        tail.last().unwrap().ends_with("fault 24"),
+        "the newest line is the last in the returned list"
+    );
+}

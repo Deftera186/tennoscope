@@ -16,6 +16,10 @@ use serde::Serialize;
 
 pub const LOG_EXCERPT_BYTES: usize = 256 * 1024;
 
+/// How many WARN/ERROR lines the copy report carries. Enough to show the
+/// shape of a failure without turning the paste into a log file.
+pub const LOG_TAIL_LINES: usize = 20;
+
 #[derive(Clone)]
 pub struct ReportMeta {
     pub version: String,
@@ -280,6 +284,41 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     } as u32;
     let year = if month <= 2 { year + 1 } else { year };
     (year, month, day)
+}
+
+/// The last WARN/ERROR lines of the app log, consecutive duplicates
+/// collapsed, kept in file order. A warning that repeats every second differs
+/// only in its timestamp and level prefix, so collapsing keys on the message,
+/// not the whole line. `log_dir` is `ReportMeta::log_dir` and
+/// `tennoscope.log` lives there; a missing file yields an empty list (the
+/// copy section explains itself when empty).
+pub fn log_error_tail(log_dir: &Path) -> Vec<String> {
+    let path = log_dir.join("tennoscope.log");
+    let Ok(bytes) = fs::read(&path) else {
+        return Vec::new();
+    };
+    let start = bytes.len().saturating_sub(LOG_EXCERPT_BYTES);
+    let deduped = String::from_utf8_lossy(&bytes[start..])
+        .lines()
+        .filter(|line| line.contains("[WARN]") || line.contains("[ERROR]"))
+        .fold(Vec::new(), |mut out: Vec<String>, line| {
+            if out
+                .last()
+                .is_none_or(|last| message_of(last) != message_of(line))
+            {
+                out.push(line.to_owned());
+            }
+            out
+        });
+    let keep = deduped.len().saturating_sub(LOG_TAIL_LINES);
+    deduped[keep..].to_vec()
+}
+
+/// The message part of a log line — everything from the level token on.
+fn message_of(line: &str) -> &str {
+    line.find("[WARN]")
+        .or_else(|| line.find("[ERROR]"))
+        .map_or(line, |index| &line[index..])
 }
 
 #[cfg(test)]
