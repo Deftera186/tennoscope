@@ -181,8 +181,13 @@ fn diagnostics_rows(health_json: &str) -> Result<String, String> {
         .map_err(|error| format!("health could not be parsed for the report: {error}"))?;
     let mut rows = String::new();
     for (key, label) in ROW_LABELS {
-        let Some(row) = health.get(*key) else { continue };
-        let state = row.get("state").and_then(Value::as_str).unwrap_or("unknown");
+        let Some(row) = health.get(*key) else {
+            continue;
+        };
+        let state = row
+            .get("state")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
         let message = row.get("message").and_then(Value::as_str).unwrap_or("");
         rows.push_str(&format!("{label}: {state} — {message}\n"));
     }
@@ -197,7 +202,10 @@ fn diagnostics_rows(health_json: &str) -> Result<String, String> {
                     if state != "degraded" && state != "failed" {
                         return None;
                     }
-                    let name = stage.get("stage").and_then(Value::as_str).unwrap_or("stage");
+                    let name = stage
+                        .get("stage")
+                        .and_then(Value::as_str)
+                        .unwrap_or("stage");
                     let message = stage.get("message").and_then(Value::as_str).unwrap_or("");
                     Some(format!("{name}: {state} — {message}"))
                 })

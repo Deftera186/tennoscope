@@ -202,8 +202,7 @@ fn report_text_scrubs_home_and_username_when_under_home() {
     )
     .expect("log");
     let meta = meta(home.parent().expect("home parent"), &log_dir);
-    let text = assemble_report_text(&meta, "{}", EeLogState::NotRequested)
-        .expect("text assembles");
+    let text = assemble_report_text(&meta, "{}", EeLogState::NotRequested).expect("text assembles");
     let _ = fs::remove_dir_all(&log_dir);
     let home_str = home.to_string_lossy().into_owned();
     assert!(
@@ -361,9 +360,15 @@ fn assemble_report_text_renders_human_readable_rows_only() {
     assert!(text.contains("Catalog: ready — Catalog ready"));
     assert!(text.contains("Market account: idle — Not linked"));
     assert!(!text.contains("game_reader"), "raw keys must not appear");
-    assert!(!text.contains("last_success"), "the stamp is a report row, not a dump");
+    assert!(
+        !text.contains("last_success"),
+        "the stamp is a report row, not a dump"
+    );
     assert!(text.contains("Diagnostics"));
-    assert!(!text.contains("Log file:"), "no filesystem provenance in the paste");
+    assert!(
+        !text.contains("Log file:"),
+        "no filesystem provenance in the paste"
+    );
 }
 
 #[test]
@@ -396,7 +401,10 @@ fn assemble_report_text_only_mentions_ee_log_when_included() {
         app_lib::report::EeLogState::NotRequested,
     )
     .expect("copy text builds");
-    assert!(!quiet.contains("Notes"), "copy text carries no notes section");
+    assert!(
+        !quiet.contains("Notes"),
+        "copy text carries no notes section"
+    );
 
     let included = app_lib::report::assemble_report_text(
         &meta(&home, &log_dir),
