@@ -12,34 +12,111 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # A pre-release tag (`v0.4.2-rc1`) builds with debug assertions on, which is what makes the
-  # `[DEBUG-…]` tracing exist at all -- every one of those lines is `cfg(debug_assertions)`, so a
-  # normal release binary handed to a tester reports nothing when something goes wrong. Stable
-  # tags are unaffected: `-` in the tag is the whole switch.
-  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
 
 jobs:
-  windows:
-    name: Windows installer
-    runs-on: windows-latest
+  # The tag rides a commit that was pushed to main in the same breath, so when this workflow
+  # starts CI has not finished -- usually has not started. Reading the check runs once would
+  # therefore find nothing conclusive and wave the build through, which is worse than having no
+  # gate at all, because it looks like one. This waits for a conclusion instead.
+  gate:
+    name: Require a green CI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
     steps:
       - uses: actions/checkout@v5
 
-      # The installer ships its own Tesseract, so the runner needs one only for the test suite.
-      # Chocolatey appends to the *machine* PATH, which later steps do not see -- they inherit the
-      # environment captured when the job started -- so `$GITHUB_PATH` is what actually reaches
-      # the tests. Without it every OCR test fails with "tesseract is not available".
-      - name: Install tesseract
-        run: |
-          choco install --no-progress -y tesseract
-          "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
-        shell: pwsh
+      # Pinned to a commit, not to `v1`: this action decides whether an untested build reaches
+      # players, and a tag is a pointer its owner can move.
+      - name: Wait for CI on this commit
+        uses: lewagon/wait-on-check-action@2271c86c146b96545b4e871b855e10ffa6f50773 # v1.9.0
+        with:
+          ref: ${{ github.sha }}
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          # Names CI's three jobs exactly, and nothing else. This workflow's own jobs report as
+          # check runs against the same commit, so waiting on "everything" would mean waiting on
+          # `Windows installer` and `Linux bundles` -- which are waiting on this job. That
+          # deadlocks until the six-hour job timeout. `running-workflow-name` does not prevent it:
+          # it drops check runs whose *name* equals the string, so it excludes this one job and
+          # leaves the builds in the set.
+          #
+          # Keep this in step with the `name:` of every job in ci.yml. The step below asserts the
+          # count, because this filter only selects: a renamed job would silently fall out of the
+          # allowlist and stop gating anything.
+          check-regexp: ^(Rust|Rust \(Windows\)|Frontend)$
+          # `success` only. The default admits `skipped`, which would let a CI job that never ran
+          # stand in for one that passed.
+          allowed-conclusions: success
+          wait-interval: 20
+          # A tag pushed at a commit with no CI at all fails here rather than building. Checks are
+          # created a moment after the push, so give discovery longer than its 60s default.
+          checks-discovery-timeout: 300
 
+      # The step above proves every check it *matched* passed. It cannot notice one that stopped
+      # matching -- it fails only when the filtered set is entirely empty. Rename `Frontend` to
+      # `Web` and the gate quietly waits on two jobs instead of three, and a release ships with a
+      # frontend nothing checked. This is the only thing that would say so.
+      - name: CI gated on every job it should have
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          expected=3
+          found=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
+            --paginate --jq '.check_runs[]
+              | select(.name | test("^(Rust|Rust \\(Windows\\)|Frontend)$"))
+              | select(.conclusion == "success")
+              | .name' | sort -u | wc -l)
+          if [ "$found" -ne "$expected" ]; then
+            echo "gated on $found CI jobs, expected $expected -- was a job in ci.yml renamed?" >&2
+            exit 1
+          fi
+          echo "gated on all $expected CI jobs"
+
+      # `check-versions.sh` proves the four in-tree version declarations agree with each other.
+      # Nothing has ever proved they agree with the tag being built, because only this workflow
+      # knows the tag -- so `v0.5.3` could quietly produce artifacts labelled 0.5.2. Same failure
+      # that script exists to catch, one level up.
+      - name: The tag names the version being built
+        run: |
+          ./scripts/check-versions.sh
+          # A pre-release tag carries a suffix the manifests cannot hold -- `v0.5.4-rc1` is built
+          # from workspace version 0.5.4 -- so compare the part before the first `-`.
+          tag=${GITHUB_REF_NAME#v}
+          tag=${tag%%-*}
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ "$tag" != "$version" ]; then
+            echo "tag $GITHUB_REF_NAME does not name workspace version $version" >&2
+            exit 1
+          fi
+          echo "tag $GITHUB_REF_NAME matches version $version"
+
+  windows:
+    name: Windows installer
+    needs: gate
+    runs-on: windows-latest
+    # Only the `release` job writes anything. These two build from a shared cache, so the
+    # narrower token is worth the two lines.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      # The installer ships its own Tesseract, downloaded and proven to run by this script. The
+      # runner needs no separate copy: the only thing that wanted one was the test suite, and the
+      # tests now run in CI.
       - name: Vendor tesseract for the bundle
         run: ./scripts/vendor-windows-tesseract.ps1
         shell: pwsh
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Reads what CI's `Rust (Windows)` job saved. Without this the prefix embeds the job id
+          # and the two can never meet. Release only ever consumes: a cache saved on a tag ref is
+          # scoped to that tag, so no later release could read it, and writing 1.2 GB nothing will
+          # read costs a minute of post-job every time.
+          shared-key: windows
+          save-if: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -54,11 +131,20 @@ jobs:
       - run: pnpm install --frozen-lockfile
         working-directory: app
 
-      # Same gates the Linux bundle script applies, spelled out because that script is /bin/sh.
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
       - run: pnpm tauri build
         working-directory: app
+        env:
+          # A pre-release tag (`v0.4.2-rc1`) builds with debug assertions on, which is what makes
+          # the `[DEBUG-…]` tracing exist at all -- every one of those lines is
+          # `cfg(debug_assertions)`, so a normal release binary handed to a tester reports nothing
+          # when something goes wrong. Stable tags are unaffected: `-` in the tag is the whole
+          # switch.
+          #
+          # Set on the step rather than the workflow because `rust-cache` hashes every `CARGO*`
+          # variable into its key. At workflow scope it reaches the cache action too, and the
+          # resulting hash cannot match CI's -- which is why this job missed its cache even though
+          # its key prefix already agreed.
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
 
       # The installer is unsigned: a code-signing certificate costs money this project does not
       # take. SmartScreen will warn on first run until the download builds reputation, which is
@@ -70,9 +156,12 @@ jobs:
 
   bundles:
     name: Linux bundles
+    needs: gate
     runs-on: ubuntu-latest
-    # The draft release is attached here, so the Windows installer has to exist by then.
-    needs: windows
+    # Only the `release` job writes anything. These two build from a shared cache, so the
+    # narrower token is worth the two lines.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v5
 
@@ -96,6 +185,10 @@ jobs:
             tesseract-ocr-eng
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Matches CI's `Rust` job. See the Windows job for why release never saves.
+          shared-key: linux
+          save-if: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -110,16 +203,35 @@ jobs:
       - run: pnpm install --frozen-lockfile
         working-directory: app
 
-      # Not a bare `pnpm tauri build`. The helper runs the test suite, clippy and `pnpm check`
-      # first, and then asserts that the AppImage it just produced still forces `GDK_BACKEND=x11`
-      # -- the property the reward overlay depends on, and the only check of it that runs against
-      # the artifact users actually download.
-      - run: ./scripts/build-linux-bundles.sh appimage deb rpm
+      # `--skip-gates` drops the test suite, clippy and `pnpm check` -- CI ran all three against
+      # this commit and the gate job refused to get here until they passed. What the script still
+      # does is the part CI cannot: it asserts the AppImage it just produced forces
+      # `GDK_BACKEND=x11`, the property the reward overlay depends on, and repacks the AppDir.
+      # That runs against the artifact users actually download.
+      - run: ./scripts/build-linux-bundles.sh --skip-gates appimage deb rpm
+        env:
+          # See the Windows job.
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundles
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+            target/release/bundle/rpm/*.rpm
+
+  # Publishing is its own job so the two builds can run at once. Previously the Linux job attached
+  # the release, which forced it to wait for the Windows installer to exist -- an artifact
+  # dependency that serialised two builds sharing no other reason to be ordered.
+  release:
+    name: Draft release
+    needs: [windows, bundles]
+    runs-on: ubuntu-latest
+    steps:
       - uses: actions/download-artifact@v4
         with:
-          name: windows-installer
-          path: windows-installer
+          path: artifacts
 
       # A draft, not a publish. The release notes are written by hand from CHANGELOG.md and the
       # release goes out when the maintainer says so.
@@ -130,8 +242,14 @@ jobs:
           # as stable by accident -- and those are exactly the builds with assertions left on.
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          # `download-artifact` puts each artifact under a directory named after it, and
+          # `upload-artifact` roots a multi-path artifact at the least common ancestor of its
+          # globs -- `target/release/bundle` -- so the per-format subdirectories survive the trip.
+          # `fail_on_unmatched_files` is what turns a wrong guess about that into a failed release
+          # rather than a draft quietly missing the Linux downloads.
           files: |
-            target/release/bundle/appimage/*.AppImage
-            target/release/bundle/deb/*.deb
-            target/release/bundle/rpm/*.rpm
-            windows-installer/*.exe
+            artifacts/linux-bundles/appimage/*.AppImage
+            artifacts/linux-bundles/deb/*.deb
+            artifacts/linux-bundles/rpm/*.rpm
+            artifacts/windows-installer/*.exe
