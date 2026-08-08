@@ -75,10 +75,25 @@ path, and a tag is a moving pointer.
 `fail-on-no-checks` stays at its default of true. A tag whose SHA has no CI at all must fail, not
 sail through.
 
+The action's filter only *selects*: it fails when the matched set is empty, never when it is
+merely smaller than intended. So a job renamed in ci.yml would fall out of the allowlist and the
+gate would go green having waited on two jobs instead of three -- silently, because the regexp and
+the job names live in different files with nothing holding them together. A second step counts the
+matched successes and fails if there are not three. That is the difference between a gate and the
+appearance of one.
+
+CI's `cancel-in-progress` needed a matching change. It grouped by ref, so on `main` it would
+cancel the very run the gate waits for as soon as another commit landed -- and `cancelled` is not
+an allowed conclusion, so an unrelated merge would fail a release. `main` now groups by SHA, giving
+each commit its own group; branches and pull requests still collapse to the newest push.
+
 The gate also asserts the tag equals the workspace version. `check-versions.sh` proves the four
 in-tree declarations agree with each other, but nothing has ever proved they agree with the tag
 being built -- and only the release workflow knows the tag. `v0.5.3` building `0.5.2` artifacts
-is exactly the silent mislabelling `check-versions.sh` was written to prevent, one level up.
+is exactly the silent mislabelling `check-versions.sh` was written to prevent, one level up. A
+pre-release tag carries a suffix the manifests cannot hold, so the comparison uses the part before
+the first `-`. This doubles as the guard on `workflow_dispatch`: dispatched on a branch the ref is
+`main`, which names no version, so it fails before building.
 
 ### windows / bundles
 
@@ -103,6 +118,30 @@ gets the full gauntlet exactly as before.
 
 Downloads both artifacts, attaches all four files to a draft. Unchanged behaviour: still a draft,
 still `prerelease` from the tag, still hand-written notes.
+
+`upload-artifact` roots a multi-path artifact at the least common ancestor of its globs, so the
+Linux bundles arrive under `appimage/`, `deb/` and `rpm/` subdirectories rather than flat.
+`fail_on_unmatched_files` turns a wrong guess about that into a failed release instead of a draft
+quietly missing its Linux downloads.
+
+Only this job keeps `contents: write`. The two build jobs are dropped to `contents: read`.
+
+## Verification
+
+Before pushing:
+
+- `actionlint` clean on both workflows
+- the check-name regexp run against the real check runs on the last release commit: matches CI's
+  three jobs, excludes all four release jobs, so it cannot deadlock
+- the count assertion run against that same commit: passes at three, and fails at two when a
+  renamed job is simulated
+- the tag comparison run over `v0.5.3`, `v0.5.3-rc1`, `v0.5.3-beta.2` (pass) and `v0.5.2`,
+  `v0.6.0`, `v0.5.2-rc1` (fail)
+- `build-linux-bundles.sh` run both ways against stub `cargo`/`pnpm`: `--skip-gates` invokes only
+  the build, the default still runs tests, clippy and `pnpm check`
+- the X11 assertion proved to still fire under `--skip-gates` by breaking the hook in a real
+  AppDir and watching it exit 1
+- `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test --workspace`, `pnpm check` all green
 
 ## Expected result
 
