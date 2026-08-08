@@ -11,6 +11,8 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-08-08
+
 ### Fixed
 
 - **One unreadable item no longer fails your whole collection.** The inventory response can
@@ -279,7 +281,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/Deftera186/tennoscope/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/Deftera186/tennoscope/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Deftera186/tennoscope/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Deftera186/tennoscope/compare/v0.4.1...v0.5.0
