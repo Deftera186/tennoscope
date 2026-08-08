@@ -1214,6 +1214,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
     let mut announced_process = None;
+    let mut tracked_resolution: Option<(u32, Option<PathBuf>)> = None;
     let mut early_reward_resolved = false;
     let mut pending_reward_squad = None::<PendingRewardSquad>;
     let incremental_reward_records = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
@@ -1274,7 +1275,19 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         let (input, log_bytes) = match discovered {
             Ok(None) => (MonitorInput::absent(now), Vec::new()),
             Err(error) => (MonitorInput::error(now, error), Vec::new()),
-            Ok(Some(process)) => build_monitor_input(&machine, now, process.pid()),
+            Ok(Some(process)) => {
+                let path = inventory_log_path(process.pid());
+                if monitor_path_changed(tracked_resolution.as_ref(), process.pid(), path.as_deref())
+                {
+                    log::debug!(
+                        "monitor: EE.log path resolution pid={} found={}",
+                        process.pid(),
+                        path.is_some()
+                    );
+                    tracked_resolution = Some((process.pid(), path.clone()));
+                }
+                build_monitor_input(&machine, now, process.pid(), path)
+            }
         };
         let result = machine.tick(input);
         if result.refresh {
@@ -2213,12 +2226,33 @@ pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
     }
 }
 
-fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (MonitorInput, Vec<u8>) {
-    let path = inventory_log_path(pid);
-    log::debug!(
-        "monitor: EE.log path resolution pid={pid} found={}",
-        path.is_some()
-    );
+/// Whether the log line about the followed EE.log path differs from the last one emitted.
+///
+/// The resolution debug line exists to explain which game the monitor is following (Wine prefix
+/// surprises are the usual cause for confusion), so it must print when that state changes --
+/// pid found, pid lost, another pid, another path -- and stay silent while the same path is
+/// being polled at up to ten times a second.
+fn monitor_path_changed(
+    tracked: Option<&(u32, Option<PathBuf>)>,
+    pid: u32,
+    path: Option<&Path>,
+) -> bool {
+    match (tracked, path) {
+        (None, _) => true,
+        (Some((tracked_pid, _)), None) => *tracked_pid != pid,
+        (Some((tracked_pid, Some(tracked))), Some(path)) => {
+            *tracked_pid != pid || tracked.as_path() != path
+        }
+        (Some(_), Some(_)) => false,
+    }
+}
+
+fn build_monitor_input(
+    machine: &MonitorMachine,
+    now: u64,
+    pid: u32,
+    path: Option<PathBuf>,
+) -> (MonitorInput, Vec<u8>) {
     let Some(path) = path else {
         return (MonitorInput::running(now, pid, None), Vec::new());
     };
@@ -2627,6 +2661,44 @@ mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
     use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
+
+    #[test]
+    fn monitor_path_changed_fires_on_the_first_observation() {
+        assert!(monitor_path_changed(None, 42, None));
+    }
+
+    #[test]
+    fn monitor_path_changed_is_silent_while_the_same_path_is_tracked() {
+        let path = Path::new("/prefix/drive_c/EE.log");
+        let tracked = Some((42, Some(path.to_path_buf())));
+        assert!(!monitor_path_changed(tracked.as_ref(), 42, Some(path)));
+    }
+
+    #[test]
+    fn monitor_path_changed_silent_when_the_log_disappears() {
+        let path = Some((42u32, Some(PathBuf::from("/p/EE.log"))));
+        assert!(!monitor_path_changed(path.as_ref(), 42, None));
+    }
+
+    #[test]
+    fn monitor_path_changed_fires_when_the_pid_changes() {
+        let tracked = Some((42u32, Some(PathBuf::from("/p/EE.log"))));
+        assert!(monitor_path_changed(
+            tracked.as_ref(),
+            43,
+            Some(Path::new("/p/EE.log"))
+        ));
+    }
+
+    #[test]
+    fn monitor_path_changed_fires_when_the_path_moves() {
+        let tracked = Some((42u32, Some(PathBuf::from("/p/EE.log"))));
+        assert!(monitor_path_changed(
+            tracked.as_ref(),
+            42,
+            Some(Path::new("/q/EE.log"))
+        ));
+    }
 
     /// A credential store that holds one token in memory, so `publish_account` can be exercised
     /// with no keyring and no network.
