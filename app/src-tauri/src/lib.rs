@@ -194,7 +194,7 @@ async fn collect_report_text(
         let health_json = serde_json::to_string_pretty(&view.health())
             .map_err(|_| "health could not be serialized".to_owned())?;
         let request = build_report_request(&app, &runtime, &health_json, false);
-        report::assemble_report_text(&request.meta, &request.health_json, false)
+        report::assemble_report_text(&request.meta, &request.health_json, report::EeLogState::NotRequested)
     })
     .await
     .map_err(|_| "report task failed".to_owned())?
@@ -268,7 +268,7 @@ fn build_report_request(
             version,
             profile,
             os_arch,
-            timestamp: report::utc_stamp(),
+            timestamp: report::utc_civil(),
             log_dir,
             app_data: runtime.app_data.clone(),
         },
@@ -2548,11 +2548,18 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let mut targets = vec![tauri_plugin_log::Target::new(
-                tauri_plugin_log::TargetKind::LogDir {
-                    file_name: Some("tennoscope.log".to_owned()),
-                },
-            )];
+            // The file target keeps debug traces in dev builds and trims to Info in stable
+            // releases: per-OCR-attempt debug lines land every 200 ms, and with only 5 MiB
+            // per rotated file a stable session of hours would otherwise keep just the last
+            // minutes of history — the very window the report block exists to serve.
+            let file = tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                file_name: Some("tennoscope.log".to_owned()),
+            });
+            let mut targets = vec![if cfg!(debug_assertions) {
+                file
+            } else {
+                file.filter(|metadata| metadata.level() <= log::Level::Info)
+            }];
             if cfg!(debug_assertions) {
                 targets.push(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Stdout,

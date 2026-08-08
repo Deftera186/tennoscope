@@ -4,8 +4,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use app_lib::report::{
-    assemble_report_text, collect_report, log_files, sanitize, utc_stamp, ReportMeta,
-    ReportRequest,
+    assemble_report_text, collect_report, log_files, sanitize, utc_stamp, EeLogState,
+    ReportMeta, ReportRequest,
 };
 
 fn meta(app_data: &std::path::Path, log_dir: &std::path::Path) -> ReportMeta {
@@ -30,12 +30,50 @@ fn sanitize_replaces_home_and_username() {
 }
 
 #[test]
+fn sanitize_ignores_embedded_fragments() {
+    let home = std::path::Path::new("/home/alice");
+    assert_eq!(
+        sanitize("builder and alicex and alice", home, Some("alice")),
+        "builder and alicex and <user>",
+        "username only scrubbed at word boundaries"
+    );
+    assert_eq!(
+        sanitize("/home/alicebackup and /home/alice/store", home, Some("alice")),
+        "/home/alicebackup and ~/store",
+        "home only scrubbed when followed by a separator or the end"
+    );
+}
+
+#[test]
 fn utc_stamp_is_civil_and_sorted() {
     let stamp = utc_stamp();
-    assert_eq!(stamp.len(), 17, "YYYY-MM-DD-HHMMSS: {stamp}");
+    assert_eq!(stamp.len(), 20, "YYYY-MM-DD-HHMMSSmmm: {stamp}");
+    assert!(stamp.is_ascii(), "stamp is plain ASCII: {stamp}");
     let digits: Vec<char> = stamp.chars().filter(|c| c.is_ascii_digit()).collect();
-    assert_eq!(digits.len(), 14);
-    assert!(stamp.starts_with("2026-08-0"), "today's stamp starts with 2026-08-0: {stamp}");
+    assert_eq!(digits.len(), 17);
+    assert_eq!(stamp.chars().filter(|c| *c == '-').count(), 3);
+    let (year, rest) = stamp.split_once('-').expect("year");
+    assert_eq!(year.len(), 4);
+    assert!(year.chars().all(|c| c.is_ascii_digit()));
+    let (month, rest) = rest.split_once('-').expect("month");
+    assert_eq!(month, "08", "month is zero-padded: {month}");
+    let month: u32 = month.parse().expect("month number");
+    assert!((1..=12).contains(&month));
+    let (day, time) = rest.split_once('-').expect("day");
+    let day: u32 = day.parse().expect("day number");
+    assert!((1..=31).contains(&day));
+    let (hour, rest) = time.split_at(2);
+    let (minutes, seconds_ms) = rest.split_at(2);
+    let (seconds, millis) = seconds_ms.split_at(2);
+    assert_eq!(millis.len(), 3, "milliseconds present: {stamp}");
+    let hour: u32 = hour.parse().expect("hour number");
+    let minutes: u32 = minutes.parse().expect("minutes number");
+    let seconds: u32 = seconds.parse().expect("seconds number");
+    let millis: u32 = millis.parse().expect("millis number");
+    assert!(hour < 24, "hour in range: {stamp}");
+    assert!(minutes < 60, "minutes in range: {stamp}");
+    assert!(seconds < 60, "seconds in range: {stamp}");
+    assert!(millis < 1000, "millis in range: {stamp}");
 }
 
 #[test]
@@ -99,7 +137,8 @@ fn github_text_never_contains_ee_log_lines() {
     fs::create_dir_all(&log_dir).expect("logs");
     fs::write(log_dir.join("tennoscope.log"), "app line\n").expect("log");
     let meta = meta(dir.path(), &log_dir);
-    let text = assemble_report_text(&meta, "{\"stage\":\"failed\"}", true).expect("text assembles");
+    let text = assemble_report_text(&meta, "{\"stage\":\"failed\"}", EeLogState::Included)
+        .expect("text assembles");
     assert!(!text.contains("session secrets"), "EE.log content must never reach report text");
     assert!(text.contains("Discord"), "the Discord routing instruction is present when EE.log is included");
 }
@@ -114,7 +153,7 @@ fn report_text_scrubs_home_and_username_when_under_home() {
     fs::create_dir_all(&log_dir).expect("dir under home");
     fs::write(log_dir.join("tennoscope.log"), "home is here\n").expect("log");
     let meta = meta(home.parent().expect("home parent"), &log_dir);
-    let text = assemble_report_text(&meta, "{}", false).expect("text assembles");
+    let text = assemble_report_text(&meta, "{}", EeLogState::NotRequested).expect("text assembles");
     let _ = fs::remove_dir_all(&log_dir);
     let home_str = home.to_string_lossy().into_owned();
     assert!(!text.contains(&home_str), "the raw home path must be scrubbed from report text");
