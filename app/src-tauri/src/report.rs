@@ -342,7 +342,13 @@ pub fn log_error_tail(log_dir: &Path) -> Vec<String> {
     let Ok(bytes) = fs::read(&path) else {
         return Vec::new();
     };
-    let start = bytes.len().saturating_sub(LOG_EXCERPT_BYTES);
+    let mut start = bytes.len().saturating_sub(LOG_EXCERPT_BYTES);
+    if start > 0 {
+        start = bytes[start..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(start, |i| start + i + 1);
+    }
     let deduped = String::from_utf8_lossy(&bytes[start..])
         .lines()
         .filter(|line| line.contains("[WARN]") || line.contains("[ERROR]"))

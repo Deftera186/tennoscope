@@ -295,6 +295,23 @@ fn error_tail_caps_at_twenty_lines_and_reads_the_last_window() {
 }
 
 #[test]
+fn error_tail_window_starts_at_a_line_boundary() {
+    let dir = std::env::temp_dir().join(format!("report-tail-boundary-{}", std::process::id()));
+    let mut content = "x".repeat(app_lib::report::LOG_EXCERPT_BYTES + 1);
+    content.push_str("[WARN] junk embedded in a giant line");
+    content.push('\n');
+    content.push_str("[2026-08-08][10:00:01][app][WARN] capture unreachable");
+    write_log(&dir, &[&content]);
+    let tail = app_lib::report::log_error_tail(&dir);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(
+        tail,
+        vec!["[2026-08-08][10:00:01][app][WARN] capture unreachable".to_owned()],
+        "a window cut inside a line must not leak a truncated fragment"
+    );
+}
+
+#[test]
 fn assemble_report_text_switches_on_log_body() {
     let home = std::env::temp_dir();
     let log_dir = home.join(format!("assemble-tail-{}", std::process::id()));
