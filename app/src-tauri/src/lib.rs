@@ -248,12 +248,13 @@ fn build_report_request(
         .unwrap_or_else(|_| runtime.app_data.clone());
     let ee_log_wanted = want_ee_log
         && runtime.core.current_view().ok().is_some_and(|view| {
-            view.health().acquisition_stages().iter().any(|stage| {
-                matches!(
-                    stage.state(),
-                    app_core::HealthState::Degraded | app_core::HealthState::Failed
-                )
-            })
+            let states: Vec<app_core::HealthState> = view
+                .health()
+                .acquisition_stages()
+                .iter()
+                .map(app_core::AcquisitionStageView::state)
+                .collect();
+            report::ee_log_wanted_for(&states)
         });
     let ee_log_path = if ee_log_wanted {
         GameMemory::new()

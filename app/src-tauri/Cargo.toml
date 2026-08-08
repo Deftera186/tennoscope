@@ -43,3 +43,4 @@ xcap = { version = "0.9.7", features = ["image", "wgc"] }
 
 [dev-dependencies]
 tempfile = "3"
+app-core = { path = "../../crates/app-core" }

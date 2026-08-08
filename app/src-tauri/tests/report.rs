@@ -348,6 +348,22 @@ fn assemble_report_text_full_body_keeps_the_excerpt() {
 }
 
 #[test]
+fn ee_log_is_only_wanted_for_failed_stages() {
+    let states = |options: &[app_core::HealthState]| options.to_vec();
+    assert!(!app_lib::report::ee_log_wanted_for(&states(&[
+        app_core::HealthState::Ready
+    ])));
+    assert!(!app_lib::report::ee_log_wanted_for(&states(&[
+        app_core::HealthState::Degraded
+    ])));
+    assert!(app_lib::report::ee_log_wanted_for(&states(&[
+        app_core::HealthState::Degraded,
+        app_core::HealthState::Failed
+    ])));
+    assert!(!app_lib::report::ee_log_wanted_for(&states(&[])));
+}
+
+#[test]
 fn assemble_report_text_tail_is_silent_when_the_log_is_quiet() {
     let home = std::env::temp_dir();
     let log_dir = home.join(format!("assemble-quiet-{}", std::process::id()));

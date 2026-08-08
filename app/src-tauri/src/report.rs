@@ -20,6 +20,13 @@ pub const LOG_EXCERPT_BYTES: usize = 256 * 1024;
 /// shape of a failure without turning the paste into a log file.
 pub const LOG_TAIL_LINES: usize = 20;
 
+/// The EE.log copy is a forensics artefact for genuine acquisition
+/// breakdowns. A degraded stage (slow market, waiting) explains itself in
+/// the health block; only a failure earns the sensitive copy.
+pub fn ee_log_wanted_for(states: &[app_core::HealthState]) -> bool {
+    states.contains(&app_core::HealthState::Failed)
+}
+
 #[derive(Clone)]
 pub struct ReportMeta {
     pub version: String,
