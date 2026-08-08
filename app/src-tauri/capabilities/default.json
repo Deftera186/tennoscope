@@ -10,8 +10,8 @@
     "core:default",
     "core:window:allow-hide",
     "core:window:allow-show",
-    "opener:allow-open-url",
-    "opener:allow-reveal-item-in-dir",
+    { "identifier": "opener:allow-open-url", "allow": [{ "url": "https://github.com/Deftera186/tennoscope/issues/**" }] },
+    { "identifier": "opener:allow-reveal-item-in-dir", "allow": [{ "path": "$APPDATA/reports/**" }] },
     "clipboard-manager:allow-write-text"
   ]
 }
