@@ -11,6 +11,17 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-08-10
+
+### Fixed
+
+- **Reward cards are read where the game draws them on non-16:9 screens.** Card positions
+  were fractions of the window's width; Warframe scales its HUD with height. On a 16:10 screen —
+  a Steam Deck's 1280x800 — the reader looked a fifth of a card away from the real slots, clipped
+  titles read as confident wrong letters, both outer cards fell under the match floor, and every
+  poll failed for the whole life of the screen. The overlay strip was drawn in the wrong place on
+  the same screens; both are right now.
+
 ## [0.5.3] - 2026-08-08
 
 ### Fixed
@@ -281,7 +292,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/Deftera186/tennoscope/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/Deftera186/tennoscope/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/Deftera186/tennoscope/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Deftera186/tennoscope/compare/v0.5.0...v0.5.1
