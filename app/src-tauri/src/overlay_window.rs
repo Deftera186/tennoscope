@@ -32,6 +32,11 @@ const OVERLAY_HEIGHT: f32 = 156.0 / 1080.0;
 /// a three-player squad's cards sit half a pitch right of a four-player squad's. Same reason the
 /// reader takes it, and the same source, so the strip and the crops can never disagree.
 ///
+/// The block is measured against window *height* and centred horizontally, which is how Warframe
+/// scales its HUD. At 16:9 that is indistinguishable from fractions of width, which is why this was
+/// width-based for so long; at 16:10 -- a Steam Deck's 1280x800 -- the two disagree by up to 36px
+/// on a 178px card, enough to cut a title in half.
+///
 /// No clamp on the width: the point is to track the cards, and a clamp is what would break that.
 pub fn reward_overlay_geometry(
     screen_width: u32,
@@ -41,11 +46,16 @@ pub fn reward_overlay_geometry(
     cards: usize,
 ) -> OverlayGeometry {
     let fraction = |value: f32, of: u32| f64::from(value) * f64::from(of);
-    let width = fraction(crate::reward_ocr::card_block_width(cards), screen_width).round() as u32;
+    let width = f64::from(crate::reward_ocr::card_block_width(cards, screen_height)).round() as u32;
     let height = (f64::from(OVERLAY_HEIGHT) * f64::from(screen_height)).round() as u32;
     let x = screen_x
         + i32::try_from(
-            fraction(crate::reward_ocr::card_block_left(cards), screen_width).round() as i64,
+            f64::from(crate::reward_ocr::card_block_left(
+                cards,
+                screen_width,
+                screen_height,
+            ))
+            .round() as i64,
         )
         .unwrap_or_default();
     let y = screen_y

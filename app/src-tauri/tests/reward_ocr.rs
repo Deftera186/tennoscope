@@ -100,6 +100,42 @@ fn the_calibrated_geometry_reads_a_real_reward_screen() {
     );
 }
 
+/// The same screen at 16:10, which is a Steam Deck's native 1280x800.
+///
+/// Warframe scales its HUD with window *height* and centres it horizontally, but the card geometry
+/// was expressed as fractions of *width*. Those two agree at 16:9 and only at 16:9, so every
+/// calibration fixture confirmed geometry that was wrong everywhere else. At 1280x800 the cards are
+/// 178px wide and the width-based reader looked 36px left of slot 0 and 18px right of slot 3 -- a
+/// fifth of a card -- which clipped the outer titles.
+///
+/// Reported from a Steam Deck AppImage: `Structured reward records were incomplete` on every poll
+/// for the whole life of the screen, because one unmatched card fails the entire read.
+///
+/// The fixture is the 1920x1080 capture scaled by height and letterboxed, which is what the game
+/// itself draws: same HUD, same height scaling, narrower window.
+#[test]
+fn a_16_10_screen_is_read_where_a_16_10_screen_actually_sits() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-1280x800.png");
+    let cards = app_lib::read_cards(&fixture, &pool()).unwrap();
+    assert_eq!(
+        names(cards.clone()),
+        vec![
+            "Braton Prime Blueprint",
+            "2X Forma Blueprint",
+            "Burston Prime Stock",
+            "Trumna Prime Blueprint",
+        ]
+    );
+    // Same reasoning as the three-card test: the closed-set match lands on the right name even from
+    // a half-clipped crop, so only the score proves the geometry. Under the width-based geometry
+    // the outer two cards read 0.85 and 0.75 here.
+    for (name, score) in cards {
+        assert!(score >= 0.9, "{name} read at only {score}");
+    }
+}
+
 /// A squad of three opens three relics, and Warframe centres the card block on however many cards
 /// there are -- so every card shifts right by half a card pitch, 121px at 1920. Reading a three-card
 /// screen at the four-card positions puts slot 0's crop across the gutter and the left part of the

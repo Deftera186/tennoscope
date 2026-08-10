@@ -23,12 +23,20 @@ use warframe_acquisition::RewardCatalogEntry;
 
 use crate::{overlay_window::WindowRect, reward_source::VisualRewardSource};
 
-/// Card geometry as fractions of the window, calibrated from a labelled 1920x1080 reward screen:
-/// four cards on a 242px pitch from x=478. Warframe scales its UI with the window, so fractions
-/// carry across resolutions where a pixel table would not.
-const CARD_LEFT: f32 = 478.0 / 1920.0;
-const CARD_PITCH: f32 = 242.0 / 1920.0;
-const CARD_WIDTH: f32 = 240.0 / 1920.0;
+/// Card geometry, calibrated from a labelled 1920x1080 reward screen: four cards on a 242px pitch
+/// from x=478, i.e. a block centred on x=960.
+///
+/// These are fractions of window *height*, offset from the horizontal centre -- not fractions of
+/// width. Warframe scales its HUD with height and centres it horizontally, so a card's distance
+/// from the centre is a fixed multiple of the window height at every aspect ratio. Fractions of
+/// width only look right because they agree with these at 16:9, and disagree everywhere else.
+const CARD_PITCH: f32 = 242.0 / 1080.0;
+const CARD_WIDTH: f32 = 240.0 / 1080.0;
+/// Centre of the card block, as a signed fraction of height from the window's horizontal centre.
+/// The 1920x1080 block spans x=478 to x=1444, whose centre is x=961 -- one pixel right of the
+/// screen centre, which is measurement noise, not an offset. Keeping the measured value rather
+/// than rounding it to zero is what makes the 1920x1080 calibration reproduce exactly.
+const BLOCK_CENTRE: f32 = (478.0 + (242.0 * 3.0 + 240.0) / 2.0 - 960.0) / 1080.0;
 
 /// The four-card block, for anything that needs to sit against the cards rather than read them.
 ///
@@ -38,31 +46,27 @@ const CARD_WIDTH: f32 = 240.0 / 1920.0;
 /// definition now, and it is this one, because this is the one that is calibrated.
 ///
 /// `BOTTOM` is the underside of the player-name row, measured at y=525 on the 2026-07-27 host
-/// screen, with a few pixels of clearance.
-///
-/// Caveat carried by both users of these constants: they are fractions of window *width*, verified
-/// only against 16:9 captures. If Warframe scales its HUD with height and centres it -- which is
-/// the usual arrangement, and which these numbers cannot distinguish at 16:9 -- then both the crop
-/// and the overlay drift on an ultrawide display. Fixing that means re-deriving from a non-16:9
-/// capture, and it would be fixed here, once, for both.
+/// screen, with a few pixels of clearance. Vertical fractions were always fractions of height, so
+/// this one needed no correction.
 pub const CARD_BLOCK_BOTTOM: f32 = 530.0 / 1080.0;
 
 /// A full squad, and the layout the fractions above are calibrated against.
 pub const MAX_CARDS: usize = 4;
 
-/// Left edge of the card block for a squad of `cards`, as a fraction of window width.
+/// Left edge of the card block for a squad of `cards`, in pixels from the window's left edge.
 ///
 /// Warframe centres the block on however many cards it has, so dropping a card pulls both edges in
 /// by half a pitch. That is not a detail: on a three-card screen every card sits 121px right of
 /// where a four-card reader looks, which is enough for slot 0's crop to straddle the gutter and cut
-/// the first title in half.
-pub fn card_block_left(cards: usize) -> f32 {
-    CARD_LEFT + MAX_CARDS.saturating_sub(cards) as f32 * CARD_PITCH / 2.0
+/// the first title in half. Centring the block is the same statement, and it is the one that keeps
+/// holding when the aspect ratio changes.
+pub fn card_block_left(cards: usize, width: u32, height: u32) -> f32 {
+    width as f32 / 2.0 + BLOCK_CENTRE * height as f32 - card_block_width(cards, height) / 2.0
 }
 
-/// Width of the card block for a squad of `cards`, as a fraction of window width.
-pub fn card_block_width(cards: usize) -> f32 {
-    CARD_PITCH * cards.saturating_sub(1) as f32 + CARD_WIDTH
+/// Width of the card block for a squad of `cards`, in pixels.
+pub fn card_block_width(cards: usize, height: u32) -> f32 {
+    (CARD_PITCH * cards.saturating_sub(1) as f32 + CARD_WIDTH) * height as f32
 }
 
 /// The title band, measured against three captured reward screens on 2026-07-27.
@@ -203,14 +207,14 @@ fn read_cards_at(
     cards: usize,
     candidates: &[RewardCatalogEntry],
 ) -> Result<Vec<(String, f32)>, (usize, &'static str)> {
-    let left = card_block_left(cards);
+    let left = card_block_left(cards, width, height);
     let mut read = Vec::with_capacity(cards);
     for slot in 0..cards {
         let (text, crop) = read_region(
             image,
-            ((left + CARD_PITCH * slot as f32) * width as f32) as u32,
+            (left + CARD_PITCH * slot as f32 * height as f32) as u32,
             (TITLE_TOP * height as f32) as u32,
-            (CARD_WIDTH * width as f32) as u32,
+            (CARD_WIDTH * height as f32) as u32,
             (TITLE_HEIGHT * height as f32) as u32,
         )
         .map_err(|reason| (slot, reason))?;
