@@ -4,7 +4,7 @@
 //! absent, EE.log unavailable" and the loop re-records it every tick. Logging each recording
 //! floods the console (and the log file) with lines that carry no new information.
 
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Mutex, Once};
 
 use app_lib::{LogObservation, MonitorInput, MonitorMachine};
 
@@ -27,12 +27,12 @@ impl log::Log for Capture {
     fn flush(&self) {}
 }
 
-fn install_capture() -> Arc<Mutex<Vec<String>>> {
+fn install_capture() {
     INSTALL.call_once(|| {
         log::set_boxed_logger(Box::new(Capture)).expect("logger installs once");
         log::set_max_level(log::LevelFilter::Debug);
     });
-    Arc::new(Mutex::new(Vec::new()))
+    LINES.lock().expect("lines lock").clear();
 }
 
 #[test]
