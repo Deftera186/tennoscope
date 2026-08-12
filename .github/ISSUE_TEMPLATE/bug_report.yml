@@ -8,8 +8,10 @@ body:
         Before filing, please check **Diagnostics** in the app — it names which stage failed, which
         is usually most of the answer.
 
-        If Diagnostics shows a **Report block**, use **Copy report** and paste it into the fields
-        below, and attach the `report.txt` from the saved report folder if you used **Save logs**.
+        If Diagnostics shows a **Report block**, click **Copy diagnostics** and paste the whole output
+        into the **Diagnostics output** field below — it carries the fault summary, the row states and
+        the recent warnings. There is nothing else to paste. The full log record (the rotated logs)
+        lives in the **Save logs** folder — attach `report.txt` from there if the issue needs it.
 
         **Do not attach EE.log to a public issue.** It contains IPs, email addresses and account
         handles — send it to the maintainer on Discord (@deftera) instead. Do not paste account
@@ -54,7 +56,8 @@ body:
     attributes:
       label: Diagnostics output
       description: >
-        The Diagnostics page, verbatim. It reports subsystem health without any account data.
+        Paste the **Copy diagnostics** output here (from the Report block). It reports subsystem
+        health without any account data.
       render: text
 
   - type: input

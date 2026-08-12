@@ -62,24 +62,22 @@ describe('report block on Diagnostics', () => {
     backend.marketStatus.mockResolvedValue(makeView(readyHealth()))
   })
 
-  // The bugs this exists to diagnose -- a wrong reward read, an overlay that lingers -- leave every
-  // health stage `ready`. Gating the block on a broken stage would hide it from exactly them.
-  it('is offered even when every system is ready', async () => {
+  it('is hidden when every system is ready', async () => {
     await openDiagnostics()
-    expect(screen.getByRole('group', { name: 'Report a problem' })).toBeVisible()
+    expect(screen.queryByRole('group', { name: 'Report a problem' })).toBeNull()
   })
 
-  it('is offered when the only non-ready state is idle', async () => {
+  it('is hidden when the only non-ready state is idle', async () => {
     const health = readyHealth()
     health.market_account = { state: 'idle', message: 'not linked', last_success: null }
     backend.getView.mockResolvedValue(makeView(health))
     await openDiagnostics()
-    expect(screen.getByRole('group', { name: 'Report a problem' })).toBeVisible()
+    expect(screen.queryByRole('group', { name: 'Report a problem' })).toBeNull()
   })
 
   it('appears when a system is degraded', async () => {
     const health = readyHealth()
-    health.market = { state: 'degraded', message: 'market offline', last_success: null }
+    health.market = { state: 'degraded', message: 'market offline', last_success: '2026-07-27' }
     backend.getView.mockResolvedValue(makeView(health))
     await openDiagnostics()
     expect(screen.getByRole('group', { name: 'Report a problem' })).toBeVisible()
@@ -95,15 +93,24 @@ describe('report block on Diagnostics', () => {
     expect(screen.getByRole('group', { name: 'Report a problem' })).toBeVisible()
   })
 
-  it('copy shows the COPIED status', async () => {
+  it('is hidden when the only broken rows have never worked this session', async () => {
+    const health = readyHealth()
+    health.game_reader = { state: 'degraded', message: 'waiting', last_success: null }
+    health.log_monitor = { state: 'degraded', message: 'EE.log not found', last_success: null }
+    backend.getView.mockResolvedValue(makeView(health))
+    await openDiagnostics()
+    expect(screen.queryByRole('group', { name: 'Report a problem' })).toBeNull()
+  })
+
+  it('copy shows the COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD status', async () => {
     const health = readyHealth()
     health.market = { state: 'failed', message: 'market offline', last_success: null }
     backend.getView.mockResolvedValue(makeView(health))
     report.copyReport.mockResolvedValue(undefined)
     const user = await openDiagnostics()
-    await user.click(within(screen.getByRole('group', { name: 'Report a problem' })).getByRole('button', { name: 'Copy report' }))
+    await user.click(within(screen.getByRole('group', { name: 'Report a problem' })).getByRole('button', { name: 'Copy diagnostics' }))
     expect(report.copyReport).toHaveBeenCalledOnce()
-    expect(screen.getByText('COPIED — PASTE IT INTO THE ISSUE FORM.')).toBeVisible()
+    expect(screen.getByText('COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD OF THE ISSUE FORM.')).toBeVisible()
   })
 
   it('save shows the folder path and the Discord note when EE.log is included', async () => {

@@ -133,3 +133,32 @@ fn log_monitor_failure_never_overwrites_successful_acquisition_health() {
     assert_eq!(view.health().log_monitor().state(), HealthState::Failed);
     assert!(view.health().log_monitor().message().contains("EE.log"));
 }
+
+#[test]
+fn catalog_without_a_load_keeps_the_prior_fetch_stamp() {
+    let mut core = AppCore::in_memory().unwrap();
+    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let result =
+        AcquisitionResult::new(snapshot("prior"), AcquisitionHealth::successful()).unwrap();
+    let view = core
+        .finish_inventory_refresh(Ok((result, meta)), Some((CatalogLoadSource::Network, 100)))
+        .unwrap();
+    assert_eq!(view.health().catalog().last_success(), Some("100"));
+
+    let result =
+        AcquisitionResult::new(snapshot("prior"), AcquisitionHealth::successful()).unwrap();
+    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let view = core
+        .finish_inventory_refresh(Ok((result, meta)), None)
+        .unwrap();
+    assert_eq!(view.health().catalog().state(), HealthState::Degraded);
+    assert!(
+        view.health().catalog().message().contains("unavailable"),
+        "no catalog load reads as unavailable"
+    );
+    assert_eq!(
+        view.health().catalog().last_success(),
+        Some("100"),
+        "a refresh with no catalog keeps the last fetched stamp"
+    );
+}

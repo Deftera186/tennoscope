@@ -176,7 +176,7 @@ async fn get_view(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     .map_err(|_| "application view task failed".to_owned())?
 }
 
-/// Assemble the GitHub-safe report text only (used by "Copy report").
+/// Assemble the GitHub-safe report text only (used by "Copy diagnostics").
 #[tauri::command]
 async fn collect_report_text(
     state: State<'_, SharedRuntime>,
@@ -194,7 +194,11 @@ async fn collect_report_text(
         let health_json = serde_json::to_string_pretty(&view.health())
             .map_err(|_| "health could not be serialized".to_owned())?;
         let request = build_report_request(&app, &runtime, &health_json, false);
-        report::assemble_report_text(&request.meta, &request.health_json, false)
+        report::assemble_report_text(
+            &request.meta,
+            &request.health_json,
+            report::EeLogState::NotRequested,
+        )
     })
     .await
     .map_err(|_| "report task failed".to_owned())?
@@ -246,12 +250,13 @@ fn build_report_request(
         .unwrap_or_else(|_| runtime.app_data.clone());
     let ee_log_wanted = want_ee_log
         && runtime.core.current_view().ok().is_some_and(|view| {
-            view.health().acquisition_stages().iter().any(|stage| {
-                matches!(
-                    stage.state(),
-                    app_core::HealthState::Degraded | app_core::HealthState::Failed
-                )
-            })
+            let states: Vec<app_core::HealthState> = view
+                .health()
+                .acquisition_stages()
+                .iter()
+                .map(app_core::AcquisitionStageView::state)
+                .collect();
+            report::ee_log_wanted_for(&states)
         });
     let ee_log_path = if ee_log_wanted {
         GameMemory::new()
@@ -267,7 +272,7 @@ fn build_report_request(
             version,
             profile,
             os_arch,
-            timestamp: report::utc_stamp(),
+            timestamp: report::utc_civil(),
             log_dir,
             app_data: runtime.app_data.clone(),
         },
@@ -1212,6 +1217,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
     let mut announced_process = None;
+    let mut tracked_resolution: Option<(u32, Option<PathBuf>)> = None;
     let mut early_reward_resolved = false;
     let mut pending_reward_squad = None::<PendingRewardSquad>;
     let incremental_reward_records = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
@@ -1272,7 +1278,19 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         let (input, log_bytes) = match discovered {
             Ok(None) => (MonitorInput::absent(now), Vec::new()),
             Err(error) => (MonitorInput::error(now, error), Vec::new()),
-            Ok(Some(process)) => build_monitor_input(&machine, now, process.pid()),
+            Ok(Some(process)) => {
+                let path = inventory_log_path(process.pid());
+                if monitor_path_changed(tracked_resolution.as_ref(), process.pid(), path.as_deref())
+                {
+                    log::debug!(
+                        "monitor: EE.log path resolution pid={} found={}",
+                        process.pid(),
+                        path.is_some()
+                    );
+                    tracked_resolution = Some((process.pid(), path.clone()));
+                }
+                build_monitor_input(&machine, now, process.pid(), path)
+            }
         };
         let result = machine.tick(input);
         if result.refresh {
@@ -2211,8 +2229,33 @@ pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
     }
 }
 
-fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (MonitorInput, Vec<u8>) {
-    let path = inventory_log_path(pid);
+/// Whether the log line about the followed EE.log path differs from the last one emitted.
+///
+/// The resolution debug line exists to explain which game the monitor is following (Wine prefix
+/// surprises are the usual cause for confusion), so it must print when that state changes --
+/// pid found, pid lost, another pid, another path -- and stay silent while the same path is
+/// being polled at up to ten times a second.
+fn monitor_path_changed(
+    tracked: Option<&(u32, Option<PathBuf>)>,
+    pid: u32,
+    path: Option<&Path>,
+) -> bool {
+    match (tracked, path) {
+        (None, _) => true,
+        (Some((tracked_pid, _)), None) => *tracked_pid != pid,
+        (Some((tracked_pid, Some(tracked))), Some(path)) => {
+            *tracked_pid != pid || tracked.as_path() != path
+        }
+        (Some(_), Some(_)) => false,
+    }
+}
+
+fn build_monitor_input(
+    machine: &MonitorMachine,
+    now: u64,
+    pid: u32,
+    path: Option<PathBuf>,
+) -> (MonitorInput, Vec<u8>) {
     let Some(path) = path else {
         return (MonitorInput::running(now, pid, None), Vec::new());
     };
@@ -2546,11 +2589,18 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            let mut targets = vec![tauri_plugin_log::Target::new(
-                tauri_plugin_log::TargetKind::LogDir {
-                    file_name: Some("tennoscope.log".to_owned()),
-                },
-            )];
+            // The file target keeps debug traces in dev builds and trims to Info in stable
+            // releases: per-OCR-attempt debug lines land every 200 ms, and with only 5 MiB
+            // per rotated file a stable session of hours would otherwise keep just the last
+            // minutes of history — the very window the report block exists to serve.
+            let file = tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                file_name: Some("tennoscope.log".to_owned()),
+            });
+            let mut targets = vec![if cfg!(debug_assertions) {
+                file
+            } else {
+                file.filter(|metadata| metadata.level() <= log::Level::Info)
+            }];
             if cfg!(debug_assertions) {
                 targets.push(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::Stdout,
@@ -2620,6 +2670,44 @@ mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
     use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
+
+    #[test]
+    fn monitor_path_changed_fires_on_the_first_observation() {
+        assert!(monitor_path_changed(None, 42, None));
+    }
+
+    #[test]
+    fn monitor_path_changed_is_silent_while_the_same_path_is_tracked() {
+        let path = Path::new("/prefix/drive_c/EE.log");
+        let tracked = Some((42, Some(path.to_path_buf())));
+        assert!(!monitor_path_changed(tracked.as_ref(), 42, Some(path)));
+    }
+
+    #[test]
+    fn monitor_path_changed_silent_when_the_log_disappears() {
+        let path = Some((42u32, Some(PathBuf::from("/p/EE.log"))));
+        assert!(!monitor_path_changed(path.as_ref(), 42, None));
+    }
+
+    #[test]
+    fn monitor_path_changed_fires_when_the_pid_changes() {
+        let tracked = Some((42u32, Some(PathBuf::from("/p/EE.log"))));
+        assert!(monitor_path_changed(
+            tracked.as_ref(),
+            43,
+            Some(Path::new("/p/EE.log"))
+        ));
+    }
+
+    #[test]
+    fn monitor_path_changed_fires_when_the_path_moves() {
+        let tracked = Some((42u32, Some(PathBuf::from("/p/EE.log"))));
+        assert!(monitor_path_changed(
+            tracked.as_ref(),
+            42,
+            Some(Path::new("/q/EE.log"))
+        ));
+    }
 
     /// A credential store that holds one token in memory, so `publish_account` can be exercised
     /// with no keyring and no network.

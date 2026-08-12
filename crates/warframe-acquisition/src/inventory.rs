@@ -488,7 +488,7 @@ fn build_entry(path: String, accumulated: AccumulatedEntry) -> Option<InventoryE
 /// at all: the serde error was discarded at the parse, so the one report that mattered could not
 /// be answered from the app's own output. This is counts and item paths only -- see `row_label`.
 fn trace_decode(line: &str) {
-    log::debug!("{line}");
+    log::warn!("{line}");
 }
 
 fn add_misc_section(

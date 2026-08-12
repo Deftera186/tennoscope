@@ -406,7 +406,14 @@ impl AppCore {
                         "Using cached WFCD catalog",
                         Some(fetched.to_string()),
                     )?,
-                    None => BackendHealth::degraded("Catalog status unavailable")?,
+                    None => {
+                        let last_success = self.health.catalog.last_success.clone();
+                        BackendHealth::new(
+                            HealthState::Degraded,
+                            "Catalog status unavailable",
+                            last_success,
+                        )?
+                    }
                 };
             }
             Err(failure) => {
@@ -471,7 +478,10 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: log monitor failed — {message}");
+        // The monitor thread re-records this every poll; log only the transition into the state.
+        if self.health.log_monitor.state() != HealthState::Failed {
+            log::warn!("health: log monitor failed — {message}");
+        }
         self.health.log_monitor = BackendHealth::failed(message)?;
         self.current_view()
     }
@@ -481,14 +491,24 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: log monitor degraded — {message}");
-        self.health.log_monitor = BackendHealth::degraded(message)?;
+        if self.health.log_monitor.state() != HealthState::Degraded {
+            log::warn!("health: log monitor degraded — {message}");
+        }
+        let last_success = self.health.log_monitor.last_success.clone();
+        self.health.log_monitor = BackendHealth::new(HealthState::Degraded, message, last_success)?;
         self.current_view()
     }
 
     pub fn record_log_monitor_ready(&mut self) -> Result<AppView, AppError> {
-        log::info!("health: log monitor ready");
-        self.health.log_monitor = BackendHealth::ready("EE.log monitor ready", None)?;
+        if self.health.log_monitor.state() != HealthState::Ready {
+            log::info!("health: log monitor ready");
+        }
+        let last_success = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            .to_string();
+        self.health.log_monitor = BackendHealth::ready("EE.log monitor ready", Some(last_success))?;
         self.current_view()
     }
 

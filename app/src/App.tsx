@@ -32,6 +32,7 @@ import { SellForm, type SellHandler } from './SellForm'
 import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, writePriceFloor } from './settings'
 import { snapshotFreshness } from './freshness'
+import { reportBlockVisible } from './reportable'
 
 type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
@@ -651,17 +652,10 @@ type ReportStatus =
   | { kind: 'busy' }
   | { kind: 'done'; message: string }
 
-function stageBroken(value: unknown): value is { state: HealthState } {
-  return typeof value === 'object' && value !== null && 'state' in value
-}
-
 function ReportBlock({ health }: { health: AppView['health'] }) {
   const [status, setStatus] = useState<ReportStatus>({ kind: 'idle' })
-  const broken = Object.values(health).some(value =>
-    Array.isArray(value)
-      ? value.some(stage => stage.state === 'degraded' || stage.state === 'failed')
-      : stageBroken(value) && (value.state === 'degraded' || value.state === 'failed'),
-  )
+const broken = reportBlockVisible(health)
+  if (!broken) return null
   const run = async (action: () => Promise<void | { folder_path: string; ee_log_included: boolean }>, done: (result: { folder_path: string; ee_log_included: boolean } | null) => string) => {
     setStatus({ kind: 'busy' })
     try {
@@ -681,7 +675,7 @@ function ReportBlock({ health }: { health: AppView['health'] }) {
       </div>
       <div className="report-actions">
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(openIssue, () => 'OPENED THE ISSUE FORM IN YOUR BROWSER.')}>Open an issue</button>
-        <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(copyReport, () => 'COPIED — PASTE IT INTO THE ISSUE FORM.')}>Copy report</button>
+        <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(copyReport, () => 'COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD OF THE ISSUE FORM.')}>Copy diagnostics</button>
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(saveReport, result =>
           `SAVED TO ${result?.folder_path ?? '…'}${result?.ee_log_included ? ' — EE.LOG INCLUDED (SENSITIVE) — SEND IT TO THE MAINTAINER ON DISCORD, NOT TO THE ISSUE.' : ''}`,
         )}>Save logs</button>

@@ -126,13 +126,11 @@ impl AuthorizationScanner {
             candidates.url.candidates.len(),
             candidates.login.candidates.len(),
         ));
-        match select_candidate(candidates) {
-            Ok(authorization) => Ok(authorization),
-            Err(error) => {
-                log::warn!("authorization scan: {error}");
-                Err(error)
-            }
+        let selected = select_candidate(candidates);
+        if let Err(error) = &selected {
+            log::warn!("authorization scan: {error}");
         }
+        selected
     }
 
     /// Sample fallback ranges round-robin until `budget` bytes are read or every cursor is spent.
