@@ -191,9 +191,8 @@ fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
 /// Both ends of the overlay's life are traced, because "the overlay lingered" has several possible
 /// owners -- the poller not noticing the screen went, the monitor not acting on it, or the hide
 /// call itself not taking effect -- and they are indistinguishable from outside.
-#[cfg(debug_assertions)]
 fn trace_overlay(action: &str) {
-    warframe_acquisition::append_debug_line(&format!("[DEBUG-overlay] {action}"));
+    log::debug!("[DEBUG-overlay] {action}");
 }
 
 /// `cards` is how many rewards are on screen, so the strip lands on the block the game actually
@@ -201,12 +200,10 @@ fn trace_overlay(action: &str) {
 pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
     if let Some(window) = app.get_webview_window("reward-overlay") {
         let _ = app.run_on_main_thread(move || {
-            #[cfg(debug_assertions)]
             trace_overlay(&format!("show cards={cards}"));
             #[cfg(target_os = "linux")]
             if let Ok(Some(geometry)) = overlay_geometry(&window, cards) {
                 if show_over_game(&window, geometry) {
-                    #[cfg(debug_assertions)]
                     trace_overlay(&format!(
                         "shown override-redirect {}x{} at {},{}",
                         geometry.width, geometry.height, geometry.x, geometry.y
@@ -220,7 +217,6 @@ pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
             // drop it out of the topmost band it was placed in. Re-asserting after the show is what
             // keeps the strip above a borderless game rather than behind it.
             let _ = window.set_always_on_top(true);
-            #[cfg(debug_assertions)]
             trace_overlay("shown via plain window");
         });
     }
@@ -229,10 +225,8 @@ pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
 pub fn hide_reward_overlay(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("reward-overlay") {
         let _ = app.run_on_main_thread(move || {
-            #[cfg(debug_assertions)]
             trace_overlay("hide");
             let _ = window.hide();
-            #[cfg(debug_assertions)]
             trace_overlay("hidden");
         });
     }

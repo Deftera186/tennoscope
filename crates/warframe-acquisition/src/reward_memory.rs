@@ -506,7 +506,10 @@ impl RewardMemoryScanner {
                 .map(|identity| identity.as_bytes())
                 .collect::<Vec<_>>(),
         )
-        .map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        .map_err(|error| {
+            log::warn!("pattern build failed: {error}");
+            AcquisitionError::SnapshotInvalid
+        })?;
         let player_overlap = responders
             .iter()
             .map(|identity| identity.len())
@@ -669,7 +672,10 @@ impl RewardMemoryScanner {
                 .map(|(_, pattern)| pattern.as_slice())
                 .collect::<Vec<_>>(),
         )
-        .map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        .map_err(|error| {
+            log::warn!("pattern build failed: {error}");
+            AcquisitionError::SnapshotInvalid
+        })?;
         let reward_overlap = reward_patterns
             .iter()
             .map(|(_, pattern)| pattern.len())
@@ -734,15 +740,14 @@ impl RewardMemoryScanner {
         }
         buffer.zeroize();
 
-        #[cfg(debug_assertions)]
-        trace_player_record_evidence(
+        log::debug!(
+            "[DEBUG-evidence] responders={} regions={} bytes={bytes_read} player_hits={} record_headers={} reward_hits={} structured_records={}",
             responders.len(),
             regions.len(),
-            bytes_read,
             player_hits.len(),
             record_headers,
             reward_hits.len(),
-            structured_rewards.len(),
+            structured_rewards.len()
         );
 
         let reward_for = |identity: &str| {
@@ -898,7 +903,10 @@ impl RewardMemoryScanner {
                     .push((candidate.choice_name(), RewardRepresentation::InternalPath));
             }
         }
-        let matcher = AhoCorasick::new(patterns).map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        let matcher = AhoCorasick::new(patterns).map_err(|error| {
+            log::warn!("pattern build failed: {error}");
+            AcquisitionError::SnapshotInvalid
+        })?;
         let mut buffer = vec![0_u8; self.chunk_size + overlap];
         let mut hits = Vec::new();
         let mut seen = BTreeSet::new();
@@ -961,65 +969,6 @@ impl RewardMemoryScanner {
             elapsed: started.elapsed(),
         })
     }
-}
-
-#[cfg(debug_assertions)]
-fn trace_player_record_evidence(
-    responders: usize,
-    regions: usize,
-    bytes_read: u64,
-    player_hits: usize,
-    record_headers: usize,
-    reward_hits: usize,
-    structured_records: usize,
-) {
-    append_debug_line(&format!(
-        "[DEBUG-evidence] responders={responders} regions={regions} bytes={bytes_read} player_hits={player_hits} record_headers={record_headers} reward_hits={reward_hits} structured_records={structured_records}"
-    ));
-}
-
-/// Append one line to the shared reward debug log.
-///
-/// The line is written with a single `write_all` so that concurrent scans appending to the same
-/// O_APPEND file cannot interleave halves of a line and destroy the evidence.
-///
-/// `TENNOSCOPE_DEBUG_LOG` redirects the file. Tests that exercise instrumented code otherwise
-/// append to the same log the live app writes, and a test fixture's output is indistinguishable
-/// from a real run once it is in there -- which already cost one misreading of this log.
-///
-/// The default lives in the platform temp directory rather than at a literal `/tmp`: there is no
-/// `/tmp` on Windows, so a hardcoded path meant every one of these lines was silently dropped on
-/// the platform where a remote tester is the only way to see them at all.
-#[cfg(debug_assertions)]
-pub fn append_debug_line(line: &str) {
-    let path = std::env::var_os("TENNOSCOPE_DEBUG_LOG")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("tennoscope-reward-debug.log"));
-    let Ok(mut output) = OpenOptions::new().create(true).append(true).open(path) else {
-        return;
-    };
-    let _ = output.write_all(format!("{} {line}\n", wall_clock()).as_bytes());
-}
-
-/// Wall clock as `HH:MM:SS.mmm`, UTC.
-///
-/// Every line in here used to be untimed, which is fine for "did this happen" and useless for
-/// "how long did it take". A report that the overlay lingered for about five seconds could not be
-/// answered from this log at all -- the ordering was there and the timing was not, and the only
-/// timestamps available were the mtimes of the crop files, by accident.
-#[cfg(debug_assertions)]
-fn wall_clock() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let seconds = now.as_secs();
-    format!(
-        "[{:02}:{:02}:{:02}.{:03}]",
-        seconds / 3600 % 24,
-        seconds / 60 % 60,
-        seconds % 60,
-        now.subsec_millis()
-    )
 }
 
 #[cfg(debug_assertions)]

@@ -50,6 +50,11 @@ impl AuthorizationScanner {
         let mut regions = memory.readable_regions(process)?;
         regions.sort_by_key(|region| (Reverse(region.scan_priority()), region.start()));
         let region_count = regions.len();
+        log::debug!(
+            "authorization scan: regions={region_count} preferred_bytes={} fallback_bytes={}",
+            policy.preferred_bytes,
+            policy.fallback_bytes
+        );
         let mut candidates = CandidateAccumulator::default();
         let mut read_buffer = Zeroizing::new(vec![0_u8; self.chunk_size]);
         let mut fallback = Vec::with_capacity(regions.len());
@@ -121,7 +126,13 @@ impl AuthorizationScanner {
             candidates.url.candidates.len(),
             candidates.login.candidates.len(),
         ));
-        select_candidate(candidates)
+        match select_candidate(candidates) {
+            Ok(authorization) => Ok(authorization),
+            Err(error) => {
+                log::warn!("authorization scan: {error}");
+                Err(error)
+            }
+        }
     }
 
     /// Sample fallback ranges round-robin until `budget` bytes are read or every cursor is spent.
@@ -621,10 +632,7 @@ fn is_value_terminator(byte: u8) -> bool {
 
 /// Counts only: how much was looked at and how many distinct pairs were seen, never their bytes.
 fn trace_scan(line: &str) {
-    #[cfg(debug_assertions)]
-    crate::append_debug_line(line);
-    #[cfg(not(debug_assertions))]
-    let _ = line;
+    log::debug!("{line}");
 }
 
 fn wipe_bytes(bytes: &mut [u8]) {

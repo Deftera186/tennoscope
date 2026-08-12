@@ -268,9 +268,26 @@ struct AccumulatedEntry {
 
 impl SnapshotDecoder for InventoryJsonDecoder<'_> {
     fn decode(&self, response: &[u8]) -> Result<InventorySnapshot, AcquisitionError> {
-        let raw: RawInventory =
-            serde_json::from_slice(response).map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        let raw: RawInventory = match serde_json::from_slice(response) {
+            Ok(raw) => raw,
+            Err(error) => {
+                // Not `{error}`: serde's type-error text quotes the offending value, which
+                // here is account data ("invalid type: string \"<their handle>\"").
+                log::warn!(
+                    "inventory decode failed: {:?} at line {} column {} payload_bytes={}",
+                    error.classify(),
+                    error.line(),
+                    error.column(),
+                    response.len()
+                );
+                return Err(AcquisitionError::SnapshotInvalid);
+            }
+        };
         if raw.last_inventory_sync.is_null() {
+            log::warn!(
+                "inventory sync timestamp missing payload_bytes={}",
+                response.len()
+            );
             return Err(AcquisitionError::SnapshotInvalid);
         }
         let mut entries = BTreeMap::<String, AccumulatedEntry>::new();
@@ -471,10 +488,7 @@ fn build_entry(path: String, accumulated: AccumulatedEntry) -> Option<InventoryE
 /// at all: the serde error was discarded at the parse, so the one report that mattered could not
 /// be answered from the app's own output. This is counts and item paths only -- see `row_label`.
 fn trace_decode(line: &str) {
-    #[cfg(debug_assertions)]
-    crate::append_debug_line(line);
-    #[cfg(not(debug_assertions))]
-    let _ = line;
+    log::debug!("{line}");
 }
 
 fn add_misc_section(

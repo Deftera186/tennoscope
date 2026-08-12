@@ -45,8 +45,6 @@ pub use market::{
 };
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 pub use relic_catalog::RelicRewardIndex;
-#[cfg(debug_assertions)]
-pub use reward_memory::append_debug_line;
 pub use reward_memory::{
     RewardFingerprint, RewardHit, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
     RewardResolution, resolve_current_reward_choices, resolve_reward_choices,

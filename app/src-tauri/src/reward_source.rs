@@ -7,9 +7,6 @@ use std::{
 /// plus four crops and OCR costs roughly 150ms, so this paces attempts without spinning.
 const VISUAL_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 
-#[cfg(debug_assertions)]
-use warframe_acquisition::append_debug_line;
-
 use warframe_acquisition::{
     GameProcess, MemoryReader, PersistentRewardResolver, RewardCatalogEntry, RewardFingerprint,
     RewardMemoryScanner, RewardNeedle, RewardResolution,
@@ -117,7 +114,6 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
             .scanner
             .fingerprint(self.memory, &self.process, candidates)
             .ok();
-        #[cfg(debug_assertions)]
         trace_fingerprint("baseline", self.state.baseline.as_ref(), None);
     }
 
@@ -130,7 +126,6 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
         )
         .resolve(self.memory, &self.process, &self.state.candidates, expected)
         .unwrap_or(RewardResolution::Incomplete);
-        #[cfg(debug_assertions)]
         trace_persistent_choices(expected, started.elapsed(), &resolution);
         resolution
     }
@@ -154,54 +149,50 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
                 local_choice,
             )
             .unwrap_or(RewardResolution::Incomplete);
-        #[cfg(debug_assertions)]
         trace_player_records(responders.len(), started.elapsed(), &resolution);
         resolution
     }
 }
 
-#[cfg(debug_assertions)]
 fn trace_fingerprint(
     phase: &str,
     fingerprint: Option<&RewardFingerprint>,
     resolution: Option<&RewardResolution>,
 ) {
     let Some(fingerprint) = fingerprint else {
-        append_debug_line(&format!("[DEBUG-reward] phase={phase} scan=failed"));
+        log::debug!("[DEBUG-reward] phase={phase} scan=failed");
         return;
     };
-    append_debug_line(&format!(
+    log::debug!(
         "[DEBUG-reward] phase={phase} bytes={} elapsed_ms={} hits={} resolution={resolution:?}",
         fingerprint.bytes_read(),
         fingerprint.elapsed().as_millis(),
         fingerprint.hits().len(),
-    ));
+    );
     for hit in fingerprint.hits() {
-        append_debug_line(&format!(
+        log::debug!(
             "[DEBUG-reward] hit phase={phase} region={} offset={} priority={:?} representation={:?} name={:?}",
             hit.region_start(),
             hit.address() - hit.region_start(),
             hit.priority(),
             hit.representation(),
             hit.choice_name(),
-        ));
+        );
     }
 }
 
-#[cfg(debug_assertions)]
 fn trace_player_records(responder_count: usize, elapsed: Duration, resolution: &RewardResolution) {
-    append_debug_line(&format!(
+    log::debug!(
         "[DEBUG-player-record] responders={responder_count} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
-    ));
+    );
 }
 
-#[cfg(debug_assertions)]
 fn trace_persistent_choices(expected: usize, elapsed: Duration, resolution: &RewardResolution) {
-    append_debug_line(&format!(
+    log::debug!(
         "[DEBUG-persistent-ui] expected={expected} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
-    ));
+    );
 }
 
 impl RewardSourceCoordinator {
@@ -267,16 +258,14 @@ impl RewardSourceCoordinator {
         let mut attempts = 0_u32;
         loop {
             if abort.load(Ordering::Acquire) {
-                #[cfg(debug_assertions)]
-                append_debug_line(&format!(
+                log::debug!(
                     "[DEBUG-visual] aborted after {}ms: the screen is already gone",
                     started.elapsed().as_millis()
-                ));
+                );
                 return None;
             }
             attempts += 1;
             let attempt = visual.choices(candidates);
-            #[cfg(debug_assertions)]
             trace_visual_read(attempts, started.elapsed(), &attempt);
             if let Some(names) =
                 attempt
@@ -356,10 +345,9 @@ impl RewardSourceCoordinator {
 
 /// The screen read was silent in the log, which is why a blank first capture looked identical to
 /// OCR never running at all. Trace every attempt.
-#[cfg(debug_assertions)]
 fn trace_visual_read(attempt: u32, elapsed: Duration, outcome: &Result<Vec<String>, &'static str>) {
-    append_debug_line(&format!(
+    log::debug!(
         "[DEBUG-visual] attempt={attempt} elapsed_ms={} outcome={outcome:?}",
         elapsed.as_millis(),
-    ));
+    );
 }

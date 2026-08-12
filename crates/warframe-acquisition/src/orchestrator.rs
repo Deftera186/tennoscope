@@ -32,16 +32,23 @@ where
             .discover()
             .map_err(AcquisitionFailure::from_error)?
             .ok_or_else(|| AcquisitionFailure::from_error(AcquisitionError::GameNotRunning))?;
+        log::info!("acquisition: process discovered pid={}", process.pid());
         let authorization = AuthorizationScanner::new(SCAN_CHUNK_BYTES)
             .scan(&self.memory, &process)
             .map_err(AcquisitionFailure::from_error)?;
+        log::info!("acquisition: authorization scan chunks=1 bytes={SCAN_CHUNK_BYTES}");
         let body = self
             .transport
             .fetch(&authorization)
             .map_err(AcquisitionFailure::from_error)?;
+        log::info!("acquisition: fetch ok bytes={}", body.len());
         let snapshot = InventoryJsonDecoder::with_catalog(catalog)
             .decode(&body)
             .map_err(AcquisitionFailure::from_error)?;
+        log::info!(
+            "acquisition: decode ok entries={}",
+            snapshot.entries().len()
+        );
         AcquisitionResult::new(snapshot, AcquisitionHealth::successful())
             .map_err(AcquisitionFailure::from_error)
     }

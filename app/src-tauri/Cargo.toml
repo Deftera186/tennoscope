@@ -20,9 +20,11 @@ tauri-build = { version = "2.6.3", features = [] }
 [dependencies]
 serde_json = "1.0"
 serde.workspace = true
-log = "0.4"
+log.workspace = true
 tauri = { version = "2.11.3", features = [] }
 tauri-plugin-log = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
 app-core = { path = "../../crates/app-core" }
 local-store = { path = "../../crates/local-store" }
 warframe-acquisition = { path = "../../crates/warframe-acquisition" }

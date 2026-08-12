@@ -230,15 +230,14 @@ fn read_cards_at(
             .is_none_or(|(_, score)| *score < CROP_KEEP_BELOW);
         #[cfg(not(debug_assertions))]
         let keep_crop = false;
-        #[cfg(debug_assertions)]
-        warframe_acquisition::append_debug_line(&format!(
+        log::debug!(
             "[DEBUG-card] cards={cards} slot={slot} raw={text:?} match={matched:?} crop={}",
             if keep_crop {
                 crop.display().to_string()
             } else {
                 "-".to_owned()
             }
-        ));
+        );
         if !keep_crop {
             let _ = std::fs::remove_file(&crop);
         }
@@ -283,9 +282,48 @@ pub(crate) fn capture_game_window() -> Result<(WindowRect, image::DynamicImage),
         monitor.height().map_err(|_| "could not read the monitor")?,
     )
     .ok_or("the game window is not on any monitor")?;
+    // The crops are fractions of this rectangle, so a wrong rectangle reads the wrong pixels and
+    // every card comes back blank -- indistinguishable, from outside, from OCR failing. On a
+    // multi-monitor desktop the monitor origin is the other half of that: a game on a screen at a
+    // negative origin captures from a different place than the window rect alone suggests.
+    log::debug!(
+        "[DEBUG-capture] window={},{} {}x{} monitor={origin_x},{origin_y} region={},{} {}x{} paste={},{}",
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        visible.x,
+        visible.y,
+        visible.width,
+        visible.height,
+        visible.paste_x,
+        visible.paste_y,
+    );
     let captured = monitor
         .capture_region(visible.x, visible.y, visible.width, visible.height)
         .map_err(|_| "could not capture the game window")?;
+    // A scaled display hands back the framebuffer's pixels, not the logical ones asked for: X and
+    // the window manager speak in logical units, the compositor captures physical ones. The paste
+    // below clips rather than scales, so an oversized capture becomes a magnified top-left corner
+    // and every card reads blank -- which is exactly how a working reader looks from outside.
+    // Resampling to the size actually requested is what makes the fractions mean the same thing on
+    // a scaled desktop as on an unscaled one.
+    let captured = if captured.dimensions() == (visible.width, visible.height) {
+        captured
+    } else {
+        log::debug!(
+            "[DEBUG-capture] scaled capture {:?} for region {}x{}",
+            captured.dimensions(),
+            visible.width,
+            visible.height
+        );
+        image::imageops::resize(
+            &captured,
+            visible.width,
+            visible.height,
+            image::imageops::FilterType::Lanczos3,
+        )
+    };
     // Paste back at the window's own origin: every crop downstream is a fraction of the *window*,
     // so the frame handed on has to be window sized even when part of it was off screen.
     let mut frame = image::RgbaImage::new(rect.width, rect.height);

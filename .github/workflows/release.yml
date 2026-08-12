@@ -12,6 +12,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # A pre-release tag (`v0.4.2-rc1`) builds with debug assertions on. The `[DEBUG-…]` log
+  # channel is always compiled now, and a debug build also prints to stdout and keeps the
+  # remaining `cfg(debug_assertions)` site: the reward OCR's crop retention (`CROP_KEEP_BELOW`
+  # keeps low-confidence crops on disk for forensics). Persistent logging always writes the
+  # platform log directory regardless of this switch -- the tag only decides how much extra
+  # debugging aid the binary carries.
+  CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
 
 jobs:
   # The tag rides a commit that was pushed to main in the same breath, so when this workflow

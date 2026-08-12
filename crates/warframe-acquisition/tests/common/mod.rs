@@ -1,21 +1,17 @@
-//! Shared helpers for the app's integration tests.
+//! Shared test helpers for the acquisition integration tests.
 
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// Point instrumented code at a per-test log instead of the one the live app appends to.
-///
-/// `read_cards`, the visual retry loop and the poller all emit through the `log` crate, which is
-/// the only evidence channel for live reward runs. Tests exercising them append fixture output to
-/// that same channel, where it is indistinguishable from a real fissure -- which already caused
-/// one misreading of a live run's log. Install a logger that writes to a temp file, once per test
-/// binary.
-pub fn isolate_debug_log() {
+/// A log-crate logger that appends formatted lines to a file, so instrumented
+/// scans keep an evidence trail that assertions can read back. One file per
+/// test binary; installed at most once per process.
+pub fn install_test_logger() {
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| {
-        let path = std::env::var_os("TENNOSCOPE_DEBUG_LOG")
+        let path = std::env::var_os("TENNOSCOPE_TEST_LOG")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("tennoscope-test.log"));
         let file = Mutex::new(

@@ -65,8 +65,7 @@ impl PersistentRewardResolver {
         }
         let started = Instant::now();
         let regions = self.read_regions(memory, process, started)?;
-        #[cfg(debug_assertions)]
-        eprintln!(
+        log::debug!(
             "[DEBUG-ui-graph] regions={} bytes={} read_ms={}",
             regions.len(),
             regions
@@ -76,8 +75,7 @@ impl PersistentRewardResolver {
             started.elapsed().as_millis()
         );
         let mut targets = seed_targets(&regions, candidates);
-        #[cfg(debug_assertions)]
-        eprintln!(
+        log::debug!(
             "[DEBUG-ui-graph] seed_targets={} seed_ms={}",
             targets.len(),
             started.elapsed().as_millis()
@@ -95,8 +93,7 @@ impl PersistentRewardResolver {
                 return Ok(RewardResolution::TimedOut);
             }
             let hits = pointer_hits(&regions, &targets);
-            #[cfg(debug_assertions)]
-            eprintln!(
+            log::debug!(
                 "[DEBUG-ui-graph] depth={depth} targets={} pointer_hits={} elapsed_ms={}",
                 targets.len(),
                 hits.len(),
@@ -104,17 +101,16 @@ impl PersistentRewardResolver {
             );
             if depth > 0 {
                 let containers = ordered_containers(&hits, &targets, expected_choices);
-                #[cfg(debug_assertions)]
-                eprintln!(
+                log::debug!(
                     "[DEBUG-ui-graph] depth={depth} containers={} elapsed_ms={}",
                     containers.len(),
                     started.elapsed().as_millis()
                 );
-                #[cfg(debug_assertions)]
                 for (index, container) in containers.iter().take(16).enumerate() {
-                    eprintln!(
+                    log::debug!(
                         "[DEBUG-ui-candidate] depth={depth} index={index} stride={} choices={:?}",
-                        container.stride, container.choices
+                        container.stride,
+                        container.choices
                     );
                 }
                 #[cfg(debug_assertions)]

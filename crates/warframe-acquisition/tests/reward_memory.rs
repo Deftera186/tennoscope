@@ -1,3 +1,5 @@
+mod common;
+
 use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 
 use warframe_acquisition::{
@@ -93,16 +95,9 @@ impl MemoryReader for FixtureMemory {
 }
 
 fn candidate() -> RewardNeedle {
-    // Instrumented scans append to the log the live app uses as its only evidence channel for a
-    // real reward run. Every test here builds its needles through this helper, so redirecting it
-    // once keeps fixture output out of that file.
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| unsafe {
-        std::env::set_var(
-            "TENNOSCOPE_DEBUG_LOG",
-            std::env::temp_dir().join("tennoscope-test.log"),
-        );
-    });
+    // Instrumented scans emit through the log crate. Redirect the test binary's
+    // logger to a temp file once so fixture output never reaches a real log.
+    common::install_test_logger();
     RewardNeedle::new(
         "Perigale Prime Receiver",
         ["/Lotus/StoreItems/PerigalePrimeReceiver"],

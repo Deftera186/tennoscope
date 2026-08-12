@@ -459,3 +459,46 @@ fn ocr_prefers_the_bundled_tesseract_over_the_one_on_path() {
     std::fs::write(&program, b"").expect("write stub");
     assert_eq!(app_lib::tesseract_program(bundled.path()), program);
 }
+
+/// A scaled desktop hands the capture back at the framebuffer's size, not the logical size the
+/// window rect is quoted in. Every crop is a fraction of the frame, so a frame 1.5x too big puts
+/// the title band a third of a card too low and every read comes back blank -- which from outside
+/// is indistinguishable from OCR simply not working, and is the shape of the reports that survived
+/// two geometry fixes.
+///
+/// This is the reason `capture_game_window` resamples a mismatched capture back to the region it
+/// asked for: reading the oversized frame fails, reading it after the resample does not.
+#[test]
+fn a_capture_at_the_wrong_scale_must_be_resampled_before_it_reads() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-1920x1080.png");
+    let screen = image::open(&fixture).expect("the fixture decodes");
+    let scaled = image::DynamicImage::ImageRgba8(image::imageops::resize(
+        &screen.to_rgba8(),
+        2880,
+        1620,
+        image::imageops::FilterType::Lanczos3,
+    ));
+    // What the live path does with an oversized capture: paste it into a window-sized frame,
+    // which clips rather than scales. The result is the top-left corner magnified, and the title
+    // band is nowhere near where the fractions say it is. (A frame that is merely scaled reads
+    // fine -- every fraction is of the frame's own height -- so it is the clip that does the
+    // damage, and the clip is unavoidable once the frame has to be window sized.)
+    let mut clipped = image::RgbaImage::new(1920, 1080);
+    image::imageops::replace(&mut clipped, &scaled.to_rgba8(), 0, 0);
+    assert!(
+        app_lib::read_cards_in(&image::DynamicImage::ImageRgba8(clipped), &pool()).is_err(),
+        "an unresampled 1.5x capture must not read"
+    );
+    let restored = image::DynamicImage::ImageRgba8(image::imageops::resize(
+        &scaled.to_rgba8(),
+        1920,
+        1080,
+        image::imageops::FilterType::Lanczos3,
+    ));
+    assert_eq!(
+        names(app_lib::read_cards_in(&restored, &pool()).unwrap()).len(),
+        4
+    );
+}

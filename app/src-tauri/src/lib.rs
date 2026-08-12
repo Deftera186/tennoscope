@@ -54,6 +54,7 @@ const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 pub mod market_account;
 mod monitor;
 mod overlay_window;
+pub mod report;
 mod reward_log;
 mod reward_observer;
 mod reward_ocr;
@@ -175,6 +176,107 @@ async fn get_view(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     .map_err(|_| "application view task failed".to_owned())?
 }
 
+/// Assemble the GitHub-safe report text only (used by "Copy report").
+#[tauri::command]
+async fn collect_report_text(
+    state: State<'_, SharedRuntime>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        let view = runtime
+            .core
+            .current_view()
+            .map_err(|_| "application view is unavailable".to_owned())?;
+        let health_json = serde_json::to_string_pretty(&view.health())
+            .map_err(|_| "health could not be serialized".to_owned())?;
+        let request = build_report_request(&app, &runtime, &health_json, false);
+        report::assemble_report_text(&request.meta, &request.health_json, false)
+    })
+    .await
+    .map_err(|_| "report task failed".to_owned())?
+}
+
+/// Write the report folder and return the text plus the folder path.
+#[tauri::command]
+async fn collect_report(
+    state: State<'_, SharedRuntime>,
+    app: AppHandle,
+) -> Result<report::CollectedReport, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        let view = runtime
+            .core
+            .current_view()
+            .map_err(|_| "application view is unavailable".to_owned())?;
+        let health_json = serde_json::to_string_pretty(&view.health())
+            .map_err(|_| "health could not be serialized".to_owned())?;
+        let request = build_report_request(&app, &runtime, &health_json, true);
+        // The copy below can be hundreds of MB of EE.log. Holding the lock across it freezes the
+        // UI, the monitor tick and the reward poller for its duration.
+        drop(runtime);
+        report::collect_report(&request)
+    })
+    .await
+    .map_err(|_| "report task failed".to_owned())?
+}
+
+fn build_report_request(
+    app: &AppHandle,
+    runtime: &Runtime,
+    health_json: &str,
+    want_ee_log: bool,
+) -> report::ReportRequest {
+    let os_arch = format!("{}/{}", std::env::consts::OS, std::env::consts::ARCH);
+    let profile = if cfg!(debug_assertions) {
+        "pre-release".to_owned()
+    } else {
+        "stable".to_owned()
+    };
+    let version = app.package_info().version.to_string();
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .unwrap_or_else(|_| runtime.app_data.clone());
+    let ee_log_wanted = want_ee_log
+        && runtime.core.current_view().ok().is_some_and(|view| {
+            view.health().acquisition_stages().iter().any(|stage| {
+                matches!(
+                    stage.state(),
+                    app_core::HealthState::Degraded | app_core::HealthState::Failed
+                )
+            })
+        });
+    let ee_log_path = if ee_log_wanted {
+        GameMemory::new()
+            .discover()
+            .ok()
+            .flatten()
+            .and_then(|process| inventory_log_path(process.pid()))
+    } else {
+        None
+    };
+    report::ReportRequest {
+        meta: report::ReportMeta {
+            version,
+            profile,
+            os_arch,
+            timestamp: report::utc_stamp(),
+            log_dir,
+            app_data: runtime.app_data.clone(),
+        },
+        health_json: health_json.to_owned(),
+        ee_log_wanted,
+        ee_log_path,
+    }
+}
+
 /// What the presence switch is asked for, including going offline.
 ///
 /// `None` is offline, and offline is the socket closing rather than a value sent over it: the
@@ -215,7 +317,12 @@ async fn set_market_presence(
             },
         }
         runtime.presence_wanted = wanted;
-        publish_presence(&mut runtime)
+        let outcome = publish_presence(&mut runtime);
+        match &outcome {
+            Ok(_) => log::info!("market: presence ok"),
+            Err(error) => log::warn!("market: presence failed: {error}"),
+        }
+        outcome
     })
     .await
     .map_err(|_| "presence task failed".to_owned())?
@@ -711,9 +818,16 @@ async fn market_sign_out(state: State<'_, SharedRuntime>) -> Result<AppView, Str
 #[tauri::command]
 async fn refresh_orders(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     let shared = Arc::clone(state.inner());
-    tauri::async_runtime::spawn_blocking(move || publish_account(&shared))
-        .await
-        .map_err(|_| "order refresh task failed".to_owned())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = publish_account(&shared);
+        match &outcome {
+            Ok(_) => log::info!("market: order refresh ok"),
+            Err(error) => log::warn!("market: order refresh failed: {error}"),
+        }
+        outcome
+    })
+    .await
+    .map_err(|_| "order refresh task failed".to_owned())?
 }
 
 /// Take one order down, then refresh so the list reflects what the account now holds.
@@ -738,7 +852,7 @@ async fn remove_order(
                 return Err(message.to_owned());
             }
         }
-        write_then_refresh(&shared, |transport, token| {
+        write_then_refresh(&shared, "remove", |transport, token| {
             warframe_market::delete_order(transport, token, &order_id)
         })
     })
@@ -782,7 +896,7 @@ async fn create_order(
                 .map_err(str::to_owned)?
                 .to_owned()
         };
-        write_then_refresh(&shared, |transport, token| {
+        write_then_refresh(&shared, "create", |transport, token| {
             warframe_market::create_order(transport, token, &item_id, platinum, quantity, visible)
         })
     })
@@ -811,7 +925,7 @@ async fn set_order_quantity(
             market_account::authorize_quantity_write(runtime.core.market_account(), &order_id)
                 .map_err(|message| message.to_owned())?
         };
-        write_then_refresh(&shared, |transport, token| {
+        write_then_refresh(&shared, "quantity", |transport, token| {
             warframe_market::set_order_quantity(transport, token, &order_id, quantity)
         })
     })
@@ -825,7 +939,11 @@ async fn set_order_quantity(
 /// account and left the list showing the old state would invite the player to press the same
 /// button again; a credential that failed to store is instead surfaced through the health row on
 /// the next fetch, when `token()` finds nothing and the account reads as unlinked or refused.
-fn write_then_refresh<F>(shared: &SharedRuntime, write: F) -> Result<AppView, String>
+fn write_then_refresh<F>(
+    shared: &SharedRuntime,
+    kind: &'static str,
+    write: F,
+) -> Result<AppView, String>
 where
     F: FnOnce(
         &dyn warframe_market::MarketTransport,
@@ -852,8 +970,16 @@ where
     let transport = warframe_market::MarketHttp::new(pacer).map_err(|_| {
         market_account::failure_message(warframe_market::MarketError::Unreachable).to_owned()
     })?;
-    let renewed = write(&transport, &token)
-        .map_err(|error| market_account::failure_message(error).to_owned())?;
+    let renewed = match write(&transport, &token) {
+        Ok(renewed) => {
+            log::info!("market: order {kind} ok");
+            renewed
+        }
+        Err(error) => {
+            log::warn!("market: order {kind} failed: {error}");
+            return Err(market_account::failure_message(error).to_owned());
+        }
+    };
     // Not propagated on failure: the write already happened on the account, and returning early
     // here would leave the list on screen out of date with no way back except pressing the same
     // button again. `publish_account` re-reads the token itself and reports whatever it finds.
@@ -1627,15 +1753,11 @@ where
     // fissure that needed it had even started.
     let pool_size = pool.lock().map(|pool| pool.len()).unwrap_or(0);
     if pool_size == 0 {
-        #[cfg(debug_assertions)]
-        warframe_acquisition::append_debug_line("[DEBUG-poller] arm declined: empty pool");
+        log::debug!("[DEBUG-poller] arm declined: empty pool");
         return None;
     }
     let already_running = visual_polling.swap(true, Ordering::AcqRel);
-    #[cfg(debug_assertions)]
-    warframe_acquisition::append_debug_line(&format!(
-        "[DEBUG-poller] arm pool={pool_size} already_running={already_running}"
-    ));
+    log::debug!("[DEBUG-poller] arm pool={pool_size} already_running={already_running}");
     if already_running {
         return None;
     }
@@ -1661,11 +1783,8 @@ where
                 continue;
             }
             let outcome = VisualRewardSource::choices(&mut source, &current);
-            #[cfg(debug_assertions)]
             if let Err(reason) = &outcome {
-                warframe_acquisition::append_debug_line(&format!(
-                    "[DEBUG-poller] poll failed: {reason}"
-                ));
+                log::warn!("[DEBUG-poller] poll failed: {reason}");
             }
             match outcome {
                 // However many cards the screen has -- the reader reports the layout it found, and
@@ -1684,10 +1803,7 @@ where
                 _ if found => {
                     misses += 1;
                     if misses >= POLLER_GONE_STREAK {
-                        #[cfg(debug_assertions)]
-                        warframe_acquisition::append_debug_line(
-                            "[DEBUG-poller] reward screen gone",
-                        );
+                        log::debug!("[DEBUG-poller] reward screen gone");
                         visual_screen_gone.store(true, Ordering::Release);
                         break;
                     }
@@ -1763,7 +1879,6 @@ fn spawn_player_record_scan(
                     .unwrap_or(warframe_acquisition::RewardResolution::Incomplete)
             },
         );
-        #[cfg(debug_assertions)]
         trace_responder_reward_scan(&identity, started.elapsed(), &resolution);
         store_player_record_if_current(
             expected_generation,
@@ -1860,7 +1975,6 @@ pub fn scan_player_record_until_ready(
     warframe_acquisition::RewardResolution::Incomplete
 }
 
-#[cfg(debug_assertions)]
 fn trace_responder_reward_scan(
     identity: &str,
     elapsed: Duration,
@@ -1869,10 +1983,10 @@ fn trace_responder_reward_scan(
     let suffix = identity
         .get(identity.len().saturating_sub(6)..)
         .unwrap_or(identity);
-    warframe_acquisition::append_debug_line(&format!(
+    log::debug!(
         "[DEBUG-responder] identity=…{suffix} elapsed_ms={} resolution={resolution:?}",
         elapsed.as_millis(),
-    ));
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2098,12 +2212,16 @@ pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
 }
 
 fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (MonitorInput, Vec<u8>) {
-    let Some(path) = inventory_log_path(pid) else {
+    let path = inventory_log_path(pid);
+    let Some(path) = path else {
         return (MonitorInput::running(now, pid, None), Vec::new());
     };
     let metadata = match fs::metadata(&path) {
         Ok(metadata) => metadata,
-        Err(_) => return (MonitorInput::running_with_log_error(now, pid), Vec::new()),
+        Err(error) => {
+            log::warn!("monitor: EE.log open failed: {error}");
+            return (MonitorInput::running_with_log_error(now, pid), Vec::new());
+        }
     };
     let identity = log_identity(&path, &metadata);
     if machine.process_pid() != Some(pid) {
@@ -2135,7 +2253,10 @@ fn build_monitor_input(machine: &MonitorMachine, now: u64, pid: u32) -> (Monitor
     }
     let mut file = match fs::File::open(path) {
         Ok(file) => file,
-        Err(_) => return (MonitorInput::running_with_log_error(now, pid), Vec::new()),
+        Err(error) => {
+            log::warn!("monitor: EE.log open failed: {error}");
+            return (MonitorInput::running_with_log_error(now, pid), Vec::new());
+        }
     };
     if file.seek(SeekFrom::Start(offset)).is_err() {
         return (MonitorInput::running_with_log_error(now, pid), Vec::new());
@@ -2412,6 +2533,8 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         // `reward-overlay` is only ever hidden, never destroyed, so Tauri still holds a live window
         // once the main window closes and the app stays up: tailing the log and drawing the overlay
         // over the game with no UI left to close it by.
@@ -2423,13 +2546,30 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            let mut targets = vec![tauri_plugin_log::Target::new(
+                tauri_plugin_log::TargetKind::LogDir {
+                    file_name: Some("tennoscope.log".to_owned()),
+                },
+            )];
             if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+                targets.push(tauri_plugin_log::Target::new(
+                    tauri_plugin_log::TargetKind::Stdout,
+                ));
             }
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    // Debug for our own crates only: `wry`, `zbus` and `rustls` at Debug would
+                    // evict the reward diagnostics from the rotation window this exists to hold.
+                    .level(log::LevelFilter::Info)
+                    .level_for("tennoscope", log::LevelFilter::Debug)
+                    .level_for("app_core", log::LevelFilter::Debug)
+                    .level_for("warframe_acquisition", log::LevelFilter::Debug)
+                    .level_for("warframe_market", log::LevelFilter::Debug)
+                    .max_file_size(5 * 1024 * 1024)
+                    .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(3))
+                    .targets(targets)
+                    .build(),
+            )?;
             // Before anything can read a reward screen: the NSIS bundle ships Tesseract under the
             // resource directory so a Windows player installs one thing, not two.
             if let Ok(resources) = app.path().resource_dir() {
@@ -2465,6 +2605,8 @@ pub fn run() {
             market_sign_out,
             refresh_orders,
             set_market_presence,
+            collect_report,
+            collect_report_text,
             remove_order,
             create_order,
             set_order_quantity

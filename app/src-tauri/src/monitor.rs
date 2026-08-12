@@ -120,11 +120,14 @@ impl MonitorMachine {
             event = true;
         }
         match input.log {
-            Err(_) => MonitorResult {
-                refresh: self.schedule(input.now, event),
-                acquisition_health: None,
-                log_health: Some(LogMonitorDiagnostic::ReadFailed),
-            },
+            Err(error) => {
+                log::warn!("monitor: EE.log read failed: {error}");
+                MonitorResult {
+                    refresh: self.schedule(input.now, event),
+                    acquisition_health: None,
+                    log_health: Some(LogMonitorDiagnostic::ReadFailed),
+                }
+            }
             Ok(Some(log)) => {
                 event |= self.ingest(log);
                 MonitorResult {
@@ -159,6 +162,7 @@ impl MonitorMachine {
         let rotated =
             self.log_identity.as_deref() != Some(&log.identity) || log.len < self.log_offset;
         if rotated {
+            log::info!("monitor: EE.log rotated or changed identity");
             self.log_identity = Some(log.identity);
             self.log_offset = 0;
             self.carry.clear();
@@ -188,6 +192,7 @@ impl MonitorMachine {
     }
 
     fn reset_process(&mut self) {
+        log::info!("monitor: game process gone, resetting");
         self.process = None;
         self.log_identity = None;
         self.log_offset = 0;

@@ -49,6 +49,10 @@ export const getView = () => invoke<AppView>('get_view')
 export const refreshInventory = () => invoke<AppView>('refresh_inventory')
 export const refreshPrices = (ids: string[]) => invoke<AppView>('refresh_prices', { itemIds: ids })
 export const loadFakeSession = () => invoke<AppView>('load_fake_session')
+export interface CollectedReport { folder_path: string; report_text: string; ee_log_included: boolean }
+
+export const collectReport = () => invoke<CollectedReport>('collect_report')
+export const collectReportText = () => invoke<string>('collect_report_text')
 /**
  * Setup status, waiting out a backend that has not finished starting.
  *

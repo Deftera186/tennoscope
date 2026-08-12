@@ -10,6 +10,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+log.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 local-store = { path = "../local-store" }
