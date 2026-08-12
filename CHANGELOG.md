@@ -11,6 +11,25 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-08-12
+
+### Added
+
+- **A report you can hand over.** Diagnostics now has *Open an issue*, *Copy report* and
+  *Save logs*. The report carries the version, the health of every system and the tail of the log,
+  with your home directory and username scrubbed out. Nothing is sent anywhere — it leaves the
+  machine only when you paste or attach it.
+- **A stable build now keeps a log.** The reward-reading diagnostics used to exist only in a
+  debug build, which is not the build anyone plays. They are written to the platform log
+  directory, capped at four files of 5 MiB.
+
+### Fixed
+
+- **Reward cards are read on a scaled display.** A capture that came back larger than the window
+  it was asked for was cropped rather than scaled, leaving a magnified top-left corner in which
+  no card is where the reader looks — every read failed, and from outside that is
+  indistinguishable from OCR simply not working.
+
 ## [0.5.4] - 2026-08-10
 
 ### Fixed
