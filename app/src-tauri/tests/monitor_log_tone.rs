@@ -12,6 +12,7 @@ struct Capture;
 
 static LINES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static INSTALL: Once = Once::new();
+static SERIAL: Mutex<()> = Mutex::new(());
 
 impl log::Log for Capture {
     fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
@@ -36,6 +37,7 @@ fn install_capture() -> Arc<Mutex<Vec<String>>> {
 
 #[test]
 fn absent_game_is_not_an_event_when_it_was_never_running() {
+    let _serial = SERIAL.lock().expect("serial lock");
     install_capture();
     let mut monitor = MonitorMachine::new(0);
     for tick in 0..5 {
@@ -55,6 +57,7 @@ fn absent_game_is_not_an_event_when_it_was_never_running() {
 
 #[test]
 fn disappearance_logs_once_and_not_again_until_it_returns() {
+    let _serial = SERIAL.lock().expect("serial lock");
     install_capture();
     let mut monitor = MonitorMachine::new(0);
     monitor.tick(MonitorInput::running(
@@ -79,6 +82,7 @@ fn disappearance_logs_once_and_not_again_until_it_returns() {
 
 #[test]
 fn no_tick_chatter_line_is_emitted_per_poll() {
+    let _serial = SERIAL.lock().expect("serial lock");
     install_capture();
     let mut monitor = MonitorMachine::new(0);
     monitor.tick(MonitorInput::running(

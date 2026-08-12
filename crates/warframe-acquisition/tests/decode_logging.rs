@@ -37,8 +37,14 @@ fn install_capture_logger() -> Arc<Mutex<Vec<String>>> {
         .clone()
 }
 
+// The capture logger is a single global, so the tests that share it must not run in parallel:
+// each one clears the line buffer at its start, and a concurrent test's decode would push lines
+// into the buffer mid-assertion (or clear the lines the first test is still checking).
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn decode_failure_logs_the_real_serde_error_and_length_but_not_contents() {
+    let _serial = SERIAL.lock().expect("serial lock");
     let lines = install_capture_logger();
     lines.lock().expect("lock").clear();
     let payload = br#"{"LastInventorySync":null,"Suits":,"broken"}"#;
@@ -73,6 +79,7 @@ fn decode_failure_logs_the_real_serde_error_and_length_but_not_contents() {
 
 #[test]
 fn missing_sync_timestamp_is_logged_without_contents() {
+    let _serial = SERIAL.lock().expect("serial lock");
     let lines = install_capture_logger();
     lines.lock().expect("lock").clear();
     let payload = br#"{"LastInventorySync":null,"Suits":[],"LongGuns":[],"Pistols":[],"Melee":[],"Sentinels":[],"MiscItems":[],"Recipes":[],"PendingRecipes":[],"XPInfo":[],"SpaceSuits":[],"SpaceMelee":[],"SpaceGuns":[],"SentinelWeapons":[],"KubrowPets":[],"OperatorAmps":[],"MechSuits":[]}"#;
