@@ -11,6 +11,31 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-08-12
+
+### Fixed
+
+- **The log file stops flooding when the game is closed.** Every poll of the game process used to
+  write "game process gone" and "EE.log not found" warnings to the new log file several times a
+  second for as long as the app sat idle. Monitor health now records transitions; the steady
+  state is silent.
+- **Open an issue actually opens the issue page.** The opener plugin allowed the command but no
+  URL, so every open was rejected with "Not allowed to open url". The issue form and the saved
+  report folder are now the only two places the app may open.
+- **The report block describes faults, not the booth.** It used to appear whenever any system was
+  merely waiting at boot; it now appears when something failed, or degraded after having worked.
+- **The saved report stops hoarding.** Report folders are pruned to the newest five, and the
+  ebuild-scale EE.log is copied only when an acquisition stage actually failed, not on any
+  degraded stage.
+- **Windows reports do not leak the user name.** The sanitizer read only the Unix home
+  variables; on Windows the real user name could reach a pasted report.
+
+### Changed
+
+- **The report reads as a report.** "Copy report" is now "Copy diagnostics", the pasted text is
+  rows rather than a JSON dump, and it carries the deduplicated WARN/ERROR tail of the session
+  log instead of a raw excerpt. EE.log content still never enters report text.
+
 ## [0.5.5] - 2026-08-12
 
 ### Added
@@ -311,7 +336,9 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.4...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.6...HEAD
+[0.5.6]: https://github.com/Deftera186/tennoscope/compare/v0.5.5...v0.5.6
+[0.5.5]: https://github.com/Deftera186/tennoscope/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/Deftera186/tennoscope/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/Deftera186/tennoscope/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/Deftera186/tennoscope/compare/v0.5.1...v0.5.2
