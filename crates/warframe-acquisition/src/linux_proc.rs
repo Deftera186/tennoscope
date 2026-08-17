@@ -156,7 +156,9 @@ impl ProcessDiscovery for LinuxProc {
             }
         }
 
-        candidates.sort_unstable_by_key(|&(priority, pid, _)| (Reverse(priority), pid));
+        candidates.sort_unstable_by_key(|&(priority, pid, start_time)| {
+            (Reverse(priority), Reverse(start_time), pid)
+        });
         let selected = candidates
             .first()
             .map(|&(_, pid, start_time)| GameProcess::identified(pid, start_time));

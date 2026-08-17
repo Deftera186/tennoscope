@@ -14,8 +14,18 @@ fn write_file(root: &Path, relative: &str, contents: impl AsRef<[u8]>) {
 }
 
 fn candidate(root: &Path, pid: u32, comm: &str, mapped_executable: &str) {
+    candidate_started_at(root, pid, comm, mapped_executable, 777);
+}
+
+fn candidate_started_at(
+    root: &Path,
+    pid: u32,
+    comm: &str,
+    mapped_executable: &str,
+    start_time: u64,
+) {
     write_file(root, &format!("{pid}/comm"), format!("{comm}\n"));
-    write_stat(root, pid, comm, 777);
+    write_stat(root, pid, comm, start_time);
     write_file(
         root,
         &format!("{pid}/maps"),
@@ -97,6 +107,57 @@ fn discovers_full_and_wine_truncated_names_only_when_the_game_executable_is_mapp
     let process = LinuxProc::at(temp.path()).discover().unwrap().unwrap();
 
     assert_eq!(process.pid(), 102);
+}
+
+#[test]
+fn a_relaunch_is_discovered_from_the_new_process_rather_than_the_dying_one() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = "/games/Warframe/Downloaded/Public/Warframe.x64.exe";
+    candidate_started_at(temp.path(), 100, "Warframe.x64.exe", executable, 777);
+    candidate_started_at(temp.path(), 200, "Warframe.x64.exe", executable, 778);
+
+    assert_eq!(
+        LinuxProc::at(temp.path())
+            .discover()
+            .unwrap()
+            .map(GameProcess::pid),
+        Some(200),
+        "the replacement process has the newest start time"
+    );
+}
+
+#[test]
+fn executable_name_priority_outranks_a_newer_lower_priority_process() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = "/games/Warframe/Downloaded/Public/Warframe.x64.exe";
+    candidate_started_at(temp.path(), 100, "Warframe.x64.exe", executable, 777);
+    candidate_started_at(temp.path(), 200, "Warframe.x64.ex", executable, 778);
+
+    assert_eq!(
+        LinuxProc::at(temp.path())
+            .discover()
+            .unwrap()
+            .map(GameProcess::pid),
+        Some(100),
+        "the full executable name has higher priority"
+    );
+}
+
+#[test]
+fn equal_name_priority_and_start_time_use_the_lower_pid() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = "/games/Warframe/Downloaded/Public/Warframe.x64.exe";
+    candidate_started_at(temp.path(), 300, "Warframe.x64.exe", executable, 777);
+    candidate_started_at(temp.path(), 200, "Warframe.x64.exe", executable, 777);
+
+    assert_eq!(
+        LinuxProc::at(temp.path())
+            .discover()
+            .unwrap()
+            .map(GameProcess::pid),
+        Some(200),
+        "the lower PID is the deterministic tie-break"
+    );
 }
 
 #[test]
