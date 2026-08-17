@@ -94,6 +94,40 @@ fn a_relaunch_is_discovered_from_the_new_process_rather_than_the_dying_one() {
 }
 
 #[test]
+fn executable_name_priority_outranks_a_newer_lower_priority_process() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = "/games/Warframe/Downloaded/Public/Warframe.x64.exe";
+    candidate_started_at(temp.path(), 100, "Warframe.x64.exe", executable, 777);
+    candidate_started_at(temp.path(), 200, "Warframe.x64.ex", executable, 778);
+
+    assert_eq!(
+        LinuxProc::at(temp.path())
+            .discover()
+            .unwrap()
+            .map(GameProcess::pid),
+        Some(100),
+        "the full executable name has higher priority"
+    );
+}
+
+#[test]
+fn equal_name_priority_and_start_time_use_the_lower_pid() {
+    let temp = tempfile::tempdir().unwrap();
+    let executable = "/games/Warframe/Downloaded/Public/Warframe.x64.exe";
+    candidate_started_at(temp.path(), 300, "Warframe.x64.exe", executable, 777);
+    candidate_started_at(temp.path(), 200, "Warframe.x64.exe", executable, 777);
+
+    assert_eq!(
+        LinuxProc::at(temp.path())
+            .discover()
+            .unwrap()
+            .map(GameProcess::pid),
+        Some(200),
+        "the lower PID is the deterministic tie-break"
+    );
+}
+
+#[test]
 fn discovery_ignores_vanished_and_malformed_process_entries() {
     let temp = tempfile::tempdir().unwrap();
     write_file(temp.path(), "not-a-pid/comm", "Warframe.x64.exe\n");
