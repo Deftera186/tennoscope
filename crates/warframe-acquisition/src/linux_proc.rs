@@ -20,6 +20,10 @@ use crate::{
 
 const FULL_PROCESS_NAME: &str = "Warframe.x64.exe";
 const WINE_PROCESS_NAME: &str = "Warframe.x64.ex";
+/// The launcher is a CEF/Chromium app; every one of its subprocesses maps this file and carries a
+/// `Cr*`-prefixed `comm` (Chromium's own subprocess-naming convention), which is what
+/// `launcher_present` uses to skip everything else before paying for a `maps` read.
+const LAUNCHER_PROCESS_NAME: &str = "Launcher.exe";
 const PAGE_SIZE: u64 = 4096;
 const PAGEMAP_PRESENT: u64 = 1 << 63;
 const PAGEMAP_SOFT_DIRTY: u64 = 1 << 55;
@@ -161,6 +165,37 @@ impl ProcessDiscovery for LinuxProc {
             .map_err(|_| AcquisitionError::ProcessDiscoveryFailed)?
             .retain(|process, _| Some(*process) == selected);
         Ok(selected)
+    }
+
+    fn launcher_present(&self) -> bool {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return false;
+        };
+        for entry in entries.flatten() {
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let Ok(comm) = fs::read_to_string(self.process_file(pid, "comm")) else {
+                continue;
+            };
+            if !comm.trim_end().starts_with("Cr") {
+                continue;
+            }
+            let Ok(maps) = fs::read_to_string(self.process_file(pid, "maps")) else {
+                continue;
+            };
+            if maps
+                .lines()
+                .any(|line| maps_named_executable(line, LAUNCHER_PROCESS_NAME))
+            {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -323,13 +358,17 @@ fn parse_start_time(stat: &str) -> Option<u64> {
 }
 
 fn maps_game_executable(line: &str) -> bool {
+    maps_named_executable(line, FULL_PROCESS_NAME)
+}
+
+fn maps_named_executable(line: &str, name: &str) -> bool {
     let Some(path) = line.split_ascii_whitespace().skip(5).last() else {
         return false;
     };
     Path::new(path)
         .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == FULL_PROCESS_NAME)
+        .and_then(|candidate| candidate.to_str())
+        .is_some_and(|candidate| candidate == name)
 }
 
 fn parse_readable_region(line: &str) -> Option<ReadableRegion> {

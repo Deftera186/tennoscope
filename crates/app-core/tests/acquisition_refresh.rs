@@ -23,7 +23,7 @@ fn failed_refresh_preserves_the_prior_persisted_snapshot_and_records_stage_healt
     let view = core.finish_inventory_refresh(Err(failure), None).unwrap();
 
     assert_eq!(view.collection().items()[0].id(), "prior");
-    assert_eq!(view.health().game_reader().state(), HealthState::Failed);
+    assert_eq!(view.health().game_reader().state(), HealthState::Degraded);
     assert!(
         view.health()
             .game_reader()
@@ -90,6 +90,36 @@ fn acquisition_port_is_the_single_refresh_seam_and_failure_keeps_last_success() 
     assert_eq!(view.collection().items()[0].id(), "prior");
     assert_eq!(view.health().game_reader().state(), HealthState::Degraded);
     assert_eq!(view.health().game_reader().last_success(), Some("123"));
+}
+
+#[test]
+fn a_transient_game_discovery_stage_clears_once_the_process_reconnects() {
+    let mut core = AppCore::in_memory().unwrap();
+    let failure = AcquisitionFailure::for_test(AcquisitionError::GameNotRunning);
+    core.finish_inventory_refresh(Err(failure), None).unwrap();
+    assert_eq!(core.current_view().unwrap().health().acquisition_stages().len(), 1);
+
+    let view = core.record_game_process_ready().unwrap();
+
+    assert!(
+        view.health().acquisition_stages().is_empty(),
+        "a stale 'game not found' stage from before the process was seen again must not linger"
+    );
+}
+
+#[test]
+fn an_unrelated_stage_failure_survives_the_process_reconnecting() {
+    let mut core = AppCore::in_memory().unwrap();
+    let failure = AcquisitionFailure::for_test(AcquisitionError::AuthorizationNotFound);
+    core.finish_inventory_refresh(Err(failure), None).unwrap();
+
+    let view = core.record_game_process_ready().unwrap();
+
+    assert_eq!(
+        view.health().acquisition_stages().len(),
+        1,
+        "authorization was never found for reasons unrelated to the process reappearing"
+    );
 }
 
 #[test]

@@ -21,6 +21,7 @@ impl LogObservation {
 pub struct MonitorInput {
     now: u64,
     discovery: Result<Option<u32>, AcquisitionError>,
+    launcher_seen: bool,
     log: Result<Option<LogObservation>, AcquisitionError>,
 }
 impl MonitorInput {
@@ -28,13 +29,15 @@ impl MonitorInput {
         Self {
             now,
             discovery: Ok(Some(pid)),
+            launcher_seen: false,
             log: Ok(log),
         }
     }
-    pub fn absent(now: u64) -> Self {
+    pub fn absent(now: u64, launcher_seen: bool) -> Self {
         Self {
             now,
             discovery: Ok(None),
+            launcher_seen,
             log: Ok(None),
         }
     }
@@ -42,6 +45,7 @@ impl MonitorInput {
         Self {
             now,
             discovery: Err(error),
+            launcher_seen: false,
             log: Ok(None),
         }
     }
@@ -49,6 +53,7 @@ impl MonitorInput {
         Self {
             now,
             discovery: Ok(Some(pid)),
+            launcher_seen: false,
             log: Err(AcquisitionError::MemoryReadFailed { pid }),
         }
     }
@@ -102,9 +107,14 @@ impl MonitorMachine {
                     log::info!("monitor: game process gone, resetting");
                 }
                 self.reset_process();
+                let acquisition_health = if input.launcher_seen {
+                    AcquisitionError::LauncherRunning
+                } else {
+                    AcquisitionError::GameNotRunning
+                };
                 return MonitorResult {
                     refresh: false,
-                    acquisition_health: Some(AcquisitionError::GameNotRunning),
+                    acquisition_health: Some(acquisition_health),
                     log_health: Some(LogMonitorDiagnostic::Unavailable),
                 };
             }

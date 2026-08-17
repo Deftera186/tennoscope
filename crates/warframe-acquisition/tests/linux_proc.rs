@@ -34,6 +34,39 @@ fn write_stat(root: &Path, pid: u32, comm: &str, start_time: u64) {
 }
 
 #[test]
+fn launcher_present_is_true_when_a_cef_subprocess_maps_launcher_exe() {
+    let temp = tempfile::tempdir().unwrap();
+    candidate(
+        temp.path(),
+        501,
+        "CrBrowserMain",
+        "/games/Warframe/Downloaded/Public/Tools/Launcher.exe",
+    );
+
+    assert!(LinuxProc::at(temp.path()).launcher_present());
+}
+
+#[test]
+fn launcher_present_is_false_with_nothing_running() {
+    let temp = tempfile::tempdir().unwrap();
+
+    assert!(!LinuxProc::at(temp.path()).launcher_present());
+}
+
+#[test]
+fn launcher_present_is_false_when_a_cef_process_maps_something_else() {
+    let temp = tempfile::tempdir().unwrap();
+    candidate(
+        temp.path(),
+        502,
+        "CrBrowserMain",
+        "/some/other/Chromium.exe",
+    );
+
+    assert!(!LinuxProc::at(temp.path()).launcher_present());
+}
+
+#[test]
 fn discovers_full_and_wine_truncated_names_only_when_the_game_executable_is_mapped() {
     let temp = tempfile::tempdir().unwrap();
     candidate(

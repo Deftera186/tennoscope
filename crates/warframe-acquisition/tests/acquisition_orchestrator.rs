@@ -13,6 +13,16 @@ impl ProcessDiscovery for Discovery {
     }
 }
 
+struct LauncherOnlyDiscovery;
+impl ProcessDiscovery for LauncherOnlyDiscovery {
+    fn discover(&self) -> Result<Option<GameProcess>, AcquisitionError> {
+        Ok(None)
+    }
+    fn launcher_present(&self) -> bool {
+        true
+    }
+}
+
 struct Memory(Vec<u8>);
 impl MemoryReader for Memory {
     fn readable_regions(&self, _: &GameProcess) -> Result<Vec<ReadableRegion>, AcquisitionError> {
@@ -92,4 +102,20 @@ fn failure_reports_the_exact_stage_and_does_not_fetch_later_stages() {
     assert_eq!(failure.health().stages()[0].state(), StageState::Degraded);
     assert_eq!(acquirer.transport().calls.get(), 0);
     assert!(!format!("{failure:?}").contains("0123456789abcdef"));
+}
+
+#[test]
+fn a_launcher_seen_through_a_reference_is_reported_rather_than_a_bare_absence() {
+    let discovery = LauncherOnlyDiscovery;
+    let transport = Transport {
+        calls: Cell::new(0),
+        body: Ok(inventory()),
+    };
+    // By reference, not owned: this is what exercises the blanket `&T` `ProcessDiscovery` impl,
+    // which is the one place `launcher_present` could silently fall back to its default.
+    let acquirer = InventoryAcquirer::new(&discovery, Memory(vec![]), transport);
+
+    let failure = acquirer.acquire(&catalog()).unwrap_err();
+
+    assert_eq!(failure.error(), AcquisitionError::LauncherRunning);
 }

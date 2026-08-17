@@ -31,7 +31,14 @@ where
             .discovery
             .discover()
             .map_err(AcquisitionFailure::from_error)?
-            .ok_or_else(|| AcquisitionFailure::from_error(AcquisitionError::GameNotRunning))?;
+            .ok_or_else(|| {
+                let error = if self.discovery.launcher_present() {
+                    AcquisitionError::LauncherRunning
+                } else {
+                    AcquisitionError::GameNotRunning
+                };
+                AcquisitionFailure::from_error(error)
+            })?;
         log::info!("acquisition: process discovered pid={}", process.pid());
         let authorization = AuthorizationScanner::new(SCAN_CHUNK_BYTES)
             .scan(&self.memory, &process)
@@ -68,6 +75,7 @@ impl AcquisitionFailure {
     pub fn from_error(error: AcquisitionError) -> Self {
         let diagnostic = match error {
             AcquisitionError::GameNotRunning => AcquisitionDiagnostic::GameNotRunning,
+            AcquisitionError::LauncherRunning => AcquisitionDiagnostic::LauncherRunning,
             AcquisitionError::ProcessDiscoveryFailed | AcquisitionError::ProcessExited { .. } => {
                 AcquisitionDiagnostic::ProcessDiscoveryFailed
             }

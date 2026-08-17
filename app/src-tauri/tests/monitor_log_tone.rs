@@ -41,7 +41,7 @@ fn absent_game_is_not_an_event_when_it_was_never_running() {
     install_capture();
     let mut monitor = MonitorMachine::new(0);
     for tick in 0..5 {
-        monitor.tick(MonitorInput::absent(tick));
+        monitor.tick(MonitorInput::absent(tick, false));
     }
     let repeated = LINES
         .lock()
@@ -65,9 +65,9 @@ fn disappearance_logs_once_and_not_again_until_it_returns() {
         7,
         Some(LogObservation::new("a", 0, Vec::new())),
     ));
-    monitor.tick(MonitorInput::absent(1));
-    monitor.tick(MonitorInput::absent(2));
-    monitor.tick(MonitorInput::absent(3));
+    monitor.tick(MonitorInput::absent(1, false));
+    monitor.tick(MonitorInput::absent(2, false));
+    monitor.tick(MonitorInput::absent(3, false));
     let gone = LINES
         .lock()
         .expect("lines")

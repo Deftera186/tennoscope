@@ -227,10 +227,20 @@ impl ReadableRegion {
 
 pub trait ProcessDiscovery {
     fn discover(&self) -> Result<Option<GameProcess>, AcquisitionError>;
+
+    /// Whether the Warframe launcher (not the game itself) is currently visible. Only meaningful
+    /// when `discover` returns `Ok(None)` -- it exists to tell "waiting for the launcher" apart
+    /// from "nothing is open at all". Defaults to `false` since only the Linux backend can tell.
+    fn launcher_present(&self) -> bool {
+        false
+    }
 }
 impl<T: ProcessDiscovery + ?Sized> ProcessDiscovery for &T {
     fn discover(&self) -> Result<Option<GameProcess>, AcquisitionError> {
         (**self).discover()
+    }
+    fn launcher_present(&self) -> bool {
+        (**self).launcher_present()
     }
 }
 
@@ -326,6 +336,7 @@ pub trait SnapshotDecoder {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AcquisitionError {
     GameNotRunning,
+    LauncherRunning,
     ProcessDiscoveryFailed,
     MemoryPermissionDenied { pid: u32 },
     MemoryReadFailed { pid: u32 },
@@ -342,6 +353,9 @@ impl fmt::Display for AcquisitionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::GameNotRunning => formatter.write_str("Warframe is not running"),
+            Self::LauncherRunning => {
+                formatter.write_str("Warframe launcher is open — waiting for the game to launch")
+            }
             Self::ProcessDiscoveryFailed => {
                 formatter.write_str("Warframe process discovery failed")
             }
@@ -400,6 +414,7 @@ pub enum StageState {
 pub enum AcquisitionDiagnostic {
     Ready,
     GameNotRunning,
+    LauncherRunning,
     ProcessDiscoveryFailed,
     MemoryPermissionDenied,
     MemoryReadFailed,
@@ -415,6 +430,7 @@ impl fmt::Display for AcquisitionDiagnostic {
         let message = match self {
             Self::Ready => "ready",
             Self::GameNotRunning => "Warframe is not running",
+            Self::LauncherRunning => "Warframe launcher is open — waiting for the game to launch",
             Self::ProcessDiscoveryFailed => "Warframe process discovery failed",
             Self::MemoryPermissionDenied => "permission to read Warframe memory was denied",
             Self::MemoryReadFailed => "Warframe memory could not be read",
@@ -447,7 +463,7 @@ impl StageHealth {
     pub const fn for_diagnostic(diagnostic: AcquisitionDiagnostic) -> Option<Self> {
         let (stage, state) = match diagnostic {
             AcquisitionDiagnostic::Ready => return None,
-            AcquisitionDiagnostic::GameNotRunning => {
+            AcquisitionDiagnostic::GameNotRunning | AcquisitionDiagnostic::LauncherRunning => {
                 (AcquisitionStage::GameDiscovery, StageState::Degraded)
             }
             AcquisitionDiagnostic::ProcessDiscoveryFailed => {
@@ -457,8 +473,10 @@ impl StageHealth {
             | AcquisitionDiagnostic::MemoryReadFailed => {
                 (AcquisitionStage::MemoryPermission, StageState::Failed)
             }
-            AcquisitionDiagnostic::AuthorizationNotFound
-            | AcquisitionDiagnostic::AuthorizationAmbiguous => {
+            AcquisitionDiagnostic::AuthorizationNotFound => {
+                (AcquisitionStage::AuthorizationDiscovery, StageState::Degraded)
+            }
+            AcquisitionDiagnostic::AuthorizationAmbiguous => {
                 (AcquisitionStage::AuthorizationDiscovery, StageState::Failed)
             }
             AcquisitionDiagnostic::InventoryRequestFailed

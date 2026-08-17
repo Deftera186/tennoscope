@@ -37,6 +37,7 @@ fn authorization_debug_never_reveals_its_parts() {
 fn all_public_errors_and_diagnostics_are_secret_free() {
     let errors = [
         AcquisitionError::GameNotRunning,
+        AcquisitionError::LauncherRunning,
         AcquisitionError::ProcessDiscoveryFailed,
         AcquisitionError::MemoryPermissionDenied { pid: 42 },
         AcquisitionError::MemoryReadFailed { pid: 42 },
@@ -51,6 +52,7 @@ fn all_public_errors_and_diagnostics_are_secret_free() {
     let diagnostics = [
         AcquisitionDiagnostic::Ready,
         AcquisitionDiagnostic::GameNotRunning,
+        AcquisitionDiagnostic::LauncherRunning,
         AcquisitionDiagnostic::ProcessDiscoveryFailed,
         AcquisitionDiagnostic::MemoryPermissionDenied,
         AcquisitionDiagnostic::MemoryReadFailed,
@@ -83,7 +85,7 @@ fn acquisition_health_reports_structured_secret_free_stages() {
         health.stages()[0].stage(),
         AcquisitionStage::AuthorizationDiscovery
     );
-    assert_eq!(health.stages()[0].state(), StageState::Failed);
+    assert_eq!(health.stages()[0].state(), StageState::Degraded);
     assert_eq!(
         health.stages()[0].diagnostic(),
         AcquisitionDiagnostic::AuthorizationNotFound

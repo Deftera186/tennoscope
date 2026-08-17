@@ -14,7 +14,7 @@ fn startup_detection_triggers_once_and_absence_or_errors_publish_health() {
     assert!(monitor.tick(MonitorInput::running(0, 7, None)).refresh);
     assert!(!monitor.tick(MonitorInput::running(1, 7, None)).refresh);
     assert_eq!(
-        monitor.tick(MonitorInput::absent(2)).acquisition_health,
+        monitor.tick(MonitorInput::absent(2, false)).acquisition_health,
         Some(AcquisitionError::GameNotRunning)
     );
     assert_eq!(
@@ -25,6 +25,16 @@ fn startup_detection_triggers_once_and_absence_or_errors_publish_health() {
             ))
             .acquisition_health,
         Some(AcquisitionError::ProcessDiscoveryFailed)
+    );
+}
+
+#[test]
+fn an_absent_game_with_the_launcher_visible_is_reported_distinctly() {
+    let mut monitor = MonitorMachine::new(15);
+
+    assert_eq!(
+        monitor.tick(MonitorInput::absent(0, true)).acquisition_health,
+        Some(AcquisitionError::LauncherRunning)
     );
 }
 
@@ -143,7 +153,7 @@ fn ready_log_monitor_degrades_when_game_disappears_or_discovery_fails() {
         Some(LogMonitorDiagnostic::Ready)
     );
     assert_eq!(
-        absent.tick(MonitorInput::absent(1)).log_health,
+        absent.tick(MonitorInput::absent(1, false)).log_health,
         Some(LogMonitorDiagnostic::Unavailable)
     );
 

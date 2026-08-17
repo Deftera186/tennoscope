@@ -520,6 +520,20 @@ impl AppCore {
             "Warframe process connected",
             last_success,
         )?;
+        // `acquisition_stages` only changes on a full acquisition attempt, not on every monitor
+        // tick -- so a transient "game not found" blip during startup (briefly classified as
+        // GameDiscovery/Degraded, e.g. GameNotRunning or LauncherRunning) would otherwise sit
+        // there forever once the process reconnects, since nothing else clears it. An unrelated
+        // failure (say, AuthorizationNotFound while logged out) is real information and must
+        // survive the process merely being seen again.
+        if self
+            .health
+            .acquisition_stages
+            .iter()
+            .all(|stage| stage.stage == "game_discovery" && stage.state != HealthState::Ready)
+        {
+            self.health.acquisition_stages.clear();
+        }
         self.current_view()
     }
 

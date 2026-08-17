@@ -1276,7 +1276,10 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             announced_process = process;
         }
         let (input, log_bytes) = match discovered {
-            Ok(None) => (MonitorInput::absent(now), Vec::new()),
+            Ok(None) => (
+                MonitorInput::absent(now, procfs.launcher_present()),
+                Vec::new(),
+            ),
             Err(error) => (MonitorInput::error(now, error), Vec::new()),
             Ok(Some(process)) => {
                 let path = inventory_log_path(process.pid());
