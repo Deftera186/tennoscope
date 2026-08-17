@@ -473,9 +473,10 @@ impl StageHealth {
             | AcquisitionDiagnostic::MemoryReadFailed => {
                 (AcquisitionStage::MemoryPermission, StageState::Failed)
             }
-            AcquisitionDiagnostic::AuthorizationNotFound => {
-                (AcquisitionStage::AuthorizationDiscovery, StageState::Degraded)
-            }
+            AcquisitionDiagnostic::AuthorizationNotFound => (
+                AcquisitionStage::AuthorizationDiscovery,
+                StageState::Degraded,
+            ),
             AcquisitionDiagnostic::AuthorizationAmbiguous => {
                 (AcquisitionStage::AuthorizationDiscovery, StageState::Failed)
             }

@@ -97,7 +97,14 @@ fn a_transient_game_discovery_stage_clears_once_the_process_reconnects() {
     let mut core = AppCore::in_memory().unwrap();
     let failure = AcquisitionFailure::for_test(AcquisitionError::GameNotRunning);
     core.finish_inventory_refresh(Err(failure), None).unwrap();
-    assert_eq!(core.current_view().unwrap().health().acquisition_stages().len(), 1);
+    assert_eq!(
+        core.current_view()
+            .unwrap()
+            .health()
+            .acquisition_stages()
+            .len(),
+        1
+    );
 
     let view = core.record_game_process_ready().unwrap();
 

@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "TennoScope",
   "mainBinaryName": "tennoscope",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "identifier": "io.github.deftera186.tennoscope",
   "build": {
     "frontendDist": "../dist",

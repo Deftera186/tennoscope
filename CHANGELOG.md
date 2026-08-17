@@ -11,6 +11,16 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.5.7] - 2026-08-17
+
+### Fixed
+
+- **Acquisition health no longer misreports idle states.** "Not logged in yet" is now Degraded
+  rather than Failed, so the Diagnostics screen stops showing the problem banner on a perfectly
+  healthy idle app. Detecting the Warframe launcher on Linux now shows "waiting for the game to
+  launch" instead of a bare "not running", and a brief game-not-found blip during startup no longer
+  sticks around after the game connects.
+
 ## [0.5.6] - 2026-08-12
 
 ### Fixed
@@ -336,7 +346,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.6...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.7...HEAD
+[0.5.7]: https://github.com/Deftera186/tennoscope/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/Deftera186/tennoscope/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/Deftera186/tennoscope/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/Deftera186/tennoscope/compare/v0.5.3...v0.5.4
