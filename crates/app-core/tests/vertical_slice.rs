@@ -123,9 +123,9 @@ fn in_memory_starts_empty_and_reports_honest_health() {
     assert!(view.reward().cards().is_empty());
     assert_eq!(view.reward().best_value_index(), None);
     assert_eq!(view.health().database().state(), HealthState::Ready);
-    assert_eq!(view.health().game_reader().state(), HealthState::Degraded);
+    assert_eq!(view.health().game_reader().state(), HealthState::Idle);
     assert_eq!(view.health().capture().state(), HealthState::Idle);
-    assert_eq!(view.health().catalog().state(), HealthState::Degraded);
+    assert_eq!(view.health().catalog().state(), HealthState::Idle);
     assert_eq!(view.health().market().state(), HealthState::Idle);
 }
 
@@ -259,7 +259,7 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
         "OCR reward observer idle; no reward screen yet"
     );
     assert_eq!(view.health().capture().last_success(), None);
-    assert_eq!(view.health().catalog().state(), HealthState::Degraded);
+    assert_eq!(view.health().catalog().state(), HealthState::Idle);
     assert_eq!(
         view.health().catalog().message(),
         "Item catalog has not loaded yet"
@@ -369,7 +369,7 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
             "health": {
                 "acquisition_stages": [],
                 "game_reader": {"state": "ready", "message": "Deterministic fake inventory loaded", "last_success": "2000-01-01T00:00:00Z"},
-                "log_monitor": {"state": "degraded", "message": "Waiting for Warframe EE.log", "last_success": null},
+                "log_monitor": {"state": "idle", "message": "Waiting for Warframe", "last_success": null},
                 "capture": {"state": "degraded", "message": "Fake session; capture not connected", "last_success": null},
                 "catalog": {"state": "degraded", "message": "Fake session; live catalog not connected", "last_success": null},
                 "market": {"state": "degraded", "message": "Fake session; live market not connected", "last_success": null},

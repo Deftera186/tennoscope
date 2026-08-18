@@ -53,15 +53,15 @@ describe('reportBlockVisible', () => {
     expect(reportBlockVisible(health({ acquisition_stages: [{ stage: 'schema_validation', state: 'failed', message: 'bad' }] }))).toBe(true)
   })
 
-  it('hides a degraded acquisition stage before the game has ever worked', () => {
-    expect(reportBlockVisible(health({ acquisition_stages: [{ stage: 'game_discovery', state: 'degraded', message: 'Warframe is not running' }] }))).toBe(false)
+  it('hides an idle acquisition stage before the game has ever worked', () => {
+    expect(reportBlockVisible(health({ acquisition_stages: [{ stage: 'game_discovery', state: 'idle', message: 'Warframe is not running' }] }))).toBe(false)
   })
 
-  it('reports a degraded acquisition stage once the game has worked this session', () => {
+  it('hides an idle acquisition stage even after the game has worked this session', () => {
     const h = health({
       game_reader: { state: 'ready', message: 'ok', last_success: '123' },
-      acquisition_stages: [{ stage: 'game_discovery', state: 'degraded', message: 'Warframe is not running' }],
+      acquisition_stages: [{ stage: 'game_discovery', state: 'idle', message: 'Warframe is not running' }],
     })
-    expect(reportBlockVisible(h)).toBe(true)
+    expect(reportBlockVisible(h)).toBe(false)
   })
 })

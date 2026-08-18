@@ -99,7 +99,7 @@ fn failure_reports_the_exact_stage_and_does_not_fetch_later_stages() {
         failure.health().stages()[0].stage(),
         AcquisitionStage::GameDiscovery
     );
-    assert_eq!(failure.health().stages()[0].state(), StageState::Degraded);
+    assert_eq!(failure.health().stages()[0].state(), StageState::Idle);
     assert_eq!(acquirer.transport().calls.get(), 0);
     assert!(!format!("{failure:?}").contains("0123456789abcdef"));
 }

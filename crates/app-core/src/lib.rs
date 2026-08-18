@@ -9,8 +9,8 @@ use local_store::{SnapshotMeta, SqliteStore, StoreError};
 use serde::Serialize;
 use thiserror::Error;
 use warframe_acquisition::{
-    AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogIndex, CatalogLoadSource,
-    MarketPriceCache, PriceTable, StageState,
+    AcquisitionError, AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogIndex,
+    CatalogLoadSource, MarketPriceCache, PriceTable, StageState,
 };
 use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot,
@@ -425,8 +425,11 @@ impl AppCore {
                     .copied()
                     .map(AcquisitionStageView::from)
                     .collect();
-                self.health.game_reader =
-                    match failure.health().stages().first().map(|stage| stage.state()) {
+                self.health.game_reader = match failure.error() {
+                    AcquisitionError::GameNotRunning | AcquisitionError::LauncherRunning => {
+                        BackendHealth::idle(failure.to_string(), last_success)?
+                    }
+                    _ => match failure.health().stages().first().map(|stage| stage.state()) {
                         Some(StageState::Degraded) => BackendHealth::new(
                             HealthState::Degraded,
                             failure.to_string(),
@@ -437,7 +440,8 @@ impl AppCore {
                             failure.to_string(),
                             last_success,
                         )?,
-                    };
+                    },
+                };
             }
         }
         self.current_view()
@@ -496,6 +500,19 @@ impl AppCore {
         }
         let last_success = self.health.log_monitor.last_success.clone();
         self.health.log_monitor = BackendHealth::new(HealthState::Degraded, message, last_success)?;
+        self.current_view()
+    }
+
+    pub fn record_log_monitor_idle(
+        &mut self,
+        message: impl Into<String>,
+    ) -> Result<AppView, AppError> {
+        let message = message.into();
+        if self.health.log_monitor.state() != HealthState::Idle {
+            log::info!("health: log monitor idle — {message}");
+        }
+        let last_success = self.health.log_monitor.last_success.clone();
+        self.health.log_monitor = BackendHealth::idle(message, last_success)?;
         self.current_view()
     }
 
@@ -946,10 +963,10 @@ pub struct HealthView {
 impl HealthView {
     fn phase_one() -> Result<Self, AppError> {
         Ok(Self {
-            game_reader: BackendHealth::degraded("Waiting for a logged-in Warframe process")?,
-            log_monitor: BackendHealth::degraded("Waiting for Warframe EE.log")?,
+            game_reader: BackendHealth::idle("Warframe is not running", None)?,
+            log_monitor: BackendHealth::idle("Waiting for Warframe", None)?,
             capture: BackendHealth::idle("OCR reward observer idle; no reward screen yet", None)?,
-            catalog: BackendHealth::degraded("Item catalog has not loaded yet")?,
+            catalog: BackendHealth::idle("Item catalog has not loaded yet", None)?,
             market: BackendHealth::idle(
                 "warframe.market pricing idle; nothing to price yet",
                 None,
@@ -969,7 +986,7 @@ impl HealthView {
             "OCR reward observer idle; no reward screen yet",
             self.capture.last_success.clone(),
         )?;
-        self.catalog = BackendHealth::degraded("Item catalog has not loaded yet")?;
+        self.catalog = BackendHealth::idle("Item catalog has not loaded yet", None)?;
         self.market = BackendHealth::idle(
             "warframe.market pricing idle; nothing to price yet",
             self.market.last_success.clone(),
@@ -1038,6 +1055,7 @@ impl From<warframe_acquisition::StageHealth> for AcquisitionStageView {
         };
         let state = match value.state() {
             StageState::Ready => HealthState::Ready,
+            StageState::Idle => HealthState::Idle,
             StageState::Degraded => HealthState::Degraded,
             StageState::Failed => HealthState::Failed,
         };

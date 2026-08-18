@@ -406,6 +406,7 @@ pub enum AcquisitionStage {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StageState {
     Ready,
+    Idle,
     Degraded,
     Failed,
 }
@@ -464,7 +465,7 @@ impl StageHealth {
         let (stage, state) = match diagnostic {
             AcquisitionDiagnostic::Ready => return None,
             AcquisitionDiagnostic::GameNotRunning | AcquisitionDiagnostic::LauncherRunning => {
-                (AcquisitionStage::GameDiscovery, StageState::Degraded)
+                (AcquisitionStage::GameDiscovery, StageState::Idle)
             }
             AcquisitionDiagnostic::ProcessDiscoveryFailed => {
                 (AcquisitionStage::GameDiscovery, StageState::Failed)

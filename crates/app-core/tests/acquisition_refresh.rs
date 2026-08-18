@@ -88,7 +88,7 @@ fn acquisition_port_is_the_single_refresh_seam_and_failure_keeps_last_success() 
     let view = core.refresh_from(&failed).unwrap();
 
     assert_eq!(view.collection().items()[0].id(), "prior");
-    assert_eq!(view.health().game_reader().state(), HealthState::Degraded);
+    assert_eq!(view.health().game_reader().state(), HealthState::Idle);
     assert_eq!(view.health().game_reader().last_success(), Some("123"));
 }
 

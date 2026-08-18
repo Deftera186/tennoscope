@@ -1,7 +1,7 @@
 //! Log-monitor health recordings log transitions, not steady state.
 //!
 //! The monitor thread re-records the log-monitor health every second. When the game is not
-//! running the steady state is "degraded, EE.log not found" — warning about it on every tick
+//! running the steady state is "idle, Waiting for Warframe" — logging it on every tick
 //! floods the console with lines that carry no new information.
 
 use std::sync::{Mutex, Once};
@@ -49,13 +49,13 @@ fn log_monitor_health_logs_only_on_state_transitions() {
     install_capture();
     let mut core = AppCore::in_memory().unwrap();
 
-    // From startup the log monitor is already degraded ("Waiting for Warframe EE.log"),
-    // so re-recording the same degraded state each tick must stay silent.
+    // From startup the log monitor is already idle ("Waiting for Warframe"),
+    // so re-recording the same idle state each tick must stay silent.
     for _ in 0..3 {
-        core.record_log_monitor_degraded("EE.log not found; retrying")
+        core.record_log_monitor_idle("Waiting for Warframe")
             .unwrap();
     }
-    // The game running hbm: first ready is a transition, the second is a re-record.
+    // The game running: first ready is a transition, the second is a re-record.
     for _ in 0..2 {
         core.record_log_monitor_ready().unwrap();
     }
@@ -64,17 +64,17 @@ fn log_monitor_health_logs_only_on_state_transitions() {
         core.record_log_monitor_failure("EE.log could not be read")
             .unwrap();
     }
-    // Back to degraded: one transition, one line.
+    // Back to idle: one transition, one line.
     for _ in 0..2 {
-        core.record_log_monitor_degraded("EE.log not found; retrying")
+        core.record_log_monitor_idle("Waiting for Warframe")
             .unwrap();
     }
 
     let lines = lines();
     assert_eq!(
-        count(&lines, "log monitor degraded"),
+        count(&lines, "log monitor idle"),
         1,
-        "repeated degraded recordings must not repeat the warning: {lines:?}"
+        "repeated idle recordings must not repeat the note: {lines:?}"
     );
     assert_eq!(
         count(&lines, "log monitor ready"),
@@ -89,7 +89,7 @@ fn log_monitor_health_logs_only_on_state_transitions() {
 }
 
 #[test]
-fn log_monitor_ready_stamps_a_last_success_and_degraded_keeps_it() {
+fn log_monitor_ready_stamps_a_last_success_and_idle_keeps_it() {
     let _serial = SERIAL.lock().expect("serial lock");
     let mut core = AppCore::in_memory().unwrap();
     let ready = core.record_log_monitor_ready().unwrap();
@@ -100,22 +100,22 @@ fn log_monitor_ready_stamps_a_last_success_and_degraded_keeps_it() {
         .unwrap()
         .to_owned();
 
-    let degraded = core
-        .record_log_monitor_degraded("EE.log not found; retrying")
+    let idle = core
+        .record_log_monitor_idle("Waiting for Warframe")
         .unwrap();
     assert_eq!(
-        degraded.health().log_monitor().last_success(),
+        idle.health().log_monitor().last_success(),
         Some(stamp.as_str()),
-        "degrading after a ready keeps the same success stamp"
+        "going idle after a ready keeps the same success stamp"
     );
 }
 
 #[test]
-fn log_monitor_boot_degradation_stays_stamp_free() {
+fn log_monitor_boot_idle_stays_stamp_free() {
     let _serial = SERIAL.lock().expect("serial lock");
     let mut core = AppCore::in_memory().unwrap();
     let view = core
-        .record_log_monitor_degraded("EE.log not found; retrying")
+        .record_log_monitor_idle("Waiting for Warframe")
         .unwrap();
     assert_eq!(
         view.health().log_monitor().last_success(),
