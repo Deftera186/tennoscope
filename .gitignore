@@ -1,6 +1,6 @@
 # Build output
 target/
-app/node_modules/
+node_modules/
 app/dist/
 
 # Local databases
