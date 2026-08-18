@@ -5520,6 +5520,7 @@ dependencies = [
  "image",
  "local-store",
  "log",
+ "regex",
  "serde",
  "serde_json",
  "tauri",

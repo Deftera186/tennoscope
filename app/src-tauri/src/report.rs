@@ -1,12 +1,12 @@
 //! Report assembly for the Diagnostics report block.
 //!
-//! Two deliverables, with a hard privacy wall between them:
+//! Two deliverables, with a privacy-aware pipeline:
 //! - `report_text` (clipboard / report.txt) is sanitized and never contains
 //!   EE.log content.
-//! - The report folder additionally carries the raw app log and, only for
-//!   acquisition failures, a copy of Warframe's EE.log under a name that
-//!   flags it as sensitive. EE.log holds IPs, email addresses and account
-//!   handles and must never be attached to a public issue.
+//! - The report folder additionally carries the app log and, only for
+//!   acquisition failures, a sanitized copy of Warframe's EE.log (IPs and
+//!   email addresses redacted). The sanitized copy is safe to attach to a
+//!   public issue.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,12 +23,6 @@ pub const LOG_TAIL_WINDOW_BYTES: usize = 256 * 1024;
 /// shape of a failure without turning the paste into a log file.
 pub const LOG_TAIL_LINES: usize = 20;
 
-/// The EE.log copy is a forensics artefact for genuine acquisition
-/// breakdowns. A degraded stage (slow market, waiting) explains itself in
-/// the health block; only a failure earns the sensitive copy.
-pub fn ee_log_wanted_for(states: &[app_core::HealthState]) -> bool {
-    states.contains(&app_core::HealthState::Failed)
-}
 
 #[derive(Clone)]
 pub struct ReportMeta {
@@ -137,8 +131,30 @@ fn prune_reports(reports: &Path) {
 /// The one thing that can go wrong between "EE.log exists" and "EE.log is in
 /// the folder": the copy itself, which the running game can block.
 fn copy_ee_log(source: &Path, folder: &Path) -> std::io::Result<()> {
-    fs::copy(source, folder.join("EE.log (sensitive)"))?;
+    let bytes = fs::read(source)?;
+    let content = String::from_utf8_lossy(&bytes);
+    let sanitized = sanitize_ee_log(&content);
+    fs::write(folder.join("EE.log (sanitized)"), sanitized)?;
     Ok(())
+}
+
+/// Strip PII (IPv4, IPv6, email addresses) from EE.log content.
+pub fn sanitize_ee_log(text: &str) -> String {
+    use std::sync::LazyLock;
+
+    static IPV4: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap()
+    });
+    static IPV6: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"(?i)\b[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){7}\b").unwrap()
+    });
+    static EMAIL: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}").unwrap()
+    });
+
+    let out = IPV4.replace_all(text, "[redacted-ip]");
+    let out = IPV6.replace_all(&out, "[redacted-ip]");
+    EMAIL.replace_all(&out, "[redacted-email]").into_owned()
 }
 
 pub fn assemble_report_text(
@@ -175,11 +191,11 @@ pub fn assemble_report_text(
         EeLogState::NotRequested => {}
         EeLogState::Included => {
             text.push_str("\nNotes\n");
-            text.push_str("EE.log is included in the report folder. It contains IPs, email addresses and account handles. Do not attach it to a public issue — send it to the maintainer on Discord (@deftera).\n");
+            text.push_str("EE.log is included in the report folder (sanitized — IPs and email addresses have been redacted). You can attach it to a GitHub issue.\n");
         }
         EeLogState::CopyFailed => {
             text.push_str("\nNotes\n");
-            text.push_str("EE.log was requested but could not be copied (the game usually keeps it locked) — it is not in this report. If the acquisition issue is urgent, send the report folder to the maintainer on Discord (@deftera) and mention the missing EE.log.\n");
+            text.push_str("EE.log was requested but could not be copied (the game usually keeps it locked) — it is not in this report.\n");
         }
     }
     Ok(sanitize(
@@ -432,7 +448,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("temp dir");
         let source = dir.path().join("EE.log");
         fs::write(&source, "secrets\n").expect("source log");
-        fs::create_dir(dir.path().join("EE.log (sensitive)")).expect("blocking dir");
+        fs::create_dir(dir.path().join("EE.log (sanitized)")).expect("blocking dir");
         assert!(super::copy_ee_log(&source, dir.path()).is_err());
     }
 

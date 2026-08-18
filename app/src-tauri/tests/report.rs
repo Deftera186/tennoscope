@@ -160,12 +160,12 @@ fn ee_log_copied_only_when_path_resolves() {
     let result = collect_report(&request).expect("report collects");
     assert!(result.ee_log_included);
     let folder = PathBuf::from(&result.folder_path);
-    let sensitive = fs::read_to_string(folder.join("EE.log (sensitive)")).expect("ee copy");
+    let sensitive = fs::read_to_string(folder.join("EE.log (sanitized)")).expect("ee copy");
     assert_eq!(sensitive, "session secrets\n");
     let text = fs::read_to_string(folder.join("report.txt")).expect("report reads");
     assert!(
-        text.contains("Do not attach it to a public issue"),
-        "sensitivity note present"
+        text.contains("You can attach it to a GitHub issue"),
+        "sanitization note present"
     );
 }
 
@@ -183,8 +183,8 @@ fn github_text_never_contains_ee_log_lines() {
         "EE.log content must never reach report text"
     );
     assert!(
-        text.contains("Discord"),
-        "the Discord routing instruction is present when EE.log is included"
+        text.contains("GitHub issue"),
+        "the attach-to-issue instruction is present when EE.log is included"
     );
 }
 
@@ -369,25 +369,10 @@ fn error_tail_window_starts_at_a_line_boundary() {
     );
 }
 
-#[test]
-fn ee_log_is_only_wanted_for_failed_stages() {
-    let states = |options: &[app_core::HealthState]| options.to_vec();
-    assert!(!app_lib::report::ee_log_wanted_for(&states(&[
-        app_core::HealthState::Ready
-    ])));
-    assert!(!app_lib::report::ee_log_wanted_for(&states(&[
-        app_core::HealthState::Degraded
-    ])));
-    assert!(app_lib::report::ee_log_wanted_for(&states(&[
-        app_core::HealthState::Degraded,
-        app_core::HealthState::Failed
-    ])));
-    assert!(!app_lib::report::ee_log_wanted_for(&states(&[])));
-}
 
 const ROW_JSON: &str = r#"{
   "game_reader": {"state": "degraded", "message": "Warframe is not running", "last_success": null},
-  "log_monitor": {"state": "degraded", "message": "EE.log not found; retrying", "last_success": null},
+  "log_monitor": {"state": "degraded", "message": "Waiting for Warframe", "last_success": null},
   "capture": {"state": "ready", "message": "Reward observer ready", "last_success": null},
   "catalog": {"state": "ready", "message": "Catalog ready", "last_success": "2026-07-27T00:00:00Z"},
   "market": {"state": "ready", "message": "Market ready", "last_success": null},
@@ -413,7 +398,7 @@ fn assemble_report_text_renders_human_readable_rows_only() {
     .expect("text builds");
     let _ = std::fs::remove_dir_all(&log_dir);
     assert!(text.contains("Game reader: degraded — Warframe is not running"));
-    assert!(text.contains("EE.log: degraded — EE.log not found; retrying"));
+    assert!(text.contains("EE.log: degraded — Waiting for Warframe"));
     assert!(text.contains("Catalog: ready — Catalog ready"));
     assert!(text.contains("Market account: idle — Not linked"));
     assert!(!text.contains("game_reader"), "raw keys must not appear");
@@ -471,4 +456,37 @@ fn assemble_report_text_only_mentions_ee_log_when_included() {
     .expect("folder text builds");
     std::fs::remove_dir_all(&log_dir).unwrap();
     assert!(included.contains("EE.log is included in the report folder"));
+}
+
+#[test]
+fn sanitize_ee_log_strips_ipv4_addresses() {
+    let input = "Connected to 192.168.1.100:6695\nServer: 203.0.113.42\n";
+    let output = app_lib::report::sanitize_ee_log(input);
+    assert!(!output.contains("192.168.1.100"));
+    assert!(!output.contains("203.0.113.42"));
+    assert!(output.contains("[redacted-ip]"));
+}
+
+#[test]
+fn sanitize_ee_log_strips_ipv6_addresses() {
+    let input = "Host: 2001:0db8:85a3:0000:0000:8a2e:0370:7334 connected\n";
+    let output = app_lib::report::sanitize_ee_log(input);
+    assert!(!output.contains("2001:0db8"));
+    assert!(output.contains("[redacted-ip]"));
+}
+
+#[test]
+fn sanitize_ee_log_strips_email_addresses() {
+    let input = "Account: player@example.com logged in\nContact: user.name+tag@domain.co.uk\n";
+    let output = app_lib::report::sanitize_ee_log(input);
+    assert!(!output.contains("player@example.com"));
+    assert!(!output.contains("user.name+tag@domain.co.uk"));
+    assert!(output.contains("[redacted-email]"));
+}
+
+#[test]
+fn sanitize_ee_log_preserves_non_pii_content() {
+    let input = "Inventory sync done\nLoaded relic: Lith A1\nMission: 4 players\n";
+    let output = app_lib::report::sanitize_ee_log(input);
+    assert_eq!(input, output);
 }
