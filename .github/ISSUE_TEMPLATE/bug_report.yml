@@ -10,13 +10,11 @@ body:
 
         If Diagnostics shows a **Report block**, click **Copy diagnostics** and paste the whole output
         into the **Diagnostics output** field below — it carries the fault summary, the row states and
-        the recent warnings. There is nothing else to paste. The full log record (the rotated logs)
-        lives in the **Save logs** folder — attach `report.txt` from there if the issue needs it.
+        the recent warnings. The full log record (the rotated logs) lives in the **Save logs** folder.
 
-        **Do not attach EE.log to a public issue.** It contains IPs, email addresses and account
-        handles — send it to the maintainer on Discord (@deftera) instead. Do not paste account
-        identifiers, nonces, or other players' handles either; if you attach a screenshot of a
-        reward screen, crop out the names underneath the cards.
+        **EE.log** is sanitized (IPs and email addresses are redacted) and included in the report
+        folder as `EE.log (sanitized)`. You can safely attach it to this issue — it helps us
+        reproduce acquisition and log-monitor problems much faster.
 
   - type: textarea
     id: what-happened
@@ -46,8 +44,19 @@ body:
         - Reward overlay (does not appear, wrong place, wrong cards)
         - Pricing (missing, wrong, or never arrives)
         - Catalog / artwork
+        - Log monitor / health reporting
         - Build or packaging
         - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux
+        - Windows
     validations:
       required: true
 
@@ -60,11 +69,14 @@ body:
         health without any account data.
       render: text
 
-  - type: input
-    id: report-folder
+  - type: textarea
+    id: ee-log
     attributes:
-      label: Report folder
-      description: If you saved a report folder from Diagnostics, attach report.txt here or give the folder's path.
+      label: EE.log (sanitized)
+      description: >
+        If the report folder contains `EE.log (sanitized)`, drag it here or paste its contents.
+        IPs and emails are already redacted — it is safe to share publicly.
+      render: text
 
   - type: input
     id: environment
