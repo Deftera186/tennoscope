@@ -472,11 +472,13 @@
 }
 .report-head { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--step); align-items: center; }
 .report-head .state-mark { width: 1.1rem; height: 1.25rem; clip-path: var(--cartouche); background: var(--oxblood); }
+.report-head .state-mark.ready { background: var(--platinum); }
 .report-head .prose { grid-column: 2; max-width: 68ch; margin: .2rem 0 0; }
 .report-title {
   margin: 0; font-family: var(--face-mark); font-size: 1.5rem; font-weight: 700;
   letter-spacing: -.015em; text-transform: uppercase; color: var(--oxblood);
 }
+.report-plate:not(.broken) .report-title { color: var(--platinum); }
 .report-actions { display: flex; flex-wrap: wrap; gap: var(--step); padding-left: calc(1.1rem + var(--step)); }
 .report-status { margin: 0; padding-left: calc(1.1rem + var(--step)); font-family: var(--face-register); font-size: .58rem; letter-spacing: .1em; color: var(--platinum-dim); }
 .procedure-head.second { margin-top: clamp(var(--course), 5vh, var(--field)); }

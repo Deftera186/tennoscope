@@ -138,6 +138,8 @@ struct Runtime {
     refresh_in_flight: bool,
     overlay_preview_until: Option<Instant>,
     monitor_started: bool,
+    /// Last-known EE.log path, cached so reports can include it even after the game exits.
+    last_ee_log_path: Option<PathBuf>,
     // Survives across missions on purpose: the same relic pools recur all evening, so a price
     // fetched two runs ago is one this run does not have to make. Shared with the collection, so
     // a pool warmed mid-mission also prices those items in the browser.
@@ -248,22 +250,14 @@ fn build_report_request(
         .path()
         .app_log_dir()
         .unwrap_or_else(|_| runtime.app_data.clone());
-    let ee_log_wanted = want_ee_log
-        && runtime.core.current_view().ok().is_some_and(|view| {
-            let states: Vec<app_core::HealthState> = view
-                .health()
-                .acquisition_stages()
-                .iter()
-                .map(app_core::AcquisitionStageView::state)
-                .collect();
-            report::ee_log_wanted_for(&states)
-        });
+    let ee_log_wanted = want_ee_log;
     let ee_log_path = if ee_log_wanted {
         GameMemory::new()
             .discover()
             .ok()
             .flatten()
             .and_then(|process| inventory_log_path(process.pid()))
+            .or_else(|| runtime.last_ee_log_path.clone())
     } else {
         None
     };
@@ -1123,6 +1117,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         refresh_in_flight: false,
         overlay_preview_until: None,
         monitor_started: false,
+        last_ee_log_path: None,
         live_prices,
         market: market_account::MarketSession::new(warframe_market::open_credential_store(
             paths.database.clone(),
@@ -1291,6 +1286,11 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                         path.is_some()
                     );
                     tracked_resolution = Some((process.pid(), path.clone()));
+                    if let Some(ref ee_path) = path {
+                        if let Ok(mut runtime) = shared.lock() {
+                            runtime.last_ee_log_path = Some(ee_path.clone());
+                        }
+                    }
                 }
                 build_monitor_input(&machine, now, process.pid(), path)
             }
@@ -1316,7 +1316,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                     LogMonitorDiagnostic::Ready => runtime.core.record_log_monitor_ready(),
                     LogMonitorDiagnostic::Unavailable => runtime
                         .core
-                        .record_log_monitor_degraded("EE.log not found; retrying"),
+                        .record_log_monitor_idle("Waiting for Warframe"),
                     LogMonitorDiagnostic::ReadFailed => runtime
                         .core
                         .record_log_monitor_failure("EE.log could not be read"),
@@ -2752,6 +2752,7 @@ mod tests {
             refresh_in_flight: false,
             overlay_preview_until: None,
             monitor_started: false,
+            last_ee_log_path: None,
             live_prices: MarketPriceCache::new(),
             market: market_account::MarketSession::new(Box::new(MemoryStore::default())),
             market_generation: 0,

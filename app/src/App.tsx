@@ -652,10 +652,10 @@ type ReportStatus =
   | { kind: 'busy' }
   | { kind: 'done'; message: string }
 
-function ReportBlock({ health }: { health: AppView['health'] }) {
+function ReportBlock({ health, alwaysVisible }: { health: AppView['health']; alwaysVisible?: boolean }) {
   const [status, setStatus] = useState<ReportStatus>({ kind: 'idle' })
-const broken = reportBlockVisible(health)
-  if (!broken) return null
+  const broken = reportBlockVisible(health)
+  if (!alwaysVisible && !broken) return null
   const run = async (action: () => Promise<void | { folder_path: string; ee_log_included: boolean }>, done: (result: { folder_path: string; ee_log_included: boolean } | null) => string) => {
     setStatus({ kind: 'busy' })
     try {
@@ -667,11 +667,13 @@ const broken = reportBlockVisible(health)
     }
   }
   return (
-    <section className="report-plate" role="group" aria-label="Report a problem">
+    <section className={`report-plate${broken ? ' broken' : ''}`} role="group" aria-label="Report a problem">
       <div className="report-head">
         <span className={`state-mark ${broken ? 'failed' : 'ready'}`} aria-hidden="true"/>
         <h2 className="report-title">Report a problem</h2>
-        <p className="prose">Strike a record of what failed. Review it before it leaves this machine — nothing is sent anywhere.</p>
+        <p className="prose">{broken
+          ? 'Strike a record of what failed. Review it before it leaves this machine — nothing is sent anywhere.'
+          : 'Something not working right? Bundle your diagnostics and open an issue — nothing leaves this machine without you sending it.'}</p>
       </div>
       <div className="report-actions">
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(openIssue, () => 'OPENED THE ISSUE FORM IN YOUR BROWSER.')}>Open an issue</button>
@@ -774,6 +776,13 @@ function SettingsPage({ view, priceFloor, onPriceFloor }: { view: AppView; price
         </div>
         <OverlayPreviewToggle/>
       </div>
+    </section>
+
+    <section aria-label="Support">
+      <div className="procedure-head">
+        <h2 className="column-head">Support</h2>
+      </div>
+      <ReportBlock health={view.health} alwaysVisible/>
     </section>
   </section>
 }
