@@ -1314,9 +1314,9 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             if let Ok(mut runtime) = shared.lock() {
                 let _ = match log_health {
                     LogMonitorDiagnostic::Ready => runtime.core.record_log_monitor_ready(),
-                    LogMonitorDiagnostic::Unavailable => runtime
-                        .core
-                        .record_log_monitor_idle("Waiting for Warframe"),
+                    LogMonitorDiagnostic::Unavailable => {
+                        runtime.core.record_log_monitor_idle("Waiting for Warframe")
+                    }
                     LogMonitorDiagnostic::ReadFailed => runtime
                         .core
                         .record_log_monitor_failure("EE.log could not be read"),

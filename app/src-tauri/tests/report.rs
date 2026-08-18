@@ -369,7 +369,6 @@ fn error_tail_window_starts_at_a_line_boundary() {
     );
 }
 
-
 const ROW_JSON: &str = r#"{
   "game_reader": {"state": "degraded", "message": "Warframe is not running", "last_success": null},
   "log_monitor": {"state": "degraded", "message": "Waiting for Warframe", "last_success": null},

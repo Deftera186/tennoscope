@@ -23,7 +23,6 @@ pub const LOG_TAIL_WINDOW_BYTES: usize = 256 * 1024;
 /// shape of a failure without turning the paste into a log file.
 pub const LOG_TAIL_LINES: usize = 20;
 
-
 #[derive(Clone)]
 pub struct ReportMeta {
     pub version: String,
@@ -142,12 +141,10 @@ fn copy_ee_log(source: &Path, folder: &Path) -> std::io::Result<()> {
 pub fn sanitize_ee_log(text: &str) -> String {
     use std::sync::LazyLock;
 
-    static IPV4: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap()
-    });
-    static IPV6: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"(?i)\b[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){7}\b").unwrap()
-    });
+    static IPV4: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap());
+    static IPV6: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"(?i)\b[0-9a-f]{1,4}(?::[0-9a-f]{1,4}){7}\b").unwrap());
     static EMAIL: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}").unwrap()
     });
