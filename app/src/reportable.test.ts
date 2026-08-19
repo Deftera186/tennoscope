@@ -18,12 +18,16 @@ describe('reportBlockVisible', () => {
     expect(reportBlockVisible(h)).toBe(false)
   })
 
+  // The price dump row was written here as `degraded` with the "has not loaded yet" message, which
+  // the backend never produces: that message is only ever emitted as `idle` (phase_one), and the
+  // row's two degraded messages both name a real failure. Corrected to the state a fresh boot
+  // actually reports.
   it('ignores the whole fresh baseline: no game, no log, catalog still loading', () => {
     const h = health({
       game_reader: { state: 'degraded', message: 'Warframe is not running', last_success: null },
       log_monitor: { state: 'degraded', message: 'EE.log not found; retrying', last_success: null },
       catalog: { state: 'degraded', message: 'Item catalog has not loaded yet', last_success: null },
-      collection_prices: { state: 'degraded', message: 'Collection price dump has not loaded yet', last_success: null },
+      collection_prices: { state: 'idle', message: 'Collection price dump has not loaded yet', last_success: null },
     })
     expect(reportBlockVisible(h)).toBe(false)
   })
@@ -61,6 +65,35 @@ describe('reportBlockVisible', () => {
     const h = health({
       game_reader: { state: 'ready', message: 'ok', last_success: '123' },
       acquisition_stages: [{ stage: 'game_discovery', state: 'idle', message: 'Warframe is not running' }],
+    })
+    expect(reportBlockVisible(h)).toBe(false)
+  })
+
+  // Capture, market and collection prices sit idle until something uses them, so a degraded state
+  // already means a real failure. The backend carries the old `last_success` forward when they
+  // degrade, so the first failure of a session has no stamp -- and requiring one hid exactly the
+  // report worth having. A reward screen that never read cleanly stayed silent all session.
+  it('reports a degraded reward observer that has never read a screen', () => {
+    const h = health({
+      capture: { state: 'degraded', message: 'Structured reward records were incomplete', last_success: null },
+    })
+    expect(reportBlockVisible(h)).toBe(true)
+  })
+
+  it('reports degraded pricing that has never priced anything', () => {
+    expect(reportBlockVisible(health({
+      market: { state: 'degraded', message: 'Market offline', last_success: null },
+    }))).toBe(true)
+    expect(reportBlockVisible(health({
+      collection_prices: { state: 'degraded', message: 'Prices checked but not saved', last_success: null },
+    }))).toBe(true)
+  })
+
+  it('still ignores an idle reward observer waiting for its first screen', () => {
+    const h = health({
+      capture: { state: 'idle', message: 'OCR reward observer idle; no reward screen yet', last_success: null },
+      market: { state: 'idle', message: 'warframe.market pricing idle; nothing to price yet', last_success: null },
+      collection_prices: { state: 'idle', message: 'Collection price dump has not loaded yet', last_success: null },
     })
     expect(reportBlockVisible(h)).toBe(false)
   })
