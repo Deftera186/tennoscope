@@ -8,5 +8,11 @@ Common commands:
 pnpm install --frozen-lockfile
 pnpm check
 pnpm tauri dev
-pnpm tauri build --bundles appimage
+```
+
+Build Linux bundles through the repository-root helper rather than `pnpm tauri build`, which skips
+two AppImage post-processing steps:
+
+```bash
+../scripts/build-linux-bundles.sh appimage
 ```

@@ -172,9 +172,23 @@ sudo emerge app-text/tesseract                       # Gentoo
 ```bash
 corepack enable
 cd app && pnpm install --frozen-lockfile
-pnpm tauri build          # Linux: AppImage, .deb and .rpm in target/release/bundle/
-                          # Windows: an NSIS installer in target/release/bundle/nsis/
 ```
+
+On Linux, build through the helper — it produces AppImage, `.deb` and `.rpm` in
+`target/release/bundle/`:
+
+```bash
+cd .. && ./scripts/build-linux-bundles.sh appimage deb rpm
+```
+
+On Windows, run Tauri directly for an NSIS installer in `target/release/bundle/nsis/`:
+
+```bash
+pnpm tauri build
+```
+
+The AppImage needs post-processing that Tauri does not do on its own, so prefer the helper over
+`pnpm tauri build` on Linux; see [`packaging/appimage.md`](packaging/appimage.md).
 
 Per-distribution prerequisites and the packaging recipes are in
 [`packaging/`](packaging/README.md). Building needs Rust 1.85+, Node 20.19+, pnpm 10 and the

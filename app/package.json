@@ -13,7 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "oxlint && tsc --noEmit && vitest run",
-    "tauri": "tauri",
+    "tauri": "node ../scripts/tauri.mjs",
     "lint": "oxlint",
     "preview": "vite preview"
   },

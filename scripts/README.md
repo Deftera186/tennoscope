@@ -5,8 +5,12 @@ are **not** part of the application, not covered by CI, and not supported — th
 they are the reproducible evidence behind the claims in those documents, and because the memory
 path they exercise is still live code in `warframe-acquisition`.
 
-`build-linux-bundles.sh` is the exception: it is the real bundle helper, documented in
-[`packaging/`](../packaging).
+Two files are exceptions, being real build tooling rather than research instruments:
+
+- `build-linux-bundles.sh` — the bundle helper, documented in [`packaging/`](../packaging).
+- `tauri.mjs` — what `pnpm tauri` runs. It forwards to the Tauri CLI, setting `NO_STRIP` on Linux
+  because linuxdeploy's bundled `strip` predates RELR relocations and fails on distributions whose
+  toolchain emits `.relr.dyn`. An explicit `NO_STRIP` from the caller always wins.
 
 ## Requirements
 

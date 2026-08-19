@@ -26,15 +26,16 @@ cd app
 pnpm install --frozen-lockfile
 ```
 
-Build one bundle:
+Build one or more bundles from the repository root:
 
 ```bash
-pnpm tauri build --bundles appimage
-pnpm tauri build --bundles deb
-pnpm tauri build --bundles rpm
+./scripts/build-linux-bundles.sh appimage
+./scripts/build-linux-bundles.sh deb
+./scripts/build-linux-bundles.sh rpm
+./scripts/build-linux-bundles.sh appimage deb rpm
 ```
 
-Or use `./scripts/build-linux-bundles.sh appimage deb rpm` from the repository root. The helper never invokes `sudo`, installs packages, or changes system configuration.
+The helper never invokes `sudo`, installs packages, or changes system configuration. Prefer it over calling `pnpm tauri build --bundles appimage` directly: the AppImage needs two post-processing steps Tauri does not perform on its own, and the helper is what CI runs. See [appimage.md](appimage.md).
 
 Generated files appear beneath `target/release/bundle/` in target-specific directories.
 
