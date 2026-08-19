@@ -11,6 +11,30 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-19
+
+### Added
+
+- **A Support section on the Settings page.** The report actions Diagnostics shows only when it
+  detects a failure — *Open an issue*, *Copy diagnostics*, *Save logs* — are now always available
+  in Settings, so a problem that automatic detection misses can still be reported.
+
+### Changed
+
+- **Save logs now includes the game's own log.** The report folder carries a copy of EE.log
+  whenever the game is running (or was — the last known location is remembered), not just after a
+  failed acquisition stage. The copy is scrubbed of IP and email addresses so it is safe to attach
+  to a public issue.
+
+### Fixed
+
+- **A fresh launch no longer looks broken.** The game reader, log monitor and catalog reported
+  Degraded before Warframe had even started, which lit up the failure banner on an idle app. They
+  now say Idle until something actually goes wrong.
+- **Relaunching the game on Linux reconnects to the new process.** After a restart the app used to
+  attach to whichever game process it found first, which could be the stale one; it now picks the
+  newest.
+
 ## [0.5.7] - 2026-08-17
 
 ### Fixed
@@ -346,7 +370,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.5.7...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Deftera186/tennoscope/compare/v0.5.7...v0.6.0
 [0.5.7]: https://github.com/Deftera186/tennoscope/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/Deftera186/tennoscope/compare/v0.5.5...v0.5.6
 [0.5.5]: https://github.com/Deftera186/tennoscope/compare/v0.5.4...v0.5.5

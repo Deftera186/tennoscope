@@ -1,5 +1,5 @@
 pkgname=tennoscope
-pkgver=0.5.7
+pkgver=0.6.0
 pkgrel=1
 pkgdesc='Local-first Linux Warframe collection and relic companion'
 arch=('x86_64')
