@@ -2613,7 +2613,16 @@ pub fn run() {
                 tauri_plugin_log::Builder::default()
                     // Debug for our own crates only: `wry`, `zbus` and `rustls` at Debug would
                     // evict the reward diagnostics from the rotation window this exists to hold.
+                    //
+                    // `app_lib` is the one that matters and the one that was missing: the log
+                    // target is the *library* name from `[lib]`, not the package name, so naming
+                    // only `tennoscope` filtered out every reward diagnostic there is --
+                    // `[DEBUG-capture]`, `[DEBUG-card]` and `[DEBUG-poller]` all log from this
+                    // crate's lib. The 2026-08-20 report is what that costs: a wall of identical
+                    // `poll failed` warnings and no way to see which monitor was captured or what
+                    // the cards actually read. `tennoscope` stays because the binary logs under it.
                     .level(log::LevelFilter::Info)
+                    .level_for("app_lib", log::LevelFilter::Debug)
                     .level_for("tennoscope", log::LevelFilter::Debug)
                     .level_for("app_core", log::LevelFilter::Debug)
                     .level_for("warframe_acquisition", log::LevelFilter::Debug)
