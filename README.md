@@ -105,12 +105,27 @@ sudo emerge --ask games-util/tennoscope-bin
 builds from source instead; it needs `sys-apps/pnpm-bin` from `::guru` and a one-off
 `FEATURES="-network-sandbox"` because pnpm and cargo resolve their lockfiles during the build.
 
-### Arch
+### Arch, Manjaro, EndeavourOS, CachyOS
+
+Any Arch-based distribution with `pacman` and `makepkg`:
 
 ```bash
-curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch/PKGBUILD
-makepkg -si
+curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch/PKGBUILD && makepkg -si
 ```
+
+`makepkg -s` pulls the build dependencies itself, so `base-devel` is all you need beforehand.
+
+There is no AUR package yet, so `yay -S tennoscope` and `paru -S tennoscope` will not find it —
+AUR helpers install *from* the AUR, and the command above is the supported route. If you would
+rather your helper drive the build, point it at a directory holding the `PKGBUILD`:
+
+```bash
+paru -B .    # or: yay -B .
+```
+
+Building from source takes a while: it compiles the full Rust workspace. The
+[AppImage](#anything-else--appimage) or the `.deb` via
+[`debtap`](https://wiki.archlinux.org/title/Debtap) is faster if you just want to run it.
 
 ### Debian, Ubuntu, Fedora
 
