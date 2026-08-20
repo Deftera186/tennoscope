@@ -113,7 +113,7 @@ describe('report block on Diagnostics', () => {
     expect(screen.getByText('COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD OF THE ISSUE FORM.')).toBeVisible()
   })
 
-  it('save shows the folder path and the Discord note when EE.log is included', async () => {
+  it('save shows the folder path and the sanitized note when EE.log is included', async () => {
     const health = readyHealth()
     health.acquisition_stages = [{ stage: 'schema_validation', state: 'failed', message: 'bad' }]
     backend.getView.mockResolvedValue(makeView(health))
@@ -122,7 +122,7 @@ describe('report block on Diagnostics', () => {
     await user.click(within(screen.getByRole('group', { name: 'Report a problem' })).getByRole('button', { name: 'Save logs' }))
     expect(report.saveReport).toHaveBeenCalledOnce()
     expect(screen.getByText(/SAVED TO \/tmp\/reports\/2026-08-05-141233/)).toBeVisible()
-    expect(screen.getByText(/EE\.LOG INCLUDED \(SENSITIVE\)/)).toBeVisible()
+    expect(screen.getByText(/EE\.LOG INCLUDED \(SANITIZED\) — SAFE TO ATTACH TO THE ISSUE\./)).toBeVisible()
   })
 
   it('open issue calls openIssue', async () => {

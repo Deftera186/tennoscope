@@ -679,7 +679,7 @@ function ReportBlock({ health, alwaysVisible }: { health: AppView['health']; alw
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(openIssue, () => 'OPENED THE ISSUE FORM IN YOUR BROWSER.')}>Open an issue</button>
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(copyReport, () => 'COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD OF THE ISSUE FORM.')}>Copy diagnostics</button>
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(saveReport, result =>
-          `SAVED TO ${result?.folder_path ?? '…'}${result?.ee_log_included ? ' — EE.LOG INCLUDED (SENSITIVE) — SEND IT TO THE MAINTAINER ON DISCORD, NOT TO THE ISSUE.' : ''}`,
+          `SAVED TO ${result?.folder_path ?? '…'}${result?.ee_log_included ? ' — EE.LOG INCLUDED (SANITIZED) — SAFE TO ATTACH TO THE ISSUE.' : ''}`,
         )}>Save logs</button>
       </div>
       {status.kind === 'done' && <p className="report-status" role="status">{status.message}</p>}
