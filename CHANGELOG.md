@@ -11,6 +11,20 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-08-20
+
+### Fixed
+
+- **The reward overlay works again on a multi-monitor desktop.** When the game sat on any monitor
+  but the first, the card reader was given the first monitor's pixels, nothing matched the relic
+  pool, and no overlay appeared. The capture now reads the monitor the game actually sits on.
+- **The saved-report note matches the log it ships.** The EE.log copy in the report folder is
+  scrubbed of IP and email addresses and safe to attach to a public issue; the toast used to call
+  it sensitive and direct it to Discord instead.
+- **Reward diagnostics reach the report bundle again.** The debug records the reward reader
+  keeps — which monitor was captured, what each card read — were filtered out of the log file, so
+  a failed reward screen produced no evidence to fix it.
+
 ## [0.6.0] - 2026-08-19
 
 ### Added
@@ -370,7 +384,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/Deftera186/tennoscope/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Deftera186/tennoscope/compare/v0.5.7...v0.6.0
 [0.5.7]: https://github.com/Deftera186/tennoscope/compare/v0.5.6...v0.5.7
 [0.5.6]: https://github.com/Deftera186/tennoscope/compare/v0.5.5...v0.5.6

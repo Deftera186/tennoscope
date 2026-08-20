@@ -1,6 +1,6 @@
 # Maintainer: Deftera186 <https://github.com/Deftera186/tennoscope/issues>
 pkgname=tennoscope
-pkgver=0.6.0
+pkgver=0.6.1
 pkgrel=1
 pkgdesc='Local-first Linux Warframe collection and relic companion'
 arch=('x86_64')
