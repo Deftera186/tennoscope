@@ -1224,7 +1224,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         .lock()
         .map(|runtime| runtime.live_prices.clone())
         .unwrap_or_default();
-    let visual_pool: SharedRelicPool = Arc::new(Mutex::new(Vec::new()));
+    let visual_pool: SharedRelicPool = Arc::new(Mutex::new(RelicPool::default()));
     let mut reward_memory = LiveMemoryRewardState::new(RewardMemoryScanner::new(
         256 * 1024,
         768 * 1024 * 1024,
@@ -1352,6 +1352,12 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         if let Some(names) = visual_reads.lock().ok().and_then(|mut slot| slot.take())
             && !early_reward_resolved
         {
+            // The poller's read is the one with nothing checking it. The log-driven path verifies
+            // its cards against the reward EE.log states outright; this one publishes on the
+            // closed-set match alone, so the set it matched against is the only evidence there is.
+            if let Ok(pool) = visual_pool.lock() {
+                pool.trace_published(&names);
+            }
             publish_reward_result(
                 RewardSourceResult {
                     choices: RewardChoiceSet {
@@ -1546,10 +1552,8 @@ fn handle_reward_event(
             // still reaches it -- which is the common case, since the baseline fires on the second
             // of four relics.
             let entries = relic_pool_entries(&candidates, reward_catalog);
-            if let Ok(mut pool) = visual_pool.lock()
-                && entries.len() > pool.len()
-            {
-                *pool = entries.clone();
+            if let Ok(mut pool) = visual_pool.lock() {
+                pool.adopt(&relic_paths, entries.clone());
             }
             spawn_market_price_warm(&entries, price_cache);
             spawn_reward_screen_poller(
@@ -1709,6 +1713,71 @@ fn spawn_reward_screen_poller(
     );
 }
 
+/// The names the poller matches a card against, and the relics they came from.
+///
+/// The relics ride along because they are what says *which fissure* a pool describes. Length
+/// cannot: a pool is not better for being bigger, it is right or wrong depending on whose relics
+/// are on screen.
+#[derive(Clone, Debug, Default)]
+pub struct RelicPool {
+    relics: Vec<String>,
+    entries: Vec<RewardCatalogEntry>,
+}
+
+impl RelicPool {
+    /// Take on the pool this fissure's relics resolve to, replacing whatever was here.
+    ///
+    /// This used to keep whichever pool was longer, which is safe within a fissure and wrong
+    /// between them. `loaded_relics` is append-only until the reward screen shuts down and the
+    /// catalog is resolved once before the monitor loop, so a later baseline in the same fissure
+    /// can only ever resolve a superset -- the length test never did anything there. Across
+    /// fissures it did the only thing it could: kept the older, bigger pool.
+    ///
+    /// 2026-08-20 is what that cost. A 38-name pool from a fissure two hours earlier outlived the
+    /// application restart between them and displaced a 16-name one, and the closed-set match has
+    /// no way to say "not in the pool" -- it returns the nearest name it was given. All four cards
+    /// were published wrong, above the match floor, without a single failed read to show for it.
+    pub fn adopt(&mut self, relics: &[String], entries: Vec<RewardCatalogEntry>) {
+        self.relics = relics.to_vec();
+        self.entries = entries;
+    }
+
+    pub fn entries(&self) -> &[RewardCatalogEntry] {
+        &self.entries
+    }
+
+    /// Record what a published read was matched against.
+    ///
+    /// At Info, not Debug, and that is the whole reason it exists. The pool already announced
+    /// itself at `[DEBUG-poller] arm pool=38`, but the stable build's file target keeps `<= Info`
+    /// -- so on 2026-08-20 a player sent a report in which all four cards were wrong, all four
+    /// were above the match floor, nothing had failed, and there was no line anywhere saying the
+    /// pool belonged to a fissure two hours earlier. It had to be reconstructed afterwards by
+    /// reading the squad's relics out of the cached catalog by hand.
+    ///
+    /// The relic paths are trimmed to their names because the prefix is the same on every one and
+    /// four of them do not fit a log line otherwise.
+    pub fn trace_published(&self, names: &[String]) {
+        let relics = self
+            .relics
+            .iter()
+            .map(|path| path.rsplit('/').next().unwrap_or(path))
+            .collect::<Vec<_>>();
+        log::info!(
+            "reward: published cards={names:?} pool={} relics={relics:?}",
+            self.entries.len(),
+        );
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 /// The relic pool the poller matches against, shared because it is still growing when the poller
 /// starts.
 ///
@@ -1720,7 +1789,7 @@ fn spawn_reward_screen_poller(
 /// overlay never appeared. Observed live on 2026-07-27: armed at 11 names, the 17-name pool
 /// declined, and `Banshee Prime Neuroptics Blueprint` -- on screen, in the newer pool, not in the
 /// older one -- failed every attempt.
-pub type SharedRelicPool = Arc<Mutex<Vec<RewardCatalogEntry>>>;
+pub type SharedRelicPool = Arc<Mutex<RelicPool>>;
 
 /// How often the poller looks, before and after it has found the cards.
 ///
@@ -1798,7 +1867,10 @@ where
             // Re-read the pool every poll rather than capturing it at arm time. Squadmates' relics
             // are still loading when this thread starts, and a card missing from the pool fails the
             // whole screen.
-            let current = pool.lock().map(|pool| pool.clone()).unwrap_or_default();
+            let current = pool
+                .lock()
+                .map(|pool| pool.entries().to_vec())
+                .unwrap_or_default();
             if current.is_empty() {
                 std::thread::sleep(timing.interval);
                 continue;

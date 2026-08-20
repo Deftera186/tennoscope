@@ -11,6 +11,20 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Fixed
+
+- **The reward overlay no longer names rewards from an earlier fissure.** The relic pool a card is
+  matched against was only replaced when the new one held more names, so a squad carrying fewer
+  relics than a previous run inherited that run's pool — and the closed-set match cannot report
+  "not in the pool", only the nearest name it was given. On 2026-08-20 that published `Forma
+  Blueprint` as `2X Forma Blueprint`, `Lavos Prime Chassis Blueprint` as `Yareli Prime Chassis
+  Blueprint` and `Daikyu Prime Blueprint` as `Xaku Prime Blueprint`, all comfortably above the
+  match floor, with nothing in the log to say so. The pool now belongs to the fissure whose relics
+  built it.
+- **A published reward read says which relics it was matched against.** The pool was only ever
+  named at Debug, which stable builds filter out of the log file, so a report of wrong cards
+  carried no evidence of the pool behind them.
+
 ## [0.6.1] - 2026-08-20
 
 ### Fixed

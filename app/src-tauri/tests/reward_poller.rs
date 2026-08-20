@@ -16,7 +16,7 @@ use std::{
     time::Duration,
 };
 
-use app_lib::{PollerTiming, VisualRewardSource, spawn_reward_screen_poller_with};
+use app_lib::{PollerTiming, RelicPool, VisualRewardSource, spawn_reward_screen_poller_with};
 use warframe_acquisition::RewardCatalogEntry;
 
 mod common;
@@ -32,6 +32,13 @@ fn timing() -> PollerTiming {
     }
 }
 
+fn relics() -> Vec<String> {
+    ["/Lotus/Types/Game/Projections/T2VoidProjectionLexPrimeCBronze"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
 fn pool() -> Vec<RewardCatalogEntry> {
     ["Lex Prime Barrel", "Forma Blueprint"]
         .into_iter()
@@ -43,7 +50,9 @@ fn pool() -> Vec<RewardCatalogEntry> {
 }
 
 fn shared_pool() -> app_lib::SharedRelicPool {
-    Arc::new(Mutex::new(pool()))
+    let mut relic_pool = RelicPool::default();
+    relic_pool.adopt(&relics(), pool());
+    Arc::new(Mutex::new(relic_pool))
 }
 
 fn cards() -> Vec<String> {
@@ -241,7 +250,7 @@ fn an_empty_pool_does_not_arm() {
     let polling = Arc::new(AtomicBool::new(false));
     let gone = Arc::new(AtomicBool::new(false));
     let handle = spawn_reward_screen_poller_with(
-        &Arc::new(Mutex::new(Vec::new())),
+        &Arc::new(Mutex::new(RelicPool::default())),
         &reads,
         &polling,
         &gone,
@@ -333,10 +342,14 @@ fn a_relic_that_loads_after_arming_still_reaches_the_running_poller() {
             .expect("poller declined to arm");
 
     // The third squad member's relic finishes loading after the poller is already running.
-    shared.lock().unwrap().push(RewardCatalogEntry {
+    let mut later = relics();
+    later.push("/Lotus/Types/Game/Projections/T2VoidProjectionLatePrimeABronze".to_owned());
+    let mut grown = pool();
+    grown.push(RewardCatalogEntry {
         name: "Late Prime Blueprint".to_owned(),
         ducats: 15,
     });
+    shared.lock().unwrap().adopt(&later, grown);
 
     handle.join().expect("poller thread panicked");
     assert_eq!(
