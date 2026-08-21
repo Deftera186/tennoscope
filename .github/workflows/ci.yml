@@ -83,14 +83,27 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The reward tests shell out to tesseract on every platform. Chocolatey appends to the
-      # *machine* PATH, which a step already running never sees -- every later step inherits the
-      # environment captured when the job started, so the tests reported "tesseract is not
-      # available" against an installed tesseract. `$GITHUB_PATH` is the one that reaches them.
-      - name: Install tesseract
+      # The reward tests shell out to tesseract on every platform. Windows gets the same portable
+      # UB-Mannheim build the installer bundles -- scripts/vendor-windows-tesseract.ps1 -- rather
+      # than a Chocolatey package, which makes CI read through the engine players actually run.
+      # It also sidesteps community.chocolatey.org: on 2026-08-21 it answered choco's resolver
+      # with 504s, choco reported "installed 0/0 packages", exited 0 anyway, and the job spent
+      # ten minutes building before eight reward tests failed with "tesseract is not available".
+      #
+      # A step already running never sees a PATH edit -- every later step inherits the environment
+      # captured when the job started -- so $GITHUB_PATH is the one that reaches the tests. They
+      # resolve bare `tesseract` off it with no resource directory, so the OCR path cannot hand
+      # the engine --tessdata-dir; TESSDATA_PREFIX is what sends it to the training data sitting
+      # beside the executable.
+      - name: Vendor tesseract
+        run: ./scripts/vendor-windows-tesseract.ps1
+        shell: pwsh
+
+      - name: Put tesseract on PATH
         run: |
-          choco install --no-progress -y tesseract
-          "C:\Program Files\Tesseract-OCR" >> $env:GITHUB_PATH
+          $vendor = Resolve-Path "app/src-tauri/vendor/tesseract"
+          "$vendor" >> $env:GITHUB_PATH
+          "TESSDATA_PREFIX=$vendor" >> $env:GITHUB_ENV
         shell: pwsh
 
       - uses: Swatinem/rust-cache@v2
