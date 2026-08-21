@@ -1,8 +1,8 @@
 use std::{cell::Cell, fs};
 use tempfile::tempdir;
 use warframe_acquisition::{
-    CatalogCache, CatalogFetch, CatalogLoadSource, CatalogSource, RelicCatalogCache,
-    RelicCatalogSource,
+    CatalogCache, CatalogCacheError, CatalogFetch, CatalogLoadSource, CatalogSource,
+    RelicCatalogCache, RelicCatalogSource,
 };
 
 const VALID: &[u8] = br#"[{"uniqueName":"/Lotus/Powersuits/Test/Test","name":"Test Frame","type":"Warframe","category":"Warframes","masterable":true}]"#;
@@ -199,15 +199,23 @@ fn concurrent_writers_leave_one_whole_valid_generation() {
         for now in [100, 200] {
             let path = path.clone();
             scope.spawn(move || {
-                CatalogCache::new(path)
-                    .load(
-                        &Source {
-                            result: Ok(VALID.to_vec()),
-                            calls: Cell::new(0),
-                        },
-                        now,
-                    )
-                    .unwrap();
+                let outcome = CatalogCache::new(path).load(
+                    &Source {
+                        result: Ok(VALID.to_vec()),
+                        calls: Cell::new(0),
+                    },
+                    now,
+                );
+                // Either writer may lose the race to replace the generation file. On Windows
+                // the replace of a destination being replaced at the same moment fails
+                // transiently (MoveFileExW), and the loser reporting CacheWrite is a
+                // legitimate outcome -- the invariant under test is that one whole valid
+                // generation survives, asserted below. Any other failure is a bug.
+                if let Err(error) = outcome
+                    && !matches!(error, CatalogCacheError::CacheWrite)
+                {
+                    panic!("unexpected cache error under concurrent writers: {error}");
+                }
             });
         }
     });
