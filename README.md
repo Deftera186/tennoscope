@@ -2,7 +2,7 @@
 
 # TennoScope
 
-**A free, Rust-based Warframe companion for Linux, Windows and the Steam Deck.
+**A free and open-source, Rust-based Warframe companion for Linux, Windows and the Steam Deck.
 No Overwolf, no account, no telemetry.**
 
 [![CI](https://github.com/Deftera186/tennoscope/actions/workflows/ci.yml/badge.svg)](https://github.com/Deftera186/tennoscope/actions/workflows/ci.yml)
