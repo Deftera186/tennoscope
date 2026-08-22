@@ -11,6 +11,8 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-22
+
 ### Added
 
 - **Prime parts carry their ducat value in the collection, beside their platinum.** The
@@ -74,8 +76,6 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   built item, not the parts held), Ayatan sculptures (socketed star counts no collection row
   knows), and rivens and the 19 mods shared between `regular`/`atragraph` variants (one market
   entry, and the path cannot say which variant is held).
-
-### Fixed
 
 - **The reward overlay no longer names rewards from an earlier fissure.** The relic pool a card is
   matched against was only replaced when the new one held more names, so a squad carrying fewer
@@ -462,7 +462,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Deftera186/tennoscope/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Deftera186/tennoscope/compare/v0.5.7...v0.6.0
 [0.5.7]: https://github.com/Deftera186/tennoscope/compare/v0.5.6...v0.5.7
