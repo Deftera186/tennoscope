@@ -1093,6 +1093,12 @@ pub struct ReconciledOrder {
     /// warframe.market's English name for the item, for the row. Absent only if the item table is
     /// missing the entry entirely.
     pub name: Option<String>,
+    /// The collection row this order's item resolves to, rank suffix or relic tier included, or
+    /// `None` for an order that names no one row -- a set, a sculpture, a retired item, a
+    /// part-ranked copy. The interface's only way to say which holding a live listing belongs to:
+    /// the order's `item_id` and the row's key are namespaces that share nothing, and only the
+    /// item table joins them.
+    pub row_id: Option<String>,
     pub status: OrderStatus,
 }
 
@@ -1124,6 +1130,7 @@ pub fn reconcile_orders(
         .map(|order| ReconciledOrder {
             order: order.clone(),
             name: items.name(&order.item_id).map(str::to_owned),
+            row_id: items.row_of(&order.item_id, order.rank, order.subtype.as_deref()),
             status: status_for(order, items, &owned, snapshot),
         })
         .collect()

@@ -24,6 +24,7 @@ const ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
      "i18n":{"en":{"name":"Braton Prime Blueprint"}}},
     {"id":"54ca39abe7798915c1c11e10",
      "gameRef":"/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol",
+     "maxRank":5,
      "i18n":{"en":{"name":"Creeping Bullseye"}}},
     {"id":"56783f24cbfa8f0432dd89a2",
      "gameRef":"/Lotus/Types/Game/Projections/T4VoidProjectionE",
@@ -318,4 +319,60 @@ fn a_set_order_is_unverifiable_rather_than_missing() {
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
+}
+
+/// The badge on a collection card is a join the frontend cannot make on its own: an order names the
+/// market's opaque id and a card names a `/Lotus/` row, and the two namespaces share nothing. The
+/// reconciliation already holds the item table, so it names the row for the interface -- including
+/// for orders it declines to judge, because an unverifiable order is still a live listing whose
+/// holding the card should be able to speak about.
+#[test]
+fn a_reconciled_order_names_the_collection_row_it_belongs_to() {
+    let mut ranked = sell_order(MOD_ID, 1, "2026-07-30T10:00:00Z");
+    ranked.rank = Some(5);
+    let mut refinement = sell_order(RELIC_ID, 1, "2026-07-30T10:00:00Z");
+    refinement.subtype = Some("intact".to_owned());
+    let orders = vec![
+        sell_order(BRATON_ID, 2, "2026-07-30T10:00:00Z"),
+        ranked,
+        refinement,
+    ];
+
+    let reconciled = reconcile_orders(
+        &orders,
+        &items(),
+        &Collection::default(),
+        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+    );
+
+    assert_eq!(reconciled[0].row_id.as_deref(), Some(BRATON_PATH));
+    assert_eq!(
+        reconciled[1].row_id.as_deref(),
+        Some(&*format!("{MOD_PATH}#5"))
+    );
+    assert_eq!(
+        reconciled[2].row_id.as_deref(),
+        Some("/Lotus/Types/Game/Projections/T4VoidProjectionEBronze")
+    );
+}
+
+/// The row an order cannot name: a set, whose path is the built item rather than the parts held,
+/// and a retired item the market publishes no path for. Each carries no row, and the interface
+/// offers neither badge nor edit on the strength of a row that does not exist.
+#[test]
+fn an_order_that_names_no_row_says_so() {
+    let orders = vec![
+        sell_order(SET_ID, 1, "2026-07-30T10:00:00Z"),
+        sell_order(RETIRED_ID, 1, "2026-07-30T10:00:00Z"),
+    ];
+
+    let reconciled = reconcile_orders(
+        &orders,
+        &items(),
+        &Collection::default(),
+        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+    );
+
+    assert_eq!(reconciled[0].row_id, None);
+    assert_eq!(reconciled[1].row_id, None);
 }

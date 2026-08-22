@@ -25,7 +25,10 @@ const ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
     {"id":"54a74454e779892d5e5155ff","slug":"streamline",
      "gameRef":"/Lotus/Upgrades/Mods/Warframe/AvatarAbilityEfficiencyMod",
      "tags":["mod","warframe","rare"],"subtypes":["regular","atragraph"],"maxRank":5,
-     "i18n":{"en":{"name":"Streamline"}}}
+     "i18n":{"en":{"name":"Streamline"}}},
+    {"id":"54a73e65e779893a797ffef1","slug":"braton_prime_set",
+     "gameRef":"/Lotus/Weapons/Tenno/Rifle/BratonPrime","tags":["set"],
+     "i18n":{"en":{"name":"Braton Prime Set"}}}
 ],"error":null}"#;
 
 #[test]
@@ -70,7 +73,7 @@ fn the_english_name_is_kept_for_display() {
         items.name("54ca39abe7798915c1c11e10"),
         Some("Creeping Bullseye")
     );
-    assert_eq!(items.len(), 6);
+    assert_eq!(items.len(), 7);
 }
 
 #[test]
@@ -87,7 +90,7 @@ fn fetching_asks_the_items_route() {
 
     let items = MarketItems::fetch(&transport).expect("items fetch");
 
-    assert_eq!(items.len(), 6);
+    assert_eq!(items.len(), 7);
     let seen = transport.seen();
     assert!(seen[0].url.ends_with("/v2/items"), "url: {}", seen[0].url);
     // The item table is public. Sending the credential with it would spend the account's identity
@@ -243,6 +246,109 @@ fn a_path_shared_by_subtypes_that_are_not_refinements_resolves_to_nothing() {
             "/Lotus/Upgrades/Mods/Warframe/AvatarAbilityEfficiencyMod",
             false
         ),
+        None
+    );
+}
+
+/// The badge on a collection card needs the opposite direction from selling: the player is looking
+/// at a live order, and the row it belongs to is what the interface has to name. The order carries
+/// the market's opaque id and its contextual fields; the row is the `/Lotus/` path those resolve
+/// back to -- the exact reverse of `listing_for`, and a join nothing else can make, because the
+/// order's id namespace and the collection's share nothing.
+#[test]
+fn a_plain_order_names_the_row_of_its_path() {
+    let items = MarketItems::from_response(ITEMS.as_bytes()).expect("items parse");
+
+    assert_eq!(
+        items.row_of("54a73e65e779893a797fff33", None, None),
+        Some("/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint".to_owned())
+    );
+}
+
+/// The two ranks the market quotes are the two rows an order can name back: rank zero is the
+/// unranked stack, the ceiling is the ranked copy's own row. A part-ranked order names no row the
+/// collection holds, and a ranked card whose order carries no rank names none either.
+#[test]
+fn a_mod_order_names_the_row_of_its_rank() {
+    let items = MarketItems::from_response(ITEMS.as_bytes()).expect("items parse");
+    const MOD: &str = "/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol";
+
+    assert_eq!(
+        items.row_of("54ca39abe7798915c1c11e10", Some(0), None),
+        Some(MOD.to_owned())
+    );
+    assert_eq!(
+        items.row_of("54ca39abe7798915c1c11e10", Some(5), None),
+        Some(format!("{MOD}#5"))
+    );
+    assert_eq!(
+        items.row_of("54ca39abe7798915c1c11e10", Some(3), None),
+        None
+    );
+    assert_eq!(items.row_of("54ca39abe7798915c1c11e10", None, None), None);
+}
+
+/// A relic's order carries its refinement as a subtype, and its row carries it as the metal tier on
+/// the end of the path. A subtype the entry does not publish is not a refinement at all, and an
+/// order without one names the base projection path, which is a row the collection never holds.
+#[test]
+fn a_relic_order_names_the_row_of_its_refinement() {
+    const RELIC: &str = r#"{"apiVersion":"0.25.0","data":[
+        {"id":"6054dd685221e30057500f63","slug":"axi_a1_relic",
+         "gameRef":"/Lotus/Types/Game/Projections/T4VoidProjectionE","tags":["relic","axi"],
+         "bulkTradable":true,"subtypes":["intact","exceptional","flawless","radiant"],
+         "i18n":{"en":{"name":"Axi A1 Relic"}}}
+    ],"error":null}"#;
+    let items = MarketItems::from_response(RELIC.as_bytes()).expect("items parse");
+    const BASE: &str = "/Lotus/Types/Game/Projections/T4VoidProjectionE";
+
+    assert_eq!(
+        items.row_of("6054dd685221e30057500f63", None, Some("intact")),
+        Some(format!("{BASE}Bronze"))
+    );
+    assert_eq!(
+        items.row_of("6054dd685221e30057500f63", None, Some("radiant")),
+        Some(format!("{BASE}Platinum"))
+    );
+    assert_eq!(items.row_of("6054dd685221e30057500f63", None, None), None);
+    assert_eq!(
+        items.row_of("6054dd685221e30057500f63", None, Some("gilded")),
+        None
+    );
+}
+
+/// Subtypes that are not refinements -- the atragraph mods -- are a variant split the path cannot
+/// resolve in either direction: no row can be listed from here, and no order can be attributed to
+/// one.
+#[test]
+fn an_order_on_a_path_shared_by_subtypes_that_are_not_refinements_names_no_row() {
+    let items = MarketItems::from_response(ITEMS.as_bytes()).expect("items parse");
+
+    assert_eq!(
+        items.row_of("54a74454e779892d5e5155ff", None, Some("regular")),
+        None
+    );
+}
+
+/// What cannot be named, in one place: a sculpture whose socketed stars no row knows, a retired
+/// item with no path at all, an id the table has never heard of, and a plain order carrying rank or
+/// subtype context it has no business carrying. Each resolves to nothing -- the row-equivalent of
+/// the unverifiable state: no badge, no claim, no edit.
+#[test]
+fn what_no_row_can_be_named_for_resolves_to_nothing() {
+    let items = MarketItems::from_response(ITEMS.as_bytes()).expect("items parse");
+
+    assert_eq!(items.row_of("57e91e65c76eb74c087f492f", None, None), None);
+    assert_eq!(items.row_of("5program0000000000000000", None, None), None);
+    assert_eq!(items.row_of("not-an-item-id", None, None), None);
+    // A set's path names the built item, and the collection carries only its parts.
+    assert_eq!(items.row_of("54a73e65e779893a797ffef1", None, None), None);
+    assert_eq!(
+        items.row_of("54a73e65e779893a797fff33", Some(2), None),
+        None
+    );
+    assert_eq!(
+        items.row_of("54a73e65e779893a797fff33", None, Some("intact")),
         None
     );
 }

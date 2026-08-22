@@ -233,6 +233,73 @@ impl MarketItems {
             .map(|(id, entry)| (id.as_str(), entry))
     }
 
+    /// The collection row an order names, when it names exactly one.
+    ///
+    /// The reverse of `listing_for`: selling goes row → listing, and this goes listing → row, so
+    /// the interface can say which holding a live order belongs to -- the join no other party can
+    /// make, because an order's `itemId` and a collection row's key are namespaces that share
+    /// nothing. The rank and subtype an order carries are decoded against the entry's own
+    /// published dimensions, so an order can only ever name a row in the vocabulary the market
+    /// itself uses for that item.
+    ///
+    /// `None` is the row-equivalent of the unverifiable state and is returned for every order that
+    /// does not name one row exactly: an unknown id, a retired item with no path, a sculpture, a
+    /// variant split the path cannot resolve, a part-ranked copy, a contextual field the item does
+    /// not support. No badge, no claim, no edit -- same restraint as `status_for`.
+    ///
+    /// ponytail: same linear scan profile as `listing_for`.
+    pub fn row_of(
+        &self,
+        item_id: &str,
+        rank: Option<u32>,
+        subtype: Option<&str>,
+    ) -> Option<String> {
+        let entry = self.entries.get(item_id)?;
+        // Star counts are known only to the sculpture itself; its orders name no row.
+        if entry.star_counted {
+            return None;
+        }
+        // A set's path names the built item; the rows a seller holds are its parts. Same refusal
+        // `path_is_comparable` makes, read from the entry's own name, so a set order is never
+        // attributed to a row the collection cannot carry.
+        if entry
+            .name
+            .as_deref()
+            .is_some_and(|name| name.trim().ends_with(" Set"))
+        {
+            return None;
+        }
+        if !entry.subtypes.is_empty() {
+            // Only a relic's subtypes are refinements of one path; anything else is a variant
+            // split, and the subtype cannot say which row the order is about.
+            let path = entry.catalog_path.as_deref()?;
+            if !path.contains("/Projections/") {
+                return None;
+            }
+            let subtype = subtype?;
+            if !entry.subtypes.iter().any(|published| published == subtype) {
+                return None;
+            }
+            let tier = tier_suffix(subtype)?;
+            return Some(format!("{path}{tier}"));
+        }
+        let path = entry.catalog_path.as_deref()?;
+        // Contextual fields on an entry that publishes none are not this collection's row.
+        if subtype.is_some() {
+            return None;
+        }
+        match (entry.max_rank, rank) {
+            // A plain item's row is the path itself.
+            (None, None) => Some(path.to_owned()),
+            // The unranked stack is the bare path; a maxed copy is its own ranked row.
+            (Some(_), Some(0)) => Some(path.to_owned()),
+            (Some(max), Some(rank)) if rank == max => Some(format!("{path}#{rank}")),
+            // A part-ranked copy is quoted at neither end; a rank on an unranked item or the
+            // absence of one on a ranked card names nothing the collection holds.
+            _ => None,
+        }
+    }
+
     pub fn name(&self, item_id: &str) -> Option<&str> {
         self.entries.get(item_id)?.name.as_deref()
     }
@@ -283,24 +350,42 @@ impl ItemEntry {
     }
 }
 
+/// A relic refinement's two vocabularies: the metal tier the game suffixes onto the path, and the
+/// lowercase subtype the market publishes. These four pairs are the whole vocabulary in both
+/// directions.
+const REFINEMENTS: [(&str, &str); 4] = [
+    ("Bronze", "intact"),
+    ("Silver", "exceptional"),
+    ("Gold", "flawless"),
+    ("Platinum", "radiant"),
+];
+
 /// The base projection path and the market subtype a relic refinement path names, or `None` for
 /// any path that is not one.
 ///
 /// The game writes a relic's refinement as a metal tier on the end of the path; the market
-/// publishes it as a lowercase subtype. These four pairs are the whole vocabulary.
+/// publishes it as a lowercase subtype.
 fn refinement_of(path: &str) -> Option<(&str, &str)> {
     if !path.contains("/Projections/") {
         return None;
     }
+    REFINEMENTS
+        .into_iter()
+        .find_map(|(suffix, subtype)| path.strip_suffix(suffix).map(|base| (base, subtype)))
+}
+
+/// The metal tier a market subtype puts back on a relic's path -- the reverse direction of
+/// `refinement_of`, over the same vocabulary.
+fn tier_suffix(subtype: &str) -> Option<&'static str> {
     const TIERS: [(&str, &str); 4] = [
-        ("Bronze", "intact"),
-        ("Silver", "exceptional"),
-        ("Gold", "flawless"),
-        ("Platinum", "radiant"),
+        ("intact", "Bronze"),
+        ("exceptional", "Silver"),
+        ("flawless", "Gold"),
+        ("radiant", "Platinum"),
     ];
     TIERS
         .into_iter()
-        .find_map(|(suffix, subtype)| path.strip_suffix(suffix).map(|base| (base, subtype)))
+        .find_map(|(word, suffix)| (word == subtype).then_some(suffix))
 }
 
 /// Whether a market item's `gameRef` names the same thing a collection row names.
