@@ -250,8 +250,8 @@ function App() {
     ordersOperation(() => setOrderQuantity(orderId), 'Could not lower that listing.')
   const ordersPresence = (status: Presence | null, auto: boolean) =>
     ordersOperation(() => setMarketPresence(status, auto), 'Could not change your market status.')
-  const ordersSell = (catalogPath: string, platinum: number, quantity: number, visible: boolean) =>
-    ordersOperation(() => createOrder(catalogPath, platinum, quantity, visible), 'Could not publish that listing.')
+  const ordersSell = (collectionId: string, platinum: number, quantity: number, visible: boolean) =>
+    ordersOperation(() => createOrder(collectionId, platinum, quantity, visible), 'Could not publish that listing.')
 
   function openPage(next: Page) {
     setPage(next)

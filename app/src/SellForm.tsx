@@ -1,6 +1,5 @@
 import { useState } from 'react'
 import type { CollectionItem } from './backend'
-import { catalogPath } from './orders'
 
 /**
  * Publishing one sell listing, from wherever the player is standing.
@@ -12,8 +11,12 @@ import { catalogPath } from './orders'
  * The price is prefilled from whatever quote the card already carries and the quantity from one,
  * not from the whole stack -- a form that offers to sell everything by default is a form that
  * eventually does.
+ *
+ * The item is named by its whole row id, rank suffix or relic tier included: the row is what the
+ * backend resolves the listing's rank, subtype and per-trade size from, and the form asks for
+ * none of them because the row already knows.
  */
-export type SellHandler = (catalogPath: string, platinum: number, quantity: number, visible: boolean) => Promise<void>
+export type SellHandler = (collectionId: string, platinum: number, quantity: number, visible: boolean) => Promise<void>
 
 export function SellForm({ item, busy, onSell, onDone }: {
   item: CollectionItem
@@ -38,7 +41,7 @@ export function SellForm({ item, busy, onSell, onDone }: {
     onSubmit={async event => {
       event.preventDefault()
       if (!valid) return
-      await onSell(catalogPath(item.id), price, count, visible)
+      await onSell(item.id, price, count, visible)
       onDone()
     }}
   >

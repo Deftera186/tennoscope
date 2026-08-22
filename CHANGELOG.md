@@ -11,6 +11,20 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Added
+
+- **Mods, arcanes and relics can be listed for sale.** The Sell button now appears for every
+  collection row warframe.market can actually trade: an unranked stack and a maxed copy of a mod
+  or arcane (the two ranks the market quotes — a part-ranked copy between them is still not
+  offered, because there is no rank the API would accept for it), and each of a relic's four
+  refinements. The row itself carries what the listing needs — the rank in its key, the
+  refinement in its path — so the form still asks for only a price and a quantity, and the
+  backend derives the rest. A bulk-tradable's per-trade size is sent as one; batch sizes remain
+  an edit on the market site. Still not offered, on purpose: sets (the market entry names the
+  built item, not the parts held), Ayatan sculptures (socketed star counts no collection row
+  knows), and rivens and the 19 mods shared between `regular`/`atragraph` variants (one market
+  entry, and the path cannot say which variant is held).
+
 ### Fixed
 
 - **The reward overlay no longer names rewards from an earlier fissure.** The relic pool a card is

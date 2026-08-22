@@ -333,7 +333,7 @@ function NewListing({ items, listable, busy, onSell }: {
               </button>
             </li>)}
           </ul>
-          : <p className="pick-empty">Nothing sellable here matches that. Relics, sets and ranked items cannot be listed from TennoScope.</p>)}
+          : <p className="pick-empty">Nothing sellable here matches that. Sets, part-ranked copies and star-set Ayatan sculptures cannot be listed from TennoScope.</p>)}
         {matches.length > shown.length && <p className="pick-more">{matches.length - shown.length} more match — keep typing to narrow it.</p>}
       </>}
   </div>

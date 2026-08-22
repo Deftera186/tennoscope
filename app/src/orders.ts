@@ -86,12 +86,11 @@ export function backingLabel(backing: CredentialBacking | undefined): string {
   return backing === 'database' ? 'Local database file' : 'Not stored'
 }
 
-/** The collection id without the rank suffix the market never sees. */
-export function catalogPath(id: string): string {
-  return id.split('#')[0]
-}
-
-/** Whether this item can be listed from here at all: held, and on the account's listable set. */
+/** Whether this item can be listed from here at all: held, and a row the account may publish.
+ *
+ * Row ids, not paths, because the rows are what a listing names: the backend resolves an unranked
+ * stack and a maxed copy to two different listings, and a part-ranked copy to none. Matching the
+ * path would offer one of them for all three. */
 export function isListable(item: CollectionItem, listable: readonly string[]): boolean {
-  return item.quantity > 0 && listable.includes(catalogPath(item.id))
+  return item.quantity > 0 && listable.includes(item.id)
 }

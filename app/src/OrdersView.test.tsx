@@ -286,6 +286,36 @@ describe('publishing a listing', () => {
     expect(handlers.onSell).toHaveBeenCalledWith(braton.id, 14, 2, true)
   })
 
+  // The whole row id, rank suffix included: it is what the backend resolves the listing's rank
+  // from, and a path with the suffix stripped would name the unranked stack instead.
+  it('sends the whole row id for a ranked copy', async () => {
+    const user = userEvent.setup()
+    const serration: CollectionItem = {
+      id: '/Lotus/Upgrades/Mods/RifleSerrationMod#10',
+      name: 'Serration',
+      category: 'mod',
+      quantity: 1,
+      mastered: false,
+      platinum: 48,
+      live: false,
+      priceable: true,
+    }
+    render(
+      <OrdersView
+        account={account({ listable: [serration.id] })}
+        {...handlers}
+        items={[serration]}
+        busy={false}
+        error={null}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /new listing/i }))
+    await user.type(screen.getByLabelText('Item'), 'serr')
+    await user.click(screen.getByRole('button', { name: /serration/i }))
+    await user.click(screen.getByRole('button', { name: /list for sale/i }))
+    expect(handlers.onSell).toHaveBeenCalledWith(serration.id, 48, 1, true)
+  })
+
   it('lists nothing until the query narrows the collection', async () => {
     const user = userEvent.setup()
     render(

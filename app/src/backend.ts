@@ -84,5 +84,5 @@ export const removeOrder = (orderId: string) => invoke<AppView>('remove_order', 
 export const setOrderQuantity = (orderId: string) => invoke<AppView>('set_order_quantity', { orderId })
 export const setMarketPresence = (status: Presence | null, auto: boolean) =>
   invoke<AppView>('set_market_presence', { status, auto })
-export const createOrder = (catalogPath: string, platinum: number, quantity: number, visible: boolean) =>
-  invoke<AppView>('create_order', { catalogPath, platinum, quantity, visible })
+export const createOrder = (collectionId: string, platinum: number, quantity: number, visible: boolean) =>
+  invoke<AppView>('create_order', { collectionId, platinum, quantity, visible })

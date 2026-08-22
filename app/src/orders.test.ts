@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ReconciledOrder } from './backend'
-import { backingLabel, fixLabel, isFlagged, listedOrderFor, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
+import type { CollectionItem, ReconciledOrder } from './backend'
+import { backingLabel, fixLabel, isFlagged, isListable, listedOrderFor, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
 
 function entry(
   id: string,
@@ -21,6 +21,19 @@ function entry(
     },
     name: 'Braton Prime Blueprint',
     status,
+  }
+}
+
+function held(id: string, overrides: Partial<CollectionItem> = {}): CollectionItem {
+  return {
+    id,
+    name: 'Item',
+    category: 'mod',
+    quantity: 1,
+    mastered: false,
+    live: false,
+    priceable: true,
+    ...overrides,
   }
 }
 
@@ -114,5 +127,22 @@ describe('what a row contributes to the listed total', () => {
     expect(orderValue(buying)).toBeNull()
     expect(uncountedReason(buying)).toBe('Buy order')
     expect(uncountedReason(entry('a', { state: 'ok' }).order)).toBeNull()
+  })
+})
+
+describe('what can be listed', () => {
+  it('offers a row the account may publish, held', () => {
+    expect(isListable(held('/Lotus/Upgrades/serration'), ['/Lotus/Upgrades/serration'])).toBe(true)
+    expect(isListable(held('/Lotus/Upgrades/serration#10'), ['/Lotus/Upgrades/serration#10'])).toBe(true)
+  })
+
+  it('offers the row, not the card: an unranked stack is not a maxed copy', () => {
+    // The backend names rows because the rows are what differ -- rank 0 and the ceiling are two
+    // listings, and conflating them here would offer one for the other.
+    expect(isListable(held('/Lotus/Upgrades/serration'), ['/Lotus/Upgrades/serration#10'])).toBe(false)
+  })
+
+  it('offers nothing for a row with nothing held', () => {
+    expect(isListable(held('/Lotus/Upgrades/serration', { quantity: 0 }), ['/Lotus/Upgrades/serration'])).toBe(false)
   })
 })
