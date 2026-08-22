@@ -283,6 +283,53 @@ fn warframe_part_blueprints_find_their_ducat_value() {
     assert_eq!(ducats("Ayatan Amber Star"), None);
 }
 
+/// The collection joins ducats onto its rows by catalog path, the same route enrichment already
+/// takes, so the index hands over a table keyed that way. Prime parents and plain equipment
+/// resolve in the index but hold no ducats of their own: only the components do.
+#[test]
+fn builds_a_ducat_table_keyed_by_catalog_path() {
+    let catalog = CatalogIndex::from_wfcd_json(&wfcd_fixture()).unwrap();
+    let table = catalog.ducat_table();
+
+    assert_eq!(
+        table.get("/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeBowString"),
+        Some(15)
+    );
+    assert_eq!(
+        table.get("/Lotus/Types/Recipes/Kubrow/Collars/PrimeKubrowCollarABlueprint"),
+        Some(45)
+    );
+    assert_eq!(
+        table.get("/Lotus/Weapons/Tenno/Bows/PrimeHuntingBow"),
+        None,
+        "the parent bow is not a ducat holding"
+    );
+    assert_eq!(
+        table.get("/Lotus/Weapons/Tenno/Rifle/Braton"),
+        None,
+        "plain equipment never was"
+    );
+    assert_eq!(table.get("/Lotus/Nothing/At/All"), None);
+}
+
+/// Zero ducats is a published value, not an absence -- Forma Blueprint carries it. But a card that
+/// reads ⛁ 0 says nothing its silence does not, and the collection's ducat total must not grow a
+/// column of zeroes, so zero stays out of the table and absence is the only reading it gets.
+#[test]
+fn a_zero_ducat_entry_is_absent_from_the_table() {
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[{"uniqueName":"/Lotus/Types/Items/MiscItems/FormaBlueprint","name":"Forma Blueprint","type":"Blueprint","category":"Misc","components":[]}]"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        catalog
+            .ducat_table()
+            .get("/Lotus/Types/Items/MiscItems/FormaBlueprint"),
+        None
+    );
+}
+
 /// WFCD names an Archon shard with the game's inline icon tag and gives a Tauforged shard only the
 /// glow layer of its art, which renders alone as a coloured smudge.
 #[test]

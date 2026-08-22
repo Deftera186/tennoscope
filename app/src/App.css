@@ -185,6 +185,11 @@
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
   border-block: 1px solid var(--rule);
 }
+/* The ducat cell is a fifth struck figure, not a swap for one of the four, so the band widens
+   rather than reflows. Five columns have less air each, so the figures narrow their clamp
+   together -- singling one out would make the newcomer read as a lesser reading. */
+.assay-band.with-ducats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.assay-band.with-ducats .band-figure { font-size: clamp(2.1rem, 4vw, 3.4rem); }
 .band-cell { padding: var(--course) var(--step) var(--course) 0; }
 .band-cell + .band-cell { padding-left: var(--course); border-left: 1px solid var(--rule); }
 .band-figure {
@@ -193,6 +198,7 @@
   font-variant-numeric: tabular-nums; color: var(--platinum);
 }
 .band-cell.mastered .band-figure { color: var(--gold); }
+.band-cell.ducats .band-figure { color: var(--gold); }
 /* The qualification on the figure above, in the slot the other cells note themselves in, so the
    band still reads as one row. Set a shade brighter than a note and in the register's tabular
    face: it is a second reading of the same holding, not a remark about it. */
@@ -375,6 +381,10 @@
    diluted by an icon that stays equally bright either way. */
 .price .metal-mark { height: 1.15rem; width: auto; opacity: .68; }
 .price.live .metal-mark { opacity: 1; }
+/* The ducat reading keeps the price span's whole shape -- figure, mark, stack total -- and takes
+   the gold the reward screen already gives this currency, so the two prices on a prime part are
+   told apart by their metals and not by position alone. */
+.price.ducat-reading b { color: var(--gold); }
 
 /* The worth figure is the one number on this page standing in a row of plain counts, so it is the
    one that has to say it is money rather than a tally. Room enough for the real icon. */
@@ -732,7 +742,8 @@
 }
 
 @media (max-width: 900px) {
-  .assay-band { grid-template-columns: 1fr; }
+  .assay-band, .assay-band.with-ducats { grid-template-columns: 1fr; }
+  .assay-band.with-ducats .band-figure { font-size: clamp(2.5rem, 5vw, 4rem); }
   .band-cell { padding: var(--step) 0; border-top: 1px solid var(--rule); }
   .band-cell:first-child { border-top: 0; }
   .band-cell + .band-cell { padding-left: 0; border-left: 0; }

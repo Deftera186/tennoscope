@@ -10,7 +10,7 @@ use serde::Serialize;
 use thiserror::Error;
 use warframe_acquisition::{
     AcquisitionError, AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogIndex,
-    CatalogLoadSource, MarketPriceCache, PriceTable, StageState,
+    CatalogLoadSource, DucatTable, MarketPriceCache, PriceTable, StageState,
 };
 use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot,
@@ -34,6 +34,7 @@ pub struct AppCore {
     reward: RewardView,
     health: HealthView,
     prices: Option<Arc<PriceTable>>,
+    ducats: Option<Arc<DucatTable>>,
     live: Option<MarketPriceCache>,
     pricing: Option<PricingProgress>,
     market_account: MarketAccountView,
@@ -93,6 +94,7 @@ impl AppCore {
             reward: RewardAdvisor::advise(Vec::new()),
             health: HealthView::phase_one()?,
             prices: None,
+            ducats: None,
             live: None,
             pricing: None,
             market_account: MarketAccountView::unlinked(),
@@ -104,6 +106,12 @@ impl AppCore {
     /// because the view is rebuilt every 2.5 seconds and the table changes once a day.
     pub fn set_collection_prices(&mut self, prices: Arc<PriceTable>) {
         self.prices = Some(prices);
+    }
+
+    /// The catalogue's ducat values, once the catalogue has loaded. Held like the price table and
+    /// for the same reason: the values move with each new Prime Access, not between renders.
+    pub fn set_collection_ducats(&mut self, ducats: Arc<DucatTable>) {
+        self.ducats = Some(ducats);
     }
 
     /// The live price cache, shared with the reward overlay. Cheap to clone and entries expire on
@@ -228,8 +236,11 @@ impl AppCore {
             .map(|entry| {
                 // Mastery is not ownership. An item at quantity 0 is not in the inventory
                 // and must not carry a price or contribute to the collection's worth.
+                // Ducats are the exception: they describe the item, not a sale the player
+                // could make, and the number on a missing part is what tells the player
+                // which relic reward to take.
                 if entry.quantity == 0 {
-                    return CollectionItemView::from(entry);
+                    return CollectionItemView::from(entry).with_ducats(self.ducats_for(entry));
                 }
                 // Both lookups go through the market's own name for the item: the live cache is
                 // keyed by what was asked for, and that is never the catalog's name for a relic.
@@ -288,6 +299,7 @@ impl AppCore {
                         .zip(self.prices.as_ref())
                         .and_then(|(name, prices)| prices.monthly_trades(name)),
                 )
+                .with_ducats(self.ducats_for(entry))
             })
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));
@@ -309,6 +321,14 @@ impl AppCore {
                 ..self.market_account.clone()
             },
         })
+    }
+
+    /// The catalogue's ducats for this entry, joined by path -- the same route enrichment takes,
+    /// so the " Blueprint" suffix that separates the two vocabularies never applies.
+    fn ducats_for(&self, entry: &warframe_domain::InventoryEntry) -> Option<u32> {
+        self.ducats
+            .as_ref()
+            .and_then(|table| table.get(entry.item.id.catalog_path()))
     }
 
     pub fn enrich_collection_from_catalog(
@@ -732,6 +752,11 @@ pub struct CollectionItemView {
     /// the market prices the two ends of the range but nothing between them.
     #[serde(skip_serializing_if = "Option::is_none")]
     platinum_ceiling: Option<u32>,
+    /// Baro Ki'Teer's price for this item, from the catalogue rather than the market. Absent for
+    /// anything that holds no ducats and while the catalogue has not loaded; present at quantity 0,
+    /// because it describes the item rather than a sale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ducats: Option<u32>,
     /// The rank these copies carry, absent for the unranked stack and for anything that cannot be
     /// ranked at all.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -779,6 +804,11 @@ impl CollectionItemView {
     /// The top of the range for a part-ranked copy the market brackets but never quotes.
     pub fn platinum_ceiling(&self) -> Option<u32> {
         self.platinum_ceiling
+    }
+
+    /// Baro's price for this item, where the catalogue publishes one.
+    pub fn ducats(&self) -> Option<u32> {
+        self.ducats
     }
 
     pub fn rank(&self) -> Option<u32> {
@@ -829,6 +859,11 @@ impl CollectionItemView {
         self.monthly_trades = traded;
         self
     }
+
+    fn with_ducats(mut self, ducats: Option<u32>) -> Self {
+        self.ducats = ducats;
+        self
+    }
 }
 
 impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
@@ -846,6 +881,7 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
             }),
             platinum: None,
             platinum_ceiling: None,
+            ducats: None,
             rank: entry.rank,
             max_rank: entry.max_rank,
             live: false,

@@ -13,6 +13,16 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ### Added
 
+- **Prime parts carry their ducat value in the collection, beside their platinum.** The
+  catalogue already knew the number — the same WFCD data the reward overlay reads — so the
+  collection joins it onto every card by catalog path: a gold ducat reading next to the
+  market's, a stack total when more than one copy is held, and a "Ducats at stake" figure in
+  the summary band totaling every owned prime part at Baro Ki'Teer's posted prices. Ducats
+  describe the item rather than a sale, so a missing part keeps its reading where it keeps no
+  platinum — the number is what tells the player which relic reward to take. The display is
+  on by default, and a "Ducats" chip in the collection toolbar puts it away, remembered in
+  local storage like the price floor.
+
 - **A listing can be edited from either screen it is visible on.** Every order row on the Orders
   screen offers an edit that opens in place, prefilled with the listing's own price and count, and
   a collection card whose listing covers only part of the holding offers "Sell more" beside the

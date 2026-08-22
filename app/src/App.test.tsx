@@ -21,7 +21,7 @@ const view: AppView = {
       { id: 'rhino', name: 'Rhino', category: 'frame', quantity: 1, mastered: true, live: false, priceable: true },
       { id: 'braton', name: 'Braton', category: 'weapon', quantity: 3, mastered: true, live: false, priceable: true },
       { id: 'carrier', name: 'Carrier', category: 'companion', quantity: 1, mastered: false, live: false, priceable: true },
-      { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 19, live: false, priceable: true, monthly_trades: 4 },
+      { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 19, ducats: 15, live: false, priceable: true, monthly_trades: 4 },
       { id: 'lith-a1', name: 'Lith A1 Relic', category: 'relic', quantity: 7, mastered: false, platinum: 20, live: true, priceable: true, monthly_trades: 3 },
       { id: 'argon-crystal', name: 'Argon Crystal', category: 'resource', quantity: 4, mastered: false, live: false, priceable: true },
       { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 0, mastered: false, live: false, priceable: false },
@@ -422,6 +422,47 @@ describe('MVP desktop interface', () => {
     expect(within(stack).getByText('140 total')).toBeInTheDocument()
     // One mark leads the pair: the unit price and the stack total are the same currency.
     expect(within(stack).getAllByAltText(/platinum/i)).toHaveLength(1)
+  })
+
+  // Ducats are the other price a prime part carries: set by Baro rather than the market, and
+  // useful in bulk, so they get the stack total platinum gets and a band figure over the whole
+  // collection. They are a fact of the item rather than of a holding, so a missing part keeps its
+  // reading where it keeps no platinum -- and the whole display is the player's choice to hide.
+  it('shows ducats beside platinum, totals the stack, and banks a collection figure', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.getView.mockResolvedValue({
+      ...view,
+      collection: {
+        ...view.collection,
+        total_entries: 2,
+        items: [
+          { id: 'paris-prime-string', name: 'Paris Prime String', category: 'prime_part', quantity: 3, mastered: false, platinum: 6, ducats: 15, live: false, priceable: true },
+          { id: 'ash-prime-systems', name: 'Ash Prime Systems', category: 'prime_part', quantity: 0, mastered: false, ducats: 100, live: false, priceable: false },
+        ],
+      },
+    })
+    const user = userEvent.setup()
+    render(<App/>)
+
+    const stack = await screen.findByRole('article', { name: 'Paris Prime String' })
+    expect(within(stack).getByText('15')).toBeInTheDocument()
+    expect(within(stack).getByText('45 total')).toBeInTheDocument()
+    // One mark leads the pair: unit value and stack total are the same currency, so they share it.
+    expect(within(stack).getAllByAltText(/ducat/i)).toHaveLength(1)
+
+    const missing = screen.getByRole('article', { name: 'Ash Prime Systems' })
+    expect(within(missing).getByText('100')).toBeInTheDocument()
+    expect(within(missing).queryByText(/total/), 'nothing is banked from a part that is not held').not.toBeInTheDocument()
+
+    const band = screen.getByTestId('band-ducats')
+    expect(within(band).getByText('45')).toBeInTheDocument()
+    expect(within(band).getByText('Ducats at stake')).toBeInTheDocument()
+
+    // The chip hides every reading above, card and band alike.
+    await user.click(screen.getByRole('button', { name: 'Ducats' }))
+    expect(screen.queryByTestId('band-ducats')).not.toBeInTheDocument()
+    expect(screen.queryByAltText(/ducat/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Ducats' })).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('says nothing rather than zero for an item with no price', async () => {

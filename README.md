@@ -45,6 +45,11 @@ item. Mods and arcanes are priced by rank, since that is how they sell. Next to 
 market-rate total sits a second figure: what the market would actually take, based on
 how much of each item really trades rather than asking prices summed up.
 
+Prime parts also carry their ducat value beside platinum — Baro Ki'Teer's posted price
+for the part, totaled across the stack and across the whole collection, and kept on
+missing parts too, since it is what tells you which relic reward to take. A chip in the
+toolbar hides them if you would rather read platinum alone.
+
 <div align="center">
 
 ## warframe.market integration

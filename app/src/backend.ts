@@ -4,7 +4,7 @@ export type HealthState = 'ready' | 'idle' | 'degraded' | 'failed'
 export interface BackendHealth { state: HealthState; message: string; last_success: string | null }
 export interface AcquisitionStageHealth { stage: string; state: HealthState; message: string }
 export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 'relic' | 'resource' | 'blueprint' | 'vehicle' | 'mod' | 'arcane'
-export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; platinum_ceiling?: number; rank?: number; max_rank?: number; live: boolean; priceable: boolean; monthly_trades?: number }
+export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; platinum_ceiling?: number; ducats?: number; rank?: number; max_rank?: number; live: boolean; priceable: boolean; monthly_trades?: number }
 /** How far the live pricing pass the player asked for has got. */
 export interface PricingProgress { done: number; total: number }
 export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }

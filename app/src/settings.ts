@@ -37,3 +37,23 @@ export function writePriceFloor(floor: number): void {
     // A preference that cannot be saved is still a preference for this session.
   }
 }
+
+/** Ducats show beside platinum on every prime part until somebody asks them not to. */
+const DUCATS_KEY = 'tennoscope.show-ducats'
+
+/** The only value that means "hidden". Anything unreadable is the default, not a refusal. */
+export function readShowDucats(): boolean {
+  try {
+    return localStorage.getItem(DUCATS_KEY) !== 'false'
+  } catch {
+    return true
+  }
+}
+
+export function writeShowDucats(show: boolean): void {
+  try {
+    localStorage.setItem(DUCATS_KEY, String(show))
+  } catch {
+    // A preference that cannot be saved is still a preference for this session.
+  }
+}

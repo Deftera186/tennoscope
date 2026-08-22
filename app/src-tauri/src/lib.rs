@@ -1289,6 +1289,10 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         .ok()
         .and_then(|runtime| load_catalog(&runtime.app_data));
     if let (Some(catalog), Ok(mut runtime)) = (catalog.as_ref(), shared.lock()) {
+        // Before enrichment, so the first view it publishes already carries ducat values.
+        runtime
+            .core
+            .set_collection_ducats(Arc::new(catalog.ducat_table()));
         let _ = runtime.core.enrich_collection_from_catalog(catalog);
     }
     let reward_catalog = catalog

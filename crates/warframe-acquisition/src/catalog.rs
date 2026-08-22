@@ -67,6 +67,22 @@ pub struct RewardCatalogEntry {
     pub ducats: u32,
 }
 
+/// Every ducat holding in the catalogue, keyed by catalog path, held apart from the index the way
+/// the daily price table is held apart from the inventory: a collection view joins against it by
+/// path without carrying the whole catalogue, and a table that has not loaded yet says nothing
+/// rather than zero.
+#[derive(Clone, Debug, Default)]
+pub struct DucatTable {
+    entries: BTreeMap<String, u32>,
+}
+
+impl DucatTable {
+    /// The ducats WFCD publishes for the item at that path, or `None` when the item holds none.
+    pub fn get(&self, catalog_path: &str) -> Option<u32> {
+        self.entries.get(catalog_path).copied()
+    }
+}
+
 /// Does this catalog entry name the item the reward screen is offering?
 ///
 /// The reward screen, the relic drop tables and warframe.market all name a Warframe part by the
@@ -168,6 +184,20 @@ impl CatalogIndex {
             .filter(|(_, metadata)| metadata.name == name)
             .map(|(path, _)| path.clone())
             .collect()
+    }
+
+    /// The catalogue's ducat values as a join table. Only entries with ducats to their name: zero
+    /// is a published value -- Forma Blueprint carries it -- but a reading of zero ducats says
+    /// nothing the absence of a reading doesn't, and a total must not grow a column of zeroes.
+    pub fn ducat_table(&self) -> DucatTable {
+        DucatTable {
+            entries: self
+                .items
+                .iter()
+                .filter(|(_, metadata)| metadata.ducats > 0)
+                .map(|(path, metadata)| (path.clone(), metadata.ducats))
+                .collect(),
+        }
     }
 
     fn insert(

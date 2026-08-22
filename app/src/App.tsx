@@ -31,7 +31,7 @@ import { OrdersView } from './OrdersView'
 import { isListable, listedLabel, listedOrderFor } from './orders'
 import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
 import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
-import { MAX_PRICE_FLOOR, readPriceFloor, writePriceFloor } from './settings'
+import { MAX_PRICE_FLOOR, readPriceFloor, readShowDucats, writePriceFloor, writeShowDucats } from './settings'
 import { snapshotFreshness } from './freshness'
 import { reportBlockVisible } from './reportable'
 
@@ -109,6 +109,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [clock, setClock] = useState(() => new Date())
   const [priceFloor, setPriceFloor] = useState(readPriceFloor)
+  const [showDucats, setShowDucats] = useState(readShowDucats)
   const [ordersBusy, setOrdersBusy] = useState(false)
   const [ordersError, setOrdersError] = useState<string | null>(null)
   const [ordersNote, setOrdersNote] = useState<string | null>(null)
@@ -347,7 +348,12 @@ function App() {
           appears and disappears with its content is not announced by every reader. */}
       <p className="sr-only" role="status">{ordersNote}</p>
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} onSell={ordersSell} onUpdate={ordersUpdate} ordersBusy={ordersBusy}/>}
+        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} showDucats={showDucats} onToggleDucats={() => {
+          setShowDucats(current => {
+            writeShowDucats(!current)
+            return !current
+          })
+        }} onSell={ordersSell} onUpdate={ordersUpdate} ordersBusy={ordersBusy}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
         {page === 'orders' && <OrdersView
           account={view.market_account}
@@ -416,7 +422,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, onUpdate, ordersBusy }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number; onSell: SellHandler; onUpdate: UpdateHandler; ordersBusy: boolean }) {
+function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, onToggleDucats, onSell, onUpdate, ordersBusy }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number; showDucats: boolean; onToggleDucats: () => void; onSell: SellHandler; onUpdate: UpdateHandler; ordersBusy: boolean }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -433,6 +439,13 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, onUpda
   // month. Market rate leads because it is the plain reading of what is owned; what the market would
   // actually take sits under it, at the size of a qualification, which is what it is.
   const sellable = priced.reduce((total, item) => total + (sellableValue(item, priceFloor) ?? 0), 0)
+  // What the whole ducat holding would bank at Baro's. Unlike platinum this is not a market
+  // opinion but a posted price, so the only qualification worth a note is that it counts prime
+  // parts actually held -- a missing part's reading is on its card, not in this figure.
+  const ducatsAtStake = view.collection.items.reduce(
+    (total, item) => item.quantity > 0 && item.ducats !== undefined ? total + item.ducats * item.quantity : total,
+    0,
+  )
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase()
     return view.collection.items
@@ -477,7 +490,7 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, onUpda
       <p className="prose">Canonical equipment, parts and relics observed on this account. Read only, held locally.</p>
     </div>
 
-    <div className="assay-band">
+    <div className={`assay-band${showDucats ? ' with-ducats' : ''}`}>
       <BandCell kind="items" value={view.collection.total_entries} label="Items tracked" note={`${owned} currently owned`}/>
       <BandCell kind="mastered" value={mastered} label="Mastered" note={masteryEligible.length ? `${Math.round(mastered / masteryEligible.length * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
       <BandCell kind="missing" value={missing} label="Missing" note="From known collection data"/>
@@ -496,6 +509,13 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, onUpda
           ? `Sellable counts only the copies the market buys in a month, at ${priceFloor} platinum and over`
           : 'Sellable counts only the copies the market buys in a month'}
       />
+      {showDucats && <BandCell
+        kind="ducats"
+        value={ducatsAtStake}
+        unit={<MetalMark metal="ducat" alt=" ducats"/>}
+        label="Ducats at stake"
+        note="Every owned prime part, at Baro Ki'Teer's posted prices"
+      />}
     </div>
 
     <div className="register">
@@ -515,6 +535,11 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, onUpda
               onClick={() => setSort(option.value)}
             >{option.label}</button>)}
           </div>
+        </div>
+        {/* A display choice, not a filter: it changes what the cards carry, not which cards are
+            shown, so it sits with the controls rather than among the ownership filters. */}
+        <div className="tally" role="group" aria-label="Ducat values">
+          <button type="button" aria-pressed={showDucats} onClick={onToggleDucats}>Ducats</button>
         </div>
       </div>
 
@@ -561,7 +586,7 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, onUpda
 
       {filtered.length
         ? <>
-          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} listedOrder={listedOrderFor(view.market_account.orders, item.id)} sellable={view.market_account.link === 'linked' && isListable(item, view.market_account.listable)} onSell={onSell} onUpdate={onUpdate} busy={ordersBusy}/></li>)}</ul>
+          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} showDucats={showDucats} listedOrder={listedOrderFor(view.market_account.orders, item.id)} sellable={view.market_account.link === 'linked' && isListable(item, view.market_account.listable)} onSell={onSell} onUpdate={onUpdate} busy={ordersBusy}/></li>)}</ul>
           <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
         </>
         : <EmptyState
@@ -589,7 +614,7 @@ function BandCell({ kind, value, unit, aside, label, note }: { kind: string; val
   </div>
 }
 
-function CollectionEntry({ item, listedOrder, sellable, onSell, onUpdate, busy }: { item: CollectionItem; listedOrder: ReturnType<typeof listedOrderFor>; sellable: boolean; onSell: SellHandler; onUpdate: UpdateHandler; busy: boolean }) {
+function CollectionEntry({ item, showDucats, listedOrder, sellable, onSell, onUpdate, busy }: { item: CollectionItem; showDucats: boolean; listedOrder: ReturnType<typeof listedOrderFor>; sellable: boolean; onSell: SellHandler; onUpdate: UpdateHandler; busy: boolean }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
   const [selling, setSelling] = useState(false)
@@ -630,6 +655,14 @@ function CollectionEntry({ item, listedOrder, sellable, onSell, onUpdate, busy }
             : <b title="Sellers list unranked and fully ranked copies only, so this rank sits between the two">
               {item.platinum}–{item.platinum_ceiling}
             </b>}
+        </span>}
+        {/* Baro's price, beside the market's. It is a fact of the item rather than of a holding,
+            so it reads on a missing part too, where the platinum span above stays silent -- and it
+            totals like platinum does, because a stack of parts banks a stack of ducats. */}
+        {showDucats && item.ducats !== undefined && <span className="price ducat-reading">
+          <MetalMark metal="ducat" alt="ducat "/>
+          <b>{item.ducats}</b>
+          {item.quantity > 1 && <em>{item.ducats * item.quantity} total</em>}
         </span>}
       </div>
       {item.live && <p className="freshness">checked live</p>}
