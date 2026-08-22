@@ -2,299 +2,106 @@
 
 # TennoScope
 
-**A Warframe companion for Linux and Windows. No Overwolf, no account, no telemetry.**
-
-Reads your collection off the running game and tells you which relic reward is worth taking,
-while the timer is still going.
+**A free, Rust-based Warframe companion for Linux, Windows and the Steam Deck.
+No Overwolf, no account, no telemetry.**
 
 [![CI](https://github.com/Deftera186/tennoscope/actions/workflows/ci.yml/badge.svg)](https://github.com/Deftera186/tennoscope/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Deftera186/tennoscope)](https://github.com/Deftera186/tennoscope/releases/latest)
 [![License: GPL v3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
-[![Platform: Linux | Windows](https://img.shields.io/badge/platform-Linux%20%7C%20Windows-informational.svg)](#install)
+[![Platform: Linux | Windows | Steam Deck](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20Steam%20Deck-informational.svg)](#install)
+[![Built with Rust](https://img.shields.io/badge/built%20with-Rust-dea584)](https://www.rust-lang.org/)
 
 </div>
 
----
+<div align="center">
 
-## Relic overlay
+## Reward overlay
 
-A relic cracks and you get four rewards and fifteen seconds. TennoScope reads the cards off the
-screen and puts prices under them, in platinum and in ducats, since those two usually disagree.
+</div>
 
-![The reward overlay, aligned under the in-game reward row](docs/screenshots/reward-overlay.png)
+Platinum and ducats under every reward card, live. Cards are marked as owned, not owned,
+or needed for mastery. The squad's entire relic pool is priced while the mission is still
+running, so the numbers are up the moment the screen appears, and only sellers who are
+actually online are counted. The overlay is click-through and never takes focus from the
+game.
 
-Prices come from warframe.market and count only sellers who are actually online, because an
-offline listing is a price nobody can trade at. The squad's whole relic pool is priced while the
-mission is still running, so the numbers are already local when the screen appears. Untradeable
-items get a dash.
+![The reward overlay](docs/screenshots/reward-overlay.png)
 
-The overlay is click-through and never takes focus from the game.
+<div align="center">
 
 ## Collection
 
-Everything the game says you own: frames, weapons, companions, prime parts, relics, resources,
-blueprints, vehicles, mods and arcanes. With artwork, mastery state, search and filters, stored
-locally.
+</div>
+
+Everything the game says you own: frames, weapons, companions, prime parts, relics,
+resources, blueprints, vehicles, mods and arcanes. Artwork, mastery state, search and
+filters, stored locally. It keeps itself current: TennoScope notices the game start,
+waits for the inventory sync, and re-reads. No exports, no manual scans.
 
 ![The collection browser](docs/screenshots/collection.png)
 
-It refreshes itself. TennoScope notices Warframe starting, watches the game's log for a completed
-inventory sync, and re-reads. The log is only a trigger, nothing is scraped out of it.
+Values come from warframe.market's daily trade dump: one download a day, no request per
+item. Mods and arcanes are priced by rank, since that is how they sell. Next to the
+market-rate total sits a second figure: what the market would actually take, based on
+how much of each item really trades rather than asking prices summed up.
 
-The whole thing is priced from warframe.market's daily trade dump — one download a day, no request
-per item. Mods and arcanes are priced by rank, because the market sells them that way: Serration is
-3p unranked and 48p at rank 10, so each rank you hold is its own row, and a half-ranked copy shows
-the two ends rather than inventing a number between them.
+<div align="center">
 
-Under the market-rate total is what the market would actually take. Nobody buys your two hundredth
-spare mod, so each stack is also counted at no more copies than the whole game trades in a month.
-Settings has a price floor for the rest of it — the 2p mods that do sell, if you will sit down and
-arrange every one of those trades by hand.
+## warframe.market integration
 
-## warframe.market account (optional)
+</div>
 
-Off by default. Link your warframe.market account — by signing in or by pasting a token from a
-signed-in browser session — and TennoScope shows your orders alongside your collection: total
-listed value, how long ago they were fetched, and which ones no longer match what you own. An
-order for something you sold, or for more than you still hold, is flagged and fixable in one
-action.
+Off by default. Link your account, by signing in or by pasting a token from a signed-in
+browser, and your orders sit next to your collection: what is listed, how fresh the
+prices are, and which orders no longer match what you own. Listing, delisting and
+changing your online status all happen in the app.
 
-You can also list something for sale — from a collection card or from the orders screen — take any
-listing down, and set what warframe.market shows you as: online, in game, invisible, or offline,
-held for as long as TennoScope is running. Listing is offered for items that need a price and a
-quantity and nothing else; relics, sets, and anything sold by rank are not offered, because
-warframe.market wants more about them than TennoScope asks you for.
+![The market orders page](docs/screenshots/market-orders.png)
 
-This is the one feature that sends anything off your device: your warframe.market credential, kept
-in your OS keyring where one is available and in the local database otherwise, never in a log.
-Unlink at any time and the stored credential is removed; everything else keeps working exactly as
-it did before you linked.
-
----
-
-## Read this before you install it
-
-> [!IMPORTANT]
-> TennoScope reads the Warframe process's memory to obtain a session token, then asks Warframe's
-> own inventory endpoint for your collection. **It never writes to the game, and never modifies,
-> automates, or influences gameplay.** Digital Extremes has not endorsed this, and any third-party
-> tool that inspects a game process may carry account-policy or anti-cheat risk.
-
-Other community tools have done this for years and DE has not acted on it, but that is not the
-same as permission. If you are not willing to accept the risk, do not run this.
-
-TennoScope shows this disclosure on first run and does nothing until you accept it.
+<div align="center">
 
 ## Install
 
-Every option gives you a `tennoscope` command and a desktop entry, except the AppImage, which is
-a single file you run directly.
+</div>
 
-### Gentoo
+| System | How |
+| --- | --- |
+| Windows | [Installer](https://github.com/Deftera186/tennoscope/releases/latest) from the latest release |
+| Debian, Ubuntu, Fedora | [`.deb` or `.rpm`](https://github.com/Deftera186/tennoscope/releases/latest) from the latest release |
+| Arch-based, incl. Steam Deck | `curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch/PKGBUILD && makepkg -si` |
+| Gentoo | `games-util/tennoscope-bin` from the [`deftera`](https://github.com/Deftera186/deftera-overlay) overlay |
+| Any other Linux | [AppImage](https://github.com/Deftera186/tennoscope/releases/latest) from the latest release |
 
-TennoScope is packaged in the [`deftera`](https://github.com/Deftera186/deftera-overlay) overlay,
-which is listed in the official Gentoo overlays database:
+- On Windows, set Warframe's display mode to **Borderless**. In exclusive fullscreen
+  nothing can draw over the game, so the overlay will not appear.
+- SmartScreen will warn about the unsigned Windows installer. "More info", then
+  "Run anyway".
+- On Linux, the overlay needs `tesseract` with English data. The collection works
+  without it.
 
-```bash
-sudo emerge --ask app-eselect/eselect-repository
-sudo eselect repository enable deftera
-sudo emaint sync --repo deftera
-sudo emerge --ask games-util/tennoscope-bin
-```
-
-`tennoscope-bin` unpacks the released binary and installs in seconds. `games-util/tennoscope`
-builds from source instead; it needs `sys-apps/pnpm-bin` from `::guru` and a one-off
-`FEATURES="-network-sandbox"` because pnpm and cargo resolve their lockfiles during the build.
-
-### Arch, Manjaro, EndeavourOS, CachyOS
-
-Any Arch-based distribution with `pacman` and `makepkg`:
-
-```bash
-curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch/PKGBUILD && makepkg -si
-```
-
-`makepkg -s` pulls the build dependencies itself, so `base-devel` is all you need beforehand.
-
-There is no AUR package yet, so `yay -S tennoscope` and `paru -S tennoscope` will not find it —
-AUR helpers install *from* the AUR, and the command above is the supported route. If you would
-rather your helper drive the build, point it at a directory holding the `PKGBUILD`:
-
-```bash
-paru -B .    # or: yay -B .
-```
-
-Building from source takes a while: it compiles the full Rust workspace. The
-[AppImage](#anything-else--appimage) or the `.deb` via
-[`debtap`](https://wiki.archlinux.org/title/Debtap) is faster if you just want to run it.
-
-### Debian, Ubuntu, Fedora
-
-Download the `.deb` or `.rpm` from the [latest release](https://github.com/Deftera186/tennoscope/releases/latest):
-
-```bash
-sudo apt install ./TennoScope_*_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./TennoScope-*.x86_64.rpm    # Fedora
-```
-
-### Windows
-
-Download the `.exe` from the [latest release](https://github.com/Deftera186/tennoscope/releases/latest)
-and run it. It installs for your user only, so there is no UAC prompt, and it carries everything
-it needs — there is nothing else to install.
-
-Windows SmartScreen will warn you the first time, because the installer is not code-signed: a
-certificate costs money this project does not take. "More info" then "Run anyway" gets past it.
-
-> [!NOTE]
-> **Windows support is best-effort.** This project is developed and tested on Linux; the Windows
-> build is compiled and unit-tested in CI, but no Windows machine runs it before a release. It is
-> expected to work and bug reports are welcome — just know that a Windows-only problem may take a
-> round trip to diagnose, because reproducing it needs a machine the author does not have.
+The [full install guide](docs/install.md) covers per-distribution details, building from
+source, process permissions and known limits.
 
 > [!IMPORTANT]
-> Set **Display Mode** to **Borderless** in Warframe's options. In exclusive fullscreen the game
-> owns the display outright and no application can draw over it — the collection browser still
-> works, but the reward overlay will not appear. TennoScope says so in its diagnostics panel if it
-> hits this.
+> **Read this before you run it.** TennoScope reads the Warframe process's memory to
+> obtain a session token, then asks Warframe's own inventory endpoint for your
+> collection. It never writes to the game and never automates or influences gameplay.
+> Digital Extremes has not endorsed this, and any tool that inspects a game process
+> carries some account-policy risk. The app shows this disclosure on first run and does
+> nothing until you accept it.
 
-### Anything else — AppImage
-
-```bash
-chmod +x TennoScope_*_amd64.AppImage
-./TennoScope_*_amd64.AppImage
-```
-
-Self-contained, no `tennoscope` command. If you want one:
-`ln -s "$PWD"/TennoScope_*_amd64.AppImage ~/.local/bin/tennoscope`.
-
-### The overlay's toolchain
-
-On Windows there is nothing to do: the installer ships its own copy of Tesseract.
-
-On Linux the collection browser works on its own, and the relic overlay needs `tesseract` with
-English data. The `.deb` and `.rpm` list it as recommended rather than required, so install it if
-your package manager skipped it:
-
-```bash
-sudo apt install tesseract-ocr tesseract-ocr-eng     # Debian, Ubuntu
-sudo dnf install tesseract tesseract-langpack-eng    # Fedora
-sudo pacman -S tesseract tesseract-data-eng          # Arch
-sudo emerge app-text/tesseract                       # Gentoo
-```
-
-### Building it yourself
-
-```bash
-corepack enable
-cd app && pnpm install --frozen-lockfile
-```
-
-On Linux, build through the helper — it produces AppImage, `.deb` and `.rpm` in
-`target/release/bundle/`:
-
-```bash
-cd .. && ./scripts/build-linux-bundles.sh appimage deb rpm
-```
-
-On Windows, run Tauri directly for an NSIS installer in `target/release/bundle/nsis/`:
-
-```bash
-pnpm tauri build
-```
-
-The AppImage needs post-processing that Tauri does not do on its own, so prefer the helper over
-`pnpm tauri build` on Linux; see [`packaging/appimage.md`](packaging/appimage.md).
-
-Per-distribution prerequisites and the packaging recipes are in
-[`packaging/`](packaging/README.md). Building needs Rust 1.85+, Node 20.19+, pnpm 10 and the
-Tauri 2 Linux libraries. A Windows build additionally wants `scripts/vendor-windows-tesseract.ps1`
-run first, which fetches the Tesseract the installer bundles.
-
-Running needs:
-
-- Linux with Warframe running through Wine or Proton, or Windows 10/11 with the native client.
-  Either way, logged in.
-- Permission to inspect your own game process. On Linux, if acquisition fails, see
-  [process permissions](#process-permissions). On Windows no elevation is needed — the game runs
-  as the same user.
-- On Windows, Warframe set to **Borderless** display mode, or the overlay cannot be drawn.
-- Network access for the inventory request, the item catalog and market prices. The catalog is
-  cached for offline use.
-
-## Known limits
-
-- **No macOS.** Warframe has no macOS client, so there is nothing to read.
-- **Overlay placement on Linux** draws an override-redirect X11 window over the game rectangle,
-  which is window-manager independent: Warframe is an X11 client under Wine and Proton alike, and
-  the app joins it there rather than asking the compositor for anything. Verified on sway; other
-  compositors are untested rather than unsupported.
-- **Overlay placement on Windows** uses a topmost, click-through, never-activated window. That
-  beats a borderless game and cannot beat an exclusive-fullscreen one, which is why Borderless is
-  a requirement rather than a suggestion. If a driver or overlay conflict leaves the strip
-  invisible, `TENNOSCOPE_OPAQUE_OVERLAY=1` draws it with a solid background instead.
-- **Windows polling costs more than Linux.** There is no `soft-dirty` equivalent, so every memory
-  poll rescans every region rather than only the pages the game wrote.
-- **Card geometry** is calibrated on 16:9 and scales by window width. Ultrawide is untested and
-  may drift.
-- **English reward names** only.
-- Acquisition depends on undocumented game behaviour and may need maintenance after a Warframe
-  update.
-
-## Privacy
-
-The account identifier and nonce are session credentials: they stay in memory, are redacted from
-`Debug` and `Display`, and never reach the database or a log. Raw inventory responses are
-validated in memory and not persisted. What lands on disk is your normalized collection snapshot,
-setup state and health metadata.
-
-No telemetry, no analytics, no crash reporting, and no account of the app's own. Network requests
-go to the pinned Warframe inventory origin, the pinned catalog source, and warframe.market. If you
-opt in to linking a warframe.market account, its credential and your orders are the only player
-data this application sends anywhere; nothing else leaves the device, and unlinking removes the
-stored credential.
-
-## Process permissions
-
-On Windows this section does not apply: TennoScope opens the game with `PROCESS_VM_READ` as the
-same user that launched it, which needs no elevation and no configuration.
-
-On Linux, TennoScope must read `/proc/<pid>/maps` and `/proc/<pid>/mem` of your own game process.
-
-```bash
-cat /proc/sys/kernel/yama/ptrace_scope   # 0 normally permits same-user inspection
-```
-
-At `1` or higher the kernel may refuse, because TennoScope is not Warframe's parent.
-`sudo sysctl kernel.yama.ptrace_scope=0` lifts that until reboot, at the cost of ptrace isolation
-for every process you own, so decide whether a permanent change fits your machine. **Do not run
-TennoScope as root, do not make the AppImage setuid, and do not grant it capabilities to work
-around the policy.** Warframe and TennoScope also have to run as the same Unix user; sandboxed
-launchers impose `/proc` restrictions that no Yama change will fix.
-
-## Development
-
-```bash
-cd app && pnpm tauri dev
-```
-
-The full check, which is what CI runs:
-
-```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cd app && pnpm check
-```
-
-Live tests are `#[ignore]`d, so a normal test run never touches a game process.
-
-[CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [docs](docs/README.md) ·
-[RELEASING](RELEASING.md) · [CHANGELOG](CHANGELOG.md)
+<div align="center">
 
 ## License
 
-[GPL-3.0-only](LICENSE). Warframe, its data and its artwork remain the property of Digital
-Extremes; runtime catalog data has its own upstream licensing, see
+</div>
+
+[GPL-3.0-only](LICENSE). TennoScope is unofficial and not affiliated with or endorsed by
+Digital Extremes. Warframe and its artwork remain the property of Digital Extremes; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-TennoScope is unofficial and not affiliated with or endorsed by Digital Extremes.
+<p align="center">
+
+[Install guide](docs/install.md) · [Docs](docs/README.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md)
+
+</p>

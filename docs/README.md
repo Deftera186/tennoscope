@@ -1,5 +1,10 @@
 # Documentation
 
+## [`install.md`](install.md)
+
+How to install, run and build TennoScope: per-distribution packages, the overlay's OCR
+toolchain, process permissions, and known limits.
+
 ## [`design/`](design)
 
 The design decisions behind the shipped code, written before the code and left as the record of
