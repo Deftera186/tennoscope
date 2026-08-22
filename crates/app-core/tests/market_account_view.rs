@@ -1,5 +1,47 @@
 use app_core::{AppCore, HealthState, LinkState, MarketAccountView, OrderStatus, ReconciledOrder};
-use warframe_market::{CredentialBacking, MarketOrder, OrderKind};
+use warframe_domain::{
+    CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
+};
+use warframe_market::{CredentialBacking, MarketItems, MarketOrder, OrderKind};
+
+/// The market table the listable rule is measured against: a plain item, a ranked mod, and a
+/// relic publishing its base path with the four refinements as subtypes. Shapes verbatim from
+/// `GET /v2/items`.
+const ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
+    {"id":"54a73e65e779893a797fff33",
+     "gameRef":"/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+     "i18n":{"en":{"name":"Braton Prime Blueprint"}}},
+    {"id":"54ca39abe7798915c1c11e10",
+     "gameRef":"/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol",
+     "maxRank":5,"i18n":{"en":{"name":"Creeping Bullseye"}}},
+    {"id":"56783f24cbfa8f0432dd89a2",
+     "gameRef":"/Lotus/Types/Game/Projections/T4VoidProjectionE","bulkTradable":true,
+     "subtypes":["intact","exceptional","flawless","radiant"],
+     "i18n":{"en":{"name":"Axi A1 Relic"}}}
+],"error":null}"#;
+
+const MOD_PATH: &str = "/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol";
+const RELIC_BASE: &str = "/Lotus/Types/Game/Projections/T4VoidProjectionE";
+
+fn items() -> MarketItems {
+    MarketItems::from_response(ITEMS.as_bytes()).expect("items parse")
+}
+
+fn row(id: &str, quantity: u32, rank: Option<u32>, max_rank: Option<u32>) -> InventoryEntry {
+    let item = CatalogItem::new(ItemId::new(id).expect("item id"), "Item", Category::Mod)
+        .expect("catalog item");
+    let entry = InventoryEntry::new(item, quantity);
+    match rank {
+        Some(rank) => entry.with_rank(rank, max_rank),
+        None => entry,
+    }
+}
+
+fn collection_of(entries: Vec<InventoryEntry>) -> Collection {
+    let mut collection = Collection::default();
+    collection.replace(InventorySnapshot::coherent(entries).expect("snapshot"));
+    collection
+}
 
 fn order(id: &str, platinum: u32, quantity: u32, visible: bool) -> MarketOrder {
     MarketOrder {
@@ -187,4 +229,42 @@ fn listed_value_prices_a_trade_rather_than_a_unit() {
     );
 
     assert_eq!(view.listed_platinum, 900);
+}
+
+/// The listable set names rows, not paths, because the rows are what differ. A card held unranked
+/// and held maxed is two holdings with two listings -- rank 0 and rank 5 -- while the part-ranked
+/// copy between them has no rank the market would accept and so no offer. A relic refinement row
+/// resolves through its tier suffix. The order is the collection's own: sorted by row id.
+#[test]
+fn the_listable_set_names_the_rows_the_market_would_accept() {
+    let collection = collection_of(vec![
+        row(
+            "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+            2,
+            None,
+            None,
+        ),
+        row(MOD_PATH, 4, None, None),
+        row(&format!("{MOD_PATH}#3"), 1, Some(3), Some(5)),
+        row(&format!("{MOD_PATH}#5"), 2, Some(5), Some(5)),
+        row(&format!("{RELIC_BASE}Bronze"), 6, None, None),
+    ]);
+
+    let view = MarketAccountView::linked(
+        CredentialBacking::Keyring,
+        Vec::new(),
+        "2026-08-22T12:00:00Z".to_owned(),
+    )
+    .with_listable(&items(), &collection);
+
+    assert_eq!(
+        view.listable,
+        vec![
+            format!("{RELIC_BASE}Bronze"),
+            "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint".to_owned(),
+            MOD_PATH.to_owned(),
+            format!("{MOD_PATH}#5"),
+        ],
+        "the part-ranked row is the one refusal in here"
+    );
 }

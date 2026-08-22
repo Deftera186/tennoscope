@@ -859,19 +859,19 @@ async fn remove_order(
     .map_err(|_| "order removal task failed".to_owned())?
 }
 
-/// Publish a sell listing for something in the collection.
+/// Publish a sell listing for one row of the collection.
 ///
-/// The item is named by its collection path, never by a market id: a market id from the frontend
-/// is a value nothing checked, and it decides which item a real listing is published against.
-/// `authorize_sell` resolves it here, refusing anything this device does not hold and anything
-/// whose market identity does not name one collection row -- the latter being exactly the items
-/// whose create body would need rank, subtype or per-trade details this application never collects.
+/// The item is named by its collection row id -- the whole key, rank suffix or relic tier
+/// included, never a market id: a market id from the frontend is a value nothing checked, and it
+/// decides which item a real listing is published against. `authorize_sell` resolves it here,
+/// refusing rows this device does not hold and rows whose listing would need details no row
+/// knows, and returning the rank, subtype and per-trade size the row's own identity implies.
 ///
 /// Price and quantity do come from the caller, because they are the two things the player is
 /// choosing. `create_order` bounds both against what the API accepts before spending a request.
 #[tauri::command]
 async fn create_order(
-    catalog_path: String,
+    collection_id: String,
     platinum: u32,
     quantity: u32,
     visible: bool,
@@ -879,24 +879,36 @@ async fn create_order(
 ) -> Result<AppView, String> {
     let shared = Arc::clone(state.inner());
     tauri::async_runtime::spawn_blocking(move || {
-        let item_id = {
+        // The table comes out as its own handle and the listing borrows it, so the runtime lock is
+        // gone before the slow part: the write below is a network round trip, and holding the lock
+        // through it would stall every poll. The collection is read under a second, equally short
+        // lock rather than carried out, because it is a copy the core may be replacing in between.
+        let items = {
             let runtime = shared
                 .lock()
                 .map_err(|_| "application state is unavailable".to_owned())?;
-            let items = runtime.market.cached_items().ok_or_else(|| {
+            runtime.market.cached_items().ok_or_else(|| {
                 market_account::failure_message(warframe_market::MarketError::Unreachable)
                     .to_owned()
-            })?;
+            })?
+        };
+        let listing = {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
             let collection = runtime
                 .core
                 .collection_for_reconciliation()
                 .map_err(|error| error.to_string())?;
-            market_account::authorize_sell(&items, &collection, &catalog_path)
+            market_account::authorize_sell(&items, &collection, &collection_id)
                 .map_err(str::to_owned)?
-                .to_owned()
         };
         write_then_refresh(&shared, "create", |transport, token| {
-            warframe_market::create_order(transport, token, &item_id, platinum, quantity, visible)
+            warframe_market::create_order(
+                transport,
+                token,
+                warframe_market::NewSellOrder::from_listing(listing, platinum, quantity, visible),
+            )
         })
     })
     .await

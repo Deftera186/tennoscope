@@ -29,11 +29,11 @@ pub use credential_store::{
 };
 
 mod items;
-pub use items::{MAX_ITEMS_BYTES, MarketItems};
+pub use items::{Listing, MAX_ITEMS_BYTES, MarketItems};
 
 mod orders;
 pub use orders::{
-    MAX_ORDERS_BYTES, MarketOrder, OrderKind, create_order, delete_order, list_mine,
+    MAX_ORDERS_BYTES, MarketOrder, NewSellOrder, OrderKind, create_order, delete_order, list_mine,
     set_order_quantity,
 };
 

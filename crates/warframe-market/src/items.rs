@@ -56,6 +56,25 @@ struct ItemNames {
     name: String,
 }
 
+/// The listing one collection row becomes on warframe.market.
+///
+/// `item_id` is what the POST addresses. The other three fields are the contextual ones the API
+/// demands exactly when the item supports the dimension and forbids otherwise: the `rank` a mod
+/// or arcane is listed at, the `subtype` a relic's refinement is listed under, and the `perTrade`
+/// size a bulk-tradable must declare. `None` throughout is a plain listing -- price and quantity
+/// and nothing else.
+///
+/// A `per_trade` of one is the only size this application chooses: it asks nothing of the player
+/// and misstates nothing, where a larger size would commit copies to batches the player was never
+/// asked about. Batch sizes are the market site's own edit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Listing<'a> {
+    pub item_id: &'a str,
+    pub rank: Option<u32>,
+    pub subtype: Option<&'a str>,
+    pub per_trade: Option<u32>,
+}
+
 /// What an `itemId` means, for as many items as warframe.market publishes.
 #[derive(Clone, Debug, Default)]
 pub struct MarketItems {
@@ -68,9 +87,15 @@ struct ItemEntry {
     name: Option<String>,
     /// Whether this item's path can stand for one collection row. See `path_is_comparable`.
     comparable: bool,
-    /// Whether a listing for it can be published with price and quantity alone. See
-    /// `is_plainly_listable`.
-    plainly_listable: bool,
+    /// The fusion ceiling a ranked listing is measured against. `Some` for every mod and arcane.
+    max_rank: Option<u32>,
+    /// The subtypes the entry publishes, empty when it has none. A relic's are its four
+    /// refinements; anything else here is a variant split the path alone cannot resolve.
+    subtypes: Vec<String>,
+    /// Whether a listing must declare socketed star counts no collection row knows.
+    star_counted: bool,
+    /// Whether a listing must declare a per-trade size.
+    bulk_tradable: bool,
 }
 
 impl MarketItems {
@@ -87,21 +112,25 @@ impl MarketItems {
                     .map(|names| names.name.clone())
                     .filter(|name| !name.trim().is_empty());
                 // Read before `game_ref` is moved out below.
-                let plain_shape = is_plainly_shaped(&record);
+                let star_counted =
+                    record.max_amber_stars.is_some() || record.max_cyan_stars.is_some();
                 let catalog_path = record.game_ref.filter(|path| path.starts_with("/Lotus/"));
                 let comparable = path_is_comparable(
                     catalog_path.as_deref(),
                     name.as_deref(),
                     record.subtypes.as_deref(),
                 );
-                let plainly_listable = comparable && plain_shape;
+                let subtypes = record.subtypes.unwrap_or_default();
                 (
                     record.id,
                     ItemEntry {
                         catalog_path,
                         name,
                         comparable,
-                        plainly_listable,
+                        max_rank: record.max_rank,
+                        subtypes,
+                        star_counted,
+                        bulk_tradable: record.bulk_tradable,
                     },
                 )
             })
@@ -147,21 +176,61 @@ impl MarketItems {
             .is_some_and(|entry| entry.comparable)
     }
 
-    /// The market's id for a collection path, for the one direction selling needs.
+    /// The listing a collection row would publish, or `None` when there is none this application
+    /// can name honestly.
     ///
-    /// Answers only for items a listing can be published for with price and quantity alone. That
-    /// is a narrower question than `comparable`, which asks whether an owned count can be read off
-    /// the collection -- and the two were conflated until a rare mod refused to list.
+    /// `id` is the row's whole key -- a bare path for the unranked stack, `path#rank` for a ranked
+    /// copy, a tier-suffixed path for a relic refinement -- because the row, not the sell form, is
+    /// what names the copy for sale. `at_max` says the rank in a suffixed id is the card's
+    /// ceiling.
     ///
-    /// ponytail: linear scan over a few thousand entries, run once per sell. A reverse map if a
-    /// caller ever needs this in a loop.
-    pub fn market_id_for_path(&self, catalog_path: &str) -> Option<&str> {
+    /// Three kinds of answer come back. A plain item resolves to price and quantity alone. A
+    /// ranked item -- every mod and arcane -- resolves with the rank the row names, because
+    /// warframe.market quotes a card at rank 0 and at its ceiling only: the unranked stack lists
+    /// at 0, a maxed copy at its ceiling, and a copy held part-way up has no rank the API would
+    /// accept, so it resolves to nothing rather than to a listing that would be refused. A relic
+    /// refinement resolves through the metal tier on its path to the subtype the market expects,
+    /// plus the per-trade size every bulk-tradable must declare.
+    ///
+    /// Still refused, on purpose: an Ayatan sculpture, whose socketed star counts no collection
+    /// row knows; and the 19 mods published under `regular`/`atragraph` subtypes with a single
+    /// path between them, where the path cannot say which variant is held.
+    ///
+    /// ponytail: linear scans over a few thousand entries, run once per row when a view is built
+    /// and once per sell. A reverse map if a caller ever needs this in a tighter loop.
+    pub fn listing_for(&self, id: &str, at_max: bool) -> Option<Listing<'_>> {
+        let (path, row_rank) = match id.split_once('#') {
+            None => (id, None),
+            // A suffix that is not a number names a row the inventory never writes; it is
+            // nothing's listing, not the unranked stack's.
+            Some((path, suffix)) => (path, Some(suffix.parse::<u32>().ok()?)),
+        };
+        if let Some((item_id, entry)) = self.entry_for_path(path) {
+            return entry.listing(item_id, row_rank, at_max);
+        }
+        let (base, tier) = refinement_of(path)?;
+        let (item_id, entry) = self.entry_for_path(base)?;
+        // The subtype is read from the entry's own vocabulary rather than the tier mapping, so
+        // the answer can only be a word the market itself publishes -- and a relic-shaped entry
+        // whose subtypes are not refinements answers nothing, same as on the exact-match path.
+        let subtype = entry
+            .subtypes
+            .iter()
+            .find(|published| published.as_str() == tier)?;
+        Some(Listing {
+            item_id,
+            rank: None,
+            subtype: Some(subtype.as_str()),
+            per_trade: entry.bulk_tradable.then_some(1),
+        })
+    }
+
+    /// The entry whose `gameRef` is exactly this path, if the market publishes one.
+    fn entry_for_path(&self, path: &str) -> Option<(&str, &ItemEntry)> {
         self.entries
             .iter()
-            .find(|(_, entry)| {
-                entry.plainly_listable && entry.catalog_path.as_deref() == Some(catalog_path)
-            })
-            .map(|(id, _)| id.as_str())
+            .find(|(_, entry)| entry.catalog_path.as_deref() == Some(path))
+            .map(|(id, entry)| (id.as_str(), entry))
     }
 
     pub fn name(&self, item_id: &str) -> Option<&str> {
@@ -175,6 +244,63 @@ impl MarketItems {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+impl ItemEntry {
+    /// The listing for a row whose path is this entry's own `gameRef`.
+    fn listing<'a>(
+        &self,
+        item_id: &'a str,
+        row_rank: Option<u32>,
+        at_max: bool,
+    ) -> Option<Listing<'a>> {
+        // Star counts are known only to the sculpture itself. Publishing a guess would sell an
+        // empty one the player may not be holding.
+        if self.star_counted {
+            return None;
+        }
+        // A subtyped entry reached by its own path is a variant split -- the atragraph mods --
+        // and the path cannot say which variant the row holds. A relic never reaches here: the
+        // collection holds only tier-suffixed paths, never the base one this would match.
+        if !self.subtypes.is_empty() {
+            return None;
+        }
+        let rank = match (self.max_rank.is_some(), row_rank, at_max) {
+            (false, _, _) => None,
+            // The unranked stack lists at rank zero, one of the two ranks the market quotes.
+            (true, None, _) => Some(0),
+            // A maxed copy lists at its ceiling, the other quoted rank.
+            (true, Some(rank), true) => Some(rank),
+            // A copy held part-way up is quoted at neither end; there is no listing to publish.
+            (true, Some(_), false) => return None,
+        };
+        Some(Listing {
+            item_id,
+            rank,
+            subtype: None,
+            per_trade: self.bulk_tradable.then_some(1),
+        })
+    }
+}
+
+/// The base projection path and the market subtype a relic refinement path names, or `None` for
+/// any path that is not one.
+///
+/// The game writes a relic's refinement as a metal tier on the end of the path; the market
+/// publishes it as a lowercase subtype. These four pairs are the whole vocabulary.
+fn refinement_of(path: &str) -> Option<(&str, &str)> {
+    if !path.contains("/Projections/") {
+        return None;
+    }
+    const TIERS: [(&str, &str); 4] = [
+        ("Bronze", "intact"),
+        ("Silver", "exceptional"),
+        ("Gold", "flawless"),
+        ("Platinum", "radiant"),
+    ];
+    TIERS
+        .into_iter()
+        .find_map(|(suffix, subtype)| path.strip_suffix(suffix).map(|base| (base, subtype)))
 }
 
 /// Whether a market item's `gameRef` names the same thing a collection row names.
@@ -215,28 +341,4 @@ fn path_is_comparable(path: Option<&str>, name: Option<&str>, subtypes: Option<&
         return false;
     }
     !name.is_some_and(|name| name.trim().ends_with(" Set"))
-}
-
-/// Whether an item is shaped so a listing needs price and quantity alone.
-///
-/// `POST /v2/order` takes contextual fields that are required exactly when the item supports the
-/// dimension and forbidden otherwise, and a 400 comes back either way. `maxRank` means the body
-/// must carry a `rank`; `maxAmberStars` and `maxCyanStars` mean an Ayatan sculpture wants its star
-/// counts; `bulkTradable` means `perTrade`. The sell form asks for price and quantity and nothing
-/// else, so it can only publish for items that need nothing else.
-///
-/// This was `comparable` until a rare mod refused to list. Measured against the live table, 1,487
-/// of the 2,721 comparable items carry a `maxRank` -- every mod and arcane in the game -- so the
-/// screen was offering a Sell button on more than half of what it could actually publish, and the
-/// failure arrived as a flat "could not publish" with no reason attached. Comparability answers
-/// whether an owned count can be read off the collection, which is a different question and stays
-/// as it is: those mods are still reconciled, still flagged, still removable.
-///
-/// The upgrade path is the sell form growing a rank field, which would recover the largest group
-/// by far. Left undone here because the fix owed today is that the button stops lying.
-fn is_plainly_shaped(record: &ItemRecord) -> bool {
-    record.max_rank.is_none()
-        && record.max_amber_stars.is_none()
-        && record.max_cyan_stars.is_none()
-        && !record.bulk_tradable
 }

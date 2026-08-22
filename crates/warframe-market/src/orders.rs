@@ -175,41 +175,97 @@ pub fn set_order_quantity(
     write_outcome(response, token)
 }
 
+/// A listing to publish: what the sell form collects, joined to what the item's shape demands.
+///
+/// Built from a [`crate::Listing`], which is where the rule lives: the API's create body carries
+/// `perTrade`, `rank`, `subtype`, star counts and charges, each required for the items that
+/// support it and *forbidden* for the ones that do not -- a 400 either way. The resolver answers
+/// with exactly the fields the item's own entry calls for, so this struct never has to decide
+/// what to send and the body never carries a field the item did not ask for.
+///
+/// `visible` is the one plain choice in here, and it is sent explicitly because the API defaults
+/// it to `false`, and a listing nobody can see is not what someone pressing "sell" asked for --
+/// as this account found out the hard way.
+#[derive(Clone, Copy, Debug)]
+pub struct NewSellOrder<'a> {
+    pub item_id: &'a str,
+    pub platinum: u32,
+    pub quantity: u32,
+    pub visible: bool,
+    pub rank: Option<u32>,
+    pub subtype: Option<&'a str>,
+    pub per_trade: Option<u32>,
+}
+
+impl<'a> NewSellOrder<'a> {
+    /// What a resolved collection row becomes when the player has set a price and a count.
+    pub fn from_listing(
+        listing: crate::Listing<'a>,
+        platinum: u32,
+        quantity: u32,
+        visible: bool,
+    ) -> Self {
+        Self {
+            item_id: listing.item_id,
+            platinum,
+            quantity,
+            visible,
+            rank: listing.rank,
+            subtype: listing.subtype,
+            per_trade: listing.per_trade,
+        }
+    }
+}
+
 /// Publish a sell listing.
 ///
-/// Deliberately narrow. The API's create body carries `perTrade`, `rank`, `charges`, `subtype`,
-/// `amberStars` and `cyanStars`, each required for the items that support it and *forbidden* for
-/// the ones that do not -- a 400 either way. Rather than model that, callers offer this only for
-/// items `MarketItems::comparable` accepts, which is exactly the set whose path names one
-/// collection row: no relics, no sets, nothing ranked or subtyped. The guard that keeps
-/// reconciliation honest is the guard that keeps this body to four fields.
-///
-/// `visible` is sent explicitly because the API defaults it to `false`, and a listing nobody can
-/// see is not what someone pressing "sell" asked for -- as this account found out the hard way.
+/// The four base fields go to every item. Each contextual field goes in exactly when it is
+/// `Some` -- which only happens for the item whose resolver produced it, because the API demands
+/// the field when the item supports the dimension and rejects it when the item does not.
 pub fn create_order(
     transport: &dyn MarketTransport,
     token: &MarketToken,
-    item_id: &str,
-    platinum: u32,
-    quantity: u32,
-    visible: bool,
+    order: NewSellOrder<'_>,
 ) -> Result<MarketToken, MarketError> {
-    // The API's own bounds, checked before a request is spent finding out. An id with a quote or a
-    // backslash would break out of the JSON it is interpolated into, so it is refused rather than
-    // escaped: every id this takes comes from the item table, and none of them contain either.
-    if item_id.is_empty() || item_id.contains(['"', '\\']) {
+    // The API's own bounds, checked before a request is spent finding out. An id or subtype with a
+    // quote or a backslash would break out of the JSON it is interpolated into, so it is refused
+    // rather than escaped: every id comes from the item table and every subtype from the entry's
+    // own published list, and neither contains either.
+    if order.item_id.is_empty() || order.item_id.contains(['"', '\\']) {
         return Err(MarketError::Rejected);
     }
-    if !(1..=900_000).contains(&platinum) || !(1..=9_999).contains(&quantity) {
+    if let Some(subtype) = order.subtype {
+        if subtype.is_empty() || subtype.contains(['"', '\\']) {
+            return Err(MarketError::Rejected);
+        }
+    }
+    if order.per_trade.is_some_and(|per_trade| per_trade == 0) {
         return Err(MarketError::Rejected);
     }
+    if !(1..=900_000).contains(&order.platinum) || !(1..=9_999).contains(&order.quantity) {
+        return Err(MarketError::Rejected);
+    }
+    // Appended rather than one `format!`, so a field goes in exactly when it is present and the
+    // body never spells a `null` the API would read as a declared dimension.
+    let mut body = format!(
+        r#"{{"itemId":"{}","type":"sell","platinum":{},"quantity":{},"visible":{}"#,
+        order.item_id, order.platinum, order.quantity, order.visible
+    );
+    if let Some(rank) = order.rank {
+        body.push_str(&format!(r#","rank":{rank}"#));
+    }
+    if let Some(subtype) = order.subtype {
+        body.push_str(&format!(r#","subtype":"{subtype}""#));
+    }
+    if let Some(per_trade) = order.per_trade {
+        body.push_str(&format!(r#","perTrade":{per_trade}"#));
+    }
+    body.push('}');
     let response = transport.send(MarketRequest {
         method: Method::Post,
         url: format!("{API_V2}/order"),
         token: Some(token.expose().to_owned()),
-        body: Some(format!(
-            r#"{{"itemId":"{item_id}","type":"sell","platinum":{platinum},"quantity":{quantity},"visible":{visible}}}"#
-        )),
+        body: Some(body),
     })?;
     write_outcome(response, token)
 }

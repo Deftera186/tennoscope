@@ -1210,12 +1210,14 @@ pub struct MarketAccountView {
     /// order is not a problem, and counting one would put a false alarm on the navigation of every
     /// machine that has not read the game yet.
     pub flagged: usize,
-    /// The collection paths this account may publish a listing for.
+    /// The collection rows this account may publish a listing for.
     ///
-    /// Sent rather than recomputed on the frontend because the rule is `path_is_comparable`, which
-    /// is measured against warframe.market's own table and lives in the crate that parses it. A
-    /// second implementation in TypeScript would be a copy of a rule that exists to keep two
-    /// vocabularies apart, and it would drift.
+    /// Row ids rather than paths, because the rows are what a listing names: an unranked stack and
+    /// a maxed copy of one card are two listings -- rank 0 and the ceiling -- while a part-ranked
+    /// copy between them is none, and a relic refinement is one of four. Sent rather than
+    /// recomputed on the frontend because the rule is the resolver in the crate that parses
+    /// warframe.market's own table. A second implementation in TypeScript would be a copy of a
+    /// rule that exists to keep two vocabularies apart, and it would drift.
     pub listable: Vec<String>,
     /// What warframe.market shows this account as, and how it is being chosen.
     ///
@@ -1299,20 +1301,25 @@ impl MarketAccountView {
         }
     }
 
-    /// Which of the collection's paths can be listed, computed once against the item table.
+    /// Which of the collection's rows can be listed, computed once against the item table.
     ///
     /// Separate from `linked` because the two callers that build a view already hold the table and
     /// the collection, and threading both through every construction site would make an argument
-    /// list out of what is one join.
+    /// list out of what is one join. No dedup: the collection's keys are the row ids this emits,
+    /// and they are unique by construction.
     #[must_use]
     pub fn with_listable(mut self, items: &MarketItems, collection: &Collection) -> Self {
         self.listable = collection
             .entries()
-            .map(|entry| entry.item.id.catalog_path())
-            .filter(|path| items.market_id_for_path(path).is_some())
-            .map(str::to_owned)
+            .filter(|entry| {
+                // An unknown ceiling is not a max: it is a riven, and a riven's rank is no
+                // listing's rank.
+                items
+                    .listing_for(entry.item.id.as_str(), entry.at_max_rank().unwrap_or(false))
+                    .is_some()
+            })
+            .map(|entry| entry.item.id.as_str().to_owned())
             .collect();
-        self.listable.dedup();
         self
     }
 }

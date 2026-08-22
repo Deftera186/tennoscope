@@ -2,8 +2,8 @@ mod common;
 
 use common::{FakeTransport, ok, ok_with_token, status};
 use warframe_market::{
-    MarketError, MarketToken, Method, OrderKind, create_order, delete_order, list_mine,
-    set_order_quantity,
+    MarketError, MarketToken, Method, NewSellOrder, OrderKind, create_order, delete_order,
+    list_mine, set_order_quantity,
 };
 
 const FAKE_TOKEN: &str = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.";
@@ -187,11 +187,10 @@ fn a_malformed_order_list_is_rejected() {
     );
 }
 
-/// The four fields, and no fifth. Everything the API calls contextual is absent by construction:
-/// callers only offer this for items whose path names one collection row, which is exactly the set
-/// with no `perTrade`, rank, subtype, charges or stars to declare.
+/// The four fields every listing carries, and no contextual one: those arrive only when the item's
+/// shape demands them, and the API forbids each one on every item that does not.
 #[test]
-fn a_new_listing_sends_the_item_the_price_the_count_and_its_visibility() {
+fn a_plain_listing_sends_the_item_the_price_the_count_and_its_visibility() {
     let transport = FakeTransport::new(vec![ok(
         r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
     )]);
@@ -199,10 +198,15 @@ fn a_new_listing_sends_the_item_the_price_the_count_and_its_visibility() {
     create_order(
         &transport,
         &token(),
-        "54a73e65e779893a797fff33",
-        19,
-        3,
-        true,
+        NewSellOrder {
+            item_id: "54a73e65e779893a797fff33",
+            platinum: 19,
+            quantity: 3,
+            visible: true,
+            rank: None,
+            subtype: None,
+            per_trade: None,
+        },
     )
     .expect("listed");
 
@@ -218,6 +222,70 @@ fn a_new_listing_sends_the_item_the_price_the_count_and_its_visibility() {
     );
 }
 
+/// A mod or arcane listing has to say which of the two quoted ranks it is; rank zero is the
+/// unranked stack's. The field is absent for every item without a `maxRank`, and the same body
+/// would be refused either way round.
+#[test]
+fn a_ranked_listing_declares_its_rank() {
+    let transport = FakeTransport::new(vec![ok(
+        r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
+    )]);
+
+    create_order(
+        &transport,
+        &token(),
+        NewSellOrder {
+            item_id: "54ca39abe7798915c1c11e10",
+            platinum: 19,
+            quantity: 1,
+            visible: true,
+            rank: Some(0),
+            subtype: None,
+            per_trade: None,
+        },
+    )
+    .expect("listed");
+
+    assert_eq!(
+        transport.seen()[0].body.as_deref(),
+        Some(
+            r#"{"itemId":"54ca39abe7798915c1c11e10","type":"sell","platinum":19,"quantity":1,"visible":true,"rank":0}"#
+        )
+    );
+}
+
+/// A relic listing names its refinement as the subtype the market publishes, and declares the
+/// per-trade size every bulk-tradable must carry. An arcane's listing carries the per-trade size
+/// with a rank instead -- the dimensions compose, and neither implies the other.
+#[test]
+fn a_relic_listing_declares_its_subtype_and_trade_size() {
+    let transport = FakeTransport::new(vec![ok(
+        r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
+    )]);
+
+    create_order(
+        &transport,
+        &token(),
+        NewSellOrder {
+            item_id: "6054dd685221e30057500f63",
+            platinum: 19,
+            quantity: 3,
+            visible: true,
+            rank: None,
+            subtype: Some("radiant"),
+            per_trade: Some(1),
+        },
+    )
+    .expect("listed");
+
+    assert_eq!(
+        transport.seen()[0].body.as_deref(),
+        Some(
+            r#"{"itemId":"6054dd685221e30057500f63","type":"sell","platinum":19,"quantity":3,"visible":true,"subtype":"radiant","perTrade":1}"#
+        )
+    );
+}
+
 /// Hidden is a real choice rather than an oversight: this account's whole order list was hidden,
 /// which is how the zero total came about in the first place.
 #[test]
@@ -226,7 +294,20 @@ fn a_listing_can_be_published_hidden() {
         r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
     )]);
 
-    create_order(&transport, &token(), "item", 19, 1, false).expect("listed");
+    create_order(
+        &transport,
+        &token(),
+        NewSellOrder {
+            item_id: "item",
+            platinum: 19,
+            quantity: 1,
+            visible: false,
+            rank: None,
+            subtype: None,
+            per_trade: None,
+        },
+    )
+    .expect("listed");
 
     assert!(
         transport.seen()[0]
@@ -237,23 +318,65 @@ fn a_listing_can_be_published_hidden() {
     );
 }
 
-/// Refused before a request is spent finding out, and before an id could break out of the JSON it
-/// is interpolated into.
+/// Refused before a request is spent finding out, and before an id or subtype could break out of
+/// the JSON it is interpolated into. A per-trade size of zero is the same non-listing a zero
+/// quantity is.
 #[test]
 fn a_listing_outside_what_the_api_accepts_is_refused_without_asking() {
-    for (item, platinum, quantity) in [
-        ("item", 0, 1),
-        ("item", 900_001, 1),
-        ("item", 19, 0),
-        ("item", 19, 10_000),
-        ("", 19, 1),
-        (r#"a","type":"buy"#, 19, 1),
-    ] {
+    let plain = NewSellOrder {
+        item_id: "item",
+        platinum: 19,
+        quantity: 1,
+        visible: true,
+        rank: None,
+        subtype: None,
+        per_trade: None,
+    };
+    let refusing = [
+        NewSellOrder {
+            platinum: 0,
+            ..plain
+        },
+        NewSellOrder {
+            platinum: 900_001,
+            ..plain
+        },
+        NewSellOrder {
+            quantity: 0,
+            ..plain
+        },
+        NewSellOrder {
+            quantity: 10_000,
+            ..plain
+        },
+        NewSellOrder {
+            item_id: "",
+            ..plain
+        },
+        NewSellOrder {
+            item_id: r#"a","type":"buy"#,
+            ..plain
+        },
+        NewSellOrder {
+            subtype: Some(r#"z","rank":9"#),
+            ..plain
+        },
+        NewSellOrder {
+            subtype: Some(""),
+            ..plain
+        },
+        NewSellOrder {
+            per_trade: Some(0),
+            ..plain
+        },
+    ];
+    for order in refusing {
         let transport = FakeTransport::new(vec![]);
         assert_eq!(
-            create_order(&transport, &token(), item, platinum, quantity, true).unwrap_err(),
+            create_order(&transport, &token(), order).unwrap_err(),
             MarketError::Rejected,
-            "{item:?} {platinum} {quantity} should be refused"
+            "{:?} should be refused",
+            order
         );
         assert!(transport.seen().is_empty(), "nothing should be sent");
     }

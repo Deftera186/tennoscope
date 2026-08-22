@@ -11,8 +11,8 @@ use app_core::{MarketAccountView, OrderStatus, ReconciledOrder, reconcile_orders
 use local_store::SnapshotMeta;
 use warframe_domain::Collection;
 use warframe_market::{
-    CredentialBacking, CredentialStore, MarketError, MarketItems, MarketToken, MarketTransport,
-    list_mine,
+    CredentialBacking, CredentialStore, Listing, MarketError, MarketItems, MarketToken,
+    MarketTransport, list_mine,
 };
 
 pub struct MarketSession {
@@ -170,34 +170,34 @@ pub fn overshoot_quantity(view: &MarketAccountView, order_id: &str) -> Option<u3
 /// A sell was asked for on something this device does not hold.
 pub const ITEM_NOT_OWNED: &str = "This device's collection does not hold that item";
 
-/// A sell was asked for on an item whose market identity does not name one collection row.
+/// A sell was asked for on a row whose listing this application cannot name honestly.
 ///
-/// The same items reconciliation declines to judge -- relics, sets, anything ranked or subtyped.
-/// They are also exactly the items whose create body needs contextual fields this application does
-/// not collect, so listing one would be refused by warframe.market anyway, after the request.
+/// A copy held part-way up its ranks -- warframe.market quotes a card at rank 0 and at its ceiling
+/// only -- an Ayatan sculpture whose socketed stars no row knows, a set whose market entry names
+/// the built item rather than the parts actually held. The refusal is backend-side because the
+/// request would be refused by warframe.market anyway, after the request.
 pub const ITEM_NOT_LISTABLE: &str = "That item cannot be listed from TennoScope: warframe.market needs details this app does not ask for";
 
-/// The market id a sell may be posted against, or the reason it is refused.
+/// The listing a sell may publish, or the reason it is refused.
 ///
-/// Takes a collection path rather than a market id for the same reason `set_order_quantity`
+/// Takes a collection row id rather than a market id for the same reason `set_order_quantity`
 /// derives its own quantity: a market id supplied by the frontend is a value nothing checked, and
-/// this one addresses which item a real listing gets published for. The path is checked against
-/// the collection first -- offering to sell what the player does not have is the mirror of the
+/// this one addresses which item a real listing gets published for. The row is checked against the
+/// collection first -- offering to sell what the player does not have is the mirror of the
 /// `missing` flag this screen exists to raise -- and then resolved through the item table, which
-/// answers only for items whose path names one row.
+/// answers with the rank, subtype and per-trade size the row's own identity implies. Every
+/// contextual field of the create body comes from here; none is ever taken from the caller.
 pub fn authorize_sell<'a>(
     items: &'a MarketItems,
     collection: &Collection,
-    catalog_path: &str,
-) -> Result<&'a str, &'static str> {
-    if !collection
+    collection_id: &str,
+) -> Result<Listing<'a>, &'static str> {
+    let held = collection
         .entries()
-        .any(|entry| entry.item.id.catalog_path() == catalog_path)
-    {
-        return Err(ITEM_NOT_OWNED);
-    }
+        .find(|entry| entry.item.id.as_str() == collection_id)
+        .ok_or(ITEM_NOT_OWNED)?;
     items
-        .market_id_for_path(catalog_path)
+        .listing_for(collection_id, held.at_max_rank().unwrap_or(false))
         .ok_or(ITEM_NOT_LISTABLE)
 }
 

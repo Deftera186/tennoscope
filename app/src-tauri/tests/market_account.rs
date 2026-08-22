@@ -313,45 +313,76 @@ fn a_removal_is_authorized_for_an_id_on_the_held_list() {
     assert!(result.is_ok(), "a held id must be authorized");
 }
 
-/// The shape of `/v2/items`, in the two cases selling cares about: an ordinary part whose path
-/// names one collection row, and a relic whose one entry stands for four refinements.
+/// The shape of `/v2/items`, in the cases selling cares about: an ordinary part whose path names
+/// one collection row, a mod whose listing must carry a rank, and a relic whose one entry stands
+/// for four refinements. Shapes verbatim from the live table.
 const SELLABLE_ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
     {"id":"54a73e65e779893a797fff33","slug":"braton_prime_blueprint",
      "gameRef":"/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
      "i18n":{"en":{"name":"Braton Prime Blueprint"}}},
-    {"id":"relic-id","slug":"lith_a1_relic",
-     "gameRef":"/Lotus/Types/Game/Projections/T1VoidProjectionBratonPrimeDBronze",
+    {"id":"54ca39abe7798915c1c11e10","slug":"creeping_bullseye",
+     "gameRef":"/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol",
+     "maxRank":5,"i18n":{"en":{"name":"Creeping Bullseye"}}},
+    {"id":"6054dd685221e30057500f63","slug":"axi_a1_relic",
+     "gameRef":"/Lotus/Types/Game/Projections/T4VoidProjectionE","bulkTradable":true,
      "subtypes":["intact","exceptional","flawless","radiant"],
-     "i18n":{"en":{"name":"Lith A1 Relic"}}}
+     "i18n":{"en":{"name":"Axi A1 Relic"}}}
 ],"error":null}"#;
 
-fn collection_holding(paths: &[&str]) -> Collection {
-    let entries = paths
-        .iter()
-        .map(|path| {
-            let id = ItemId::new(*path).expect("item id");
-            let item = CatalogItem::new(id, "Item", Category::PrimePart).expect("catalog item");
-            InventoryEntry::new(item, 3)
-        })
-        .collect();
+const MOD_PATH: &str = "/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol";
+const RELIC_BASE: &str = "/Lotus/Types/Game/Projections/T4VoidProjectionE";
+
+fn entry_of(path: &str, quantity: u32, rank: Option<u32>, max_rank: Option<u32>) -> InventoryEntry {
+    let id = ItemId::new(path).expect("item id");
+    let item = CatalogItem::new(id, "Item", Category::PrimePart).expect("catalog item");
+    let entry = InventoryEntry::new(item, quantity);
+    match rank {
+        Some(rank) => entry.with_rank(rank, max_rank),
+        None => entry,
+    }
+}
+
+fn collection_holding(entries: &[InventoryEntry]) -> Collection {
     let mut collection = Collection::default();
-    collection.replace(InventorySnapshot::coherent(entries).expect("snapshot"));
+    collection.replace(InventorySnapshot::coherent(entries.to_vec()).expect("snapshot"));
     collection
 }
 
 #[test]
-fn a_sell_resolves_the_collections_path_to_the_market_id_it_will_be_listed_against() {
+fn a_sell_resolves_the_collections_row_to_the_listing_it_will_be_published_as() {
     let items = MarketItems::from_response(SELLABLE_ITEMS.as_bytes()).expect("items parse");
-    let collection = collection_holding(&["/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint"]);
+    let collection = collection_holding(&[entry_of(
+        "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+        3,
+        None,
+        None,
+    )]);
 
-    let item_id = authorize_sell(
+    let listing = authorize_sell(
         &items,
         &collection,
         "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
     )
     .expect("an owned, comparable item can be listed");
 
-    assert_eq!(item_id, "54a73e65e779893a797fff33");
+    assert_eq!(listing.item_id, "54a73e65e779893a797fff33");
+    assert_eq!(listing.rank, None);
+    assert_eq!(listing.subtype, None);
+    assert_eq!(listing.per_trade, None);
+}
+
+/// The row is what gets sold, and the guard is the row id rather than the path: a card held only
+/// maxed has no unranked stack to list, and a path with no such row is not held at all. The old
+/// path match would have offered the unranked stack's listing against copies that are ranked.
+#[test]
+fn a_sell_names_one_row_not_the_cards_whole_path() {
+    let items = MarketItems::from_response(SELLABLE_ITEMS.as_bytes()).expect("items parse");
+    let collection = collection_holding(&[entry_of(&format!("{MOD_PATH}#5"), 1, Some(5), Some(5))]);
+
+    assert_eq!(
+        authorize_sell(&items, &collection, MOD_PATH),
+        Err(ITEM_NOT_OWNED)
+    );
 }
 
 /// Offering to sell what the device does not hold is the mirror of the `missing` flag this whole
@@ -369,17 +400,39 @@ fn a_sell_is_refused_for_something_this_device_does_not_hold() {
     assert_eq!(result, Err(ITEM_NOT_OWNED));
 }
 
-/// Refused on the backend and not merely hidden in the interface. A relic's create body needs a
-/// `subtype` this application never collects, so the request would come back 400 -- but the
+/// A maxed copy lists at its ceiling and a relic refinement at its subtype, both resolved from the
+/// row itself: this is the guard that decides what the create body will carry, and neither value
+/// is ever taken from the frontend.
+#[test]
+fn a_maxed_copy_and_a_relic_refinement_resolve_their_own_context() {
+    let items = MarketItems::from_response(SELLABLE_ITEMS.as_bytes()).expect("items parse");
+    let collection = collection_holding(&[
+        entry_of(&format!("{MOD_PATH}#5"), 1, Some(5), Some(5)),
+        entry_of(&format!("{RELIC_BASE}Bronze"), 6, None, None),
+    ]);
+
+    let maxed = authorize_sell(&items, &collection, &format!("{MOD_PATH}#5"))
+        .expect("a maxed copy is one of the two ranks the market quotes");
+    assert_eq!(maxed.item_id, "54ca39abe7798915c1c11e10");
+    assert_eq!(maxed.rank, Some(5));
+
+    let relic = authorize_sell(&items, &collection, &format!("{RELIC_BASE}Bronze"))
+        .expect("a refinement is one of the four rows a relic entry stands for");
+    assert_eq!(relic.item_id, "6054dd685221e30057500f63");
+    assert_eq!(relic.subtype, Some("intact"));
+    assert_eq!(relic.per_trade, Some(1));
+}
+
+/// Refused on the backend and not merely hidden in the interface. A part-ranked copy has no rank
+/// the market would accept -- it quotes a card at rank 0 and at its ceiling only -- so the
 /// refusal belongs here, where a caller cannot route around it.
 #[test]
-fn a_sell_is_refused_for_an_item_whose_identity_names_no_single_row() {
+fn a_sell_is_refused_for_a_copy_held_part_way_up() {
     let items = MarketItems::from_response(SELLABLE_ITEMS.as_bytes()).expect("items parse");
-    let path = "/Lotus/Types/Game/Projections/T1VoidProjectionBratonPrimeDBronze";
-    let collection = collection_holding(&[path]);
+    let collection = collection_holding(&[entry_of(&format!("{MOD_PATH}#3"), 1, Some(3), Some(5))]);
 
     assert_eq!(
-        authorize_sell(&items, &collection, path),
+        authorize_sell(&items, &collection, &format!("{MOD_PATH}#3")),
         Err(ITEM_NOT_LISTABLE)
     );
 }
