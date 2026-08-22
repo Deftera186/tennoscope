@@ -25,6 +25,20 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ### Fixed
 
+- **A stale EE.log replayed as a live session produced a reward report for a game that was not
+  running.** Resolving the log path under a freshly discovered process can settle on a different
+  Wine prefix's EE.log a moment after attaching, and the identity change reset the read offset to
+  zero — so a morning fissure replayed within a second as if it were happening now: relic loads
+  from hours before armed the reward poller, the pipeline ran against a screen that did not exist,
+  and capture health ended the day degraded with "Structured reward records were incomplete", the
+  state the Report block then shows until a real reward screen reads clean. A replacement log is
+  now placed in time before any of it is replayed: by the session start from the `[UTC: ...]`
+  clock the game writes at the top of every log (EE.log lines themselves carry only engine
+  uptime), or by the file's own creation time when no clock line is readable. Lines older than
+  the moment the monitor attached to the process — less a minute's grace for the flush delay —
+  are dropped, a log that is entirely older is skipped outright, and a log that cannot be placed
+  in time at all is skipped too: a missed reward is quieter than a false report.
+
 - **The "listed" badge on a collection card never appeared.** It matched the order's `item_id`
   against the collection row's id — warframe.market's opaque identifier against a `/Lotus/` path,
   two namespaces that share nothing — so no card ever said it was listed, a successful sell left

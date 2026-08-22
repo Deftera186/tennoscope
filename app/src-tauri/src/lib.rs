@@ -61,6 +61,7 @@ mod reward_ocr;
 mod reward_source;
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
+    ee_log_rotation_keep_from, ee_log_session_start_utc, ee_log_stale_prefix_end,
 };
 pub use overlay_window::{OverlayGeometry, WindowRect, borderless_notice, reward_overlay_geometry};
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
@@ -2377,7 +2378,7 @@ fn monitor_path_changed(
     }
 }
 
-fn build_monitor_input(
+pub fn build_monitor_input(
     machine: &MonitorMachine,
     now: u64,
     pid: u32,
@@ -2436,16 +2437,48 @@ fn build_monitor_input(
     if file.take(requested).read_to_end(&mut bytes).is_err() {
         return (MonitorInput::running_with_log_error(now, pid), Vec::new());
     }
+    // A read from zero means the log changed identity under the same process: a rotation, or the
+    // path resolution settling on a different Wine prefix's EE.log. Everything from before this
+    // process was attached is not this session's events, and replaying it as if it were is the
+    // whole of the 2026-08-22 ghost report -- an hours-old fissure armed the poller, ran the
+    // reward pipeline against a screen that was not there, and left health degraded for a game
+    // that was never running.
+    let mut observation_len = offset + bytes.len() as u64;
+    if offset == 0 {
+        let created_unix = metadata
+            .created()
+            .ok()
+            .and_then(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since| since.as_secs());
+        match ee_log_rotation_keep_from(&bytes, created_unix, machine.attached_since()) {
+            Some(0) => {}
+            Some(keep) => {
+                log::warn!(
+                    "monitor: EE.log changed identity under the game process; skipping {} bytes \
+                     that predate this session",
+                    keep
+                );
+                bytes.drain(..keep);
+            }
+            None => {
+                log::warn!(
+                    "monitor: EE.log changed identity to a log from an earlier session; skipping \
+                     all {} bytes",
+                    bytes.len()
+                );
+                bytes.clear();
+                // Past this read, not just up to it: a stale file larger than the read cap would
+                // otherwise hand its remainder over one incremental chunk at a time.
+                observation_len = metadata.len();
+            }
+        }
+    }
     let log_bytes = bytes.clone();
     (
         MonitorInput::running(
             now,
             pid,
-            Some(LogObservation::new(
-                identity,
-                offset + bytes.len() as u64,
-                bytes,
-            )),
+            Some(LogObservation::new(identity, observation_len, bytes)),
         ),
         log_bytes,
     )
