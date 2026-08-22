@@ -13,6 +13,7 @@ import {
   refreshPrices,
   removeOrder,
   createOrder,
+  updateOrder,
   setMarketPresence,
   setOrderQuantity,
   type AppView,
@@ -28,7 +29,7 @@ import { RewardCards } from './RewardCards'
 import { MetalMark } from './MetalMark'
 import { OrdersView } from './OrdersView'
 import { isListable, listedLabel, listedOrderFor } from './orders'
-import { SellForm, type SellHandler } from './SellForm'
+import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
 import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, writePriceFloor } from './settings'
 import { snapshotFreshness } from './freshness'
@@ -110,6 +111,7 @@ function App() {
   const [priceFloor, setPriceFloor] = useState(readPriceFloor)
   const [ordersBusy, setOrdersBusy] = useState(false)
   const [ordersError, setOrdersError] = useState<string | null>(null)
+  const [ordersNote, setOrdersNote] = useState<string | null>(null)
   const viewGeneration = useRef(0)
   const foregroundInFlight = useRef(0)
 
@@ -223,12 +225,22 @@ function App() {
     setPricing(false)
   }
 
-  async function ordersOperation(operation: () => Promise<AppView>, failure: string) {
+  /**
+   * Every market write goes through here: fresh view on success, a banner on failure. The optional
+   * note is spoken once, on success only -- the badge appearing is the sighted player's
+   * confirmation, and the note is the same confirmation for anyone not looking at it.
+   */
+  async function ordersOperation(
+    operation: () => Promise<AppView>,
+    failure: string,
+    note?: (next: AppView) => string,
+  ) {
     setOrdersBusy(true)
     setOrdersError(null)
     try {
       const next = await operation()
       setView(next)
+      setOrdersNote(note ? note(next) : null)
     } catch {
       setOrdersError(failure)
     } finally {
@@ -250,8 +262,31 @@ function App() {
     ordersOperation(() => setOrderQuantity(orderId), 'Could not lower that listing.')
   const ordersPresence = (status: Presence | null, auto: boolean) =>
     ordersOperation(() => setMarketPresence(status, auto), 'Could not change your market status.')
+  /** The card's own accessible name: the rank belongs in it because a mod held at two ranks is two
+   * cards headed the same word. Shared with the spoken note, so the note says what the card is
+   * named. */
+  function cardLabel(item: CollectionItem): string {
+    return rankLabel(item) ? `${item.name}, ${rankLabel(item)}` : item.name
+  }
+
   const ordersSell = (collectionId: string, platinum: number, quantity: number, visible: boolean) =>
-    ordersOperation(() => createOrder(collectionId, platinum, quantity, visible), 'Could not publish that listing.')
+    ordersOperation(
+      () => createOrder(collectionId, platinum, quantity, visible),
+      'Could not publish that listing.',
+      next => {
+        const item = next.collection.items.find(entry => entry.id === collectionId)
+        return `Listed ${item ? cardLabel(item) : 'the item'} at ${platinum} platinum × ${quantity}`
+      },
+    )
+  const ordersUpdate = (orderId: string, platinum: number, quantity: number) =>
+    ordersOperation(
+      () => updateOrder(orderId, platinum, quantity),
+      'Could not update that listing.',
+      next => {
+        const name = next.market_account.orders.find(entry => entry.order.id === orderId)?.name
+        return `Listing updated: ${name ?? 'the item'} at ${platinum} platinum × ${quantity}`
+      },
+    )
 
   function openPage(next: Page) {
     setPage(next)
@@ -308,8 +343,11 @@ function App() {
       {/* A sell can be started from a collection card, and its failure has to be readable where it
           was started. The orders screen renders this itself, in the block that owns the recovery. */}
       {ordersError && page !== 'orders' && <p className="error-banner" role="alert">{ordersError}</p>}
+      {/* Always in the document, spoken only when a write leaves a word in it: a live region that
+          appears and disappears with its content is not announced by every reader. */}
+      <p className="sr-only" role="status">{ordersNote}</p>
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} onSell={ordersSell} ordersBusy={ordersBusy}/>}
+        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} onSell={ordersSell} onUpdate={ordersUpdate} ordersBusy={ordersBusy}/>}
         {page === 'rewards' && <RewardPage view={view}/>}
         {page === 'orders' && <OrdersView
           account={view.market_account}
@@ -320,6 +358,7 @@ function App() {
           onRemove={ordersRemove}
           onLowerTo={ordersLowerTo}
           onSell={ordersSell}
+          onUpdate={ordersUpdate}
           onPresence={ordersPresence}
           items={view.collection.items}
           busy={ordersBusy}
@@ -377,7 +416,7 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, ordersBusy }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number; onSell: SellHandler; ordersBusy: boolean }) {
+function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, onUpdate, ordersBusy }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number; onSell: SellHandler; onUpdate: UpdateHandler; ordersBusy: boolean }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -522,7 +561,7 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, onSell, orders
 
       {filtered.length
         ? <>
-          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} listedOrder={listedOrderFor(view.market_account.orders, item.id)} sellable={view.market_account.link === 'linked' && isListable(item, view.market_account.listable)} onSell={onSell} busy={ordersBusy}/></li>)}</ul>
+          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} listedOrder={listedOrderFor(view.market_account.orders, item.id)} sellable={view.market_account.link === 'linked' && isListable(item, view.market_account.listable)} onSell={onSell} onUpdate={onUpdate} busy={ordersBusy}/></li>)}</ul>
           <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
         </>
         : <EmptyState
@@ -550,7 +589,7 @@ function BandCell({ kind, value, unit, aside, label, note }: { kind: string; val
   </div>
 }
 
-function CollectionEntry({ item, listedOrder, sellable, onSell, busy }: { item: CollectionItem; listedOrder: ReturnType<typeof listedOrderFor>; sellable: boolean; onSell: SellHandler; busy: boolean }) {
+function CollectionEntry({ item, listedOrder, sellable, onSell, onUpdate, busy }: { item: CollectionItem; listedOrder: ReturnType<typeof listedOrderFor>; sellable: boolean; onSell: SellHandler; onUpdate: UpdateHandler; busy: boolean }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
   const [selling, setSelling] = useState(false)
@@ -558,6 +597,11 @@ function CollectionEntry({ item, listedOrder, sellable, onSell, busy }: { item: 
   // cards headed the same word, and without it they are indistinguishable to anyone not reading
   // the cartouches.
   const label = rankLabel(item) ? `${item.name}, ${rankLabel(item)}` : item.name
+  // Nothing offered on a card whose whole holding is already listed: the badge above says so, and
+  // the market allows one sell order per item, so a second listing is not what "sell more" can
+  // mean. A listing that covers part of the holding keeps the control, as an edit of the listing
+  // that already stands -- raising the count is the only honest way to sell the remainder.
+  const remaining = sellable && (!listedOrder || listedOrder.quantity < item.quantity)
   return <article className={`entry cat-${item.category}`} aria-label={label}>
     <div className="entry-well">
       {item.image_url && !artFailed
@@ -589,11 +633,9 @@ function CollectionEntry({ item, listedOrder, sellable, onSell, busy }: { item: 
         </span>}
       </div>
       {item.live && <p className="freshness">checked live</p>}
-      {/* Nothing offered on a card that is already listed: the badge above says so, and a second
-          listing for the same item is not what "sell" meant. */}
-      {sellable && !listedOrder && (selling
-        ? <SellForm item={item} busy={busy} onSell={onSell} onDone={() => setSelling(false)}/>
-        : <button type="button" className="stamp sell-open" disabled={busy} onClick={() => setSelling(true)}><span>Sell</span></button>)}
+      {remaining && (selling
+        ? <SellForm item={item} listing={listedOrder ?? undefined} busy={busy} onSell={onSell} onUpdate={onUpdate} onDone={() => setSelling(false)}/>
+        : <button type="button" className="stamp sell-open" disabled={busy} onClick={() => setSelling(true)}><span>{listedOrder ? 'Sell more' : 'Sell'}</span></button>)}
     </div>
   </article>
 }

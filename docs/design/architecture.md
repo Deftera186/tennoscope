@@ -120,21 +120,25 @@ only when the snapshot is coherent and newer than the order; every other case is
 unverifiable and carries no claim. Each reconciled order also names the collection row it belongs
 to, resolved through the item table as the reverse of the listing resolution -- the join nothing
 else can make, because an order's `itemId` and a row's key are namespaces that share nothing. The
-presentation reads it for the "listed" badge on a card; an order that names no one row (a set, a
-sculpture, a retired item) carries none, and no surface offers what it cannot name.
+presentation reads it for the "listed" badge on a card, and the edit writes bound their count
+against it; an order that names no one row (a set, a sculpture, a retired item) carries none, and
+no surface offers what it cannot name.
 
-Writes -- publishing a listing, taking one down, lowering an oversold quantity -- are authorized
-against the held view before any transport is built, and address items by the collection's own row
-id -- the whole `/Lotus/` key, rank suffix or relic tier included -- rather than by a market
-identifier the presentation layer supplied. Publishing is resolved from the row against the item
-table, because the row names the exact copy for sale: a bare path is the unranked stack, `path#rank`
-a ranked copy, a tier-suffixed path a relic refinement. `POST /order` requires contextual fields
-exactly when the item supports the dimension -- a rank, star counts, a per-trade size -- and
-refuses the request either way, so the resolver sends each field only for the items that demand
-it, and a row whose listing would need details no row knows (a part-ranked copy, a sculpture's
-socketed stars, a variant split) is not offered rather than refused after the fact. That is a
-narrower question than whether an owned count can be read off the collection: a ranked mod
-reconciles by its path and lists by its rank.
+Writes -- publishing a listing, editing its price and count, taking one down, lowering an oversold
+quantity -- are authorized against the held view before any transport is built, and address items
+by the collection's own row id -- the whole `/Lotus/` key, rank suffix or relic tier included --
+rather than by a market identifier the presentation layer supplied. Publishing is resolved from
+the row against the item table, because the row names the exact copy for sale: a bare path is the
+unranked stack, `path#rank` a ranked copy, a tier-suffixed path a relic refinement. Editing is
+bounded by the row the order names: warframe.market allows one sell order per item, so selling
+more of a partly-listed holding is an edit of the existing listing rather than a second one, and
+the count may not exceed that row's holding -- the overshoot flag's own condition, not created by
+hand. `POST /order` requires contextual fields exactly when the item supports the dimension -- a
+rank, star counts, a per-trade size -- and refuses the request either way, so the resolver sends
+each field only for the items that demand it, and a row whose listing would need details no row
+knows (a part-ranked copy, a sculpture's socketed stars, a variant split) is not offered rather
+than refused after the fact. That is a narrower question than whether an owned count can be read
+off the collection: a ranked mod reconciles by its path and lists by its rank.
 
 Presence -- what warframe.market shows the account as -- is a separate crate, because it is a held
 WebSocket with a reconnect lifecycle rather than request and response over a transport. It reports

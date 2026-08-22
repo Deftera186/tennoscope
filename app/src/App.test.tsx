@@ -6,7 +6,7 @@ const backend = vi.hoisted(() => ({
   getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(), refreshPrices: vi.fn(),
   marketStatus: vi.fn(), marketSignIn: vi.fn(), marketLinkToken: vi.fn(), marketSignOut: vi.fn(),
   refreshOrders: vi.fn(), removeOrder: vi.fn(), setOrderQuantity: vi.fn(),
-  setMarketPresence: vi.fn(), createOrder: vi.fn(),
+  setMarketPresence: vi.fn(), createOrder: vi.fn(), updateOrder: vi.fn(),
 }))
 const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverlay: vi.fn() }))
 vi.mock('./backend', () => backend)
@@ -257,7 +257,9 @@ describe('MVP desktop interface', () => {
     await screen.findByRole('heading', { name: 'Your collection' })
     await userEvent.click(screen.getByRole('button', { name: 'Refresh inventory' }))
     expect(backend.refreshInventory).toHaveBeenCalledOnce()
-    expect(screen.getByRole('status')).toHaveTextContent(/Watching|Attention/)
+    // The reader's own state is announced in the masthead; the sheet below carries its own status
+    // regions, so this is scoped to the one that speaks for the reader.
+    expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent(/Watching|Attention/)
   })
 
   it('does not let an older poll overwrite a newer manual refresh', async () => {
@@ -601,6 +603,85 @@ describe('MVP desktop interface', () => {
     render(<App/>)
     await screen.findByRole('heading', { name: 'Your collection' })
     expect(await screen.findByText(/listed 1 @ 30p/i)).toBeInTheDocument()
+  })
+
+  /** A listing that covers part of the holding is not the end of selling that row: the remainder is
+   * exactly what the control beside the badge still offers, as an edit of the one order the market
+   * allows per item rather than a second listing it would refuse. */
+  it('offers to sell the remainder of a partly listed holding, as an edit of the listing', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.marketStatus.mockResolvedValue({
+      ...view,
+      market_account: {
+        ...view.market_account,
+        link: 'linked',
+        listable: ['lith-a1'],
+        orders: [{
+          order: { id: 'o1', item_id: '6054dd685221e30057500f63', kind: 'sell', platinum: 20, quantity: 3, per_trade: 1, visible: true },
+          name: 'Lith A1 Relic',
+          row_id: 'lith-a1',
+          status: { state: 'ok' },
+        }],
+      },
+    })
+    backend.updateOrder.mockResolvedValue(view)
+    const user = userEvent.setup()
+    render(<App/>)
+    const card = await screen.findByRole('article', { name: 'Lith A1 Relic' })
+
+    expect(await within(card).findByText(/listed 3 of 7 @ 20p/i)).toBeInTheDocument()
+    await user.click(await within(card).findByRole('button', { name: /sell more/i }))
+    expect(screen.getByLabelText('Platinum')).toHaveValue(20)
+    await user.clear(screen.getByLabelText('Quantity'))
+    await user.type(screen.getByLabelText('Quantity'), '5')
+    await user.click(screen.getByRole('button', { name: /save listing/i }))
+
+    expect(backend.updateOrder).toHaveBeenCalledWith('o1', 20, 5)
+    expect(backend.createOrder).not.toHaveBeenCalled()
+  })
+
+  /** The whole holding already listed is the state the old rule guarded: no second listing, and
+   * nothing left to sell. The badge says the row is fully listed; the control says nothing. */
+  it('offers nothing more on a card whose whole holding is listed', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.marketStatus.mockResolvedValue({
+      ...view,
+      market_account: {
+        ...view.market_account,
+        link: 'linked',
+        listable: ['lith-a1'],
+        orders: [{
+          order: { id: 'o1', item_id: '6054dd685221e30057500f63', kind: 'sell', platinum: 20, quantity: 7, per_trade: 1, visible: true },
+          name: 'Lith A1 Relic',
+          row_id: 'lith-a1',
+          status: { state: 'ok' },
+        }],
+      },
+    })
+    render(<App/>)
+    const card = await screen.findByRole('article', { name: 'Lith A1 Relic' })
+
+    expect(await within(card).findByText(/listed 7 @ 20p/i)).toBeInTheDocument()
+    expect(within(card).queryByRole('button', { name: /sell/i })).toBeNull()
+  })
+
+  /** The press that succeeded is spoken once, where it was made. The badge appearing is the sighted
+   * player's confirmation; this is the same confirmation for anyone not looking at it. */
+  it('announces a listing published from a card', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.marketStatus.mockResolvedValue({
+      ...view,
+      market_account: { ...view.market_account, link: 'linked', listable: ['lex-prime-receiver'] },
+    })
+    backend.createOrder.mockResolvedValue(view)
+    render(<App/>)
+    await screen.findByRole('heading', { name: 'Your collection' })
+
+    const card = await screen.findByRole('article', { name: 'Lex Prime Receiver' })
+    await userEvent.click(await within(card).findByRole('button', { name: 'Sell' }))
+    await userEvent.click(within(card).getByRole('button', { name: /list for sale/i }))
+
+    expect(await screen.findByText(/listed Lex Prime Receiver at 19 platinum/i)).toBeInTheDocument()
   })
 
   /**

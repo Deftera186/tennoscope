@@ -86,3 +86,5 @@ export const setMarketPresence = (status: Presence | null, auto: boolean) =>
   invoke<AppView>('set_market_presence', { status, auto })
 export const createOrder = (collectionId: string, platinum: number, quantity: number, visible: boolean) =>
   invoke<AppView>('create_order', { collectionId, platinum, quantity, visible })
+export const updateOrder = (orderId: string, platinum: number, quantity: number) =>
+  invoke<AppView>('update_order', { orderId, platinum, quantity })

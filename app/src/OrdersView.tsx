@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { CollectionItem, MarketAccount, Presence } from './backend'
-import { SellForm, type SellHandler } from './SellForm'
-import { backingLabel, fixLabel, isFlagged, isListable, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
+import type { CollectionItem, MarketAccount, Presence, ReconciledOrder } from './backend'
+import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
+import { backingLabel, fixLabel, isFlagged, isListable, listedOrderFor, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
 import { snapshotFreshness } from './freshness'
 import { MetalMark } from './MetalMark'
 
@@ -14,6 +14,7 @@ type OrdersViewProps = {
   onRemove: (orderId: string) => Promise<void>
   onLowerTo: (orderId: string, quantity: number) => Promise<void>
   onSell: SellHandler
+  onUpdate: UpdateHandler
   onPresence: (status: Presence | null, auto: boolean) => Promise<void>
   items: CollectionItem[]
   busy: boolean
@@ -26,7 +27,7 @@ function fetchFreshness(fetchedAt: string | undefined, now = new Date()) {
   return snapshotFreshness(fetchedAt ? { observed_at: fetchedAt, game_build: '', source: 'warframe.market' } : null, now)
 }
 
-export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, onSell, onPresence, items, busy, error }: OrdersViewProps) {
+export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, onSell, onUpdate, onPresence, items, busy, error }: OrdersViewProps) {
   if (account.link === 'unlinked') {
     return <UnlinkedPanel onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} error={error} />
   }
@@ -88,12 +89,12 @@ export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefres
 
     {!needsRelink && <PresenceSwitch presence={account.presence} busy={busy} onPresence={onPresence}/>}
 
-    {!needsRelink && <NewListing items={items} listable={account.listable} busy={busy} onSell={onSell}/>}
+    {!needsRelink && <NewListing items={items} orders={account.orders} listable={account.listable} busy={busy} onSell={onSell} onUpdate={onUpdate}/>}
 
     {account.orders.length
       ? <ul className="docket" aria-label="Market orders">
         {sortOrders(account.orders).map(entry => <li key={entry.order.id}>
-          <OrderRow entry={entry} busy={busy} onRemove={onRemove} onLowerTo={onLowerTo} />
+          <OrderRow entry={entry} items={items} busy={busy} onRemove={onRemove} onLowerTo={onLowerTo} onSell={onSell} onUpdate={onUpdate} />
         </li>)}
       </ul>
       : <div className="empty-state">
@@ -109,18 +110,31 @@ export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefres
  * figures are read down a column -- price against price, quantity against quantity -- so the
  * columns are fixed and the fix button sits in a reserved slot that stays empty on the rows that
  * need nothing. A row whose button appeared and vanished would shift the rows beneath it.
+ *
+ * The edit form opens in place, spanning the row's full width beneath its figures: the change is
+ * being made to this row, and moving it somewhere else would take the numbers it edits out of the
+ * line they are read against.
  */
-function OrderRow({ entry, busy, onRemove, onLowerTo }: {
+function OrderRow({ entry, items, busy, onRemove, onLowerTo, onSell, onUpdate }: {
   entry: ReturnType<typeof sortOrders>[number]
+  items: CollectionItem[]
   busy: boolean
   onRemove: (orderId: string) => Promise<void>
   onLowerTo: (orderId: string, quantity: number) => Promise<void>
+  onSell: SellHandler
+  onUpdate: UpdateHandler
 }) {
+  const [editing, setEditing] = useState(false)
   const flagged = isFlagged(entry.status)
   const label = statusLabel(entry)
   const fix = fixLabel(entry.status)
   const value = orderValue(entry.order)
   const overshoot = entry.status.state === 'overshoot' ? entry.status.owned : null
+  // The edit is bounded by a holding, so it is offered only where the order names one held row.
+  // A set, a sculpture, a buy order: real rows, no edit, same honesty as everywhere else.
+  const held = entry.order.kind === 'sell' && entry.row_id
+    ? items.find(item => item.id === entry.row_id && item.quantity > 0)
+    : undefined
   return <article className={`docket-line${flagged ? ' doubt' : ''}`} aria-label={entry.name ?? entry.order.item_id}>
     {/* The claim is struck as a shape as well as a colour: a row is legible as flagged with the
         hue removed, which is what keeps the whole thing readable to anyone who cannot separate
@@ -146,12 +160,26 @@ function OrderRow({ entry, busy, onRemove, onLowerTo }: {
         disabled={busy}
         onClick={() => onLowerTo(entry.order.id, overshoot)}
       ><span>{fix}</span></button>}
+      {held && <button
+        type="button"
+        className="stamp"
+        disabled={busy}
+        onClick={() => setEditing(true)}
+      ><span>Edit listing</span></button>}
       <RemoveControl
         entry={entry}
         busy={busy}
         onRemove={onRemove}
       />
     </span>
+    {held && editing && <SellForm
+      item={held}
+      listing={entry.order}
+      busy={busy}
+      onSell={onSell}
+      onUpdate={onUpdate}
+      onDone={() => setEditing(false)}
+    />}
   </article>
 }
 
@@ -261,15 +289,21 @@ function statusWord(status: Presence | null): string {
  * either -- the refusal lives in one place, on the backend, and neither surface offers what it
  * would refuse.
  *
+ * A row that is already listed opens the form as an edit of that listing, for the same reason the
+ * card offers "Sell more": warframe.market allows one sell order per item, and a create against an
+ * existing one would be refused by the market after the request.
+ *
  * Typed rather than picked from a list. A collection runs to a couple of thousand items, and no
  * one scrolls a list that long to find the one they already have a name for -- so the field takes
  * the name and the register answers with the few that match.
  */
-function NewListing({ items, listable, busy, onSell }: {
+function NewListing({ items, orders, listable, busy, onSell, onUpdate }: {
   items: CollectionItem[]
+  orders: ReconciledOrder[]
   listable: string[]
   busy: boolean
   onSell: SellHandler
+  onUpdate: UpdateHandler
 }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -277,6 +311,7 @@ function NewListing({ items, listable, busy, onSell }: {
   const sellable = items.filter(item => isListable(item, listable))
   if (!sellable.length) return null
   const item = sellable.find(entry => entry.id === chosen)
+  const listing = item ? listedOrderFor(orders, item.id) : null
 
   function close() {
     setOpen(false)
@@ -309,7 +344,7 @@ function NewListing({ items, listable, busy, onSell }: {
           <b>{item.name}</b> <i>· {item.quantity} held</i>
           <button type="button" className="link-button" disabled={busy} onClick={() => setChosen('')}>Choose another</button>
         </p>
-        <SellForm item={item} busy={busy} onSell={onSell} onDone={close}/>
+        <SellForm item={item} listing={listing ?? undefined} busy={busy} onSell={onSell} onUpdate={onUpdate} onDone={close}/>
       </>
       : <>
         <label className="dial-slot">

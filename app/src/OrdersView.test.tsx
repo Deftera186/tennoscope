@@ -12,7 +12,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-function entry(id: string, status: ReconciledOrder['status'], quantity = 1): ReconciledOrder {
+function entry(id: string, status: ReconciledOrder['status'], quantity = 1, rowId?: string): ReconciledOrder {
   return {
     order: {
       id,
@@ -25,6 +25,7 @@ function entry(id: string, status: ReconciledOrder['status'], quantity = 1): Rec
       updated_at: '2026-07-30T10:00:00Z',
     },
     name: 'Braton Prime Blueprint',
+    row_id: rowId,
     status,
   }
 }
@@ -46,6 +47,7 @@ function account(overrides: Partial<MarketAccount> = {}): MarketAccount {
 const handlers = {
   items: [],
   onSell: vi.fn(),
+  onUpdate: vi.fn().mockResolvedValue(undefined),
   onPresence: vi.fn().mockResolvedValue(undefined),
   onSignIn: vi.fn().mockResolvedValue(undefined),
   onLinkToken: vi.fn().mockResolvedValue(undefined),
@@ -258,6 +260,84 @@ const braton: CollectionItem = {
   live: false,
   priceable: true,
 }
+
+describe('editing a listing from its row', () => {
+  /// The row is where the player is looking at the listing itself, so it is where a change of
+  /// price or count is made. Offered only where the order names one held row: a count bounded by
+  /// a holding is the one thing this write insists on, and an order that names no row -- a set, a
+  /// sculpture -- has no holding to be bounded against.
+  it('opens the form prefilled from the row, and saves through the order', async () => {
+    const user = userEvent.setup()
+    render(
+      <OrdersView
+        account={account({ orders: [entry('o1', { state: 'ok' }, 2, braton.id)] })}
+        {...handlers}
+        items={[braton]}
+        busy={false}
+        error={null}
+      />,
+    )
+
+    await user.click(screen.getByRole('button', { name: /edit listing/i }))
+    expect(screen.getByLabelText('Platinum')).toHaveValue(12)
+    expect(screen.getByLabelText('Quantity')).toHaveValue(2)
+    await user.clear(screen.getByLabelText('Quantity'))
+    await user.type(screen.getByLabelText('Quantity'), '3')
+    await user.click(screen.getByRole('button', { name: /save listing/i }))
+
+    expect(handlers.onUpdate).toHaveBeenCalledWith('o1', 12, 3)
+    expect(handlers.onSell).not.toHaveBeenCalled()
+  })
+
+  it('offers no edit on a row that names nothing this device holds', () => {
+    const buying = entry('b', { state: 'ok' }, 1, braton.id)
+    buying.order.kind = 'buy'
+    render(
+      <OrdersView
+        account={{
+          ...account(),
+          orders: [
+            entry('set', { state: 'unverifiable' }),
+            entry('gone', { state: 'ok' }, 1, '/Lotus/Not/Held'),
+            buying,
+          ],
+        }}
+        {...handlers}
+        items={[braton]}
+        busy={false}
+        error={null}
+      />,
+    )
+
+    expect(screen.queryByRole('button', { name: /edit listing/i })).toBeNull()
+  })
+
+  /** The picker offers the same collection the cards do, and a row that is already listed is edited
+   * there for the same reason it is edited from the card: the market allows one sell order per
+   * item, and a second create would be refused after the request. */
+  it('routes the new-listing picker to an edit when the chosen row is already listed', async () => {
+    const user = userEvent.setup()
+    render(
+      <OrdersView
+        account={{
+          ...account({ listable: [braton.id] }),
+          orders: [entry('o1', { state: 'ok' }, 1, braton.id)],
+        }}
+        {...handlers}
+        items={[braton]}
+        busy={false}
+        error={null}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: /new listing/i }))
+    await user.type(screen.getByLabelText('Item'), 'brat')
+    await user.click(screen.getByRole('button', { name: /braton/i }))
+
+    expect(screen.getByRole('form', { name: /edit listing for/i })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /save listing/i }))
+    expect(handlers.onUpdate).toHaveBeenCalledWith('o1', 12, 1)
+  })
+})
 
 describe('publishing a listing', () => {
   it('offers nothing when the account can list nothing', () => {

@@ -13,6 +13,28 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ### Added
 
+- **A listing can be edited from either screen it is visible on.** Every order row on the Orders
+  screen offers an edit that opens in place, prefilled with the listing's own price and count, and
+  a collection card whose listing covers only part of the holding offers "Sell more" beside the
+  badge — an edit of the existing listing, because warframe.market allows one sell order per item
+  and a second create would be refused by the market after the request. The edit sends price and
+  count together in one patch, and offers no visibility choice because it sends none. It is
+  offered only where the order names one held row of this device's collection: a set, a sculpture
+  or a buy order has no holding to bound the count against, and the backend refuses the write on
+  the same grounds before any request is sent.
+
+### Fixed
+
+- **The "listed" badge on a collection card never appeared.** It matched the order's `item_id`
+  against the collection row's id — warframe.market's opaque identifier against a `/Lotus/` path,
+  two namespaces that share nothing — so no card ever said it was listed, a successful sell left
+  the card it was pressed on looking untouched, and the same row could be offered for sale again
+  with nothing to say it already was. The reconciliation now names the row each order belongs to
+  (the reverse of the listing resolution: rank 0 is the unranked stack's row, a card's ceiling its
+  ranked row, a relic subtype its tier-suffixed refinement), and the badge, the sell-more offer
+  and the edit all read that join. The badge counts the holding — "listed 3 of 7 @ 20p" — and a
+  listing published or edited is now spoken once, as the confirmation of the press that made it.
+
 - **Mods, arcanes and relics can be listed for sale.** The Sell button now appears for every
   collection row warframe.market can actually trade: an unranked stack and a maxed copy of a mod
   or arcane (the two ranks the market quotes — a part-ranked copy between them is still not

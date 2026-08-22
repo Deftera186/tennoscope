@@ -14,6 +14,7 @@ import {
   refreshOrders,
   removeOrder,
   setOrderQuantity,
+  updateOrder,
 } from './backend'
 
 describe('typed Tauri command bridge', () => {
@@ -92,5 +93,13 @@ describe('typed Tauri command bridge', () => {
     invoke.mockResolvedValueOnce({})
     await setOrderQuantity('order-one')
     expect(invoke).toHaveBeenCalledWith('set_order_quantity', { orderId: 'order-one' })
+
+    invoke.mockResolvedValueOnce({})
+    await updateOrder('order-one', 19, 3)
+    expect(invoke).toHaveBeenCalledWith('update_order', {
+      orderId: 'order-one',
+      platinum: 19,
+      quantity: 3,
+    })
   })
 })

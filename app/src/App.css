@@ -925,6 +925,9 @@
    would move every row beneath it, and the refresh runs after every write. */
 .line-fix { display: flex; gap: var(--hair); justify-content: flex-end; min-width: 0; }
 .line-fix .stamp { white-space: nowrap; }
+/* The edit form takes the row's whole width as its own line, beneath the figures it changes: the
+   row's grid keeps its columns, and the form rules itself off from them. */
+.docket-line .sell-form { grid-column: 1 / -1; border-top: none; border-bottom: 1px solid var(--rule); padding-bottom: var(--tight); }
 /* A press away from destroying a listing the player did not flag. Oxblood is the product's word
    for a claim against a listing, and this is the one moment an ordinary row makes one. */
 .line-fix .stamp.armed {
