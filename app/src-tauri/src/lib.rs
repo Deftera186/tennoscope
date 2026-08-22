@@ -944,6 +944,46 @@ async fn set_order_quantity(
     .map_err(|_| "order update task failed".to_owned())?
 }
 
+/// Edit the price and the count of a listing the player is looking at.
+///
+/// Unlike the derived quantity repair beside it, both numbers are the player's own choice -- and
+/// everything this device can check about them is checked here: `authorize_update` bounds the
+/// count against the holding of the row the order names, and the market crate bounds the price and
+/// the count against what the API accepts. Neither bound is the frontend's to enforce alone,
+/// because a write past either acts on a real account.
+#[tauri::command]
+async fn update_order(
+    order_id: String,
+    platinum: u32,
+    quantity: u32,
+    state: State<'_, SharedRuntime>,
+) -> Result<AppView, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            let collection = runtime
+                .core
+                .collection_for_reconciliation()
+                .map_err(|error| error.to_string())?;
+            market_account::authorize_update(
+                runtime.core.market_account(),
+                &collection,
+                &order_id,
+                quantity,
+            )
+            .map_err(str::to_owned)?;
+        }
+        write_then_refresh(&shared, "update", |transport, token| {
+            warframe_market::update_order(transport, token, &order_id, platinum, quantity)
+        })
+    })
+    .await
+    .map_err(|_| "order edit task failed".to_owned())?
+}
+
 /// Both writes share this: perform it, keep whatever token came back, then refresh.
 ///
 /// The refresh happens whether or not the renewed token could be stored. A write that changed the
@@ -2755,7 +2795,8 @@ pub fn run() {
             collect_report_text,
             remove_order,
             create_order,
-            set_order_quantity
+            set_order_quantity,
+            update_order
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

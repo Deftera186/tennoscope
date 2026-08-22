@@ -3,7 +3,7 @@ mod common;
 use common::{FakeTransport, ok, ok_with_token, status};
 use warframe_market::{
     MarketError, MarketToken, Method, NewSellOrder, OrderKind, create_order, delete_order,
-    list_mine, set_order_quantity,
+    list_mine, set_order_quantity, update_order,
 };
 
 const FAKE_TOKEN: &str = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJ0ZXN0In0.";
@@ -163,6 +163,76 @@ fn patching_with_a_slash_in_the_id_is_refused() {
         transport.seen().is_empty(),
         "no request should have been sent"
     );
+}
+
+/// Editing is the player changing their mind about a listing they can see, and the two things they
+/// can change are the price and the count. Both go in one patch -- the edit form collects them
+/// together, and a player who raised the count while the price silently stayed would find out from
+/// a buyer, same as the reverse.
+#[test]
+fn editing_a_listing_patches_the_price_and_the_count_together() {
+    let transport = FakeTransport::new(vec![ok(
+        r#"{"apiVersion":"0.25.0","data":{},"error":null}"#,
+    )]);
+
+    update_order(&transport, &token(), "order-one", 19, 3).expect("patch succeeds");
+
+    let seen = transport.seen();
+    assert_eq!(seen[0].method, Method::Patch);
+    assert!(
+        seen[0].url.ends_with("/v2/order/order-one"),
+        "url: {}",
+        seen[0].url
+    );
+    assert_eq!(
+        seen[0].body.as_deref(),
+        Some(r#"{"platinum":19,"quantity":3}"#)
+    );
+}
+
+/// Same bounds as the create, refused before a request is spent finding out: a zero quantity is a
+/// deletion wearing a patch's clothes, and a price outside what the API accepts would be refused
+/// there anyway.
+#[test]
+fn an_edit_outside_what_the_api_accepts_is_refused_without_asking() {
+    for (platinum, quantity) in [(0, 1), (900_001, 1), (19, 0), (19, 10_000)] {
+        let transport = FakeTransport::new(vec![]);
+        assert_eq!(
+            update_order(&transport, &token(), "order-one", platinum, quantity).unwrap_err(),
+            MarketError::Rejected,
+            "({platinum}, {quantity}) should be refused"
+        );
+        assert!(
+            transport.seen().is_empty(),
+            "no request should have been sent"
+        );
+    }
+}
+
+/// An edit with a `/` in the id would address something other than one order in the interpolated
+/// path, and these writes act on a real account.
+#[test]
+fn editing_with_a_slash_in_the_id_is_refused() {
+    let transport = FakeTransport::new(Vec::new());
+
+    let outcome = update_order(&transport, &token(), "order/one", 19, 3);
+
+    assert_eq!(outcome.unwrap_err(), MarketError::Rejected);
+    assert!(
+        transport.seen().is_empty(),
+        "no request should have been sent"
+    );
+}
+
+/// The edit is a write like the others, and renews the token the same way.
+#[test]
+fn an_edit_returns_the_renewed_token() {
+    let renewed = "eyJhbGciOiJub25lIn0.eyJzdWIiOiJyZW5ld2VkIn0.";
+    let transport = FakeTransport::new(vec![ok_with_token("{}", renewed)]);
+
+    let token = update_order(&transport, &token(), "order-one", 19, 3).expect("patch succeeds");
+
+    assert_eq!(token.expose(), renewed);
 }
 
 /// Every authenticated call may reissue the token, and the writes are authenticated calls. Missing

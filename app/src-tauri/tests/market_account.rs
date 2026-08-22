@@ -2,8 +2,9 @@ use std::sync::Mutex;
 
 use app_core::{LinkState, MarketAccountView, OrderStatus, ReconciledOrder};
 use app_lib::market_account::{
-    ITEM_NOT_LISTABLE, ITEM_NOT_OWNED, MarketSession, account_view, authorize_quantity_write,
-    authorize_removal, authorize_sell, failure_message,
+    ITEM_NOT_LISTABLE, ITEM_NOT_OWNED, MarketSession, ORDER_EXCEEDS_HOLDING, ORDER_NOT_A_SELL,
+    ORDER_NOT_HELD, ORDER_NOT_ON_A_ROW, account_view, authorize_quantity_write, authorize_removal,
+    authorize_sell, authorize_update, failure_message,
 };
 use warframe_domain::{
     CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
@@ -435,5 +436,99 @@ fn a_sell_is_refused_for_a_copy_held_part_way_up() {
     assert_eq!(
         authorize_sell(&items, &collection, &format!("{MOD_PATH}#3")),
         Err(ITEM_NOT_LISTABLE)
+    );
+}
+
+/// An edit is bounded by what the device holds, and the bound is read here rather than trusted
+/// from the caller: the order must name one row of the collection through the reconciliation's own
+/// join, and the count the player asks for may not exceed that row's holding. Raising a listing to
+/// more copies than are held is the overshoot flag's own condition, created by hand.
+#[test]
+fn an_edit_is_authorized_up_to_the_holding_of_the_row_the_order_names() {
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![order("order-one", OrderStatus::Ok)],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+    let collection = collection_holding(&[entry_of(
+        "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+        3,
+        None,
+        None,
+    )]);
+
+    authorize_update(&view, &collection, "order-one", 3).expect("the whole holding may be listed");
+    assert_eq!(
+        authorize_update(&view, &collection, "order-one", 4),
+        Err(ORDER_EXCEEDS_HOLDING)
+    );
+}
+
+/// A row held at zero is not ownership -- the collection keeps mastered items at zero -- and an
+/// order against one cannot be edited into a listing of copies that do not exist.
+#[test]
+fn an_edit_is_refused_for_a_row_held_at_zero() {
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![order("order-one", OrderStatus::Ok)],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+    let collection = collection_holding(&[entry_of(
+        "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+        0,
+        None,
+        None,
+    )]);
+
+    assert_eq!(
+        authorize_update(&view, &collection, "order-one", 1),
+        Err(ITEM_NOT_OWNED)
+    );
+}
+
+/// An order that names no one row -- a set, a sculpture, a retired item -- has no holding to be
+/// bounded against, and no edit can be authorized for it. The interface offers none; this is the
+/// refusal behind that.
+#[test]
+fn an_edit_is_refused_for_an_order_that_names_no_row() {
+    let mut set = order("order-one", OrderStatus::Ok);
+    set.row_id = None;
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![set],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+
+    assert_eq!(
+        authorize_update(&view, &Collection::default(), "order-one", 1),
+        Err(ORDER_NOT_ON_A_ROW)
+    );
+}
+
+/// A buy order is not this application's to edit, and an id absent from the currently held view is
+/// refused like every other write: stale or fabricated ids never reach a real account.
+#[test]
+fn an_edit_is_refused_for_a_buy_order_or_an_unknown_id() {
+    let mut buying = order("order-one", OrderStatus::Ok);
+    buying.order.kind = OrderKind::Buy;
+    let view = MarketAccountView::linked(
+        CredentialBacking::Database,
+        vec![buying],
+        "2026-07-31T12:00:00Z".to_owned(),
+    );
+    let collection = collection_holding(&[entry_of(
+        "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+        3,
+        None,
+        None,
+    )]);
+
+    assert_eq!(
+        authorize_update(&view, &collection, "order-one", 1),
+        Err(ORDER_NOT_A_SELL)
+    );
+    assert_eq!(
+        authorize_update(&view, &collection, "order-missing", 1),
+        Err(ORDER_NOT_HELD)
     );
 }

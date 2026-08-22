@@ -12,7 +12,7 @@ use local_store::SnapshotMeta;
 use warframe_domain::Collection;
 use warframe_market::{
     CredentialBacking, CredentialStore, Listing, MarketError, MarketItems, MarketToken,
-    MarketTransport, list_mine,
+    MarketTransport, OrderKind, list_mine,
 };
 
 pub struct MarketSession {
@@ -150,6 +150,19 @@ pub const ORDER_NOT_HELD: &str = "That order is not on the currently held list";
 /// `OrderStatus::Overshoot { owned }`. An order that is not an overshoot has no such count to send.
 pub const ORDER_NOT_OVERSHOOT: &str = "That order is not currently flagged as oversold";
 
+/// An edit was asked for on an order that does not name one row of the collection -- a set, a
+/// sculpture, a retired item. There is no holding to bound the edit against, so there is no edit.
+pub const ORDER_NOT_ON_A_ROW: &str =
+    "That listing does not name one row of this device's collection";
+
+/// An edit was asked for on an order that is not a sell listing. Buy orders are not this
+/// application's to write.
+pub const ORDER_NOT_A_SELL: &str = "Only sell listings can be edited from here";
+
+/// The count an edit would list is above what the device holds. An edit that raised a listing past
+/// the holding would be the overshoot flag's own condition, created by hand.
+pub const ORDER_EXCEEDS_HOLDING: &str = "That is more than this device's collection holds";
+
 /// Find one order by id in the account view currently held, so a write can be checked against
 /// what the player is actually looking at rather than against whatever a frontend call supplies.
 pub fn find_order<'a>(view: &'a MarketAccountView, order_id: &str) -> Option<&'a ReconciledOrder> {
@@ -205,6 +218,37 @@ pub fn authorize_sell<'a>(
 /// transport is built, since a stale or fabricated id must never reach a delete call.
 pub fn authorize_removal(view: &MarketAccountView, order_id: &str) -> Result<(), &'static str> {
     find_order(view, order_id).map(|_| ()).ok_or(ORDER_NOT_HELD)
+}
+
+/// Whether an edit may proceed, bounded by the holding of the row the order names.
+///
+/// The price and the count both come from the player, so unlike the derived quantity repair this
+/// write does take caller-supplied numbers -- and everything that can be checked against this
+/// device's own knowledge is: the order is on the held view, it is a sell listing, its `row_id`
+/// names a row the collection holds, and the count does not exceed that row's holding. Only the
+/// price is left to the market crate's own bounds, because a fair price is the player's alone to
+/// choose.
+pub fn authorize_update(
+    view: &MarketAccountView,
+    collection: &Collection,
+    order_id: &str,
+    quantity: u32,
+) -> Result<(), &'static str> {
+    let entry = find_order(view, order_id).ok_or(ORDER_NOT_HELD)?;
+    if entry.order.kind != OrderKind::Sell {
+        return Err(ORDER_NOT_A_SELL);
+    }
+    let row_id = entry.row_id.as_deref().ok_or(ORDER_NOT_ON_A_ROW)?;
+    let held = collection
+        .entries()
+        .find(|held| held.item.id.as_str() == row_id)
+        .filter(|held| held.quantity > 0)
+        .map(|held| held.quantity)
+        .ok_or(ITEM_NOT_OWNED)?;
+    if quantity > held {
+        return Err(ORDER_EXCEEDS_HOLDING);
+    }
+    Ok(())
 }
 
 /// The quantity a quantity write may send, or the reason it is refused. Checked before any

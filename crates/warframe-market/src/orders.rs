@@ -175,6 +175,37 @@ pub fn set_order_quantity(
     write_outcome(response, token)
 }
 
+/// Change the price and the count of a listing the player is looking at and editing on purpose.
+///
+/// Both fields go together because the edit form collects them together: a count raised while the
+/// price silently stayed, or the reverse, is a change the player did not make and would find out
+/// about from a buyer. [`set_order_quantity`] is the derived repair and stays quantity-only; this
+/// is the player's own hand.
+///
+/// The bounds are the API's own, checked before a request is spent finding out. Bounding the
+/// quantity against what the collection holds is the caller's obligation, the same way.
+pub fn update_order(
+    transport: &dyn MarketTransport,
+    token: &MarketToken,
+    order_id: &str,
+    platinum: u32,
+    quantity: u32,
+) -> Result<MarketToken, MarketError> {
+    validate_order_id(order_id)?;
+    if !(1..=900_000).contains(&platinum) || !(1..=9_999).contains(&quantity) {
+        return Err(MarketError::Rejected);
+    }
+    let response = transport.send(MarketRequest {
+        method: Method::Patch,
+        url: format!("{API_V2}/order/{order_id}"),
+        token: Some(token.expose().to_owned()),
+        body: Some(format!(
+            "{{\"platinum\":{platinum},\"quantity\":{quantity}}}"
+        )),
+    })?;
+    write_outcome(response, token)
+}
+
 /// A listing to publish: what the sell form collects, joined to what the item's shape demands.
 ///
 /// Built from a [`crate::Listing`], which is where the rule lives: the API's create body carries
