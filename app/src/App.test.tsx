@@ -580,6 +580,9 @@ describe('MVP desktop interface', () => {
     expect(await screen.findByRole('heading', { name: 'Market orders' })).toBeInTheDocument()
   })
 
+  // The production shape of an order: warframe.market's opaque item id, joined to the row by the
+  // backend. The badge used to compare the market id against the row id directly -- two namespaces
+  // that share nothing -- and never matched, which is how a sell left the card looking untouched.
   it('shows a listed-order badge on a collection item with a live sell order', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     backend.marketStatus.mockResolvedValue({
@@ -588,15 +591,16 @@ describe('MVP desktop interface', () => {
         ...view.market_account,
         link: 'linked',
         orders: [{
-          order: { id: 'o1', item_id: 'rhino', kind: 'sell', platinum: 30, quantity: 1, per_trade: 1, visible: true },
+          order: { id: 'o1', item_id: '54a73e65e779893a797fff33', kind: 'sell', platinum: 30, quantity: 1, per_trade: 1, visible: true },
           name: 'Rhino',
+          row_id: 'rhino',
           status: { state: 'ok' },
         }],
       },
     })
     render(<App/>)
     await screen.findByRole('heading', { name: 'Your collection' })
-    expect(await screen.findByText(/listed 30p/i)).toBeInTheDocument()
+    expect(await screen.findByText(/listed 1 @ 30p/i)).toBeInTheDocument()
   })
 
   /**

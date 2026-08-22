@@ -117,7 +117,11 @@ as a fallback.
 Reconciliation is the Warframe Library's, not this module's: it joins an order list to an
 inventory snapshot, and the account module has no concept of a collection. A mismatch is claimed
 only when the snapshot is coherent and newer than the order; every other case is reported as
-unverifiable and carries no claim.
+unverifiable and carries no claim. Each reconciled order also names the collection row it belongs
+to, resolved through the item table as the reverse of the listing resolution -- the join nothing
+else can make, because an order's `itemId` and a row's key are namespaces that share nothing. The
+presentation reads it for the "listed" badge on a card; an order that names no one row (a set, a
+sculpture, a retired item) carries none, and no surface offers what it cannot name.
 
 Writes -- publishing a listing, taking one down, lowering an oversold quantity -- are authorized
 against the held view before any transport is built, and address items by the collection's own row

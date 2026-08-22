@@ -27,7 +27,7 @@ import { copyReport, openIssue, saveReport } from './report'
 import { RewardCards } from './RewardCards'
 import { MetalMark } from './MetalMark'
 import { OrdersView } from './OrdersView'
-import { isListable, listedOrderFor } from './orders'
+import { isListable, listedLabel, listedOrderFor } from './orders'
 import { SellForm, type SellHandler } from './SellForm'
 import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, writePriceFloor } from './settings'
@@ -573,7 +573,7 @@ function CollectionEntry({ item, listedOrder, sellable, onSell, busy }: { item: 
           : <span className="hallmark owned">Owned ×{item.quantity}</span>}
         {rankLabel(item) && <span className={`hallmark rank${atMaxRank(item) ? ' maxed' : ''}`}>{rankLabel(item)}</span>}
         {item.mastered && <span className="hallmark mastered">Mastered</span>}
-        {listedOrder && <span className="hallmark">listed {listedOrder.platinum}p</span>}
+        {listedOrder && <span className="hallmark">{listedLabel(listedOrder, item.quantity)}</span>}
         {item.platinum !== undefined && <span className={`price${item.live ? ' live' : ''}`}>
           <MetalMark metal="plat" alt="platinum "/>
           {item.platinum_ceiling === undefined

@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { CollectionItem, ReconciledOrder } from './backend'
-import { backingLabel, fixLabel, isFlagged, isListable, listedOrderFor, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
+import { backingLabel, fixLabel, isFlagged, isListable, listedLabel, listedOrderFor, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
 
 function entry(
   id: string,
   status: ReconciledOrder['status'],
   overrides: Partial<ReconciledOrder['order']> = {},
+  rowId?: string,
 ): ReconciledOrder {
   return {
     order: {
@@ -20,6 +21,7 @@ function entry(
       ...overrides,
     },
     name: 'Braton Prime Blueprint',
+    row_id: rowId,
     status,
   }
 }
@@ -86,21 +88,46 @@ describe('order ordering', () => {
 })
 
 describe('the collection badge', () => {
-  it('finds a visible sell order for an item', () => {
-    const orders = [entry('a', { state: 'ok' }, { item_id: '/Lotus/Thing', platinum: 24 })]
+  // The regression this whole join exists for: an order's `item_id` is warframe.market's opaque id
+  // and a collection row is a `/Lotus/` path, and a badge that compared the two matched nothing,
+  // ever -- which is how a successful sell used to leave the card it was pressed on unchanged.
+  // The row the backend resolves is the only id the two namespaces share.
+  it('finds a visible sell order through the row it names, not the market id it carries', () => {
+    const orders = [entry('a', { state: 'ok' }, { item_id: '54a73e65e779893a797fff33', platinum: 24 }, '/Lotus/Thing')]
 
     expect(listedOrderFor(orders, '/Lotus/Thing')?.platinum).toBe(24)
   })
 
   it('ignores hidden orders and buy orders, which are not listings anybody sees', () => {
-    const hidden = entry('h', { state: 'ok' }, { item_id: '/Lotus/Thing', visible: false })
-    const buying = entry('b', { state: 'ok' }, { item_id: '/Lotus/Thing', kind: 'buy' })
+    const hidden = entry('h', { state: 'ok' }, { visible: false }, '/Lotus/Thing')
+    const buying = entry('b', { state: 'ok' }, { kind: 'buy' }, '/Lotus/Thing')
 
     expect(listedOrderFor([hidden, buying], '/Lotus/Thing')).toBeNull()
   })
 
   it('has nothing to say about an item with no order', () => {
     expect(listedOrderFor([], '/Lotus/Thing')).toBeNull()
+  })
+
+  it('has nothing to say about an order that names no row of the collection', () => {
+    // A set, a sculpture, a retired item: real listings, but not listings of any row on a card.
+    const orders = [entry('a', { state: 'unverifiable' }, { item_id: '54a73e65e779893a797ffef1' })]
+
+    expect(listedOrderFor(orders, '/Lotus/Weapons/Tenno/Rifle/BratonPrime')).toBeNull()
+  })
+})
+
+describe('what the listed badge says', () => {
+  it('counts the unlisted remainder when the listing covers part of the holding', () => {
+    expect(listedLabel(entry('a', { state: 'ok' }, { platinum: 12, quantity: 3 }).order, 5)).toBe('listed 3 of 5 @ 12p')
+  })
+
+  it('states the listing plain when it covers the whole holding', () => {
+    expect(listedLabel(entry('a', { state: 'ok' }, { platinum: 12, quantity: 5 }).order, 5)).toBe('listed 5 @ 12p')
+  })
+
+  it('never divides a listing against a holding smaller than itself — the orders screen carries that claim', () => {
+    expect(listedLabel(entry('a', { state: 'overshoot', owned: 5 }, { platinum: 12, quantity: 7 }).order, 5)).toBe('listed 7 @ 12p')
   })
 })
 
