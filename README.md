@@ -47,8 +47,9 @@ how much of each item really trades rather than asking prices summed up.
 
 Prime parts also carry their ducat value beside platinum — Baro Ki'Teer's posted price
 for the part, totaled across the stack and across the whole collection, and kept on
-missing parts too, since it is what tells you which relic reward to take. A chip in the
-toolbar hides them if you would rather read platinum alone.
+missing parts too, since it is what tells you which relic reward to take. A switch in
+the toolbar hides them if you would rather read platinum alone, and the two value
+sorts — platinum and ducats — are named and marked by their own metal.
 
 <div align="center">
 

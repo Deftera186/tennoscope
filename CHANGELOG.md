@@ -19,9 +19,13 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   market's, a stack total when more than one copy is held, and a "Ducats at stake" figure in
   the summary band totaling every owned prime part at Baro Ki'Teer's posted prices. Ducats
   describe the item rather than a sale, so a missing part keeps its reading where it keeps no
-  platinum — the number is what tells the player which relic reward to take. The display is
-  on by default, and a "Ducats" chip in the collection toolbar puts it away, remembered in
-  local storage like the price floor.
+  platinum — the number is what tells the player which relic reward to take. The display is on
+  by default, and a switch in the collection toolbar — labeled "Ducat values", its thumb
+  crossing the track in ducat gold when on — puts it away, remembered in local storage like
+  the price floor. With two prices on one card the old "Value" sort stopped answering, so the
+  value sorts are now named and marked by their metal — "Platinum" and "Ducats" — and the
+  ducat sort exists only while its values are shown, falling back to platinum when they are
+  hidden: nothing orders the register by a number it is not showing.
 
 - **A listing can be edited from either screen it is visible on.** Every order row on the Orders
   screen offers an edit that opens in place, prefilled with the listing's own price and count, and

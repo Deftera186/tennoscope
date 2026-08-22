@@ -458,11 +458,65 @@ describe('MVP desktop interface', () => {
     expect(within(band).getByText('45')).toBeInTheDocument()
     expect(within(band).getByText('Ducats at stake')).toBeInTheDocument()
 
-    // The chip hides every reading above, card and band alike.
-    await user.click(screen.getByRole('button', { name: 'Ducats' }))
+    // The switch is the layer's valve -- a two-state control, not a mode among the sorts and
+    // filters beside it. Off, every reading above goes, card and band alike.
+    const ducatsSwitch = screen.getByRole('switch', { name: 'Ducat values' })
+    expect(ducatsSwitch).toHaveAttribute('aria-checked', 'true')
+    await user.click(ducatsSwitch)
     expect(screen.queryByTestId('band-ducats')).not.toBeInTheDocument()
     expect(screen.queryByAltText(/ducat/i)).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Ducats' })).toHaveAttribute('aria-pressed', 'false')
+    expect(ducatsSwitch).toHaveAttribute('aria-checked', 'false')
+  })
+
+  // The two value sorts are named and marked by their own metal: "Value" stopped answering once
+  // one card could carry two prices. Ducats orders by the unit reading like Platinum does, sinks
+  // what carries no such reading rather than interleaving zeros, and breaks ties on the name.
+  it('sorts by ducat value while the values are shown', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    backend.getView.mockResolvedValue({
+      ...view,
+      collection: {
+        ...view.collection,
+        total_entries: 5,
+        items: [
+          { id: 'braton', name: 'Braton', category: 'weapon', quantity: 1, mastered: false, live: false, priceable: true },
+          { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, live: false, priceable: true, ducats: 15 },
+          { id: 'paris-prime-string', name: 'Paris Prime String', category: 'prime_part', quantity: 2, mastered: false, live: false, priceable: true, ducats: 45 },
+          { id: 'ash-prime-systems', name: 'Ash Prime Systems', category: 'prime_part', quantity: 1, mastered: false, live: false, priceable: true, ducats: 100 },
+          { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 3, mastered: false, live: false, priceable: false, ducats: 45 },
+        ],
+      },
+    })
+    const user = userEvent.setup()
+    render(<App/>)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await user.click(screen.getByRole('button', { name: 'Ducats' }))
+
+    const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
+    expect(names).toEqual([
+      'Ash Prime Systems',      // 100
+      'Forma Blueprint',        // 45, before Paris on the name
+      'Paris Prime String',     // 45
+      'Lex Prime Receiver',     // 15
+      'Braton',                 // no ducats, sunk below every reading
+    ])
+  })
+
+  // A sort over numbers the screen is not showing would reorder the register invisibly, so the
+  // ducat sort belongs to the layer the switch governs. Off, the chip retires with the badges,
+  // and the pressed chip moves to platinum in plain sight rather than silently.
+  it('retires the ducat sort with the values, handing the sort to platinum', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
+    const user = userEvent.setup()
+    render(<App/>)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await user.click(screen.getByRole('button', { name: 'Ducats' }))
+    expect(screen.getByRole('button', { name: 'Ducats' })).toHaveAttribute('aria-pressed', 'true')
+
+    await user.click(screen.getByRole('switch', { name: 'Ducat values' }))
+
+    expect(screen.queryByRole('button', { name: 'Ducats' }), 'no sorting by an invisible reading').not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Platinum' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('says nothing rather than zero for an item with no price', async () => {
@@ -531,7 +585,7 @@ describe('MVP desktop interface', () => {
     })
     const user = userEvent.setup()
     render(<App/>)
-    await user.click(await screen.findByRole('button', { name: 'Value' }))
+    await user.click(await screen.findByRole('button', { name: 'Platinum' }))
 
     const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
     expect(names[0]).toBe('Ash Prime Blueprint')  // 45p × 1

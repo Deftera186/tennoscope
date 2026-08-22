@@ -289,6 +289,7 @@
 .register-line.pricing { color: var(--platinum-dim); }
 .tally { display: flex; gap: 0; }
 .tally button {
+  display: inline-flex; align-items: center; justify-content: center; gap: .38rem;
   padding: .55rem .85rem; border: 1px solid var(--rule-control); border-radius: 0; background: transparent;
   font-family: var(--face-register); font-size: .58rem; font-weight: 600; letter-spacing: .12em;
   text-transform: uppercase; color: var(--platinum-deep); cursor: pointer;
@@ -297,6 +298,50 @@
 .tally button + button { border-left: 0; }
 .tally button:hover { color: var(--platinum-dim); background: var(--plate); }
 .tally button[aria-pressed="true"] { color: var(--platinum); background: var(--raised); box-shadow: var(--strike); }
+/* The value sorts wear their own currency, at the size the price readings use, so "Platinum" and
+   "Ducats" are told apart by metal at a glance the way the cards' figures already are. */
+.tally button .metal-mark { height: 1.15rem; width: auto; }
+
+/* The ducat layer's valve. A switch, not a mode chip: the tally rows beside it choose one of
+   several readings, while this turns one reading on and off, and only its own two states are its
+   siblings. On, the thumb crosses the track's midline and takes the gold every ducat reading on
+   this sheet already wears -- the control's state is the color of what it governs. */
+.display-switch {
+  display: inline-flex; align-items: center; gap: .6rem;
+  padding: .55rem .85rem; border: 1px solid var(--rule-control); background: transparent;
+  font-family: var(--face-register); font-size: .58rem; font-weight: 600; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--platinum-deep); cursor: pointer;
+  transition: color .12s ease, background .12s ease, border-color .12s ease;
+}
+.display-switch:hover { color: var(--platinum-dim); background: var(--plate); }
+.display-switch:focus-visible { outline: none; background: var(--platinum); color: var(--touchstone); border-color: var(--platinum); }
+.display-face { display: inline-flex; align-items: center; gap: .34rem; }
+.display-switch .metal-mark { height: 1.15rem; width: auto; opacity: .68; }
+.display-switch[aria-checked="true"] { color: var(--platinum); }
+.display-switch[aria-checked="true"] .metal-mark { opacity: 1; }
+.display-track {
+  position: relative; flex: none; width: 2.3rem; height: 1.15rem; overflow: hidden;
+  border: 1px solid var(--rule-control); background: var(--plate);
+}
+.display-switch[aria-checked="true"] .display-track { border-color: var(--gold); }
+/* The far half of the track, lit faintly from the side the thumb travels to. */
+.display-track::after {
+  content: ""; position: absolute; inset: 0 0 0 50%; background: var(--gold); opacity: 0;
+  transition: opacity .15s ease;
+}
+.display-switch[aria-checked="true"] .display-track::after { opacity: .22; }
+.display-thumb {
+  position: absolute; top: 1px; bottom: 1px; left: 1px; width: calc(50% - 2px);
+  background: var(--platinum-dim);
+  transition: transform .15s ease, background-color .15s ease;
+}
+.display-switch[aria-checked="true"] .display-thumb {
+  transform: translateX(calc(100% + 2px)); background: var(--gold);
+}
+@media (prefers-reduced-motion: reduce) {
+  /* The position is the reading, so it still moves; only its travel is undressed. */
+  .display-thumb, .display-track::after { transition: none; }
+}
 
 /* The provenance line states the baseline once, so no card needs a legend to explain a price's
    date or authority. It and the range readout are one statement -- which day these prices are
@@ -778,6 +823,9 @@
   /* flex-basis is the main axis: in a column this would become a 22rem HEIGHT. */
   .search-slot { flex: none; }
   .sort-slot select { flex: 1; }
+  /* A switch keeps its own width where the tally chips stretch: it is one control with a label,
+     not one option among a row of them. */
+  .display-switch { align-self: flex-start; }
   .register-bar { gap: var(--tight); }
   .tally { width: 100%; }
   .tally button { flex: 1; padding-inline: .3rem; }

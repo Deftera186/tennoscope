@@ -37,7 +37,7 @@ import { reportBlockVisible } from './reportable'
 
 type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
-type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'value-desc'
+type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'platinum-desc' | 'ducats-desc'
 
 const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: string }> = [
   { value: 'all', label: 'All categories', tally: '✳' },
@@ -53,11 +53,15 @@ const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: str
   { value: 'arcane', label: 'Arcane', tally: 'A' },
 ]
 
-const sortOptions: Array<{ value: Sort; label: string }> = [
+// The two value sorts are named and marked by their own metal: "Value" stopped answering once a
+// card could carry two prices, and a currency's own icon is the disambiguator this screen already
+// teaches. Ducats belongs to the ducat layer -- offered only while the values are on screen.
+const sortOptions: Array<{ value: Sort; label: string; metal?: 'plat' | 'ducat' }> = [
   { value: 'name-asc', label: 'Name A–Z' },
   { value: 'quantity-desc', label: 'Quantity' },
   { value: 'category-asc', label: 'Category' },
-  { value: 'value-desc', label: 'Value' },
+  { value: 'platinum-desc', label: 'Platinum', metal: 'plat' },
+  { value: 'ducats-desc', label: 'Ducats', metal: 'ducat' },
 ]
 
 const categoryName = Object.fromEntries(categories.map(category => [category.value, category.label])) as Record<ItemCategory | 'all', string>
@@ -460,9 +464,11 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, on
         ? right.quantity - left.quantity || left.name.localeCompare(right.name)
         : sort === 'category-asc'
           ? left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
-          : sort === 'value-desc'
+          : sort === 'platinum-desc'
             ? (right.platinum ?? -1) - (left.platinum ?? -1) || left.name.localeCompare(right.name)
-            : left.name.localeCompare(right.name))
+            : sort === 'ducats-desc'
+              ? (right.ducats ?? -1) - (left.ducats ?? -1) || left.name.localeCompare(right.name)
+              : left.name.localeCompare(right.name))
   }, [view.collection.items, search, category, ownership, sort])
   const totalPages = pageCount(filtered.length)
   const currentPage = clampPage(page, filtered.length)
@@ -481,6 +487,13 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, on
   // counter would be describing one queue twice.
   const inProgress = view.collection.pricing ?? null
   const dumpDate = view.health.collection_prices.last_success
+  // You can only sort by what is on screen. Hiding ducat values retires their sort with them, and
+  // the pressed chip moves to platinum in plain sight rather than leaving an invisible criterion
+  // reorder the register.
+  const sorts = showDucats ? sortOptions : sortOptions.filter(option => option.value !== 'ducats-desc')
+  useEffect(() => {
+    if (!showDucats && sort === 'ducats-desc') setSort('platinum-desc')
+  }, [showDucats, sort])
   useEffect(() => setPage(1), [search, category, ownership, sort])
   useEffect(() => setPage(value => clampPage(value, filtered.length)), [filtered.length])
 
@@ -528,19 +541,28 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, on
         <div className="sort-slot" role="group" aria-label="Sort collection">
           <span>Sort</span>
           <div className="tally">
-            {sortOptions.map(option => <button
+            {sorts.map(option => <button
               type="button"
               key={option.value}
               aria-pressed={sort === option.value}
               onClick={() => setSort(option.value)}
-            >{option.label}</button>)}
+            >{option.metal && <MetalMark metal={option.metal}/>}{option.label}</button>)}
           </div>
         </div>
-        {/* A display choice, not a filter: it changes what the cards carry, not which cards are
-            shown, so it sits with the controls rather than among the ownership filters. */}
-        <div className="tally" role="group" aria-label="Ducat values">
-          <button type="button" aria-pressed={showDucats} onClick={onToggleDucats}>Ducats</button>
-        </div>
+        {/* The ducat layer's valve, drawn as a switch because it has two states rather than a
+            place among the sort and filter modes beside it. The label names what it shows; on,
+            its thumb crosses the track's midline in the gold every ducat reading on this sheet
+            already wears. */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={showDucats}
+          className="display-switch"
+          onClick={onToggleDucats}
+        >
+          <span className="display-face"><MetalMark metal="ducat"/>Ducat values</span>
+          <span className="display-track" aria-hidden="true"><span className="display-thumb"/></span>
+        </button>
       </div>
 
       <div className="shield-strip" role="group" aria-label="Item categories">
