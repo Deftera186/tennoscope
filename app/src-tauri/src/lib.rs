@@ -54,6 +54,7 @@ const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 mod kiosk_geometry;
 mod kiosk_log;
 mod kiosk_ocr;
+mod kiosk_view;
 pub mod market_account;
 mod monitor;
 mod overlay_window;
