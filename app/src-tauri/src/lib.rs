@@ -2365,13 +2365,15 @@ where
         let mut static_looks = 0_u32;
         let deadline = Instant::now() + timing.lifetime;
         // The label geometry the locator measures against, in strip-relative pixels; both
-        // anchors come from the 1080p calibration and scale with the strip's length.
+        // anchors come from the 1080p calibration and scale with the strip's length. The top
+        // is the LOCATOR's anchor on purpose -- deriving it from the OCR crop's rect coupled
+        // the two, and growing the crop to catch three-line labels dragged the locator's
+        // keying 22 rows down the screen with it.
         let (strip_top, strip_h) = {
             let (_x, y, _w, h) = kiosk_geometry::grid_strip(1920, 1080);
             (y, h)
         };
-        let first_label_top = kiosk_geometry::grid_label_rect(1920, 1080, 0, 0, 0)
-            .map_or(strip_top, |(_x, y, _w, _h)| y);
+        let first_label_top = kiosk_geometry::LABEL_BAND_TOP_1080;
         while Instant::now() < deadline {
             // The log said the screen went away (or the game did): stop looking at it.
             if gone.load(Ordering::Acquire) {

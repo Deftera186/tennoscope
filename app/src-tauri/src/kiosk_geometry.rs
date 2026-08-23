@@ -56,10 +56,13 @@ pub const ROW_PITCH_1080: i32 = 222;
 /// average the label's brightness away against the artwork above it.
 pub const LABEL_BAND_TOP_1080: i32 = 343;
 pub const LABEL_BAND_H_1080: i32 = 46;
-/// Label band top relative to its row's card top.
-const LABEL_DY: f32 = fx(144.0);
-/// Label band height: two ~17px lines plus breathing room for the OCR crop.
-const LABEL_H: f32 = fx(46.0);
+/// Label crop top relative to its row's card top: grown upward from the two-line band (144)
+/// because three-line labels stack upward out of it -- *Styanax Prime Neuroptics Blueprint*
+/// renders its first line at card top +124, 20px above the old crop, and went unpriced for
+/// it (measured live, 2026-08-23). The bottom edge stays where it was.
+const LABEL_DY: f32 = fx(122.0);
+/// Label crop height: the two-line geometry's bottom edge (+190) plus the upward growth.
+const LABEL_H: f32 = fx(68.0);
 /// Chip inset from the tile's right edge, and rise above the card top.
 const CHIP_INSET: f32 = fx(6.0);
 const CHIP_RISE: f32 = fx(2.0);
@@ -185,20 +188,20 @@ mod tests {
     fn the_1920x1080_calibration_reproduces_the_fixture() {
         assert_eq!(
             grid_label_rect(1920, 1080, 0, 0, 0),
-            Some((76, 343, 190, 46)),
-            "row 0 col 0 label band"
+            Some((76, 321, 190, 68)),
+            "row 0 col 0 label crop"
         );
         assert_eq!(
             grid_label_rect(1920, 1080, 5, 2, 0),
-            Some((1114, 787, 190, 46)),
+            Some((1114, 765, 190, 68)),
             "last column, last row"
         );
         // A scrolled grid sits off its calibration rows by the tracked drift: the reads shift
         // with it (2026-08-23's dead session stopped at dy=-142).
         assert_eq!(
             grid_label_rect(1920, 1080, 0, 0, -142),
-            Some((76, 201, 190, 46)),
-            "label band follows the scroll"
+            Some((76, 179, 190, 68)),
+            "label crop follows the scroll"
         );
         assert_eq!(
             grid_label_rect(1920, 1080, 0, 2, 500),
@@ -239,6 +242,25 @@ mod tests {
         assert_eq!(grid_label_rect(1920, 1080, 0, 3, 0), None);
         assert_eq!(tile_anchor(1920, 1080, 6, 0), None);
         assert_eq!(basket_row_pair(1920, 1080, BASKET_ROWS), None);
+    }
+
+    /// A three-line label (*Styanax Prime Neuroptics Blueprint*, measured live on the
+    /// unscrolled fixture at rows +124..+182 relative to its card top) stacks UPWARD out of
+    /// the two-line box, so the crop grows upward too -- its bottom edge stays on the two-line
+    /// geometry every other measurement was calibrated against. Above the label is the tile's
+    /// dead space: nothing bright renders between the badge zone and row +123.
+    #[test]
+    fn a_three_line_label_fits_inside_the_crop() {
+        let (_, y, _, h) = grid_label_rect(1920, 1080, 0, 0, 0).expect("row 0 crop");
+        assert!(
+            y <= 199 + 124,
+            "crop top {y} clips the third line's cap height"
+        );
+        assert!(
+            y + h >= 199 + 183,
+            "crop bottom {} clips the first line's descenders",
+            y + h
+        );
     }
 
     /// The locator's anchors are the unscrolled label band's top and height, and they stay put
