@@ -1,15 +1,14 @@
-//! Follow the kiosk grid's scroll without reading it.
+//! Ask one cheap question of the kiosk grid without reading it: has it moved?
 //!
-//! A full recognition pass costs one tesseract crop per visible slot, which is fine four times a
-//! second and impossible thirty. But the moment the player drags the scrollbar, chips that stay
-//! put are worse than no chips at all, and the only question during those ~100ms is *how far did
-//! the rows move* -- answerable from one luma profile per row, correlated against the previous
-//! tick's. When the motion settles, one full pass re-anchors and the accumulated offset resets.
+//! A full recognition pass costs one tesseract crop per visible slot -- fine once a second,
+//! impossible thirty. But a capture cannot even sample a scroll fast enough to follow it, so
+//! following was never the right ambition; not lying is. Each poll tick compares the strip's row
+//! luma profile against the anchor frame's, and a confident mismatch means the chips no longer
+//! describe the screen: fade them, defer the expensive read until the rows rest, then re-anchor.
 //!
-//! The correlation is normalized (a Pearson r per candidate shift), so the peak's value is itself
-//! the confidence: structure that moved together peaks near 1.0, two unrelated frames peak near
-//! 0.3, and a flat strip has nothing to say at all. Below the floor the tracker reports blindness
-//! rather than a guess -- a wrong `dy` silently mislabels every chip on screen.
+//! The comparison is normalized cross-correlation (a Pearson r per candidate shift), so the
+//! peak's value is itself the confidence: structure that moved together peaks near 1.0, two
+//! unrelated frames peak near 0.3, and a flat strip has nothing to say at all.
 
 use image::DynamicImage;
 
@@ -22,28 +21,12 @@ pub const MAX_SHIFT: i32 = 48;
 /// the floor sits between them, nearer the noise.
 pub const MIN_PEAK_RATIO: f32 = 0.5;
 
-/// Consecutive near-still looks before motion counts as over (~120ms at the 33ms motion cadence).
-pub const SETTLE_TICKS: u32 = 4;
-
-/// What one look at the strip tells the poller to do.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ScrollStep {
-    /// The rows moved by this many pixels since the last look (positive = content moved down).
-    /// Chips translate by the running total; the full read is deferred.
-    Moving(i32),
-    /// The grid is at rest and anchored: run the full recognition pass and publish.
-    Settled,
-    /// The strip could not be measured (occluded, unreadable, or unrecognizable). Chips fade and
-    /// the last anchor stands until a clean settle replaces it.
-    Blind,
-}
-
 /// Normalized cross-correlation of two row profiles: the shift (in rows) that best explains
 /// `next` as `prev` moved vertically, if that shift is confident enough to name.
 ///
 /// Positive means content moved down the screen: `next[i]` is `prev[i - dy]`. Sub-pixel shifts
-/// are not attempted -- at 33ms ticks the chips are translucent anyway, and the settle pass is
-/// what actually re-aligns them.
+/// are not attempted -- the caller only needs to know whether the anchor still holds, and the
+/// next settled read is what re-aligns everything.
 pub fn estimate_dy(prev: &[f32], next: &[f32], max_shift: i32, min_peak: f32) -> Option<i32> {
     let len = prev.len().min(next.len());
     // Correlation needs rows to spare on both sides of every candidate shift, and a strip that
@@ -111,67 +94,6 @@ pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec
     rows
 }
 
-/// The strip's motion state across looks: first look anchors, motion streams deltas, stillness
-/// holds for `SETTLE_TICKS` looks before the full re-read, and a blind look drops the anchor so
-/// the next confident look starts fresh.
-#[derive(Default)]
-pub struct ScrollTracker {
-    prev: Option<Vec<f32>>,
-    was_moving: bool,
-    still: u32,
-}
-
-impl ScrollTracker {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn step(&mut self, profile: &[f32]) -> ScrollStep {
-        let Some(prev) = self.prev.take() else {
-            // The first look is an anchor by definition: whatever is on screen is where the
-            // chips' epoch begins.
-            self.prev = Some(profile.to_vec());
-            return ScrollStep::Settled;
-        };
-        match estimate_dy(&prev, profile, MAX_SHIFT, MIN_PEAK_RATIO) {
-            Some(dy) if dy.abs() > 1 => {
-                self.was_moving = true;
-                self.still = 0;
-                self.prev = Some(profile.to_vec());
-                ScrollStep::Moving(dy)
-            }
-            // At rest. Mid-motion, rest only counts once it holds; in the steady state every
-            // look is a settle, because the full read is what notices basket edits.
-            Some(_) => {
-                self.prev = Some(profile.to_vec());
-                if !self.was_moving {
-                    return ScrollStep::Settled;
-                }
-                self.still += 1;
-                if self.still >= SETTLE_TICKS {
-                    self.was_moving = false;
-                    self.still = 0;
-                    ScrollStep::Settled
-                } else {
-                    ScrollStep::Moving(0)
-                }
-            }
-            None => {
-                self.was_moving = false;
-                self.still = 0;
-                ScrollTracker::blind_reset(&mut self.prev);
-                ScrollStep::Blind
-            }
-        }
-    }
-
-    /// Blindness drops the anchor: the next confident look must build one from scratch rather
-    /// than measure against a frame it cannot see the lineage of.
-    fn blind_reset(prev: &mut Option<Vec<f32>>) {
-        *prev = None;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,38 +155,6 @@ mod tests {
                 (state % 1000) as f32
             })
             .collect()
-    }
-
-    #[test]
-    fn the_first_look_anchors_and_motion_then_settles() {
-        let mut tracker = ScrollTracker::new();
-        let base = strip(400);
-        assert_eq!(tracker.step(&base), ScrollStep::Settled);
-
-        // Motion streams deltas.
-        let scrolled = shift(&base, -23);
-        assert_eq!(tracker.step(&scrolled), ScrollStep::Moving(-23));
-        let scrolled_more = shift(&base, -31);
-        assert_eq!(tracker.step(&scrolled_more), ScrollStep::Moving(-8));
-
-        // Stillness holds for SETTLE_TICKS looks, emitting dy=0, then settles.
-        for _ in 0..SETTLE_TICKS - 1 {
-            assert_eq!(tracker.step(&scrolled_more), ScrollStep::Moving(0));
-        }
-        assert_eq!(tracker.step(&scrolled_more), ScrollStep::Settled);
-
-        // Steady state: every look settles, because the full read notices basket edits.
-        assert_eq!(tracker.step(&scrolled_more), ScrollStep::Settled);
-    }
-
-    #[test]
-    fn a_blind_look_drops_the_anchor() {
-        let mut tracker = ScrollTracker::new();
-        assert_eq!(tracker.step(&strip(400)), ScrollStep::Settled);
-        // A flat strip is the unreadable one (kiosk closed over by a menu, say).
-        assert_eq!(tracker.step(&vec![90.0; 400]), ScrollStep::Blind);
-        // After blindness the next structured look is a fresh anchor, not a measurement.
-        assert_eq!(tracker.step(&strip(400)), ScrollStep::Settled);
     }
 
     #[test]

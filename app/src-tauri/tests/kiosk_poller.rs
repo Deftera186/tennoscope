@@ -75,7 +75,6 @@ fn read(cells: usize, basket: usize) -> Result<KioskRead, &'static str> {
 fn timing() -> KioskPollerTiming {
     KioskPollerTiming {
         interval: std::time::Duration::from_millis(1),
-        motion_interval: std::time::Duration::from_millis(1),
         lifetime: std::time::Duration::from_secs(5),
         grace: std::time::Duration::ZERO,
     }
@@ -290,57 +289,61 @@ fn shift_rows(rows: &[f32], dy: i32) -> Vec<f32> {
         .collect()
 }
 
-/// While the strip is moving, deltas stream at the motion rate and the expensive read waits:
-/// the one scripted read serves the initial anchor, and the moving strip must not consume
-/// another.
+/// Drift fades the chips and defers recognition: after the anchor's read, a strip that no
+/// longer matches it must produce fade verdicts -- never another publish, never an OCR pass.
 #[test]
-fn motion_streams_deltas_and_defers_the_full_read() {
+fn drift_fades_and_defers_the_full_read() {
     let base = bands(400);
     let outcome = run_with_strips(
         vec![(false, read(18, 3))],
-        vec![base.clone(), shift_rows(&base, -23)],
+        vec![base.clone(), shift_rows(&base, -23), shift_rows(&base, -40)],
     );
     assert_eq!(outcome.totals, vec![21], "only the anchor's read published");
-    assert_eq!(outcome.scrolls, vec![Some(-23)], "the motion streamed");
+    assert!(
+        !outcome.scrolls.is_empty() && outcome.scrolls.iter().all(|v| v.is_none()),
+        "drift only ever fades: {:?}",
+        outcome.scrolls
+    );
 }
 
-/// A settle after motion re-anchors: the epoch advances so the frontend drops the transform the
-/// deltas accumulated, and the fresh read publishes against the new epoch.
+/// When the grid comes back to rest on the anchored position, the deferred read runs: the fresh
+/// epoch tells the frontend to drop its fade, and the view is true again.
 #[test]
-fn a_settle_after_motion_reanchors_with_a_fresh_epoch() {
+fn rest_after_drift_reanchors_with_a_fresh_epoch() {
     let base = bands(400);
     let scrolled = shift_rows(&base, -31);
-    let mut strips = vec![base, scrolled.clone()];
-    // still looks until SETTLE_TICKS is satisfied, then the settle's look
-    for _ in 0..4 {
-        strips.push(scrolled.clone());
-    }
-    let outcome = run_with_strips(vec![(false, read(18, 3)), (false, read(18, 3))], strips);
-    assert_eq!(outcome.totals, vec![21, 21]);
-    assert_eq!(outcome.epochs, vec![1, 2], "the settle bumped the epoch");
-    assert_eq!(
-        outcome.scrolls,
-        vec![Some(-31), Some(0), Some(0), Some(0)],
-        "three still looks precede the settle (the fourth settles)"
+    let outcome = run_with_strips(
+        vec![(false, read(18, 3)), (false, read(18, 3))],
+        vec![base.clone(), scrolled, base],
     );
+    assert_eq!(
+        outcome.totals,
+        vec![21, 21],
+        "the deferred read ran at rest"
+    );
+    assert_eq!(outcome.epochs, vec![1, 2], "the settle bumped the epoch");
+    // After the script runs dry every look is unreadable-drift, so fades continue; what matters
+    // is that the drift itself faded exactly once before rest.
+    assert_eq!(outcome.scrolls.first(), Some(&None));
+    assert!(outcome.scrolls.iter().all(|v| v.is_none()));
 }
 
-/// A strip that cannot be measured fades the chips (`None`) and counts a miss like a failed
-/// read. Blindness also drops the tracker's anchor, so the look after it is a forced full read
-/// -- here scripted to fail, which is what a screen that has gone blank reads like, and two
-/// misses close the session with the last good view standing.
+/// An unreadable strip is drift like any other while it lasts -- but a screen that has left the
+/// kiosk for good never rests. The forced read past the drift limit finds an exhausted script,
+/// the miss streak closes in, and the last good view stood the whole time.
 #[test]
-fn a_blind_strip_fades_then_a_failed_reanchor_closes() {
-    let outcome = run_with_strips(
-        // One good read for the anchor; the post-blind re-anchor read fails (script exhausted).
-        vec![(false, read(18, 3))],
-        vec![bands(400), vec![90.0; 400], vec![90.0; 400]],
-    );
+fn endless_drift_is_capped_then_closed_by_the_forced_read() {
+    let mut strips = vec![bands(400)];
+    // Far more unreadable looks than the forced-read limit.
+    for _ in 0..20 {
+        strips.push(vec![90.0; 400]);
+    }
+    let outcome = run_with_strips(vec![(false, read(18, 3))], strips);
     assert_eq!(outcome.totals, vec![21], "the anchor stands");
-    assert_eq!(outcome.scrolls, vec![None], "the blind look faded");
+    assert!(!outcome.scrolls.is_empty(), "every drifted tick faded");
     assert!(
         outcome.gone,
-        "the blind miss plus the failed read closed it"
+        "the forced read's failures closed the session"
     );
 }
 

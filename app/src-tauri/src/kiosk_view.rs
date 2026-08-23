@@ -136,11 +136,20 @@ mod tests {
     }
 
     fn cell(col: usize, row: usize, name: &str) -> GridCell {
-        GridCell { col, row, name: name.to_owned(), score: 0.9 }
+        GridCell {
+            col,
+            row,
+            name: name.to_owned(),
+            score: 0.9,
+        }
     }
 
     fn basket_row(index: usize, name: &str) -> BasketRow {
-        BasketRow { index, name: name.to_owned(), score: 0.9 }
+        BasketRow {
+            index,
+            name: name.to_owned(),
+            score: 0.9,
+        }
     }
 
     #[test]
