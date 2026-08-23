@@ -11,7 +11,10 @@
 //! sell-basket list whose ducat numbers right-align at x=1792, and the TOTAL row's digits
 //! (16px tall, baseline y=877) with its gold ducat glyph at x=1729..1749.
 //!
-//! Consumed by recognition and rendering tasks; dead until then.
+//! The rendering anchors (`tile_anchor`, `total_row_pair`, the chip/digit sizes) have no Rust
+//! consumer: the `/kiosk` window positions its chips in CSS. They stay because they are the
+//! calibration of record -- fixture-exact, test-asserted -- and the TypeScript constants are
+//! mirrors of these, not a second measurement.
 #![allow(dead_code)]
 
 /// Grid columns across the kiosk.

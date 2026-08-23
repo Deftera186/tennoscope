@@ -50,6 +50,10 @@ const POLLER_WATCH_INTERVAL: Duration = Duration::from_millis(400);
 const POLLER_GONE_STREAK: u32 = 2;
 /// Upper bound on how long a single fissure mission is worth watching for.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
+/// The kiosk poller's single cadence: the kiosk stays up while the player browses, so there is no
+/// "found it, watch faster" split like the reward screen's -- only one rate fast enough to feel
+/// live against basket edits and slow enough to keep OCR off the CPU.
+const KIOSK_POLL_INTERVAL: Duration = Duration::from_millis(400);
 
 mod kiosk_geometry;
 mod kiosk_log;
@@ -63,6 +67,8 @@ mod reward_log;
 mod reward_observer;
 mod reward_ocr;
 mod reward_source;
+pub use kiosk_log::KioskLogEvent;
+pub use kiosk_ocr::{BasketRow, GridCell};
 pub use kiosk_view::{KioskState, KioskView};
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
@@ -1373,16 +1379,6 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         let app = app.clone();
         move || overlay_window::hide_kiosk_overlay(&app)
     };
-    // The recognition poller lands with the next feature commit; the flags are its interface and
-    // the session already runs, so the arm call is logged rather than silent.
-    let kiosk_spawn = |reanchor: &Arc<std::sync::atomic::AtomicBool>,
-                       gone: &Arc<std::sync::atomic::AtomicBool>| {
-        log::debug!(
-            "[DEBUG-kiosk] poller arm requested (reanchor={} gone={})",
-            reanchor.load(Ordering::Acquire),
-            gone.load(Ordering::Acquire)
-        );
-    };
     let mut announced_process = None;
     let mut tracked_resolution: Option<(u32, Option<PathBuf>)> = None;
     let mut early_reward_resolved = false;
@@ -1418,6 +1414,76 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         .as_ref()
         .map(CatalogIndex::reward_entries)
         .unwrap_or_default();
+    // The kiosk poller's join inputs, cloned per arm: the closed candidate set, the runtime's
+    // price/collection state, and the live market cache that outranks the daily dump.
+    let kiosk_candidates = Arc::new(reward_catalog.clone());
+    let kiosk_spawn = |reanchor: &Arc<std::sync::atomic::AtomicBool>,
+                       gone: &Arc<std::sync::atomic::AtomicBool>| {
+        let joiner = {
+            let shared = Arc::clone(&shared);
+            let cache = price_cache.clone();
+            let candidates = Arc::clone(&kiosk_candidates);
+            move |epoch: u64, frame: &KioskRead| {
+                // Take the join inputs under one short lock hold, then build outside it: the
+                // OCR thread never makes the UI wait on a lock it does not need.
+                let (table, owned) = shared
+                    .lock()
+                    .map(|runtime| {
+                        let table = runtime.core.collection_prices();
+                        let owned = runtime
+                            .core
+                            .current_view()
+                            .map(|view| {
+                                view.collection()
+                                    .items()
+                                    .iter()
+                                    .map(|item| (item.name().to_owned(), item.quantity()))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        (table, owned)
+                    })
+                    .unwrap_or_default();
+                kiosk_view::build_view(
+                    epoch,
+                    &frame.cells,
+                    &frame.basket,
+                    &candidates,
+                    |name| {
+                        cache
+                            .get(name)
+                            .or_else(|| table.as_ref().and_then(|table| table.price_for(name)))
+                    },
+                    |name| {
+                        owned
+                            .iter()
+                            .find(|(item_name, _)| {
+                                warframe_acquisition::reward_name_matches(item_name, name)
+                            })
+                            .map_or(0, |(_, quantity)| *quantity)
+                    },
+                )
+            }
+        };
+        let publish = {
+            let app = app.clone();
+            move |view: KioskView| {
+                if let Some(kiosk) = app.try_state::<KioskState>() {
+                    kiosk.set(view);
+                    emit_kiosk_update(&app);
+                }
+            }
+        };
+        spawn_kiosk_poller_with(
+            reanchor,
+            gone,
+            KioskPollerTiming::live(),
+            Arc::clone(&kiosk_candidates),
+            joiner,
+            publish,
+            || ScreenKioskSource,
+        );
+    };
     let relic_catalog = shared
         .lock()
         .ok()
@@ -2100,6 +2166,126 @@ where
         }
         visual_polling.store(false, Ordering::Release);
     }))
+}
+
+/// How often the kiosk poller looks, and how long it may run.
+///
+/// One rate, unlike the reward poller's two: the kiosk is not a fifteen-second screen, it stays
+/// up while the player browses, and 400ms is faster than any basket edit or scroll re-anchoring
+/// needs to feel live while still costing one tesseract pass per visible slot per tick.
+#[derive(Clone, Copy, Debug)]
+pub struct KioskPollerTiming {
+    pub interval: Duration,
+    pub lifetime: Duration,
+}
+
+impl KioskPollerTiming {
+    pub const fn live() -> Self {
+        Self {
+            interval: KIOSK_POLL_INTERVAL,
+            lifetime: POLLER_LIFETIME,
+        }
+    }
+}
+
+/// One whole poller attempt: what the screen said, per slot.
+pub struct KioskRead {
+    pub cells: Vec<GridCell>,
+    pub basket: Vec<BasketRow>,
+}
+
+/// The screen behind the kiosk poller, as one method so a test can script it -- the same shape
+/// that made the reward poller testable without playing a fissure.
+pub trait KioskFrameSource {
+    fn read_kiosk(&mut self, candidates: &[RewardCatalogEntry]) -> Result<KioskRead, &'static str>;
+}
+
+/// The live source: the game window through the same capture path the reward reader uses.
+pub struct ScreenKioskSource;
+
+impl KioskFrameSource for ScreenKioskSource {
+    fn read_kiosk(&mut self, candidates: &[RewardCatalogEntry]) -> Result<KioskRead, &'static str> {
+        let (_, frame) = reward_ocr::capture_game_window()?;
+        Ok(KioskRead {
+            cells: kiosk_ocr::read_grid(&frame, candidates),
+            basket: kiosk_ocr::read_basket(&frame, candidates),
+        })
+    }
+}
+
+/// The kiosk poller's body, with the screen and the join as parameters.
+///
+/// The loop's one judgement is what a bad frame means. EE.log never says the kiosk closed, so a
+/// miss streak is the whole close path; but a single miss -- a capture hiccup, a blank read, a
+/// hover card covering most of the grid -- must not publish an emptied view over the last good
+/// one. The anchor cell count is the tie-breaker: a read that lost more than half its cells is an
+/// occlusion, not an emptied kiosk, unless a re-anchor request (open, filter change, basket edit)
+/// says the grid really did just change shape.
+pub fn spawn_kiosk_poller_with<S, J, P>(
+    reanchor: &Arc<std::sync::atomic::AtomicBool>,
+    gone: &Arc<std::sync::atomic::AtomicBool>,
+    timing: KioskPollerTiming,
+    candidates: Arc<Vec<RewardCatalogEntry>>,
+    joiner: J,
+    publish: P,
+    make_source: impl FnOnce() -> S + Send + 'static,
+) -> std::thread::JoinHandle<()>
+where
+    S: KioskFrameSource + Send + 'static,
+    J: Fn(u64, &KioskRead) -> KioskView + Send + 'static,
+    P: Fn(KioskView) + Send + 'static,
+{
+    let reanchor = Arc::clone(reanchor);
+    let gone = Arc::clone(gone);
+    std::thread::spawn(move || {
+        let mut source = make_source();
+        let mut epoch = 0_u64;
+        let mut misses = 0_u32;
+        let mut anchored_cells = 0_usize;
+        let deadline = Instant::now() + timing.lifetime;
+        while Instant::now() < deadline {
+            // The session's re-anchor request: advance the epoch so the frontend drops its
+            // accumulated scroll transform, and accept the next read as the new anchor even if
+            // it holds fewer cells -- a filter that narrows the grid is not an occlusion.
+            let fresh_anchor = reanchor.swap(false, Ordering::AcqRel);
+            if fresh_anchor {
+                epoch += 1;
+            }
+            let frame = match source.read_kiosk(&candidates) {
+                Ok(frame) => frame,
+                Err(reason) => {
+                    log::warn!("[DEBUG-kiosk] read failed: {reason}");
+                    misses += 1;
+                    if misses >= POLLER_GONE_STREAK {
+                        log::debug!("[DEBUG-kiosk] kiosk gone");
+                        gone.store(true, Ordering::Release);
+                        break;
+                    }
+                    std::thread::sleep(timing.interval);
+                    continue;
+                }
+            };
+            let read_something = !frame.cells.is_empty() || !frame.basket.is_empty();
+            let occluded =
+                !fresh_anchor && anchored_cells > 0 && frame.cells.len() * 2 < anchored_cells;
+            if read_something && !occluded {
+                misses = 0;
+                anchored_cells = frame.cells.len();
+                publish(joiner(epoch, &frame));
+            } else {
+                misses += 1;
+                if misses >= POLLER_GONE_STREAK {
+                    log::debug!(
+                        "[DEBUG-kiosk] kiosk gone ({} cells read)",
+                        frame.cells.len()
+                    );
+                    gone.store(true, Ordering::Release);
+                    break;
+                }
+            }
+            std::thread::sleep(timing.interval);
+        }
+    })
 }
 
 /// The relic pool as catalog entries, so the visual source can match against exactly the rewards
@@ -2850,8 +3036,6 @@ fn get_kiosk_view(kiosk: State<'_, KioskState>) -> Option<KioskView> {
 }
 
 /// Tell the kiosk window a new epoch is published; it fetches the view itself.
-// Called from the kiosk poller, which lands two tasks from now.
-#[allow(dead_code)]
 fn emit_kiosk_update(app: &AppHandle) {
     let _ = app.emit_to("kiosk-overlay", "kiosk-updated", ());
 }

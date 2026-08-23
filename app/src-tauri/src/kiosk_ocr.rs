@@ -10,9 +10,6 @@
 //! It is not general OCR: every label only has to land on the nearest of the player's own prime
 //! parts (`CatalogIndex::reward_entries`), which is what makes a garbled read safe to drop.
 
-// Nothing consumes the reads until the poller lands (same as the geometry and log machines).
-#![allow(dead_code)]
-
 use image::{DynamicImage, GenericImageView};
 use std::path::PathBuf;
 

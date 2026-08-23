@@ -5,9 +5,6 @@
 //! joins against data the app already holds, never from the screen: the spec's no-digit-OCR rule
 //! keeps the game's own numerals out of the pipeline entirely.
 
-// Nothing consumes the view until the poller and IPC land (same as the modules before it).
-#![allow(dead_code)]
-
 use serde::Serialize;
 use warframe_acquisition::{RewardCatalogEntry, reward_name_matches};
 
