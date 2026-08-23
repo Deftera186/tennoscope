@@ -10,6 +10,10 @@
 //! - `InventoryTest.lua: InventoryTest - CurrMode: Selling Prime Parts`
 //! - `Created /Lotus/Interface/InventoryTest.swf`
 //! - `InventoryTest.lua: PopulateGrid()`
+//!
+//! Consumed by the monitor loop once the kiosk poller lands; everything below is dead until
+//! then, which is why the module carries this allowance only for now.
+#![allow(dead_code)]
 
 /// A kiosk event worth acting on: open the overlay, or re-anchor it because the grid was
 /// repopulated (open, filter change, basket edit).
