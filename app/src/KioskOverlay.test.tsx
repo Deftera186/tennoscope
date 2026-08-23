@@ -108,11 +108,12 @@ describe('kiosk overlay route', () => {
 
     events.listeners['kiosk-scroll']?.({ payload: 5 })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' }))
-    // Offsets are absolute against the anchor, not increments: a second verdict replaces,
-    // it does not accumulate. The basket pane never scrolls, so it carries no transform.
+    // The backend streams movement, not position: each verdict is how far the grid went since
+    // the last look, so the chips ride a scroll of any length by adding them up. (Assigning
+    // them absolutely left the chips 17px from home on a 300px scroll.)
     events.listeners['kiosk-scroll']?.({ payload: 9 })
-    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(9 * var(--h)))' }))
-    expect(basket).not.toHaveStyle({ transform: 'translateY(calc(9 * var(--h)))' })
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(14 * var(--h)))' }))
+    expect(basket).not.toHaveStyle({ transform: 'translateY(calc(14 * var(--h)))' })
     expect(grid).not.toHaveClass('kiosk-faded')
   })
 

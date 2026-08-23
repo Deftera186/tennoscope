@@ -90,12 +90,14 @@ export default function KioskOverlay() {
       } catch { /* transient IPC failure: keep the last anchor standing */ }
     }
 
-    // While the grid moves the backend streams its offset from the anchor -- the chips ride
-    // the scroll in real time; an unreadable look (null) fades until the next anchor.
+    // While the grid moves the backend streams how far it moved since the last look -- the
+    // chips ride the scroll by accumulating those deltas. An unreadable look (null) fades
+    // them until the next settled read publishes where the grid actually is.
     void listen<number | null>('kiosk-scroll', (event) => {
       if (!active) return
       if (event.payload === null) { setFaded(true); return }
-      setOffset(event.payload)
+      const delta = event.payload
+      setOffset(previous => previous + delta)
     }).then(stop => { if (active) unlistenScroll = stop; else stop() })
 
     void listen('kiosk-updated', () => { void refresh() }).then(stop => {
@@ -121,7 +123,14 @@ export default function KioskOverlay() {
       <div
         className="kiosk-grid"
         data-testid="kiosk-grid"
-        style={{ transform: `translateY(calc(${offset} * var(--h)))` }}
+        style={{
+          transform: `translateY(calc(${offset} * var(--h)))`,
+          // The pane's own clip edges (193 and 983 design px, measured on a live frame): a
+          // row sliding out of the pane must slide out of the overlay too, instead of
+          // painting its chips over the header. The inset is undone by the same translate
+          // the chips ride, so it is expressed against the untranslated box.
+          clipPath: `inset(calc(${193 - offset} * var(--h)) 0 calc(${97 + offset} * var(--h)) 0)`,
+        }}
       >
         {view?.cells.map(cell =>
           <span
