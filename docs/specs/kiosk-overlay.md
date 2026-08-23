@@ -83,20 +83,34 @@ re-measures from the committed fixture and asserts these):
   (clone of the reward-overlay declarations in tauri.conf.json:26-41 +
   capabilities/default.json).
 - One window spans the whole game window rect (unlike reward-overlay's card-sized window):
-  scroll-following requires moving DOM elements inside the window, not the window itself.
-- Chips are absolutely positioned DOM nodes at fraction coordinates; scroll offset applies as
-  a single CSS `translateY` on the chip container (GPU-composited, no IPC per frame beyond
-  the offset event).
+  chips are absolutely positioned DOM nodes at fraction coordinates over the full screen.
 
-### Scroll sync
+### Scroll sync (as built)
 
-1. While scrolling, the poller captures a thin horizontal strip of the grid region each tick
-   (~30ms) and computes vertical displacement vs the previous strip by phase correlation
-   (FFT cross-correlation on luma, sub-pixel not required).
-2. Offset streams to the frontend (`kiosk-scroll`) and chips translate in lockstep.
-3. When |dy| stays under ε for ~120ms, one full OCR pass re-anchors and clears drift.
-4. Confidence guard: if correlation peak ratio drops below threshold, or fewer than half the
-   previously anchored cells re-match after settle, chips fade out rather than mislabel.
+The spec's original design streamed per-tick displacements into a CSS transform. That assumed
+~33ms sampling; the Wayland capture path costs ~750ms a frame, so mid-scroll looks read as
+"settled" and chips would sit still over rows that moved. The shipped behaviour is honest
+instead of fast:
+
+1. Each tick captures once and correlates the grid strip's row-luma profile against the anchor
+   frame's (`estimate_dy`, normalized cross-correlation).
+2. Confidently unmoved → run the full OCR pass on the same capture and publish.
+3. Moved or unreadable → emit `kiosk-scroll` (fade) and defer recognition. No deltas are
+   streamed; the frontend only knows "fade".
+4. When the strip matches the anchor again, one full pass re-anchors under a fresh epoch and
+   the fade lifts.
+5. Drift that never rests (the kiosk was closed entirely) is capped: after `KIOSK_DRIFT_READ_LIMIT`
+   ticks a full read is forced, whose empty verdict starts the miss streak that ends the session.
+
+### Speed notes (measured, live machine)
+
+- One tesseract spawn ≈ 165ms; crops fan out across up to 12 threads with each child pinned to
+  one OpenMP thread (`OMP_THREAD_LIMIT=1`) — without that pin, 12 concurrent spawns oversubscribe
+  and the grid pass goes from 385ms to 6s.
+- A uniform-background prefilter (`band_has_text`) skips the spawn for slots whose label band
+  has no glyphs: empty basket rows and partial grids cost ~nothing.
+- Screen capture (~750ms, compositor-bound; xcap and grim agree) dominates every budget and is
+  the next lever, but it is platform work, not app work.
 
 ## Edge cases
 

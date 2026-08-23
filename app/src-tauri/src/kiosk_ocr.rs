@@ -10,7 +10,7 @@
 //! It is not general OCR: every label only has to land on the nearest of the player's own prime
 //! parts (`CatalogIndex::reward_entries`), which is what makes a garbled read safe to drop.
 
-use image::{DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView, GrayImage};
 use std::path::PathBuf;
 
 use warframe_acquisition::RewardCatalogEntry;
@@ -58,11 +58,12 @@ fn scratch_file() -> PathBuf {
 /// as the whole crop's preprocessing, so the reads run across a small pool of threads: the
 /// poller's whole budget is one interval, and 26 sequential spawns spend several of them.
 pub fn read_grid(image: &DynamicImage, candidates: &[RewardCatalogEntry]) -> Vec<GridCell> {
+    let luma = image.to_luma8();
     let (width, height) = image.dimensions();
     let slots: Vec<(usize, usize)> = (0..crate::kiosk_geometry::GRID_ROWS)
         .flat_map(|row| (0..crate::kiosk_geometry::GRID_COLS).map(move |col| (col, row)))
         .collect();
-    let reads = read_slots(image, width, height, &slots, candidates, |slot| {
+    let reads = read_slots(&luma, image, width, height, &slots, candidates, |slot| {
         crate::kiosk_geometry::grid_label_rect(width, height, slot.0, slot.1)
     });
     slots
@@ -81,9 +82,10 @@ pub fn read_grid(image: &DynamicImage, candidates: &[RewardCatalogEntry]) -> Vec
 
 /// Read every visible basket row independently; rows past the list's end read blank and drop out.
 pub fn read_basket(image: &DynamicImage, candidates: &[RewardCatalogEntry]) -> Vec<BasketRow> {
+    let luma = image.to_luma8();
     let (width, height) = image.dimensions();
     let slots: Vec<usize> = (0..crate::kiosk_geometry::BASKET_ROWS).collect();
-    let reads = read_slots(image, width, height, &slots, candidates, |index| {
+    let reads = read_slots(&luma, image, width, height, &slots, candidates, |index| {
         basket_label_rect(width, height, *index)
     });
     slots
@@ -96,6 +98,7 @@ pub fn read_basket(image: &DynamicImage, candidates: &[RewardCatalogEntry]) -> V
 /// Read every slot's rect in parallel, preserving input order; failed or sub-floor reads come
 /// back as `None` and simply drop out of the caller's view.
 fn read_slots<T>(
+    luma: &GrayImage,
     image: &DynamicImage,
     width: u32,
     height: u32,
@@ -113,7 +116,7 @@ where
     if workers <= 1 {
         return slots
             .iter()
-            .map(|slot| read_slot(image, width, height, rect(slot), candidates))
+            .map(|slot| read_slot(luma, image, width, height, rect(slot), candidates))
             .collect();
     }
     let rect = &rect;
@@ -130,7 +133,9 @@ where
                 scope.spawn(move || {
                     indices
                         .iter()
-                        .map(|&i| read_slot(image, width, height, rect(&slots[i]), candidates))
+                        .map(|&i| {
+                            read_slot(luma, image, width, height, rect(&slots[i]), candidates)
+                        })
                         .collect::<Vec<_>>()
                 })
             })
@@ -150,7 +155,30 @@ where
     })
 }
 
+/// Luma range below which a band is background rather than text. The game draws labels as
+/// bright glyphs on a dark pane, so a populated band swings hard between the two; an empty
+/// slot's band barely varies. One cheap pass over the raw band replaces a whole tesseract
+/// spawn for every slot the grid is not showing.
+const BLANK_BAND_RANGE: u8 = 40;
+
+/// True when the band holds glyphs worth reading.
+fn band_has_text(luma: &GrayImage, x: u32, y: u32, w: u32, h: u32) -> bool {
+    let mut min = u8::MAX;
+    let mut max = u8::MIN;
+    for row in y..y + h {
+        // `rows` hands back a borrowed slice of one scanline; skip/take trims to the band.
+        let stride = luma.width() as usize;
+        let start = row as usize * stride + x as usize;
+        for cell in &luma.as_raw()[start..start + w as usize] {
+            min = min.min(*cell);
+            max = max.max(*cell);
+        }
+    }
+    max.saturating_sub(min) >= BLANK_BAND_RANGE
+}
+
 fn read_slot(
+    luma: &GrayImage,
     image: &DynamicImage,
     width: u32,
     height: u32,
@@ -161,6 +189,9 @@ fn read_slot(
     // A window smaller than the 1080p calibration cannot contain these fractions at pixel
     // fidelity; clipping to the frame beats panicking on an out-of-bounds view.
     if x + w > width || y + h > height || w == 0 || h == 0 {
+        return None;
+    }
+    if !band_has_text(luma, x, y, w, h) {
         return None;
     }
     let prepared = prepare_crop(image, x, y, w, h);
