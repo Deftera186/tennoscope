@@ -42,6 +42,20 @@ const COL_PITCH: f32 = fx(207.5);
 const TILE_W: f32 = fx(190.0);
 const GRID_LEFT: f32 = fcx(76.0);
 const ROW_TOPS: [f32; 3] = [fx(199.0), fx(421.0), fx(643.0)];
+/// The grid pane's clip edge in design pixels, measured on a live 1080p frame: card-column
+/// mean luma drops 77 to 48 between y=982 and y=985, so 983 is where the pane ends. A label
+/// band that would land at y=1009 is never rendered -- the game clips before drawing it.
+const PANE_BOTTOM: f32 = fx(983.0);
+/// The grid's vertical period in design pixels: one row's card top to the next's
+/// (`ROW_TOPS` differences, 421-199 and 643-421). The scroll locator folds the pane's row
+/// profile over this, because a grid scrolled by any amount repeats itself on it.
+pub const ROW_PITCH_1080: i32 = 222;
+/// Where the unscrolled grid's first label band starts, and how tall the band is. These are
+/// the locator's anchors, not the OCR crop's: the crop is deliberately taller (three-line
+/// labels stack upward out of a two-line box), and a locator window that grew with it would
+/// average the label's brightness away against the artwork above it.
+pub const LABEL_BAND_TOP_1080: i32 = 343;
+pub const LABEL_BAND_H_1080: i32 = 46;
 /// Label band top relative to its row's card top.
 const LABEL_DY: f32 = fx(144.0);
 /// Label band height: two ~17px lines plus breathing room for the OCR crop.
@@ -135,16 +149,22 @@ pub fn total_row_pair(width: u32, height: u32) -> (f32, f32) {
     )
 }
 
-/// The grid pane region the scroll tracker profiles: every column's width, from just above the
-/// first thumbnail row to just below the last label band, `(x, y, w, h)` in pixels.
+/// The grid pane region the scroll tracker profiles: every column's width and the whole
+/// pane's height, `(x, y, w, h)` in pixels.
 ///
-/// The pane, not the window: the basket beside it never moves, and rows outside it (title bar,
-/// navigation) carry no scroll information -- including them only dilutes the correlation.
+/// The pane, not the window: the basket beside it never moves, and rows outside it (title
+/// bar, navigation) carry no scroll information -- including them only dilutes the correlation.
+/// The bottom is the pane's own clip edge, not the last calibrated row: at some scroll phases
+/// the game renders a fourth label band below row 2, and a band the tracker cannot see is a
+/// row of items that never gets read.
 pub fn grid_strip(width: u32, height: u32) -> (u32, u32, u32, u32) {
     let left = col_left(width, height, 0) - fx(6.0) * height as f32;
     let right = col_left(width, height, GRID_COLS - 1) + (TILE_W + fx(6.0)) * height as f32;
     let top = ROW_TOPS[0] * height as f32 - fx(6.0) * height as f32;
-    let bottom = (ROW_TOPS[GRID_ROWS - 1] + LABEL_DY + LABEL_H + fx(8.0)) * height as f32;
+    // The pane's own clip edge, measured on a live 1080p frame (card content stops between
+    // y=982 and y=985). The strip has to reach it: at some scroll phases the pane renders a
+    // fourth label band as low as y=937, and the locator can only find bands it can see.
+    let bottom = PANE_BOTTOM * height as f32;
     (
         left.round() as u32,
         top.round() as u32,
@@ -220,6 +240,22 @@ mod tests {
         assert_eq!(tile_anchor(1920, 1080, 6, 0), None);
         assert_eq!(basket_row_pair(1920, 1080, BASKET_ROWS), None);
     }
+
+    /// The locator's anchors are the unscrolled label band's top and height, and they stay put
+    /// when the OCR crop grows to catch three-line labels: the crop is what tesseract reads,
+    /// the band is what the profile peaks on.
+    #[test]
+    fn the_label_band_anchors_are_independent_of_the_ocr_crop() {
+        let (_x, y, _w, h) = grid_label_rect(1920, 1080, 0, 0, 0).expect("row 0 crop");
+        assert!(
+            y <= LABEL_BAND_TOP_1080 as u32,
+            "the crop starts at or above the band it must contain: crop {y}, band {LABEL_BAND_TOP_1080}"
+        );
+        assert!(
+            y + h >= (LABEL_BAND_TOP_1080 + LABEL_BAND_H_1080) as u32,
+            "and ends at or below its bottom"
+        );
+    }
 }
 
 /// The OCR crop over one basket row's item name.
@@ -256,8 +292,22 @@ mod basket_label_tests {
     #[test]
     fn the_scroll_strip_spans_the_pane() {
         // Six columns on a 207.5 pitch from x=76, tile width 190: right edge 1303.5, inset 6
-        // each side; vertically from above row 0's cards (199) to below row 2's label band
-        // (643 + 144 + 46 + 8).
-        assert_eq!(grid_strip(1920, 1080), (70, 193, 1240, 648));
+        // each side; vertically from above row 0's cards (199) down to the pane's clip edge.
+        assert_eq!(grid_strip(1920, 1080), (70, 193, 1240, 790));
+    }
+
+    /// The pane the tracker profiles is the pane the game clips to, measured on a live 1080p
+    /// frame: card content ends between y=982 and y=985, and a label band at 1009 is never
+    /// rendered. Stopping the strip at the third row's label (841) hid the fourth band the
+    /// pane does render at some scroll positions, and a band the locator cannot see is a row
+    /// of items that never gets a chip.
+    #[test]
+    fn the_strip_reaches_the_panes_clip_edge() {
+        let (_x, y, _w, h) = grid_strip(1920, 1080);
+        assert_eq!(
+            y + h,
+            (PANE_BOTTOM * 1080.0).round() as u32,
+            "the strip stops where the game stops drawing"
+        );
     }
 }
