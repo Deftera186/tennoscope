@@ -2,26 +2,31 @@
 //!
 //! The reward screen announces itself with a marker and dismisses with another, so
 //! `RewardLogMachine` can key its whole session off log lines alone. The kiosk has open markers
-//! -- the mode line, the SWF creation line, and one `PopulateGrid()` per repopulation -- but no
-//! close marker at all. This machine therefore only ever opens: closing is the poller's job,
-//! decided from the screen going blank (miss streak), not from anything written here.
+//! -- the mode line, the SWF creation line, and one `PopulateGrid()` per repopulation -- and,
+//! contrary to what this machine believed for its first day, a close marker too:
+//! `InventoryTest.lua: DBG: HudVis 0` is the kiosk hiding itself, and it precedes every reopen
+//! in a live 2026-08-23 log. Sessions therefore open, re-anchor, *and* close off the log; the
+//! poller's miss streak is only the backstop for a log that stops cooperating.
 //!
-//! The three markers were read off a live 2026-08-23 log:
+//! The markers were read off a live 2026-08-23 log:
 //! - `InventoryTest.lua: InventoryTest - CurrMode: Selling Prime Parts`
 //! - `Created /Lotus/Interface/InventoryTest.swf`
 //! - `InventoryTest.lua: PopulateGrid()`
+//! - `InventoryTest.lua: DBG: HudVis 0`
 
-/// A kiosk event worth acting on: open the overlay, or re-anchor it because the grid was
-/// repopulated (open, filter change, basket edit).
+/// A kiosk event worth acting on: open the overlay, re-anchor it because the grid was
+/// repopulated (open, filter change, basket edit), or close it because the game said so.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum KioskLogEvent {
     KioskOpened,
     GridPopulated,
+    KioskClosed,
 }
 
 const MODE_MARKER: &str = "InventoryTest - CurrMode: Selling Prime Parts";
 const SWF_MARKER: &str = "/Lotus/Interface/InventoryTest.swf";
 const POPULATE_MARKER: &str = "PopulateGrid()";
+const CLOSE_MARKER: &str = "InventoryTest.lua: DBG: HudVis 0";
 
 #[derive(Default)]
 pub struct KioskLogMachine {
@@ -60,6 +65,11 @@ impl KioskLogMachine {
         if !self.open && (line.contains(MODE_MARKER) || line.contains(SWF_MARKER)) {
             self.open = true;
             events.push(KioskLogEvent::KioskOpened);
+            return events;
+        }
+        if self.open && line.contains(CLOSE_MARKER) {
+            self.open = false;
+            events.push(KioskLogEvent::KioskClosed);
             return events;
         }
         if self.open && line.contains(POPULATE_MARKER) && events.is_empty() {
@@ -111,6 +121,42 @@ mod tests {
         let mut m = KioskLogMachine::default();
         let _ = m.observe_line(MODE_LINE);
         assert!(m.observe_line(MODE_LINE).is_empty());
+    }
+
+    /// `InventoryTest.lua: DBG: HudVis 0` is the kiosk hiding itself -- read off a live
+    /// 2026-08-23 log, where it precedes every reopen by a beat. While a session is open that
+    /// line is the close verdict, and the session that follows is a fresh open.
+    #[test]
+    fn hud_vis_zero_closes_an_open_session() {
+        let mut m = KioskLogMachine::default();
+        let _ = m.observe_line(MODE_LINE);
+        assert_eq!(
+            m.observe_line("InventoryTest.lua: DBG: HudVis 0"),
+            vec![KioskLogEvent::KioskClosed]
+        );
+        assert!(
+            m.observe_line(MODE_LINE)
+                .contains(&KioskLogEvent::KioskOpened)
+        );
+    }
+
+    #[test]
+    fn hud_vis_zero_before_any_open_is_ignored() {
+        let mut m = KioskLogMachine::default();
+        assert!(
+            m.observe_line("InventoryTest.lua: DBG: HudVis 0")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn hud_vis_one_is_not_a_close() {
+        let mut m = KioskLogMachine::default();
+        let _ = m.observe_line(MODE_LINE);
+        assert!(
+            m.observe_line("InventoryTest.lua: DBG: HudVis 1")
+                .is_empty()
+        );
     }
 
     #[test]

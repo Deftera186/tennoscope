@@ -1340,6 +1340,13 @@ impl KioskSession {
                         self.reanchor.store(true, Ordering::Release);
                     }
                 }
+                kiosk_log::KioskLogEvent::KioskClosed => {
+                    // The game hid the kiosk: end the session exactly as a poller verdict
+                    // would. `poller_gone` consumes the flag and tears the overlay down.
+                    if self.poller_active {
+                        self.gone.store(true, Ordering::Release);
+                    }
+                }
             }
         }
     }
@@ -2192,7 +2199,13 @@ pub struct KioskRead {
 /// The screen behind the kiosk poller, as one method so a test can script it -- the same shape
 /// that made the reward poller testable without playing a fissure.
 pub trait KioskFrameSource {
-    fn read_kiosk(&mut self, candidates: &[RewardCatalogEntry]) -> Result<KioskRead, &'static str>;
+    /// `dy` is the grid's tracked scroll offset in pixels: the label bands are calibrated for
+    /// the unscrolled grid, so a read at any other scroll position must look there instead.
+    fn read_kiosk(
+        &mut self,
+        candidates: &[RewardCatalogEntry],
+        dy: i32,
+    ) -> Result<KioskRead, &'static str>;
 
     /// Mean luma per row across the grid pane, for the scroll tracker's cheap ticks. Sources
     /// that cannot look cheaply leave this as `Err`, and the poller simply falls back to full
@@ -2212,14 +2225,18 @@ pub struct ScreenKioskSource {
 }
 
 impl KioskFrameSource for ScreenKioskSource {
-    fn read_kiosk(&mut self, candidates: &[RewardCatalogEntry]) -> Result<KioskRead, &'static str> {
+    fn read_kiosk(
+        &mut self,
+        candidates: &[RewardCatalogEntry],
+        dy: i32,
+    ) -> Result<KioskRead, &'static str> {
         let frame = match &self.recent {
             Some((at, frame)) if at.elapsed() < KIOSK_POLL_INTERVAL => frame.clone(),
             _ => reward_ocr::capture_game_window()?.1,
         };
         self.recent = None;
         Ok(KioskRead {
-            cells: kiosk_ocr::read_grid(&frame, candidates),
+            cells: kiosk_ocr::read_grid(&frame, candidates, dy),
             basket: kiosk_ocr::read_basket(&frame, candidates),
         })
     }
@@ -2297,6 +2314,11 @@ where
         let spawned_at = Instant::now();
         let deadline = spawned_at + timing.lifetime;
         while Instant::now() < deadline {
+            // The log machine's close verdict lands in the same flag the poller's own verdicts
+            // use: the game hid the kiosk, so stop looking at it.
+            if gone.load(Ordering::Acquire) {
+                break;
+            }
             // The session's re-anchor request: advance the epoch so the frontend drops whatever
             // it is showing, and accept the next read as the new anchor even if it holds fewer
             // cells -- a filter that narrows the grid is not an occlusion.
@@ -2314,24 +2336,31 @@ where
             let reading = current_strip.as_ref().ok();
             let mut deferred = false;
             let mut moving_now = false;
+            let mut drift_dy = 0_i32;
             if let Some(anchor) = &anchor_strip {
                 let vs_anchor = reading.and_then(|current| {
                     kiosk_scroll::estimate_dy(
                         anchor,
                         current,
-                        kiosk_scroll::MAX_SHIFT,
+                        kiosk_scroll::FULL_RANGE,
                         kiosk_scroll::MIN_PEAK_RATIO,
                     )
                 });
                 match vs_anchor {
                     // Confidently unmoved: the anchor still holds, go ahead and re-read below.
-                    Some(dy) if dy.abs() <= 1 => drift_ticks = 0,
+                    Some(dy) if dy.abs() <= 1 => {
+                        drift_ticks = 0;
+                        drift_dy = dy;
+                    }
                     // Moved measurably (stream the offset) or unreadably (fade until it
                     // resolves): either way the anchor no longer describes the screen.
                     verdict => {
                         emit_scroll(verdict);
                         scrolled_since_anchor = true;
                         moving_now = verdict.is_some();
+                        if let Some(dy) = verdict {
+                            drift_dy = dy;
+                        }
                         if moving_now {
                             // The grid is verifiably still with us and in motion: follow it for
                             // as long as it lasts. A read forced here would catch rows straddling
@@ -2367,7 +2396,7 @@ where
             }
             pause_ticks = 0;
             let opening = spawned_at.elapsed() < timing.grace;
-            let frame = match source.read_kiosk(&candidates) {
+            let frame = match source.read_kiosk(&candidates, drift_dy) {
                 Ok(frame) => frame,
                 Err(reason) => {
                     log::warn!("[DEBUG-kiosk] read failed: {reason}");
@@ -2401,7 +2430,9 @@ where
                 // This frame is the new anchor; its strip is what future ticks compare against.
                 anchor_strip = current_strip.ok();
                 drift_ticks = 0;
-                publish(joiner(epoch, &frame));
+                let mut view = joiner(epoch, &frame);
+                view.scroll_dy = drift_dy;
+                publish(view);
             } else if opening {
                 // Still inside the open animation: an empty frame here is the fade, not an
                 // emptied kiosk, so the streak holds its breath.
@@ -3339,7 +3370,12 @@ mod live_bench {
         println!("frame: {w}x{h}");
 
         let t1 = Instant::now();
-        let cells = kiosk_ocr::read_grid(&frame, &candidates);
+        let dy: i32 = std::env::var("KIOSK_BENCH_DY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        println!("bench dy: {dy}");
+        let cells = kiosk_ocr::read_grid(&frame, &candidates, dy);
         println!(
             "read_grid (18 crops): {:?} -> {} cells",
             t1.elapsed(),
@@ -3389,6 +3425,7 @@ mod tests {
         fn read_kiosk(
             &mut self,
             _candidates: &[RewardCatalogEntry],
+            _dy: i32,
         ) -> Result<KioskRead, &'static str> {
             // An exhausted script is a vanished screen: the miss streak closes the session
             // instead of a panic inside the poller thread.
