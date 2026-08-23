@@ -10,6 +10,9 @@
 //! three thumbnail rows (tops y=197/423/640), the item label sitting below each thumbnail, a
 //! sell-basket list whose ducat numbers right-align at x=1792, and the TOTAL row's digits
 //! (16px tall, baseline y=877) with its gold ducat glyph at x=1729..1749.
+//!
+//! Consumed by recognition and rendering tasks; dead until then.
+#![allow(dead_code)]
 
 /// Grid columns across the kiosk.
 pub const GRID_COLS: usize = 6;
