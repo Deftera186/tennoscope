@@ -1,10 +1,12 @@
-//! Ask one cheap question of the kiosk grid without reading it: has it moved?
+//! Ask one cheap question of the kiosk grid without reading it: where is it relative to the
+//! anchor?
 //!
 //! A full recognition pass costs one tesseract crop per visible slot -- fine once a second,
-//! impossible thirty. But a capture cannot even sample a scroll fast enough to follow it, so
-//! following was never the right ambition; not lying is. Each poll tick compares the strip's row
-//! luma profile against the anchor frame's, and a confident mismatch means the chips no longer
-//! describe the screen: fade them, defer the expensive read until the rows rest, then re-anchor.
+//! impossible thirty. But a capture through grim costs ~25ms, so each tick compares the strip's
+//! row luma profile against the anchor frame's and streams the answer: a confident shift rides
+//! to the frontend as an offset (the chips follow the scroll in real time), a confident zero
+//! means the anchor still holds, and no confident answer at all fades until the next settled
+//! read re-anchors.
 //!
 //! The comparison is normalized cross-correlation (a Pearson r per candidate shift), so the
 //! peak's value is itself the confidence: structure that moved together peaks near 1.0, two

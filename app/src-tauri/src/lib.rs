@@ -2240,9 +2240,10 @@ impl KioskFrameSource for ScreenKioskSource {
 /// animation, short enough that a kiosk which never really appears still closes within seconds.
 const KIOSK_OPEN_GRACE: Duration = Duration::from_secs(3);
 
-/// Consecutive drifted ticks before a full read is forced anyway: scrolling defers recognition
-/// because chips on moved rows are worse than no chips, but a screen that has left the kiosk
-/// entirely never rests -- this bound is what lets that session end (~8 ticks at one interval).
+/// Consecutive *unreadable* drifted looks before a full read is forced anyway. Measurable
+/// motion never escalates -- the grid is demonstrably there, and a mid-scroll read comes back
+/// empty and killed sessions (2026-08-23) -- but a flat or unmatched strip is what a closed or
+/// occluded kiosk looks like, and it never rests: this bound ends that session (~8 looks).
 const KIOSK_DRIFT_READ_LIMIT: u32 = 8;
 
 /// How many consecutive looks must agree with each other (while disagreeing with the anchor)
@@ -2312,6 +2313,7 @@ where
             let current_strip = source.strip_profile();
             let reading = current_strip.as_ref().ok();
             let mut deferred = false;
+            let mut moving_now = false;
             if let Some(anchor) = &anchor_strip {
                 let vs_anchor = reading.and_then(|current| {
                     kiosk_scroll::estimate_dy(
@@ -2329,25 +2331,32 @@ where
                     verdict => {
                         emit_scroll(verdict);
                         scrolled_since_anchor = true;
-                        drift_ticks += 1;
-                        // A pause is two consecutive looks that agree with each other while
-                        // both disagree with the anchor: the scroll has stopped, so settle
-                        // now instead of waiting for the grid to return to the anchor row.
-                        let paused = match (&last_strip, reading) {
-                            (Some(prev), Some(current)) => matches!(
-                                kiosk_scroll::estimate_dy(
-                                    prev,
-                                    current,
-                                    kiosk_scroll::MAX_SHIFT,
-                                    kiosk_scroll::MIN_PEAK_RATIO,
+                        moving_now = verdict.is_some();
+                        if moving_now {
+                            // The grid is verifiably still with us and in motion: follow it for
+                            // as long as it lasts. A read forced here would catch rows straddling
+                            // the label bands and come back empty -- the 2026-08-23 mid-scroll
+                            // session kill -- so only a pause settles into one.
+                            let paused = match (&last_strip, reading) {
+                                (Some(prev), Some(current)) => matches!(
+                                    kiosk_scroll::estimate_dy(
+                                        prev,
+                                        current,
+                                        kiosk_scroll::MAX_SHIFT,
+                                        kiosk_scroll::MIN_PEAK_RATIO,
+                                    ),
+                                    Some(d) if d.abs() <= 1,
                                 ),
-                                Some(d) if d.abs() <= 1,
-                            ),
-                            _ => false,
-                        };
-                        pause_ticks = if paused { pause_ticks + 1 } else { 0 };
-                        deferred = pause_ticks < KIOSK_SETTLE_LOOKS
-                            && drift_ticks <= KIOSK_DRIFT_READ_LIMIT;
+                                _ => false,
+                            };
+                            pause_ticks = if paused { pause_ticks + 1 } else { 0 };
+                            deferred = pause_ticks < KIOSK_SETTLE_LOOKS;
+                        } else {
+                            // Unreadable: blindness, occlusion, or a closed kiosk -- something
+                            // that never comes back to rest. The cap forces the verdict read.
+                            drift_ticks += 1;
+                            deferred = drift_ticks <= KIOSK_DRIFT_READ_LIMIT;
+                        }
                     }
                 }
             }
@@ -2362,7 +2371,10 @@ where
                 Ok(frame) => frame,
                 Err(reason) => {
                     log::warn!("[DEBUG-kiosk] read failed: {reason}");
-                    if !opening {
+                    // A read that raced a resumed scroll is not the kiosk being gone: the strip
+                    // had just measured the grid alive and moving. Only a still screen may
+                    // advance the streak.
+                    if !opening && !moving_now {
                         misses += 1;
                     }
                     if misses >= POLLER_GONE_STREAK {
@@ -2395,7 +2407,11 @@ where
                 // emptied kiosk, so the streak holds its breath.
                 misses = 0;
             } else {
-                misses += 1;
+                // Same rule as the capture-error branch: an empty read against a screen the
+                // strip just measured moving is a raced read, not an emptied kiosk.
+                if !moving_now {
+                    misses += 1;
+                }
                 if misses >= POLLER_GONE_STREAK {
                     log::debug!(
                         "[DEBUG-kiosk] kiosk gone ({} cells read)",

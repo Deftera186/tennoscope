@@ -373,21 +373,51 @@ fn endless_drift_is_capped_then_closed_by_the_forced_read() {
     );
 }
 
-/// Motion that never pauses is not our grid forever: consecutive looks always disagree, so the
-/// settle rule never fires and the cap forces the read -- which either re-anchors (here it
-/// does) or starts the streak that closes.
+/// Motion that never pauses is still our grid: every look measures confidently, so the poller
+/// follows it for as long as it lasts and never spends a mid-scroll recognition pass -- those
+/// read rows straddling the label bands and come back empty, which is how a session used to
+/// die mid-scroll. Only unreadable strips escalate to the forced read.
 #[test]
-fn unending_motion_is_capped_by_a_forced_read() {
+fn sustained_measurable_motion_never_forces_the_read() {
     let base = bands(400);
     let mut strips = vec![base.clone()];
-    // Every look moves another 3 rows from the last, so no two consecutive looks ever agree.
-    for k in 1..600 {
-        strips.push(shift_rows(&base, -(3 * k)));
+    // A triangle wave: every look moves another 3 rows from the last (never a pause) while
+    // staying inside the +-48-row window the tracker can measure against the anchor.
+    for k in 0..30 {
+        let pos = k % 28;
+        let shift = if pos < 14 {
+            3 * (pos + 1)
+        } else {
+            3 * (28 - pos)
+        };
+        strips.push(shift_rows(&base, -shift));
     }
-    let outcome = run_with_strips(vec![(false, read(18, 3)), (false, read(18, 3))], strips);
-    assert_eq!(
-        outcome.totals.len(),
-        2,
-        "the forced read after the motion cap published"
+    let outcome = run_with_strips(vec![(false, read(18, 3))], strips);
+    assert_eq!(outcome.totals, vec![21], "no mid-scroll read ever ran");
+    assert!(
+        outcome.scrolls.len() >= 20 && outcome.scrolls[..20].iter().all(|v| v.is_some()),
+        "the scroll streamed, no fades: {:?}",
+        &outcome.scrolls[..20.min(outcome.scrolls.len())]
+    );
+}
+
+/// An empty read that raced a resumed scroll is not the kiosk being gone: the strip had just
+/// measured the grid alive and moving, so the miss streak must not advance -- the session
+/// survives to stream and to settle properly later. (Without this, a scroll's pause long
+/// enough to settle but short enough to resume used to two-strike the session closed.)
+#[test]
+fn an_empty_read_while_the_grid_moves_is_not_the_kiosk_gone() {
+    let base = bands(400);
+    let moved = shift_rows(&base, -9);
+    // The settle read pops the empty frame; the motion then continues for many more looks.
+    let mut strips = vec![base.clone()];
+    for _ in 0..25 {
+        strips.push(moved.clone());
+    }
+    let outcome = run_with_strips(vec![(false, read(18, 3)), (false, read(0, 0))], strips);
+    assert!(
+        outcome.scrolls.iter().filter(|v| v.is_some()).count() >= 15,
+        "the session streamed long after the empty settle read: {:?}",
+        outcome.scrolls
     );
 }
