@@ -99,17 +99,34 @@ describe('kiosk overlay route', () => {
     expect(screen.queryByTestId('kiosk-grid-chip')).not.toBeInTheDocument()
   })
 
-  it('fades while the grid scrolls and un-fades when a fresh epoch anchors', async () => {
+  it('follows streamed scroll offsets on the strip transform', async () => {
     render(<AppRoute pathname="/kiosk" />)
     const strip = await screen.findByTestId('kiosk-strip')
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
 
+    events.listeners['kiosk-scroll']?.({ payload: 5 })
+    await waitFor(() => expect(strip).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' }))
+    // Offsets are absolute against the anchor, not increments: a second verdict replaces,
+    // it does not accumulate.
+    events.listeners['kiosk-scroll']?.({ payload: 9 })
+    await waitFor(() => expect(strip).toHaveStyle({ transform: 'translateY(calc(9 * var(--h)))' }))
+    expect(strip).not.toHaveClass('kiosk-faded')
+  })
+
+  it('fades on an unreadable verdict and resets the transform when a fresh epoch anchors', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const strip = await screen.findByTestId('kiosk-strip')
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+
+    events.listeners['kiosk-scroll']?.({ payload: 12 })
+    await waitFor(() => expect(strip).toHaveStyle({ transform: 'translateY(calc(12 * var(--h)))' }))
     events.listeners['kiosk-scroll']?.({ payload: null })
     await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
 
     backend.getKioskView.mockResolvedValue({ ...sampleView, epoch: 4 })
     events.listeners['kiosk-updated']?.()
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+    expect(strip).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' })
     expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
   })
 })

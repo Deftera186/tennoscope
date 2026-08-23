@@ -63,6 +63,7 @@ const totalChipStyle: React.CSSProperties = {
 export default function KioskOverlay() {
   const [view, setView] = useState<KioskView | null>(null)
   const [faded, setFaded] = useState(false)
+  const [offset, setOffset] = useState(0)
   const epochSeen = useRef(-1)
 
   useEffect(() => {
@@ -78,16 +79,21 @@ export default function KioskOverlay() {
         const next = await getKioskView()
         if (!active) return
         if (!next) { setView(null); return }
-        if (next.epoch !== epochSeen.current) setFaded(false)
+        if (next.epoch !== epochSeen.current) {
+          setFaded(false)
+          setOffset(0)
+        }
         epochSeen.current = next.epoch
         setView(next)
       } catch { /* transient IPC failure: keep the last anchor standing */ }
     }
 
-    // The capture pipeline cannot sample a scroll fast enough to follow it, so while the grid
-    // moves the backend only says "fade"; the next settled read re-anchors with real positions.
-    void listen<null>('kiosk-scroll', () => {
-      if (active) setFaded(true)
+    // While the grid moves the backend streams its offset from the anchor -- the chips ride
+    // the scroll in real time; an unreadable look (null) fades until the next anchor.
+    void listen<number | null>('kiosk-scroll', (event) => {
+      if (!active) return
+      if (event.payload === null) { setFaded(true); return }
+      setOffset(event.payload)
     }).then(stop => { if (active) unlistenScroll = stop; else stop() })
 
     void listen('kiosk-updated', () => { void refresh() }).then(stop => {
@@ -105,7 +111,11 @@ export default function KioskOverlay() {
   }, [])
 
   return <main className="kiosk-shell" aria-label="Kiosk overlay">
-    <div className={faded ? 'kiosk-strip kiosk-faded' : 'kiosk-strip'} data-testid="kiosk-strip">
+    <div
+      className={faded ? 'kiosk-strip kiosk-faded' : 'kiosk-strip'}
+      data-testid="kiosk-strip"
+      style={{ transform: `translateY(calc(${offset} * var(--h)))` }}
+    >
       {view?.cells.map(cell =>
         <span
           key={`${cell.col}:${cell.row}`}

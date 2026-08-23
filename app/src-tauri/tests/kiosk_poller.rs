@@ -75,6 +75,7 @@ fn read(cells: usize, basket: usize) -> Result<KioskRead, &'static str> {
 fn timing() -> KioskPollerTiming {
     KioskPollerTiming {
         interval: std::time::Duration::from_millis(1),
+        motion_interval: std::time::Duration::from_millis(1),
         lifetime: std::time::Duration::from_secs(5),
         grace: std::time::Duration::ZERO,
     }
@@ -289,32 +290,60 @@ fn shift_rows(rows: &[f32], dy: i32) -> Vec<f32> {
         .collect()
 }
 
-/// Drift fades the chips and defers recognition: after the anchor's read, a strip that no
-/// longer matches it must produce fade verdicts -- never another publish, never an OCR pass.
+/// Measurable drift streams its offset instead of fading: each tick names where the grid now
+/// sits relative to the anchor, and the expensive read stays deferred while it lasts.
 #[test]
-fn drift_fades_and_defers_the_full_read() {
+fn measurable_drift_streams_deltas_and_defers_the_full_read() {
     let base = bands(400);
     let outcome = run_with_strips(
         vec![(false, read(18, 3))],
         vec![base.clone(), shift_rows(&base, -23), shift_rows(&base, -40)],
     );
     assert_eq!(outcome.totals, vec![21], "only the anchor's read published");
-    assert!(
-        !outcome.scrolls.is_empty() && outcome.scrolls.iter().all(|v| v.is_none()),
-        "drift only ever fades: {:?}",
+    assert_eq!(
+        &outcome.scrolls[..2],
+        &[Some(-23), Some(-40)],
+        "drift streams absolute offsets: {:?}",
+        outcome.scrolls
+    );
+}
+
+/// Motion that pauses is settled, not still scrolling: two consecutive looks that agree with
+/// each other (while both disagree with the anchor) mean the grid has stopped, and the full
+/// read re-anchors immediately -- no fade was ever emitted, so nothing flashes.
+#[test]
+fn a_pause_in_the_motion_settles_into_a_fresh_read() {
+    let base = bands(400);
+    let moved = shift_rows(&base, -9);
+    let outcome = run_with_strips(
+        vec![(false, read(18, 3)), (false, read(18, 3))],
+        vec![
+            base.clone(),
+            shift_rows(&base, -5),
+            moved.clone(),
+            moved.clone(),
+            moved,
+        ],
+    );
+    assert_eq!(outcome.totals, vec![21, 21], "the settle read ran");
+    assert_eq!(outcome.epochs, vec![1, 2], "the settle bumped the epoch");
+    assert_eq!(
+        &outcome.scrolls[..4],
+        &[Some(-5), Some(-9), Some(-9), Some(-9)],
+        "deltas streamed the whole way, never a fade: {:?}",
         outcome.scrolls
     );
 }
 
 /// When the grid comes back to rest on the anchored position, the deferred read runs: the fresh
-/// epoch tells the frontend to drop its fade, and the view is true again.
+/// epoch tells the frontend to drop its transform, and the view is true again.
 #[test]
 fn rest_after_drift_reanchors_with_a_fresh_epoch() {
     let base = bands(400);
     let scrolled = shift_rows(&base, -31);
     let outcome = run_with_strips(
         vec![(false, read(18, 3)), (false, read(18, 3))],
-        vec![base.clone(), scrolled, base],
+        vec![base.clone(), scrolled.clone(), scrolled, base],
     );
     assert_eq!(
         outcome.totals,
@@ -322,10 +351,7 @@ fn rest_after_drift_reanchors_with_a_fresh_epoch() {
         "the deferred read ran at rest"
     );
     assert_eq!(outcome.epochs, vec![1, 2], "the settle bumped the epoch");
-    // After the script runs dry every look is unreadable-drift, so fades continue; what matters
-    // is that the drift itself faded exactly once before rest.
-    assert_eq!(outcome.scrolls.first(), Some(&None));
-    assert!(outcome.scrolls.iter().all(|v| v.is_none()));
+    assert_eq!(outcome.scrolls[0], Some(-31), "the drift streamed first");
 }
 
 /// An unreadable strip is drift like any other while it lasts -- but a screen that has left the
@@ -347,16 +373,16 @@ fn endless_drift_is_capped_then_closed_by_the_forced_read() {
     );
 }
 
-/// Motion that never settles is not our grid forever: after the cap, a full read is forced,
-/// which either re-anchors (here it does) or starts the streak that closes.
+/// Motion that never pauses is not our grid forever: consecutive looks always disagree, so the
+/// settle rule never fires and the cap forces the read -- which either re-anchors (here it
+/// does) or starts the streak that closes.
 #[test]
 fn unending_motion_is_capped_by_a_forced_read() {
     let base = bands(400);
-    let scrolling = shift_rows(&base, -3);
-    // anchor look, then endless motion looks
-    let mut strips = vec![base];
-    for _ in 0..600 {
-        strips.push(scrolling.clone());
+    let mut strips = vec![base.clone()];
+    // Every look moves another 3 rows from the last, so no two consecutive looks ever agree.
+    for k in 1..600 {
+        strips.push(shift_rows(&base, -(3 * k)));
     }
     let outcome = run_with_strips(vec![(false, read(18, 3)), (false, read(18, 3))], strips);
     assert_eq!(
