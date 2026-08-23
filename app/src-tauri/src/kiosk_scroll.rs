@@ -278,8 +278,8 @@ mod tests {
             }
             // a count badge above the thumbnail: bright but flat and weak
             if label >= 127 + 14 {
-                for row in (label - 127)..(label - 113).min(len) {
-                    rows[row] = 30.0;
+                for row in &mut rows[(label - 127)..(label - 113).min(len)] {
+                    *row = 30.0;
                 }
             }
             band += 1;

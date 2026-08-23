@@ -1295,6 +1295,10 @@ pub struct KioskSession {
     /// A close the monitor has not torn down yet. Deliberately not the poller's stop flag: see
     /// `KioskLogEvent::KioskClosed` below for what sharing one cost.
     close_pending: bool,
+    /// The overlay is on screen, so a teardown has something to take down. Separate from
+    /// `poller_active` because a close retires the poller at once while the window waits for
+    /// the monitor's next tick -- and a reopen in between cancels the teardown entirely.
+    overlay_up: bool,
     reanchor: Arc<std::sync::atomic::AtomicBool>,
     gone: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -1326,15 +1330,7 @@ impl KioskSession {
                         // one batch and a second poller would race the first for the same flags.
                         continue;
                     }
-                    self.poller_active = true;
-                    // Flags are per poller, never recycled. The previous visit's thread may
-                    // still be winding down -- it reads its stop every 60-400ms -- and clearing
-                    // a shared flag for this poller would un-stop that one as well, which a
-                    // player who reopens quickly can trigger by hand.
-                    self.reanchor = Arc::new(std::sync::atomic::AtomicBool::new(true));
-                    self.gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    spawn_poller(&self.reanchor, &self.gone);
-                    show();
+                    self.arm(show, spawn_poller);
                 }
                 kiosk_log::KioskLogEvent::GridPopulated => {
                     if self.poller_active {
@@ -1352,16 +1348,69 @@ impl KioskSession {
                     // streaming scroll deltas across later sessions (nineteen in one evening,
                     // two at once, double-counting the scroll the overlay accumulates).
                     self.gone.store(true, Ordering::Release);
+                    // The session is over *here*, not when the monitor gets round to the
+                    // window: a close and the next open arrive in one batch whenever the
+                    // player reopens inside a tick, and leaving this set until `take_close`
+                    // ran made the open look like a duplicate marker and dropped it -- a kiosk
+                    // with no overlay for the whole visit.
+                    self.poller_active = false;
                     self.close_pending = true;
                 }
             }
         }
     }
 
+    /// Adopt whatever state a stretch of log *ends* in -- called once when the monitor attaches
+    /// to a game process. Presence is edge-triggered and the live tail starts at EOF (replaying
+    /// history is what produced the 2026-08-22 ghost report), so a kiosk already on screen when
+    /// the app started had no open marker left to see and the overlay stayed dark until the
+    /// player closed and reopened it by hand. A tail that ends closed arms nothing.
+    pub fn adopt_log_tail(
+        &mut self,
+        bytes: &[u8],
+        show: &dyn Fn(),
+        spawn_poller: &dyn Fn(
+            &Arc<std::sync::atomic::AtomicBool>,
+            &Arc<std::sync::atomic::AtomicBool>,
+        ),
+    ) {
+        if self.poller_active || !kiosk_log::KioskLogMachine::state_after(bytes) {
+            return;
+        }
+        // The machine has to know it is open, or the exit line for a session joined late
+        // would be read as chatter and the overlay would never come down.
+        self.machine.adopt_open();
+        self.arm(show, spawn_poller);
+    }
+
+    /// Start a session: fresh flags, a poller on them, and the overlay up.
+    fn arm(
+        &mut self,
+        show: &dyn Fn(),
+        spawn_poller: &dyn Fn(
+            &Arc<std::sync::atomic::AtomicBool>,
+            &Arc<std::sync::atomic::AtomicBool>,
+        ),
+    ) {
+        self.poller_active = true;
+        self.overlay_up = true;
+        // A teardown armed earlier in this same batch belongs to the visit that just ended;
+        // the player is back on the screen, so the overlay stays up instead of blinking.
+        self.close_pending = false;
+        // Flags are per poller, never recycled. The previous visit's thread may still be
+        // winding down -- it reads its stop every 60-400ms -- and clearing a shared flag for
+        // this poller would un-stop that one as well, which a player who reopens quickly can
+        // trigger by hand.
+        self.reanchor = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        self.gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        spawn_poller(&self.reanchor, &self.gone);
+        show();
+    }
+
     /// Did the session end? Consumed once; the teardown is `close`'s. The verdict comes from
     /// the log (`KioskClosed`) -- the poller only ever stops looking, it does not judge.
     pub fn take_close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) -> bool {
-        self.poller_active && std::mem::take(&mut self.close_pending) && {
+        std::mem::take(&mut self.close_pending) && {
             self.close(kiosk_view, hide);
             true
         }
@@ -1372,13 +1421,13 @@ impl KioskSession {
     /// payload cannot render over whatever the game drew next, resets the log machine so a
     /// later open re-arms, and stops the poller: a dead game has nothing left to capture.
     pub fn close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) {
-        if !self.poller_active {
-            return;
-        }
-        self.poller_active = false;
         self.close_pending = false;
+        self.poller_active = false;
         self.gone.store(true, Ordering::Release);
         self.machine = kiosk_log::KioskLogMachine::default();
+        if !std::mem::take(&mut self.overlay_up) {
+            return;
+        }
         kiosk_view.clear();
         hide();
     }
@@ -1540,6 +1589,15 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                         if let Ok(mut runtime) = shared.lock() {
                             runtime.last_ee_log_path = Some(ee_path.clone());
                         }
+                        // The overlay's presence is edge-triggered from the log and the live
+                        // tail starts at EOF, so a kiosk already on screen when the app started
+                        // has no open marker left for us to see. Fold the recent tail once, at
+                        // attach, to adopt the session in progress.
+                        kiosk_session.adopt_log_tail(
+                            &log_tail(ee_path, KIOSK_TAIL_SCAN),
+                            &kiosk_show,
+                            &kiosk_spawn,
+                        );
                     }
                 }
                 build_monitor_input(&machine, now, process.pid(), path)
@@ -2811,6 +2869,33 @@ fn monitor_path_changed(
         }
         (Some(_), Some(_)) => false,
     }
+}
+
+/// How much of EE.log to fold when recovering a kiosk that was already on screen at attach.
+/// Enough to carry a visit's open marker through the game's ordinary chatter (the kiosk logs
+/// nothing while the player reads, and the surrounding traffic is a few hundred KB a minute)
+/// without replaying an evening of history into anything.
+const KIOSK_TAIL_SCAN: u64 = 1024 * 1024;
+
+/// The last stretch of a file, for one-shot state recovery. Any failure reads as "no tail":
+/// the caller simply learns nothing, which is where it started.
+fn log_tail(path: &Path, limit: u64) -> Vec<u8> {
+    let Ok(metadata) = fs::metadata(path) else {
+        return Vec::new();
+    };
+    let len = metadata.len();
+    let start = len.saturating_sub(limit);
+    let Ok(mut file) = fs::File::open(path) else {
+        return Vec::new();
+    };
+    if file.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut bytes = Vec::with_capacity((len - start) as usize);
+    if file.take(len - start).read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    bytes
 }
 
 pub fn build_monitor_input(

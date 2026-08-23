@@ -110,13 +110,13 @@ fn label_strip_at(dy: i64) -> Vec<f32> {
         if top >= 0 {
             // Bands clip at the pane's bottom edge exactly as the game clips them.
             let first_end = (top + 11).min(790);
-            for row in top as usize..first_end as usize {
-                rows[row] = 250.0;
+            for row in &mut rows[top as usize..first_end as usize] {
+                *row = 250.0;
             }
             let second = top + 27;
             if second + 11 <= 790 {
-                for row in second as usize..second as usize + 11 {
-                    rows[row] = 240.0;
+                for row in &mut rows[second as usize..second as usize + 11] {
+                    *row = 240.0;
                 }
             }
         }
@@ -124,8 +124,8 @@ fn label_strip_at(dy: i64) -> Vec<f32> {
     }
     let badge = 23 + dy;
     if badge > 0 && badge + 14 <= 790 {
-        for row in badge as usize..badge as usize + 14 {
-            rows[row] = 30.0;
+        for row in &mut rows[badge as usize..badge as usize + 14] {
+            *row = 30.0;
         }
     }
     rows
@@ -185,11 +185,10 @@ fn run_with_strips(
             }
         }
     };
-    let joiner = move |epoch: u64, frame: &KioskRead| {
-        let mut view = KioskView::default();
-        view.epoch = epoch;
-        view.total_plat = (frame.cells.len() + frame.basket.len()) as u64;
-        view
+    let joiner = move |epoch: u64, frame: &KioskRead| KioskView {
+        epoch,
+        total_plat: (frame.cells.len() + frame.basket.len()) as u64,
+        ..KioskView::default()
     };
     let reanchor_arg = Arc::clone(&reanchor);
     let make_source = move || {

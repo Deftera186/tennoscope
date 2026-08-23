@@ -85,6 +85,21 @@ impl KioskLogMachine {
             .collect()
     }
 
+    /// The state a stretch of log ends in, folded without reporting the transitions. Used once
+    /// at attach: the app can start with the kiosk already on screen, and the open marker for
+    /// that session scrolled past before anything was watching.
+    pub fn state_after(bytes: &[u8]) -> bool {
+        let mut machine = Self::default();
+        machine.observe_bytes(bytes);
+        machine.open
+    }
+
+    /// Adopt a session discovered some other way than its own open marker, so the exit line
+    /// that ends it is recognised when it arrives.
+    pub fn adopt_open(&mut self) {
+        self.open = true;
+    }
+
     pub fn observe_line(&mut self, line: &str) -> Vec<KioskLogEvent> {
         if self.open {
             // Close before anything else: the exit line and the open lines both name the
@@ -121,8 +136,7 @@ mod tests {
         "2026/08/23_12.00 InventoryTest.lua: InventoryTest - CurrMode: Selling Prime Parts";
     const SWF_LINE: &str = "Created /Lotus/Interface/InventoryTest.swf";
     const POPULATE_LINE: &str = "InventoryTest.lua: PopulateGrid()";
-    const HUD_VIS_ZERO_LINE: &str =
-        "75584.766 Script [Info]: InventoryTest.lua: DBG: HudVis 0";
+    const HUD_VIS_ZERO_LINE: &str = "75584.766 Script [Info]: InventoryTest.lua: DBG: HudVis 0";
     const SUBSCRIBE_LINE: &str = "75583.344 Input [Info]: Subscribing for /Lotus/Interface/InventoryTest.swf with input filter /EE/Types/Input/MenuInputFilter";
 
     #[test]

@@ -259,6 +259,151 @@ fn a_reopen_cannot_revive_the_previous_poller() {
     );
 }
 
+/// The app can be started with the kiosk already on screen. Presence is edge-triggered from
+/// the log and the live tail starts at EOF -- replaying an evening of history is what produced
+/// the 2026-08-22 ghost report -- so the open marker for the session in progress was never
+/// seen, and the overlay stayed dark until the player closed and reopened the screen by hand.
+/// Folding the log's recent tail once, at attach, recovers the state we were not there for.
+#[test]
+fn a_kiosk_already_open_at_attach_is_adopted() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let (shows, show) = tally();
+    let kiosk = KioskState::new();
+    let (hides, hide) = tally();
+
+    let tail = [
+        "82315.203 Sys [Info]: some unrelated chatter\n",
+        MODE_LINE,
+        SWF_LINE,
+        POPULATE_LINE,
+        "82315.500 Sys [Info]: more chatter while the player reads\n",
+    ]
+    .concat();
+    session.adopt_log_tail(tail.as_bytes(), &show, &spawns.hook());
+    assert_eq!(spawns.spawns(), 1, "the session in progress got a poller");
+    assert_eq!(tally_of(&shows), 1, "and the overlay came up");
+    assert!(
+        spawns.reanchor.lock().unwrap()[0].load(Ordering::Acquire),
+        "the adopted session still reads from a full anchor"
+    );
+
+    // And it ends the ordinary way: the machine must know it is open, or the exit line for a
+    // session we joined late would be ignored.
+    session.observe(CLOSE_LINE.as_bytes(), &show, &spawns.hook());
+    assert!(
+        session.take_close(&kiosk, &hide),
+        "the adopted session closes on its own exit line"
+    );
+    assert_eq!(tally_of(&hides), 1);
+}
+
+/// A tail whose last word on the subject is a close means the player is not in the kiosk: the
+/// markers in it are history, and history must not arm anything.
+#[test]
+fn a_tail_that_ends_closed_is_not_adopted() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let (shows, show) = tally();
+
+    let tail = [MODE_LINE, SWF_LINE, POPULATE_LINE, CLOSE_LINE].concat();
+    session.adopt_log_tail(tail.as_bytes(), &show, &spawns.hook());
+    assert_eq!(spawns.spawns(), 0, "that visit is over");
+    assert_eq!(tally_of(&shows), 0);
+
+    // A tail holding no kiosk markers at all is the same nothing.
+    session.adopt_log_tail(b"82000.0 Sys [Info]: chatter\n", &show, &spawns.hook());
+    assert_eq!(spawns.spawns(), 0);
+}
+
+/// Re-resolving the log path (the monitor does it whenever the pid or path moves) must not arm
+/// a second poller over a session that is already running.
+#[test]
+fn adopting_twice_does_not_double_arm() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let (shows, show) = tally();
+
+    let tail = [MODE_LINE, SWF_LINE].concat();
+    session.adopt_log_tail(tail.as_bytes(), &show, &spawns.hook());
+    session.adopt_log_tail(tail.as_bytes(), &show, &spawns.hook());
+    assert_eq!(spawns.spawns(), 1);
+    assert_eq!(tally_of(&shows), 1);
+}
+
+/// A close and the next open landing in ONE batch of log bytes must still arm the new visit.
+///
+/// EE.log reaches the monitor in chunks, so closing the kiosk and reopening it inside a tick
+/// puts both markers in the same `observe` call. The close only *arms* a teardown -- the window
+/// work is the monitor's, on its next tick -- so the open that follows used to be dropped by
+/// the `poller_active` guard meant for duplicate open markers, and the player got a kiosk with
+/// no overlay at all until they closed and opened it slowly enough. The overlay is already up
+/// and stays up: the reopen cancels the pending teardown instead of flashing it.
+#[test]
+fn a_close_and_reopen_in_one_batch_rearms_without_a_flash() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let (shows, show) = tally();
+    let kiosk = KioskState::new();
+    let (hides, hide) = tally();
+
+    session.observe(MODE_LINE.as_bytes(), &show, &spawns.hook());
+    let first = spawns.gone.lock().unwrap()[0].clone();
+
+    session.observe(
+        [CLOSE_LINE, MODE_LINE, POPULATE_LINE].concat().as_bytes(),
+        &show,
+        &spawns.hook(),
+    );
+    assert_eq!(spawns.spawns(), 2, "the reopen got its own poller");
+    assert!(first.load(Ordering::Acquire), "the old poller was stopped");
+    let second = spawns.gone.lock().unwrap()[1].clone();
+    assert!(
+        !second.load(Ordering::Acquire),
+        "the new one is free to look"
+    );
+    assert!(
+        spawns.reanchor.lock().unwrap()[1].load(Ordering::Acquire),
+        "and it anchors its first read"
+    );
+
+    assert!(
+        !session.take_close(&kiosk, &hide),
+        "the kiosk is on screen: nothing to tear down"
+    );
+    assert_eq!(tally_of(&hides), 0, "the overlay never blinked");
+    assert_eq!(tally_of(&shows), 2);
+}
+
+/// The same batch ending on a close still tears the overlay down -- the player closed the
+/// kiosk, reopened it and closed it again faster than one tick.
+#[test]
+fn a_batch_that_ends_closed_still_tears_down() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+    let (hides, hide) = tally();
+
+    session.observe(MODE_LINE.as_bytes(), &|| (), &spawns.hook());
+    kiosk.set(KioskView::default());
+    session.observe(
+        [CLOSE_LINE, MODE_LINE, CLOSE_LINE].concat().as_bytes(),
+        &|| (),
+        &spawns.hook(),
+    );
+    assert!(
+        session.take_close(&kiosk, &hide),
+        "the last word in the batch was a close"
+    );
+    assert_eq!(tally_of(&hides), 1);
+    assert!(kiosk.get().is_none(), "and the payload went with it");
+    let second = spawns.gone.lock().unwrap()[1].clone();
+    assert!(
+        second.load(Ordering::Acquire),
+        "the short-lived visit's poller was stopped too"
+    );
+}
+
 /// The game process dying takes the kiosk with it even though the poller may never deliver a
 /// verdict (capture fails read as misses, but the process vanishing can outrun the streak).
 #[test]
