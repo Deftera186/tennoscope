@@ -9,9 +9,11 @@ const MODE_LINE: &str =
     "2026/08/23_12.00 InventoryTest.lua: InventoryTest - CurrMode: Selling Prime Parts\n";
 const SWF_LINE: &str = "Created /Lotus/Interface/InventoryTest.swf\n";
 const POPULATE_LINE: &str = "InventoryTest.lua: PopulateGrid()\n";
+/// The game's own exit line, exactly as EE.log writes it (census: once per session).
+const CLOSE_LINE: &str = "75584.766 Script [Info]: InventoryTest.lua: DBG: HudVis 0\n";
 
 /// A spawn hook that records the flags it was handed, so the test can play the poller: consume
-/// the re-anchor request, or deliver the gone verdict.
+/// the re-anchor request, or deliver the stop signal.
 #[derive(Default)]
 struct SpawnLog {
     calls: Mutex<usize>,
@@ -107,12 +109,12 @@ fn populate_re_requests_the_anchor_while_polling() {
     assert!(reanchor.load(Ordering::Acquire));
 }
 
-/// The poller's miss-streak verdict is the only close signal there is: it must hide the overlay,
-/// clear the published view, and reset the log machine so the *next* kiosk visit -- whose open
-/// markers print fresh into the growing log -- arms from scratch instead of being swallowed by
-/// the previous session's `open` state.
+/// The session's stop flag -- set by the monitor when the log's close line arrives -- must hide
+/// the overlay, clear the published view, consume exactly once, and reset the log machine so
+/// the *next* kiosk visit -- whose open markers print fresh into the growing log -- arms from
+/// scratch instead of being swallowed by the previous session's `open` state.
 #[test]
-fn poller_gone_closes_and_a_reopen_rearms() {
+fn the_logs_close_line_closes_and_a_reopen_rearms() {
     let session = &mut KioskSession::new();
     let spawns = SpawnLog::default();
     let noop = || ();
@@ -126,21 +128,21 @@ fn poller_gone_closes_and_a_reopen_rearms() {
     });
     let gone = spawns.gone.lock().unwrap()[0].clone();
 
-    assert!(!session.poller_gone(&kiosk, &hide), "no verdict yet");
+    assert!(!session.take_close(&kiosk, &hide), "no verdict yet");
     assert!(
         kiosk.get().is_some(),
         "a stray poll must not tear down a live session"
     );
 
     gone.store(true, Ordering::Release);
-    assert!(session.poller_gone(&kiosk, &hide));
+    assert!(session.take_close(&kiosk, &hide));
     assert!(
         kiosk.get().is_none(),
         "the payload must not outlive the window"
     );
     assert_eq!(tally_of(&hides), 1);
     assert!(
-        !session.poller_gone(&kiosk, &hide),
+        !session.take_close(&kiosk, &hide),
         "the verdict is consumed once"
     );
 
@@ -150,6 +152,59 @@ fn poller_gone_closes_and_a_reopen_rearms() {
     // ...and a fresh open re-arms with fresh flags.
     session.observe(MODE_LINE.as_bytes(), &noop, &spawns.hook());
     assert_eq!(spawns.spawns(), 2, "the second visit arms a new poller");
+}
+
+/// The end-to-end shape of a session, in raw log bytes: the open shows the overlay and starts
+/// a poller, and the game's own exit line arms the close that the very next monitor tick
+/// consumes -- no OCR, no miss streak, no wait. This is the whole reason the log owns
+/// presence: it narrates both edges within ~50ms of the player's ESC.
+#[test]
+fn the_logs_exit_line_takes_the_overlay_down() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+    let (hides, hide) = tally();
+
+    session.observe(MODE_LINE.as_bytes(), &|| (), &spawns.hook());
+    assert_eq!(spawns.spawns(), 1, "the open started a poller");
+
+    session.observe(CLOSE_LINE.as_bytes(), &|| (), &spawns.hook());
+    // The close arms on the log line and the monitor's next tick consumes it -- once.
+    assert!(
+        session.take_close(&kiosk, &hide),
+        "the game's own exit line closed the session"
+    );
+    assert_eq!(tally_of(&hides), 1, "the overlay came down");
+    assert!(
+        !session.take_close(&kiosk, &hide),
+        "consumed once; nothing left to tear down"
+    );
+}
+
+/// And the next visit re-arms: the flags outlive the session, so a stop left over from the
+/// last one must not kill the new poller on its first tick.
+#[test]
+fn a_second_visit_starts_a_fresh_poller() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+
+    session.observe(SWF_LINE.as_bytes(), &|| (), &spawns.hook());
+    session.observe(CLOSE_LINE.as_bytes(), &|| (), &spawns.hook());
+    assert!(
+        session.take_close(&kiosk, &|| ()),
+        "the first visit closed off its own exit line"
+    );
+
+    session.observe(SWF_LINE.as_bytes(), &|| (), &spawns.hook());
+    assert_eq!(spawns.spawns(), 2, "the second visit got its own poller");
+
+    // The fresh poller's stop flag is clear: a tick later the session is still alive...
+    let gone = spawns.gone.lock().unwrap()[1].clone();
+    assert!(!gone.load(Ordering::Acquire));
+    // ...and the second visit closes on its own exit line too.
+    session.observe(CLOSE_LINE.as_bytes(), &|| (), &spawns.hook());
+    assert!(session.take_close(&kiosk, &|| ()));
 }
 
 /// The game process dying takes the kiosk with it even though the poller may never deliver a

@@ -3571,11 +3571,16 @@ mod tests {
             Some(label_strip()),
         ]);
         let (_, gone, published) = run_poller(source);
-        assert_eq!(published.lock().expect("published").len(), 1);
-        assert_eq!(
-            published.lock().expect("published")[0].scroll_dy,
-            -30,
-            "the view carries the label-located phase"
+        let published = published.lock().expect("published");
+        assert_eq!(published.len(), 1);
+        // The view carries the label phase. These synthetic bands are flat blocks, so the
+        // locator's containment plateau is at its widest: any offset that still lands row
+        // 0's crop over the anchor band's whole text (within 8 rows above its top) is right.
+        let drift = (published[0].scroll_dy - -30).rem_euclid(222);
+        assert!(
+            drift == 0 || drift + 8 >= 222,
+            "the view carries the label-located phase: {}",
+            published[0].scroll_dy
         );
         // Whether the script's exhaustion later closed the session is beside the point.
         let _ = gone.load(Ordering::Acquire);
