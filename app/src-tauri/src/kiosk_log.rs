@@ -90,7 +90,10 @@ mod tests {
     #[test]
     fn opening_emits_opened_then_populated() {
         let mut m = KioskLogMachine::default();
-        assert!(m.observe_line(MODE_LINE).contains(&KioskLogEvent::KioskOpened));
+        assert!(
+            m.observe_line(MODE_LINE)
+                .contains(&KioskLogEvent::KioskOpened)
+        );
         assert!(m.open());
         assert_eq!(
             m.observe_line(POPULATE_LINE),
@@ -101,7 +104,10 @@ mod tests {
     #[test]
     fn swf_marker_also_opens() {
         let mut m = KioskLogMachine::default();
-        assert!(m.observe_line(SWF_LINE).contains(&KioskLogEvent::KioskOpened));
+        assert!(
+            m.observe_line(SWF_LINE)
+                .contains(&KioskLogEvent::KioskOpened)
+        );
         assert!(m.open());
     }
 
@@ -124,7 +130,10 @@ mod tests {
         let mut m = KioskLogMachine::default();
         let line = MODE_LINE.as_bytes().to_vec();
         let split = line.len() - 10;
-        assert!(m.observe_bytes(&line[..split]).is_empty(), "partial line is carried");
+        assert!(
+            m.observe_bytes(&line[..split]).is_empty(),
+            "partial line is carried"
+        );
         assert!(
             m.observe_bytes(&[&line[split..], b"\n"].concat())
                 .contains(&KioskLogEvent::KioskOpened)
