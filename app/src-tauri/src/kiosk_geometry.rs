@@ -164,3 +164,35 @@ mod tests {
         assert_eq!(basket_row_pair(1920, 1080, BASKET_ROWS), None);
     }
 }
+
+/// The OCR crop over one basket row's item name.
+///
+/// The pane starts near x=1256 and its item names end well before the ducat column: the game
+/// draws the ducat value right-aligned at x<=1792 and the digits begin around x=1758, so the
+/// crop stops at 1748 -- a trailing "100" read into the text costs every match an edit distance
+/// it does not have to spend. Vertically the band hugs the measured digit baseline.
+pub fn basket_label_rect(width: u32, height: u32, row: usize) -> Option<(u32, u32, u32, u32)> {
+    if row >= BASKET_ROWS {
+        return None;
+    }
+    let (_, baseline) = basket_row_pair(width, height, row)?;
+    let x = (width as f32 / 2.0 + fcx(1256.0) * height as f32).round() as u32;
+    let y = (baseline - fx(21.0) * height as f32).round() as u32;
+    Some((
+        x,
+        y,
+        (fx(1748.0 - 1256.0) * height as f32).round() as u32,
+        (fx(26.0) * height as f32).round() as u32,
+    ))
+}
+
+#[cfg(test)]
+mod basket_label_tests {
+    use super::*;
+
+    #[test]
+    fn basket_label_band_hugs_the_baseline_and_stops_before_the_ducat_column() {
+        assert_eq!(basket_label_rect(1920, 1080, 0), Some((1256, 222, 492, 26)));
+        assert_eq!(basket_label_rect(1920, 1080, BASKET_ROWS), None);
+    }
+}
