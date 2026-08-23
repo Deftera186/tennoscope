@@ -1190,14 +1190,7 @@
   text-shadow: 0 calc(1 * var(--h)) 1px rgb(0 0 0 / 55%);
 }
 /* The icon rides above the digits' baseline, like the game's own glyph pairing. */
-.kiosk-pair .kiosk-plat { align-self: flex-end; }
-.kiosk-pair i { font-style: normal; color: rgb(196 208 222 / 92%); margin-left: calc(6 * var(--h)); }
-.kiosk-total { font-size: calc(16 * var(--h)); }
-.kiosk-total b { font-weight: inherit; }
-
-.kiosk-plat {
-  width: auto; aspect-ratio: 1;
-  fill: none; stroke: currentColor;
-  stroke-width: 2; stroke-linecap: round;
-  opacity: .95;
-}
+.kiosk-mark { height: calc(12 * var(--h)); width: auto; }
+.kiosk-chip .kiosk-mark { height: calc(12 * var(--h)); }
+.kiosk-pair .kiosk-mark { height: calc(18 * var(--h)); align-self: flex-end; }
+.kiosk-total .kiosk-mark { height: calc(19 * var(--h)); }

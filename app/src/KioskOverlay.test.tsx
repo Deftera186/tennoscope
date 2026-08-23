@@ -7,6 +7,7 @@ const events = vi.hoisted(() => ({
   listen: vi.fn(),
 }))
 vi.mock('./backend', () => backend)
+vi.mock('./MetalMark', () => ({ MetalMark: () => <img alt="" data-testid="plat-mark"/> }))
 vi.mock('@tauri-apps/api/event', () => ({
   listen: events.listen.mockImplementation((event: string, listener: () => void) => {
     events.listeners[event] = listener
@@ -21,12 +22,12 @@ import type { KioskView } from './backend'
 const sampleView: KioskView = {
   epoch: 3,
   cells: [
-    { col: 0, row: 0, name: 'Titania Prime Systems Blueprint', platinum: 30, owned: 1 },
-    { col: 5, row: 2, name: 'Tiberon Prime Barrel', platinum: 12, owned: 0 },
+    { col: 0, row: 0, name: 'Titania Prime Systems Blueprint', platinum: 30 },
+    { col: 5, row: 2, name: 'Tiberon Prime Barrel', platinum: 12 },
   ],
   basket: [
-    { index: 0, name: 'Afentis Prime Blade', platinum: 6, ducats: 15 },
-    { index: 1, name: 'Fulmin Prime Receiver', platinum: null, ducats: 75 },
+    { index: 0, name: 'Afentis Prime Blade', platinum: 6 },
+    { index: 1, name: 'Fulmin Prime Receiver', platinum: null },
   ],
   total_plat: 6,
 }
@@ -64,12 +65,12 @@ describe('kiosk overlay route', () => {
     expect(last).toHaveStyle({ left: 'calc(50% + 330 * var(--h))', top: 'calc(638 * var(--h))' })
   })
 
-  it('shows an em dash for unpriced basket rows without counting them into the total', async () => {
+  it('adds only the platinum the game does not already show', async () => {
     render(<AppRoute pathname="/kiosk" />)
-    const rows = await screen.findAllByTestId('kiosk-basket-chip')
-    expect(rows[1]).toHaveTextContent('—')
-    expect(rows[0]).toHaveTextContent('6p')
-    expect(rows[0]).toHaveTextContent('15d')
+    const [first] = await screen.findAllByTestId('kiosk-basket-chip')
+    expect(first).toHaveTextContent('6p')
+    expect(first).not.toHaveTextContent('d')
+    expect(screen.queryByText(/\d+d/)).not.toBeInTheDocument()
   })
 
   it('hides the total while the basket is empty', async () => {
@@ -86,31 +87,17 @@ describe('kiosk overlay route', () => {
     expect(screen.queryByTestId('kiosk-grid-chip')).not.toBeInTheDocument()
   })
 
-  it('accumulates scroll deltas into the strip transform', async () => {
+  it('fades while the grid scrolls and un-fades when a fresh epoch anchors', async () => {
     render(<AppRoute pathname="/kiosk" />)
     const strip = await screen.findByTestId('kiosk-strip')
-    expect(strip).toHaveStyle({ transform: 'translateY(0px)' })
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
 
-    events.listeners['kiosk-scroll']?.({ payload: 12 })
-    events.listeners['kiosk-scroll']?.({ payload: -5 })
-    await waitFor(() => expect(strip).toHaveStyle({ transform: 'translateY(7px)' }))
-  })
-
-  it('fades on blindness and re-anchors when a fresh epoch publishes', async () => {
-    render(<AppRoute pathname="/kiosk" />)
-    await screen.findByTestId('kiosk-strip')
-
-    events.listeners['kiosk-scroll']?.({ payload: 30 })
     events.listeners['kiosk-scroll']?.({ payload: null })
+    await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
 
     backend.getKioskView.mockResolvedValue({ ...sampleView, epoch: 4 })
     events.listeners['kiosk-updated']?.()
-
-    await waitFor(() => {
-      expect(screen.getByTestId('kiosk-strip')).toHaveStyle({
-        transform: 'translateY(0px)',
-        opacity: '1',
-      })
-    })
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+    expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
   })
 })

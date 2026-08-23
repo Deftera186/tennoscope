@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { getKioskView, type KioskView } from './backend'
+import { MetalMark } from './MetalMark'
 
 /*
  * Screen geometry, mirrored from `src-tauri/src/kiosk_geometry.rs`. Warframe scales its HUD
@@ -57,7 +58,6 @@ const totalChipStyle: React.CSSProperties = {
 
 export default function KioskOverlay() {
   const [view, setView] = useState<KioskView | null>(null)
-  const [dy, setDy] = useState(0)
   const [faded, setFaded] = useState(false)
   const epochSeen = useRef(-1)
 
@@ -74,19 +74,16 @@ export default function KioskOverlay() {
         const next = await getKioskView()
         if (!active) return
         if (!next) { setView(null); return }
-        if (next.epoch !== epochSeen.current) {
-          epochSeen.current = next.epoch
-          setDy(0)
-          setFaded(false)
-        }
+        if (next.epoch !== epochSeen.current) setFaded(false)
+        epochSeen.current = next.epoch
         setView(next)
       } catch { /* transient IPC failure: keep the last anchor standing */ }
     }
 
-    void listen<number | null>('kiosk-scroll', (event) => {
-      if (!active) return
-      if (event.payload === null) setFaded(true)
-      else setDy(current => current + event.payload)
+    // The capture pipeline cannot sample a scroll fast enough to follow it, so while the grid
+    // moves the backend only says "fade"; the next settled read re-anchors with real positions.
+    void listen<null>('kiosk-scroll', () => {
+      if (active) setFaded(true)
     }).then(stop => { if (active) unlistenScroll = stop; else stop() })
 
     void listen('kiosk-updated', () => { void refresh() }).then(stop => {
@@ -104,11 +101,7 @@ export default function KioskOverlay() {
   }, [])
 
   return <main className="kiosk-shell" aria-label="Kiosk overlay">
-    <div
-      className={faded ? 'kiosk-strip kiosk-faded' : 'kiosk-strip'}
-      data-testid="kiosk-strip"
-      style={{ transform: `translateY(${dy}px)` }}
-    >
+    <div className={faded ? 'kiosk-strip kiosk-faded' : 'kiosk-strip'} data-testid="kiosk-strip">
       {view?.cells.map(cell =>
         <span
           key={`${cell.col}:${cell.row}`}
@@ -117,7 +110,7 @@ export default function KioskOverlay() {
           style={gridChipStyle(cell.col, cell.row)}
           title={cell.name}
         >
-          <PlatIcon h={12}/>{cell.platinum}p{cell.owned > 0 ? ` · ${cell.owned}` : ''}
+          <MetalMark metal="plat" className="kiosk-mark"/>{cell.platinum}p
         </span>
       )}
       {view?.basket.map(row =>
@@ -128,21 +121,14 @@ export default function KioskOverlay() {
           style={basketChipStyle(row.index)}
           title={row.name}
         >
-          <PlatIcon h={18}/><b>{row.platinum === null ? '—' : `${row.platinum}p`}</b><i>{row.ducats}d</i>
+          <MetalMark metal="plat" className="kiosk-mark"/>
+          <b>{row.platinum === null ? '—' : `${row.platinum}p`}</b>
         </span>
       )}
       {view && view.basket.length > 0 &&
         <span className="kiosk-pair kiosk-total" data-testid="kiosk-total" style={totalChipStyle}>
-          <PlatIcon h={19}/><b>{view.total_plat}p</b>
+          <MetalMark metal="plat" className="kiosk-mark"/><b>{view.total_plat}p</b>
         </span>}
     </div>
   </main>
-}
-
-function PlatIcon({ h }: { h: number }) {
-  // The platinum orb, matching the app's own MetalMark glyph; `h` is design pixels.
-  return <svg className="kiosk-plat" style={{ height: `calc(${h} * var(--h))` }} viewBox="0 0 24 24" aria-hidden="true">
-    <circle cx="12" cy="14.5" r="7.5"/>
-    <path d="M12 7V1.5M9 4h6"/>
-  </svg>
 }

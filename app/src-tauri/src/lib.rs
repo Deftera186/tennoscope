@@ -1431,43 +1431,15 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             move |epoch: u64, frame: &KioskRead| {
                 // Take the join inputs under one short lock hold, then build outside it: the
                 // OCR thread never makes the UI wait on a lock it does not need.
-                let (table, owned) = shared
+                let table = shared
                     .lock()
-                    .map(|runtime| {
-                        let table = runtime.core.collection_prices();
-                        let owned = runtime
-                            .core
-                            .current_view()
-                            .map(|view| {
-                                view.collection()
-                                    .items()
-                                    .iter()
-                                    .map(|item| (item.name().to_owned(), item.quantity()))
-                                    .collect::<Vec<_>>()
-                            })
-                            .unwrap_or_default();
-                        (table, owned)
-                    })
+                    .map(|runtime| runtime.core.collection_prices())
                     .unwrap_or_default();
-                kiosk_view::build_view(
-                    epoch,
-                    &frame.cells,
-                    &frame.basket,
-                    &candidates,
-                    |name| {
-                        cache
-                            .get(name)
-                            .or_else(|| table.as_ref().and_then(|table| table.price_for(name)))
-                    },
-                    |name| {
-                        owned
-                            .iter()
-                            .find(|(item_name, _)| {
-                                warframe_acquisition::reward_name_matches(item_name, name)
-                            })
-                            .map_or(0, |(_, quantity)| *quantity)
-                    },
-                )
+                kiosk_view::build_view(epoch, &frame.cells, &frame.basket, &candidates, |name| {
+                    cache
+                        .get(name)
+                        .or_else(|| table.as_ref().and_then(|table| table.price_for(name)))
+                })
             }
         };
         let publish = {
@@ -3418,14 +3390,7 @@ mod tests {
             Arc::new(Vec::new()),
             |epoch, read| {
                 // Price everything so the join keeps the scripted cells visible.
-                crate::kiosk_view::build_view(
-                    epoch,
-                    &read.cells,
-                    &read.basket,
-                    &[],
-                    |_| Some(1),
-                    |_| 0,
-                )
+                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
             },
             move |view| sink.lock().expect("published").push(view),
             |_| {},
@@ -3522,14 +3487,7 @@ mod tests {
             Arc::new(Vec::new()),
             |epoch, read| {
                 // Price everything so the join keeps the scripted cells visible.
-                crate::kiosk_view::build_view(
-                    epoch,
-                    &read.cells,
-                    &read.basket,
-                    &[],
-                    |_| Some(1),
-                    |_| 0,
-                )
+                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
             },
             move |view| sink.lock().expect("published").push(view),
             |_| {},
@@ -3587,14 +3545,7 @@ mod tests {
             },
             Arc::new(Vec::new()),
             |epoch, read| {
-                crate::kiosk_view::build_view(
-                    epoch,
-                    &read.cells,
-                    &read.basket,
-                    &[],
-                    |_| Some(1),
-                    |_| 0,
-                )
+                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
             },
             move |view| pub_sink.lock().expect("published").push(view),
             move |scroll| sink.lock().expect("deltas").push(scroll),
@@ -3632,14 +3583,7 @@ mod tests {
             },
             Arc::new(Vec::new()),
             |epoch, read| {
-                crate::kiosk_view::build_view(
-                    epoch,
-                    &read.cells,
-                    &read.basket,
-                    &[],
-                    |_| Some(1),
-                    |_| 0,
-                )
+                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
             },
             move |view| pub_sink.lock().expect("published").push(view),
             move |scroll| sink.lock().expect("deltas").push(scroll),
@@ -3695,14 +3639,7 @@ mod tests {
             Arc::new(Vec::new()),
             |epoch, read| {
                 // Price everything so the join keeps the scripted cells visible.
-                crate::kiosk_view::build_view(
-                    epoch,
-                    &read.cells,
-                    &read.basket,
-                    &[],
-                    |_| Some(1),
-                    |_| 0,
-                )
+                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
             },
             move |view| pub_sink.lock().expect("published").push(view),
             move |scroll| sink.lock().expect("deltas").push(scroll),
