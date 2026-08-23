@@ -1292,6 +1292,9 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
 pub struct KioskSession {
     machine: kiosk_log::KioskLogMachine,
     poller_active: bool,
+    /// A close the monitor has not torn down yet. Deliberately not the poller's stop flag: see
+    /// `KioskLogEvent::KioskClosed` below for what sharing one cost.
+    close_pending: bool,
     reanchor: Arc<std::sync::atomic::AtomicBool>,
     gone: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -1324,10 +1327,12 @@ impl KioskSession {
                         continue;
                     }
                     self.poller_active = true;
-                    self.reanchor.store(true, Ordering::Release);
-                    // Flags outlive sessions; a stop left over from the last one would kill
-                    // this poller on its first tick.
-                    self.gone.store(false, Ordering::Release);
+                    // Flags are per poller, never recycled. The previous visit's thread may
+                    // still be winding down -- it reads its stop every 60-400ms -- and clearing
+                    // a shared flag for this poller would un-stop that one as well, which a
+                    // player who reopens quickly can trigger by hand.
+                    self.reanchor = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                    self.gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
                     spawn_poller(&self.reanchor, &self.gone);
                     show();
                 }
@@ -1337,10 +1342,17 @@ impl KioskSession {
                     }
                 }
                 kiosk_log::KioskLogEvent::KioskClosed => {
-                    // The same flag the poller's own verdicts used, so the teardown has one
-                    // path: the monitor picks it up with `take_close` on this very tick, and
-                    // the poller thread sees it and stops looking.
+                    // One event, two readers that must both get it: the poller thread stops
+                    // looking, and the monitor takes the window down on its next tick. They
+                    // shared a single consuming flag once, and the monitor always won it --
+                    // set here, swapped back by `take_close` a few lines later in the same
+                    // tick, while the thread was still asleep or parked inside tesseract. It
+                    // never saw the stop and ran out its 45-minute lifetime instead, so every
+                    // visit leaked a live poller that went on capturing, publishing views and
+                    // streaming scroll deltas across later sessions (nineteen in one evening,
+                    // two at once, double-counting the scroll the overlay accumulates).
                     self.gone.store(true, Ordering::Release);
+                    self.close_pending = true;
                 }
             }
         }
@@ -1349,21 +1361,23 @@ impl KioskSession {
     /// Did the session end? Consumed once; the teardown is `close`'s. The verdict comes from
     /// the log (`KioskClosed`) -- the poller only ever stops looking, it does not judge.
     pub fn take_close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) -> bool {
-        self.poller_active && self.gone.swap(false, Ordering::AcqRel) && {
+        self.poller_active && std::mem::take(&mut self.close_pending) && {
             self.close(kiosk_view, hide);
             true
         }
     }
 
-    /// Tear the session down from the monitor's side -- either consumed after a poller verdict
-    /// or forced because the game process died. Clears the published view so a stale payload
-    /// cannot render over whatever the game drew next, and resets the log machine so a later
-    /// open re-arms.
+    /// Tear the session down from the monitor's side -- either consumed after the log's close
+    /// line or forced because the game process died. Clears the published view so a stale
+    /// payload cannot render over whatever the game drew next, resets the log machine so a
+    /// later open re-arms, and stops the poller: a dead game has nothing left to capture.
     pub fn close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) {
         if !self.poller_active {
             return;
         }
         self.poller_active = false;
+        self.close_pending = false;
+        self.gone.store(true, Ordering::Release);
         self.machine = kiosk_log::KioskLogMachine::default();
         kiosk_view.clear();
         hide();

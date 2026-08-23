@@ -109,10 +109,10 @@ fn populate_re_requests_the_anchor_while_polling() {
     assert!(reanchor.load(Ordering::Acquire));
 }
 
-/// The session's stop flag -- set by the monitor when the log's close line arrives -- must hide
-/// the overlay, clear the published view, consume exactly once, and reset the log machine so
-/// the *next* kiosk visit -- whose open markers print fresh into the growing log -- arms from
-/// scratch instead of being swallowed by the previous session's `open` state.
+/// The log's close line must hide the overlay, clear the published view, consume exactly once,
+/// and reset the log machine so the *next* kiosk visit -- whose open markers print fresh into
+/// the growing log -- arms from scratch instead of being swallowed by the previous session's
+/// `open` state.
 #[test]
 fn the_logs_close_line_closes_and_a_reopen_rearms() {
     let session = &mut KioskSession::new();
@@ -126,7 +126,6 @@ fn the_logs_close_line_closes_and_a_reopen_rearms() {
         epoch: 4,
         ..KioskView::default()
     });
-    let gone = spawns.gone.lock().unwrap()[0].clone();
 
     assert!(!session.take_close(&kiosk, &hide), "no verdict yet");
     assert!(
@@ -134,7 +133,7 @@ fn the_logs_close_line_closes_and_a_reopen_rearms() {
         "a stray poll must not tear down a live session"
     );
 
-    gone.store(true, Ordering::Release);
+    session.observe(CLOSE_LINE.as_bytes(), &noop, &spawns.hook());
     assert!(session.take_close(&kiosk, &hide));
     assert!(
         kiosk.get().is_none(),
@@ -181,8 +180,8 @@ fn the_logs_exit_line_takes_the_overlay_down() {
     );
 }
 
-/// And the next visit re-arms: the flags outlive the session, so a stop left over from the
-/// last one must not kill the new poller on its first tick.
+/// And the next visit re-arms: a stop left over from the last session must never kill the new
+/// poller on its first tick.
 #[test]
 fn a_second_visit_starts_a_fresh_poller() {
     let session = &mut KioskSession::new();
@@ -207,6 +206,59 @@ fn a_second_visit_starts_a_fresh_poller() {
     assert!(session.take_close(&kiosk, &|| ()));
 }
 
+/// The monitor consuming a close must not erase the poller's stop signal.
+///
+/// These are two different readers of one event: the monitor tears the window down on its next
+/// tick, and the poller thread stops looking. When they shared one consuming flag the monitor
+/// always won -- it set the flag and swapped it back four lines later in the same tick, while
+/// the thread only reads it every 60-400ms and can be parked inside tesseract for far longer.
+/// The thread then never saw it and ran out its whole 45-minute lifetime: on 2026-08-23 every
+/// visit leaked a poller that kept capturing, publishing views and streaming scroll deltas over
+/// later sessions -- nineteen in one evening, two of them alive at once, double-counting the
+/// scroll the overlay accumulates and drifting the chips off their tiles.
+#[test]
+fn a_consumed_close_still_tells_the_poller_to_stop() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+
+    session.observe(MODE_LINE.as_bytes(), &|| (), &spawns.hook());
+    let gone = spawns.gone.lock().unwrap()[0].clone();
+
+    session.observe(CLOSE_LINE.as_bytes(), &|| (), &spawns.hook());
+    assert!(session.take_close(&kiosk, &|| ()), "the monitor's teardown");
+    assert!(
+        gone.load(Ordering::Acquire),
+        "the poller must still be told to stop after the monitor consumed the close"
+    );
+}
+
+/// A quick reopen must not revive the poller the previous visit stopped. Flags that outlived a
+/// session made this a race the player can lose by clicking fast: clearing the shared stop for
+/// the new poller un-stopped the old one too, if it had not happened to tick in between.
+#[test]
+fn a_reopen_cannot_revive_the_previous_poller() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+
+    session.observe(MODE_LINE.as_bytes(), &|| (), &spawns.hook());
+    let first = spawns.gone.lock().unwrap()[0].clone();
+    session.observe(CLOSE_LINE.as_bytes(), &|| (), &spawns.hook());
+    assert!(session.take_close(&kiosk, &|| ()));
+
+    session.observe(MODE_LINE.as_bytes(), &|| (), &spawns.hook());
+    let second = spawns.gone.lock().unwrap()[1].clone();
+    assert!(
+        first.load(Ordering::Acquire),
+        "the first visit's poller stays stopped for good"
+    );
+    assert!(
+        !second.load(Ordering::Acquire),
+        "the new poller starts free to look"
+    );
+}
+
 /// The game process dying takes the kiosk with it even though the poller may never deliver a
 /// verdict (capture fails read as misses, but the process vanishing can outrun the streak).
 #[test]
@@ -219,9 +271,14 @@ fn process_death_closes_the_session() {
 
     session.observe(MODE_LINE.as_bytes(), &noop, &spawns.hook());
     kiosk.set(KioskView::default());
+    let gone = spawns.gone.lock().unwrap()[0].clone();
     session.close(&kiosk, &hide);
     assert!(kiosk.get().is_none());
     assert_eq!(tally_of(&hides), 1, "process death hides the overlay");
+    assert!(
+        gone.load(Ordering::Acquire),
+        "a dead game stops the poller too: there is nothing left to capture"
+    );
 
     // Closing again is a no-op, and a later open still works.
     session.close(&kiosk, &hide);
