@@ -1,3 +1,7 @@
+//! The kiosk poller's contract, played against a scripted screen: what streams while the grid
+//! moves, what publishes when it stops, and how it stops. What it does NOT decide is presence:
+//! EE.log owns that (see `kiosk_wiring`), so no failure in here may end a session.
+
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -9,10 +13,10 @@ use app_lib::{
 };
 use warframe_acquisition::RewardCatalogEntry;
 
-/// A scripted source: each call pops the next scripted result; exhaustion reads as a capture
-/// error, which drives the poller's miss streak and ends the thread deterministically. A frame
-/// may carry the `reanchor` side effect, standing in for the monitor loop's `PopulateGrid()`
-/// flag arriving between two reads.
+/// A scripted source: strips are popped one per look, frames one per read; exhaustion reads as
+/// a capture error, which costs that look and nothing else -- the run simply ends at its
+/// lifetime. A frame may carry the `reanchor` side effect, standing in for the monitor loop's
+/// `PopulateGrid()` flag arriving between two reads.
 struct ScriptedKiosk {
     frames: Mutex<Vec<(bool, Result<KioskRead, &'static str>)>>,
     strips: Mutex<Vec<Vec<f32>>>,
@@ -73,12 +77,14 @@ fn read(cells: usize, basket: usize) -> Result<KioskRead, &'static str> {
     })
 }
 
+/// A short lifetime on purpose: with no close verdict of its own, a session runs until the
+/// lifetime ends, and 400ms at a 1ms tick is dozens of looks -- plenty for every script here,
+/// and it keeps the tests deterministic instead of script-length-dependent.
 fn timing() -> KioskPollerTiming {
     KioskPollerTiming {
         interval: std::time::Duration::from_millis(1),
         motion_interval: std::time::Duration::from_millis(1),
-        lifetime: std::time::Duration::from_secs(5),
-        grace: std::time::Duration::ZERO,
+        lifetime: std::time::Duration::from_millis(400),
     }
 }
 
@@ -93,24 +99,48 @@ fn candidates() -> Arc<Vec<RewardCatalogEntry>> {
     )
 }
 
-/// Drive the poller over a frame script and collect what it published, plus its flags' final
-/// state. The joiner only has to make the frame recognizable in the output: epoch and slot counts.
-fn run(frames: Vec<(bool, Result<KioskRead, &'static str>)>) -> RunOutcome {
-    run_with_strips(frames, Vec::new())
+/// A pane profile at 1080p scale: 790 rows (the whole pane), bands every 222 with two text
+/// lines each, the first band at strip row 150 -- which `label_offset` reads as offset zero.
+/// A count badge is staged above the first label: bright enough to see, far too weak and
+/// narrow to be mistaken for a label window.
+fn label_strip_at(dy: i64) -> Vec<f32> {
+    let mut rows = vec![2.0_f32; 790];
+    let mut top = 150 + dy;
+    while top < 790 {
+        if top >= 0 {
+            // Bands clip at the pane's bottom edge exactly as the game clips them.
+            let first_end = (top + 11).min(790);
+            for row in top as usize..first_end as usize {
+                rows[row] = 250.0;
+            }
+            let second = top + 27;
+            if second + 11 <= 790 {
+                for row in second as usize..second as usize + 11 {
+                    rows[row] = 240.0;
+                }
+            }
+        }
+        top += 222;
+    }
+    let badge = 23 + dy;
+    if badge > 0 && badge + 14 <= 790 {
+        for row in badge as usize..badge as usize + 14 {
+            rows[row] = 30.0;
+        }
+    }
+    rows
 }
 
-fn run_with_strips(
-    frames: Vec<(bool, Result<KioskRead, &'static str>)>,
-    strips: Vec<Vec<f32>>,
-) -> RunOutcome {
-    run_joining(
-        frames,
-        strips,
-        |_epoch, _frame| KioskView::default(),
-        |_view| (),
-    )
+fn label_strip() -> Vec<f32> {
+    label_strip_at(0)
 }
 
+/// A strip with nothing white in it: an animation frame, or a filter that emptied the grid.
+fn bare_strip() -> Vec<f32> {
+    vec![2.0_f32; 790]
+}
+
+/// Everything the poller did over one scripted run.
 struct RunOutcome {
     epochs: Vec<u64>,
     totals: Vec<u64>,
@@ -119,11 +149,11 @@ struct RunOutcome {
     gone: bool,
 }
 
-fn run_joining(
+/// Drive the poller over a frame script plus a strip script and collect everything it did.
+/// The joiner only has to make the frame recognizable in the output: epoch and slot counts.
+fn run_with_strips(
     frames: Vec<(bool, Result<KioskRead, &'static str>)>,
     strips: Vec<Vec<f32>>,
-    join: impl Fn(u64, &KioskRead) -> KioskView + Send + Sync + 'static,
-    on_publish: impl Fn(KioskView) + Send + Sync + 'static,
 ) -> RunOutcome {
     let reanchor = Arc::new(AtomicBool::new(true));
     let gone = Arc::new(AtomicBool::new(false));
@@ -145,7 +175,6 @@ fn run_joining(
             if let Ok(mut slot) = dys.lock() {
                 slot.push(view.scroll_dy);
             }
-            on_publish(view);
         }
     };
     let scroll_sink = {
@@ -157,7 +186,7 @@ fn run_joining(
         }
     };
     let joiner = move |epoch: u64, frame: &KioskRead| {
-        let mut view = join(epoch, frame);
+        let mut view = KioskView::default();
         view.epoch = epoch;
         view.total_plat = (frame.cells.len() + frame.basket.len()) as u64;
         view
@@ -183,71 +212,55 @@ fn run_joining(
     .join()
     .expect("poller thread panicked");
     RunOutcome {
-        epochs: Arc::try_unwrap(epochs)
-            .map(|slot| slot.into_inner().unwrap())
-            .unwrap_or_default(),
-        totals: Arc::try_unwrap(totals)
-            .map(|slot| slot.into_inner().unwrap())
-            .unwrap_or_default(),
-        scrolls: Arc::try_unwrap(scrolls)
-            .map(|slot| slot.into_inner().unwrap())
-            .unwrap_or_default(),
-        dys: Arc::try_unwrap(dys)
-            .map(|slot| slot.into_inner().unwrap())
-            .unwrap_or_default(),
+        epochs: epochs.lock().unwrap().clone(),
+        totals: totals.lock().unwrap().clone(),
+        scrolls: scrolls.lock().unwrap().clone(),
+        dys: dys.lock().unwrap().clone(),
         gone: gone.load(Ordering::Acquire),
     }
 }
 
-fn plain(frames: Vec<Result<KioskRead, &'static str>>) -> RunOutcome {
-    run(frames.into_iter().map(|frame| (false, frame)).collect())
-}
-
-/// The poller's day job: read the screen, join it, publish the view. One good frame publishes
-/// once; the exhaustion errors afterwards must not publish anything.
+/// The poller's day job: two still looks settle it, the read runs where the labels say the
+/// rows are, the view publishes. Script exhaustion afterwards is just failed looks -- the run
+/// ends at its lifetime, and the flags show no verdict, because the poller has none to give.
 #[test]
 fn a_good_frame_publishes_once_per_read() {
-    let outcome = plain(vec![read(18, 3)]);
+    let outcome = run_with_strips(vec![(false, read(18, 3))], vec![label_strip(); 4]);
     assert_eq!(outcome.totals, vec![21], "cells + basket rode the join");
-    assert!(outcome.gone, "exhaustion closed the poller");
+    assert!(!outcome.gone, "an exhausted script is not a close");
 }
 
-/// One bad frame -- a capture error or a blank read -- keeps the last published view: an emptying
-/// view is worse than a slightly old one, and one miss has never meant the screen closed.
+/// One bad read keeps the last published view: an emptying view is worse than a slightly old
+/// one, and one miss has never meant anything at all -- the session just tries again.
 #[test]
 fn one_bad_frame_keeps_the_last_view() {
-    let outcome = plain(vec![read(18, 3), Err("capture failed"), read(18, 3)]);
-    assert_eq!(
-        outcome.totals,
-        vec![21, 21],
-        "only the good frames published"
+    let outcome = run_with_strips(
+        vec![
+            (false, read(18, 3)),
+            (false, Err("capture failed")),
+            (false, read(18, 3)),
+        ],
+        vec![label_strip(); 8],
     );
-}
-
-/// Two misses in a row is the gone verdict: EE.log never says the kiosk closed, so the streak is
-/// the whole close path.
-#[test]
-fn two_misses_in_a_row_deliver_the_gone_verdict() {
-    let outcome = plain(vec![
-        read(18, 3),
-        Err("capture failed"),
-        Err("capture failed"),
-        read(18, 3), // must never be read: the poller exited
-    ]);
-    assert_eq!(outcome.totals, vec![21]);
-    assert!(outcome.gone);
-}
-
-/// A hover card covering tiles reads as most of the grid gone. That frame is an occlusion, not an
-/// emptied kiosk: nothing publishes, and the miss counts toward the streak exactly like a capture
-/// failure.
-#[test]
-fn a_majority_lost_frame_is_an_occlusion_not_an_emptied_kiosk() {
-    let outcome = plain(vec![read(18, 3), read(3, 3), read(18, 3)]);
     assert_eq!(
         outcome.totals,
         vec![21, 21],
-        "the 3-cell frame must not publish over the 18-cell anchor"
+        "only the good reads published"
+    );
+    assert!(!outcome.gone);
+}
+
+/// Presence is EE.log's answer, not the reader's. A pane with no labels in it -- an
+/// animation, a filter that matched nothing, a torn capture -- is a look the poller skips,
+/// and the session goes on. (Reading this as a close tore the overlay down mid-session all
+/// through 2026-08-23.)
+#[test]
+fn an_unreadable_pane_is_a_skipped_look_not_a_close() {
+    let outcome = run_with_strips(vec![(false, read(18, 3))], vec![bare_strip(); 20]);
+    assert!(!outcome.gone);
+    assert!(
+        outcome.totals.is_empty(),
+        "nothing was published over nothing"
     );
 }
 
@@ -255,19 +268,18 @@ fn a_majority_lost_frame_is_an_occlusion_not_an_emptied_kiosk() {
 /// only a read with nothing at all is a miss.
 #[test]
 fn an_empty_basket_still_publishes() {
-    let outcome = plain(vec![read(18, 0)]);
+    let outcome = run_with_strips(vec![(false, read(18, 0))], vec![label_strip(); 4]);
     assert_eq!(outcome.totals, vec![18]);
 }
 
 /// `PopulateGrid()` (open, filter change, basket edit) re-anchors: the epoch advances so the
-/// frontend resets its scroll transform, and the new anchor replaces the old cell count -- a
-/// filter that legitimately narrows the grid is not an occlusion.
+/// frontend resets its scroll transform.
 #[test]
-fn a_reanchor_request_advances_the_epoch_and_replaces_the_anchor() {
-    // The flag rides the first frame's delivery: it lands between the two reads, the way the
-    // monitor loop would set it after seeing PopulateGrid, so the 6-cell grid that follows is a
-    // new anchor rather than a lost one.
-    let outcome = run(vec![(true, read(18, 3)), (false, read(6, 2))]);
+fn a_reanchor_request_advances_the_epoch() {
+    let outcome = run_with_strips(
+        vec![(true, read(18, 3)), (false, read(6, 2))],
+        vec![label_strip(); 8],
+    );
     assert_eq!(outcome.totals, vec![21, 8], "both reads published");
     assert_eq!(
         outcome.epochs,
@@ -276,123 +288,66 @@ fn a_reanchor_request_advances_the_epoch_and_replaces_the_anchor() {
     );
 }
 
-/// A structured strip for the scroll channel: brightness bands of varying height, like rows of
-/// thumbnails and labels (same shape as the tracker's own unit tests).
-fn bands(len: usize) -> Vec<f32> {
-    (0..len)
-        .map(|row| {
-            let base = match (row / 13) % 5 {
-                0 => 20.0,
-                1 => 180.0,
-                2 => 60.0,
-                3 => 200.0,
-                _ => 100.0,
-            };
-            base + (row % 7) as f32
-        })
-        .collect()
-}
-
-/// `new[i] = old[i - dy]` with wrap-around, so lengths always match.
-fn shift_rows(rows: &[f32], dy: i32) -> Vec<f32> {
-    (0..rows.len())
-        .map(|i| rows[(i as i64 - dy as i64).rem_euclid(rows.len() as i64) as usize])
-        .collect()
-}
-
-/// Measurable drift streams its offset instead of fading: each tick names where the grid now
-/// sits relative to the anchor, and the expensive read stays deferred while it lasts.
+/// Measurable motion streams frame-to-frame deltas instead of fading, and no recognition pass
+/// runs while it lasts -- a mid-scroll read catches rows straddling the bands and comes back
+/// empty, which is how sessions used to die.
 #[test]
-fn measurable_drift_streams_deltas_and_defers_the_full_read() {
-    let base = bands(400);
+fn motion_streams_deltas_and_defers_the_read() {
     let outcome = run_with_strips(
         vec![(false, read(18, 3))],
-        vec![base.clone(), shift_rows(&base, -23), shift_rows(&base, -40)],
+        vec![
+            label_strip(),
+            label_strip_at(-23),
+            label_strip_at(-40),
+            label_strip_at(-40),
+            label_strip_at(-40),
+            label_strip_at(-40),
+        ],
     );
-    assert_eq!(outcome.totals, vec![21], "only the anchor's read published");
+    assert_eq!(outcome.totals, vec![21], "only the settled read published");
     assert_eq!(
         &outcome.scrolls[..2],
-        &[Some(-23), Some(-40)],
-        "drift streams absolute offsets: {:?}",
+        &[Some(-23), Some(-17)],
+        "deltas stream frame to frame: {:?}",
         outcome.scrolls
     );
 }
 
-/// Motion that pauses is settled, not still scrolling: two consecutive looks that agree with
-/// each other (while both disagree with the anchor) mean the grid has stopped, and the full
-/// read re-anchors immediately -- no fade was ever emitted, so nothing flashes.
+/// A scroll that stops anywhere settles into a read located by the grid's own label rows, and
+/// the view carries that offset: the chips land on the rows wherever the scroll stopped.
+/// (2026-08-23's session stopped at -142, read the calibration gaps, and died.)
 #[test]
-fn a_pause_in_the_motion_settles_into_a_fresh_read() {
-    let base = bands(400);
-    let moved = shift_rows(&base, -9);
+fn a_stopped_scroll_publishes_the_located_offset() {
     let outcome = run_with_strips(
         vec![(false, read(18, 3)), (false, read(18, 3))],
         vec![
-            base.clone(),
-            shift_rows(&base, -5),
-            moved.clone(),
-            moved.clone(),
-            moved,
+            label_strip(),
+            label_strip(),
+            label_strip_at(-142),
+            label_strip_at(-142),
+            label_strip_at(-142),
+            label_strip_at(-142),
         ],
     );
-    assert_eq!(outcome.totals, vec![21, 21], "the settle read ran");
-    assert_eq!(outcome.epochs, vec![1, 2], "the settle bumped the epoch");
-    assert_eq!(
-        &outcome.scrolls[..4],
-        &[Some(-5), Some(-9), Some(-9), Some(-9)],
-        "deltas streamed the whole way, never a fade: {:?}",
-        outcome.scrolls
-    );
-}
-
-/// When the grid comes back to rest on the anchored position, the deferred read runs: the fresh
-/// epoch tells the frontend to drop its transform, and the view is true again.
-#[test]
-fn rest_after_drift_reanchors_with_a_fresh_epoch() {
-    let base = bands(400);
-    let scrolled = shift_rows(&base, -31);
-    let outcome = run_with_strips(
-        vec![(false, read(18, 3)), (false, read(18, 3))],
-        vec![base.clone(), scrolled.clone(), scrolled, base],
-    );
-    assert_eq!(
-        outcome.totals,
-        vec![21, 21],
-        "the deferred read ran at rest"
-    );
-    assert_eq!(outcome.epochs, vec![1, 2], "the settle bumped the epoch");
-    assert_eq!(outcome.scrolls[0], Some(-31), "the drift streamed first");
-}
-
-/// An unreadable strip is drift like any other while it lasts -- but a screen that has left the
-/// kiosk for good never rests. The forced read past the drift limit finds an exhausted script,
-/// the miss streak closes in, and the last good view stood the whole time.
-#[test]
-fn endless_drift_is_capped_then_closed_by_the_forced_read() {
-    let mut strips = vec![bands(400)];
-    // Far more unreadable looks than the forced-read limit.
-    for _ in 0..20 {
-        strips.push(vec![90.0; 400]);
-    }
-    let outcome = run_with_strips(vec![(false, read(18, 3))], strips);
-    assert_eq!(outcome.totals, vec![21], "the anchor stands");
-    assert!(!outcome.scrolls.is_empty(), "every drifted tick faded");
+    assert_eq!(outcome.totals, vec![21, 21], "anchor and settle published");
+    assert_eq!(outcome.dys[0], 0, "the anchor read at calibration");
+    // The view carries the label phase. These synthetic bands are flat blocks, so the
+    // locator's containment plateau is at its widest: anywhere that keeps row 0's crop over
+    // the anchor band's whole text (within 8 rows above its top) is a correct answer.
+    let drift = (outcome.dys[1] + 142).rem_euclid(222);
     assert!(
-        outcome.gone,
-        "the forced read's failures closed the session"
+        drift == 0 || drift + 8 >= 222,
+        "the view carries the phase: {:?}",
+        outcome.dys
     );
 }
 
 /// Motion that never pauses is still our grid: every look measures confidently, so the poller
-/// follows it for as long as it lasts and never spends a mid-scroll recognition pass -- those
-/// read rows straddling the label bands and come back empty, which is how a session used to
-/// die mid-scroll. Only unreadable strips escalate to the forced read.
+/// follows it for as long as it lasts and never spends a recognition pass.
 #[test]
-fn sustained_measurable_motion_never_forces_the_read() {
-    let base = bands(400);
-    let mut strips = vec![base.clone()];
-    // A triangle wave: every look moves another 3 rows from the last (never a pause) while
-    // staying inside the +-48-row window the tracker can measure against the anchor.
+fn sustained_motion_never_reads() {
+    let mut strips = vec![label_strip()];
+    // A triangle wave: every look moves another 3 rows from the last (never a pause).
     for k in 0..30 {
         let pos = k % 28;
         let shift = if pos < 14 {
@@ -400,10 +355,10 @@ fn sustained_measurable_motion_never_forces_the_read() {
         } else {
             3 * (28 - pos)
         };
-        strips.push(shift_rows(&base, -shift));
+        strips.push(label_strip_at(-shift));
     }
     let outcome = run_with_strips(vec![(false, read(18, 3))], strips);
-    assert_eq!(outcome.totals, vec![21], "no mid-scroll read ever ran");
+    assert!(outcome.totals.is_empty(), "no mid-scroll read ever ran");
     assert!(
         outcome.scrolls.len() >= 20 && outcome.scrolls[..20].iter().all(|v| v.is_some()),
         "the scroll streamed, no fades: {:?}",
@@ -411,49 +366,43 @@ fn sustained_measurable_motion_never_forces_the_read() {
     );
 }
 
-/// An empty read that raced a resumed scroll is not the kiosk being gone: the strip had just
-/// measured the grid alive and moving, so the miss streak must not advance -- the session
-/// survives to stream and to settle properly later. (Without this, a scroll's pause long
-/// enough to settle but short enough to resume used to two-strike the session closed.)
+/// An empty settle read that raced a resumed scroll is not the kiosk being gone: the poller
+/// has no misses to advance anymore -- it just keeps looking, streaming while the grid moves,
+/// and outlives the empty read to settle properly later.
 #[test]
-fn an_empty_read_while_the_grid_moves_is_not_the_kiosk_gone() {
-    let base = bands(400);
-    let moved = shift_rows(&base, -9);
-    // The settle read pops the empty frame; the motion then continues for many more looks.
-    let mut strips = vec![base.clone()];
-    for _ in 0..25 {
-        strips.push(moved.clone());
+fn an_empty_settle_read_while_the_grid_moves_is_not_the_kiosk_gone() {
+    // Two still looks settle into the good read; then a still look settles into the empty
+    // one; then the grid keeps moving for many looks -- deltas stream throughout and the
+    // session goes on.
+    let mut strips = vec![
+        label_strip(),
+        label_strip(),
+        label_strip_at(-9),
+        label_strip_at(-9),
+        label_strip_at(-9),
+    ];
+    for k in 0..25 {
+        strips.push(label_strip_at(-9 - 3 * (k % 8) as i64));
     }
     let outcome = run_with_strips(vec![(false, read(18, 3)), (false, read(0, 0))], strips);
     assert!(
-        outcome.scrolls.iter().filter(|v| v.is_some()).count() >= 15,
-        "the session streamed long after the empty settle read: {:?}",
-        outcome.scrolls
+        outcome.scrolls.len() >= 15,
+        "the session kept looking long after the empty settle read: {:?}",
+        outcome.scrolls.len()
     );
+    assert!(!outcome.gone);
 }
 
-/// The settle read happens where the rows actually are, and the published view says so: the
-/// scroll's measured offset rides the view so the chips land on the scrolled grid, not the
-/// calibration rows. (2026-08-23's session stopped at dy=-142 and died reading the gaps.)
-#[test]
-fn the_settle_read_publishes_the_scrolled_offset() {
-    let base = bands(400);
-    let moved = shift_rows(&base, -142);
-    let outcome = run_with_strips(
-        vec![(false, read(18, 3)), (false, read(18, 3))],
-        vec![base.clone(), moved.clone(), moved.clone(), moved],
-    );
-    assert_eq!(outcome.totals, vec![21, 21], "anchor and settle published");
-    assert_eq!(outcome.dys, vec![0, -142], "the view carries the phase");
-}
-
-/// The log machine's close verdict shares the poller's `gone` flag: once it is set from
-/// outside, the poller stops looking at a kiosk the game has already hidden -- no further
+/// The external verdict -- the monitor acting on EE.log's close line -- is the only thing
+/// that stops the poller besides its lifetime. Once the shared `gone` flag is set from
+/// outside, the poller stops looking at a kiosk the game has already hidden: no further
 /// reads, no further publishes.
 #[test]
-fn an_external_close_verdict_stops_the_poller() {
-    let base = bands(400);
-    let strips: Vec<Vec<f32>> = std::iter::repeat_n(base, 200).collect();
+fn the_external_close_verdict_stops_the_poller() {
+    // Two still looks anchor the view; then the grid never stops moving, so only the
+    // external verdict can end the poller before its lifetime.
+    let mut strips = vec![label_strip(), label_strip()];
+    strips.extend((0..200).map(|k| label_strip_at(-3 * (k % 20) as i64)));
     let frames = vec![
         (false, read(18, 3)),
         (false, read(6, 2)), // must never be read
@@ -477,11 +426,12 @@ fn an_external_close_verdict_stops_the_poller() {
         |_| (),
         move || {
             let mut source = ScriptedKiosk::scripted(frames);
-            source.strips = Mutex::new(strips);
+            // Popped from the tail, like every scripted run.
+            source.strips = Mutex::new(strips.into_iter().rev().collect());
             source
         },
     );
-    // The anchor publishes; then the log's close verdict lands.
+    // The anchor publishes; then the external verdict lands.
     std::thread::sleep(std::time::Duration::from_millis(30));
     gone_arg.store(true, Ordering::Release);
     handle.join().expect("poller thread panicked");
