@@ -3260,7 +3260,276 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+    use std::sync::atomic::AtomicBool;
     use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
+
+    /// A scripted screen for the kiosk poller: each `pop` is one look, so a test can stage
+    /// capture loss, occlusions and scrolls without playing the game.
+    struct ScriptedKiosk {
+        looks: StdMutex<Vec<Result<KioskRead, &'static str>>>,
+        profiles: StdMutex<Vec<Option<Vec<f32>>>>,
+    }
+
+    impl ScriptedKiosk {
+        fn new(looks: Vec<Result<KioskRead, &'static str>>) -> Self {
+            Self {
+                looks: StdMutex::new(looks),
+                profiles: StdMutex::new(vec![None]),
+            }
+        }
+
+        fn with_profiles(mut self, profiles: Vec<Option<Vec<f32>>>) -> Self {
+            self.profiles = StdMutex::new(profiles);
+            self
+        }
+    }
+
+    impl KioskFrameSource for ScriptedKiosk {
+        fn read_kiosk(
+            &mut self,
+            _candidates: &[RewardCatalogEntry],
+        ) -> Result<KioskRead, &'static str> {
+            // An exhausted script is a vanished screen: the miss streak closes the session
+            // instead of a panic inside the poller thread.
+            self.looks
+                .lock()
+                .expect("looks")
+                .pop()
+                .unwrap_or(Err("script exhausted"))
+        }
+
+        fn strip_profile(&mut self) -> Result<Vec<f32>, &'static str> {
+            match self.profiles.lock().expect("profiles").pop() {
+                Some(Some(profile)) => Ok(profile),
+                Some(None) => Err("strip unavailable"),
+                None => Err("profile script exhausted"),
+            }
+        }
+    }
+
+    fn scripted_cell(name: &str) -> GridCell {
+        GridCell {
+            col: 0,
+            row: 0,
+            name: name.to_owned(),
+            score: 0.95,
+        }
+    }
+
+    fn run_poller(
+        source: ScriptedKiosk,
+    ) -> (
+        Arc<AtomicBool>,
+        Arc<AtomicBool>,
+        Arc<StdMutex<Vec<KioskView>>>,
+    ) {
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let sink = Arc::clone(&published);
+        let handle = spawn_kiosk_poller_with(
+            &reanchor,
+            &gone,
+            KioskPollerTiming {
+                interval: Duration::from_millis(1),
+                motion_interval: Duration::from_millis(1),
+                lifetime: Duration::from_millis(400),
+            },
+            Arc::new(Vec::new()),
+            |epoch, read| {
+                // Price everything so the join keeps the scripted cells visible.
+                crate::kiosk_view::build_view(
+                    epoch,
+                    &read.cells,
+                    &read.basket,
+                    &[],
+                    |_| Some(1),
+                    |_| 0,
+                )
+            },
+            move |view| sink.lock().expect("published").push(view),
+            |_| {},
+            move || source,
+        );
+        handle.join().expect("poller thread");
+        (reanchor, gone, published)
+    }
+
+    #[test]
+    fn one_failed_capture_is_a_miss_and_the_next_good_frame_publishes() {
+        // Pops come off the back: the first look fails, the second is a good frame. When the
+        // script runs dry the screen counts as vanished, so the session closes afterwards --
+        // what matters here is that the bad frame in between did not stop the publish.
+        let source = ScriptedKiosk::new(vec![
+            Ok(KioskRead {
+                cells: vec![scripted_cell("Titania Prime Systems Blueprint")],
+                basket: vec![],
+            }),
+            Err("window gone"),
+        ]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert_eq!(
+            published.len(),
+            1,
+            "the good frame after the miss published"
+        );
+        assert_eq!(
+            published[0].cells[0].name,
+            "Titania Prime Systems Blueprint"
+        );
+    }
+
+    #[test]
+    fn two_consecutive_capture_failures_close_the_session() {
+        let source = ScriptedKiosk::new(vec![Err("alt-tab"), Err("alt-tab")]);
+        let (_, gone, published) = run_poller(source);
+        assert!(gone.load(Ordering::Acquire));
+        assert!(published.lock().expect("published").is_empty());
+    }
+
+    #[test]
+    fn an_occlusion_drops_cells_but_the_anchor_view_stands() {
+        // Anchored on four cells, then a hover card halves the visible set: that frame is a miss,
+        // nothing republishes (the last anchor stays on screen), and only the streak closes.
+        let four = KioskRead {
+            cells: vec![
+                scripted_cell("A"),
+                scripted_cell("B"),
+                scripted_cell("C"),
+                scripted_cell("D"),
+            ],
+            basket: vec![],
+        };
+        let hovered = KioskRead {
+            cells: vec![scripted_cell("A")],
+            basket: vec![],
+        };
+        // Pops come off the back: the anchor read is `four`, then the hover-card frame; the
+        // exhausted script then ends the session like any vanished screen.
+        let source = ScriptedKiosk::new(vec![Ok(hovered), Ok(four)]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert_eq!(published.len(), 1, "only the anchor published");
+        assert_eq!(
+            published[0].cells.len(),
+            4,
+            "the occluded frame must not replace the anchor"
+        );
+    }
+
+    #[test]
+    fn a_reanchor_accepts_a_partially_filled_grid() {
+        // The player narrowed a filter: EE.log asked for a fresh anchor and the next read holds
+        // fewer cells. That is not an occlusion -- publish what is there.
+        let reanchor = Arc::new(AtomicBool::new(true));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let sink = Arc::clone(&published);
+        let source = ScriptedKiosk::new(vec![Ok(KioskRead {
+            cells: vec![scripted_cell("Only survivor")],
+            basket: vec![],
+        })]);
+        let handle = spawn_kiosk_poller_with(
+            &reanchor,
+            &gone,
+            KioskPollerTiming {
+                interval: Duration::from_millis(1),
+                motion_interval: Duration::from_millis(1),
+                lifetime: Duration::from_millis(100),
+            },
+            Arc::new(Vec::new()),
+            |epoch, read| {
+                // Price everything so the join keeps the scripted cells visible.
+                crate::kiosk_view::build_view(
+                    epoch,
+                    &read.cells,
+                    &read.basket,
+                    &[],
+                    |_| Some(1),
+                    |_| 0,
+                )
+            },
+            move |view| sink.lock().expect("published").push(view),
+            |_| {},
+            move || source,
+        );
+        handle.join().expect("poller thread");
+        let published = published.lock().expect("published");
+        assert_eq!(
+            published.len(),
+            1,
+            "the narrowed grid published on the fresh anchor"
+        );
+        assert_eq!(published[0].cells.len(), 1);
+    }
+
+    #[test]
+    fn motion_defers_the_full_read_until_the_grid_settles() {
+        // Two moving ticks stream deltas without OCR; the settled frame then publishes once.
+        // Successive looks each move one triangular peak down 8 rows, so each correlation
+        // peaks confidently at dy=8 -- a real scroll, not noise against an anchor.
+        // estimate_dy needs at least 2*MAX_SHIFT+8 rows to consider any shift at all.
+        let base: Vec<f32> = (0_u32..128)
+            .map(|i| (1.0_f32 - (i.abs_diff(63) as f32 / 24.0)).max(0.05))
+            .collect();
+        let shifted_by = |rows: usize| {
+            let mut p = vec![0.05_f32; 128];
+            p[rows..128].copy_from_slice(&base[..128 - rows]);
+            p
+        };
+        let settled_read = KioskRead {
+            cells: vec![scripted_cell("Settled")],
+            basket: vec![],
+        };
+        let deltas: Arc<StdMutex<Vec<Option<i32>>>> = Arc::new(StdMutex::new(Vec::new()));
+        let sink = Arc::clone(&deltas);
+        let gone = Arc::new(AtomicBool::new(false));
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let pub_sink = Arc::clone(&published);
+        let source = ScriptedKiosk::new(vec![Ok(settled_read)]).with_profiles(vec![
+            // Pops come off the back: looks at base, then +8 rows, then +16.
+            Some(shifted_by(16)),
+            Some(shifted_by(8)),
+            Some(base),
+        ]);
+        let handle = spawn_kiosk_poller_with(
+            &reanchor,
+            &gone,
+            KioskPollerTiming {
+                interval: Duration::from_millis(1),
+                motion_interval: Duration::from_millis(1),
+                lifetime: Duration::from_millis(200),
+            },
+            Arc::new(Vec::new()),
+            |epoch, read| {
+                // Price everything so the join keeps the scripted cells visible.
+                crate::kiosk_view::build_view(
+                    epoch,
+                    &read.cells,
+                    &read.basket,
+                    &[],
+                    |_| Some(1),
+                    |_| 0,
+                )
+            },
+            move |view| pub_sink.lock().expect("published").push(view),
+            move |scroll| sink.lock().expect("deltas").push(scroll),
+            move || source,
+        );
+        handle.join().expect("poller thread");
+        let deltas = deltas.lock().expect("deltas");
+        assert!(
+            deltas.iter().filter(|d| d.is_some()).count() >= 2,
+            "motion ticks streamed: {deltas:?}"
+        );
+        assert_eq!(
+            published.lock().expect("published").len(),
+            1,
+            "the full read waits for settle"
+        );
+    }
 
     #[test]
     fn monitor_path_changed_fires_on_the_first_observation() {
