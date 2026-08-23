@@ -8,27 +8,29 @@ import { MetalMark } from './MetalMark'
  * with window height and centres it horizontally, so every position here is a design pixel at
  * the 1920x1080 calibration multiplied by `--h` (one design pixel's actual size); horizontal
  * positions are offsets from the window's horizontal centre. Grid chips anchor at their tile
- * corner by their RIGHT edge (translateX(-100%)), basket pairs by their LEFT edge, and the total
- * pair by its RIGHT edge, matching how the game lays out its own numerals.
+ * corner by their RIGHT edge, basket and total pairs by their bottom-right corner (the box
+ * descent puts the digits' baseline on the game's), matching how the game lays out its own.
  */
 const CAL = 1080
 const fx = (px: number) => px / CAL
 const fcx = (px: number) => (px - 960) / CAL
 
-const COL_PITCH = fx(206)
-const TILE_W = fx(198)
-const GRID_LEFT = fcx(68)
-const ROW_TOPS = [197, 423, 640].map(fx)
+const COL_PITCH = fx(207.5)
+const TILE_W = fx(190)
+const GRID_LEFT = fcx(76)
+const ROW_TOPS = [199, 421, 643].map(fx)
 const CHIP_INSET = fx(6)
 const CHIP_RISE = fx(2)
 
-const ROW_PAIR_LEFT = fcx(1814)
-const BASKET_Y0 = fx(224)
-const BASKET_PITCH = fx(38.7)
-const BASKET_BASELINE_DY = fx(19)
+/// Digits' baseline sits ~3 design px above a line-height-1 box's bottom edge.
+const PAIR_DESCENT = fx(3)
+
+const ROW_PAIR_RIGHT = fcx(1750)
+const BASKET_FIRST_BASELINE = fx(243)
+const BASKET_PITCH = fx(115 / 3)
 
 const TOTAL_PAIR_RIGHT = fcx(1717)
-const TOTAL_BASELINE = fx(877)
+const TOTAL_BASELINE = fx(875)
 
 /** Design pixels -> CSS calc against `--h`, for a `left` anchored at the window centre. */
 const cx = (fraction: number) => `calc(50% + ${Math.round(fraction * CAL)} * var(--h))`
@@ -44,15 +46,17 @@ function gridChipStyle(col: number, row: number): React.CSSProperties {
 }
 
 function basketChipStyle(index: number): React.CSSProperties {
+  const baseline = BASKET_FIRST_BASELINE + BASKET_PITCH * index
   return {
-    left: cx(ROW_PAIR_LEFT),
-    top: y(BASKET_Y0 + BASKET_PITCH * index + BASKET_BASELINE_DY),
+    left: cx(ROW_PAIR_RIGHT),
+    top: y(baseline + PAIR_DESCENT),
+    transform: 'translate(-100%, -100%)',
   }
 }
 
 const totalChipStyle: React.CSSProperties = {
   left: cx(TOTAL_PAIR_RIGHT),
-  top: y(TOTAL_BASELINE),
+  top: y(TOTAL_BASELINE + PAIR_DESCENT),
   transform: 'translate(-100%, -100%)',
 }
 

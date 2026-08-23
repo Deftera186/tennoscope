@@ -59,10 +59,22 @@ describe('kiosk overlay route', () => {
     render(<AppRoute pathname="/kiosk" />)
     const [first, last] = await screen.findAllByTestId('kiosk-grid-chip')
     // The 50% already carries the design centre (960), so the offset is the raw edge minus it:
-    // col0,row0 right edge = 68 + 0 + 198 - 6 = 260 -> 50% - 700; top = 197 - 2.
-    expect(first).toHaveStyle({ left: 'calc(50% + -700 * var(--h))', top: 'calc(195 * var(--h))' })
-    // col5,row2: right = 68 + 206*5 + 198 - 6 = 1290 -> 50% + 330; top = 640 - 2.
-    expect(last).toHaveStyle({ left: 'calc(50% + 330 * var(--h))', top: 'calc(638 * var(--h))' })
+    // col0,row0 right edge = 76 + 0 + 190 - 6 = 260 -> 50% - 700; top = 199 - 2.
+    expect(first).toHaveStyle({ left: 'calc(50% + -700 * var(--h))', top: 'calc(197 * var(--h))' })
+    // col5,row2: right = 76 + 207.5*5 + 190 - 6 = 1297.5 -> 50% + 338; top = 643 - 2.
+    expect(last).toHaveStyle({ left: 'calc(50% + 338 * var(--h))', top: 'calc(641 * var(--h))' })
+  })
+
+  it('right-aligns basket pairs onto the game ducat column', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const [first] = await screen.findAllByTestId('kiosk-basket-chip')
+    // Pair's bottom-right corner lands on (1750, baseline+descent): inside the pane edge,
+    // clear of the game's own digits which start at x>=1759.
+    expect(first).toHaveStyle({
+      left: 'calc(50% + 790 * var(--h))',
+      top: 'calc(246 * var(--h))',
+      transform: 'translate(-100%, -100%)',
+    })
   })
 
   it('adds only the platinum the game does not already show', async () => {
