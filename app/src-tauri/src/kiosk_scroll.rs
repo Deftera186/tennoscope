@@ -56,6 +56,12 @@ const MIN_BAND_MEAN: f32 = 40.0;
 /// scores near the floor.
 const BAND_PRESENT_RATIO: f32 = 0.35;
 
+/// How bright a folded row must be, against the loudest row of the fold, to count as glyph
+/// structure when locating the grid. Glyph cores measured 130-330 white pixels per column
+/// band on live captures, anti-aliased fringes under 85, floor under 5; the fraction splits
+/// core from fringe. Relative, not absolute, because row counts scale with capture width.
+const LOUD_ROW_FRACTION: f32 = 0.4;
+
 /// Normalized cross-correlation of two row profiles: the shift (in rows) that best explains
 /// `next` as `prev` moved vertically, if that shift is confident enough to name.
 ///
@@ -133,12 +139,16 @@ pub fn estimate_dy(prev: &[f32], next: &[f32], max_shift: i32, min_peak: f32) ->
 /// the offset returned is the topmost band the pane actually renders. That puts read row 0 on
 /// a real label instead of past the pane's edge.
 ///
-/// Precision is the band window's containment plateau, and that is deliberate: a 46-row band
-/// around 32 rows of text can slide ~14 rows and still contain every glyph row, so scores tie
-/// across that range and no tie-break can name the phase more precisely than the text's own
-/// slack. Ties go to the earliest window start (strict improvement only, scanning ascending),
-/// which lands the named top at or above the band's first text row and never below its last --
-/// the property the OCR crop downstream actually needs.
+/// Precision: a 46-row band around ~32 rows of text can slide ~14 rows and still contain
+/// every glyph row, and within that containment slack the mean window score cannot name a
+/// winner -- on synthetic panes it ties exactly (and answered whichever edge the scan order
+/// favored), while on real captures texture tilts it into a shallow monotone slope whose
+/// argmax sat at the slack's low edge, reporting an unscrolled grid as 8 rows scrolled
+/// (2026-08-23). So the phase is named by counting rows that are DECISIVELY bright
+/// (`LOUD_ROW_FRACTION`): every window fully containing the glyph cores holds exactly the
+/// same count -- an integer tie -- and every window that clips one does not. The midpoint of
+/// that tied run, walked circularly because the run straddles the fold boundary more often
+/// than not, is the least-wrong point in a range the data cannot narrow.
 ///
 /// `y0` is the absolute row the profile starts at, `first_label_top` the absolute row of the
 /// unscrolled grid's first label band. `None` means no grid in this profile -- an animation
@@ -168,30 +178,48 @@ pub fn label_offset(
         .zip(&counts)
         .map(|(sum, count)| if *count > 0.0 { sum / count } else { 0.0 })
         .collect();
-    // The brightest band-wide window, circularly.
-    let window_at = |start: usize| -> f32 {
+    // The brightest band-wide window, by mean -- this gates presence but localizes nothing
+    // (see the precision note for why).
+    let mean_at = |start: usize| -> f32 {
         (0..band_n)
             .map(|offset| folded[(start + offset) % pitch_n])
             .sum::<f32>()
             / band_n as f32
     };
-    let windows: Vec<f32> = (0..pitch_n).map(window_at).collect();
-    // First strict maximum: the earliest start of the containment plateau (see doc comment).
-    // An explicit fold, because iterator max_by returns the *last* of equal maxima.
-    let phase =
-        windows.iter().enumerate().fold(
-            0_usize,
-            |best, (index, &window)| {
-                if window > windows[best] { index } else { best }
-            },
-        );
-    let mut sorted = windows.clone();
+    let means: Vec<f32> = (0..pitch_n).map(mean_at).collect();
+    let mut sorted = means.clone();
     sorted.sort_by(f32::total_cmp);
     let median = sorted[sorted.len() / 2];
-    let peak = windows[phase];
+    let peak = means.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     if peak < median.max(f32::EPSILON) * MIN_LABEL_CONTRAST || peak < MIN_BAND_MEAN {
         return None;
     }
+    // The phase, by count of decisively-bright rows: integer ties across the containment
+    // slack, midpoint of the tied run as the answer.
+    let loudest = folded.iter().copied().fold(0.0_f32, f32::max);
+    let loud_at = |start: usize| -> i32 {
+        (0..band_n)
+            .filter(|offset| folded[(start + offset) % pitch_n] >= loudest * LOUD_ROW_FRACTION)
+            .count() as i32
+    };
+    let counts: Vec<i32> = (0..pitch_n).map(loud_at).collect();
+    let tallest = counts.iter().copied().max().unwrap_or(0);
+    let (mut run_start, mut walked) = (
+        counts
+            .iter()
+            .position(|&count| count == tallest)
+            .unwrap_or(0),
+        0_usize,
+    );
+    while walked < pitch_n && counts[(run_start + pitch_n - 1) % pitch_n] == tallest {
+        run_start = (run_start + pitch_n - 1) % pitch_n;
+        walked += 1;
+    }
+    let mut run_len = 1_usize;
+    while run_len < pitch_n && counts[(run_start + run_len) % pitch_n] == tallest {
+        run_len += 1;
+    }
+    let phase = (run_start + (run_len - 1) / 2) % pitch_n;
     // Which bands at that phase does the pane actually render? Score each against the
     // unfolded profile; the pane's clip edge shows up as a band that scores near nothing.
     let band_top = |k: i32| first_label_top + phase as i32 + pitch * k;
@@ -431,33 +459,28 @@ mod tests {
         rows
     }
 
-    /// The locator's whole contract, at any scroll position: row 0's crop must contain the
-    /// anchor band's entire text. Text occupies band rows 6..37 inside the 46-row crop, so the
-    /// named offset may sit anywhere from 8 rows above the band top (crop covers -8..38) to 6
-    /// below it (crop covers 6..52) and never clip a glyph -- that containment plateau is why
-    /// the fold cannot name the phase more precisely than the text's own slack, and why it
-    /// never needs to.
-    fn assert_crop_contains_anchor_text(offset: Option<i32>, anchor_phase: i32) {
-        let drift = (offset.expect("an offset was located") - anchor_phase).rem_euclid(PITCH);
-        assert!(
-            drift <= 6 || drift + 8 >= PITCH,
-            "offset {offset:?} does not put row 0's crop over the anchor band at {anchor_phase}: \
-             drift {drift} rows outside the containment plateau"
-        );
-    }
-
     /// The phases here span where live sessions actually sat on 2026-08-23 (0, -142, -111)
     /// plus both ends of a pitch, and the anchor is the topmost band whose text lies inside
     /// the strip -- a band scrolled mostly past the pane's top edge cannot be read by anybody.
+    ///
+    /// The assertions are exact, not containment: the pane's folded profile is perfectly flat
+    /// across the whole containment plateau, so every algorithm gets the same tie to break,
+    /// and the tie-break is part of the contract. (Textured fixtures cannot pin this -- the
+    /// fold averages their floor noise into near-ties whose winner is noise -- which is
+    /// precisely how the real grid's unscrolled frame came to publish -8.)
     #[test]
     fn the_grid_offset_is_named_at_any_scroll_position() {
         for phase in [0_i32, -33, -111, -142, -200] {
             let strip = pane(STRIP, phase, &[true, true, true]);
-            let offset = label_offset(&strip, 193, 343, PITCH, BAND);
             // The first band's text clears the strip top (y=193) only when its top (343 +
             // phase) sits at or above 187; otherwise the anchor is the next band down.
             let anchor = if phase >= -156 { phase } else { phase + PITCH };
-            assert_crop_contains_anchor_text(offset, anchor);
+            // Glyph rows span band rows 6..37, so windows starting anywhere in -8..=6
+            // contain them all; fifteen tied starts, midpoint -8+7 = -1.
+            assert_eq!(
+                label_offset(&strip, 193, 343, PITCH, BAND),
+                Some(anchor - 1)
+            );
         }
     }
 
@@ -467,7 +490,7 @@ mod tests {
     #[test]
     fn the_topmost_rendered_band_anchors_the_read() {
         let strip = pane(STRIP, -149, &[true, true, true, true]);
-        assert_crop_contains_anchor_text(label_offset(&strip, 193, 343, PITCH, BAND), -149);
+        assert_eq!(label_offset(&strip, 193, 343, PITCH, BAND), Some(-150));
     }
 
     /// A phase whose first band is above the pane's clip edge: that band is not rendered, and
@@ -475,7 +498,10 @@ mod tests {
     #[test]
     fn a_band_the_pane_does_not_render_is_not_the_anchor() {
         let strip = pane(STRIP, -20, &[false, true, true, true]);
-        assert_crop_contains_anchor_text(label_offset(&strip, 193, 343, PITCH, BAND), -20 + PITCH);
+        assert_eq!(
+            label_offset(&strip, 193, 343, PITCH, BAND),
+            Some(-20 + PITCH - 1)
+        );
     }
 
     /// No labels anywhere -- an animation frame, or a grid filtered down to nothing. The
