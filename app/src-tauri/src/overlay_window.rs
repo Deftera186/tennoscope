@@ -188,8 +188,6 @@ pub(crate) fn warframe_window_rect() -> Option<WindowRect> {
 /// Same trio of window styles as the reward strip -- click-through, no activation, topmost --
 /// sized to the whole game window instead of a card block. See `configure_reward_overlay` for why
 /// each of the three is load-bearing.
-// Called by the monitor wiring, which lands with the next feature commit.
-#[allow(dead_code)]
 pub fn configure_kiosk_overlay(window: &WebviewWindow) -> tauri::Result<()> {
     if let Some(geometry) = kiosk_geometry(window)? {
         window.set_size(PhysicalSize::new(geometry.width, geometry.height))?;
@@ -292,8 +290,6 @@ pub fn hide_reward_overlay(app: &tauri::AppHandle) {
     }
 }
 
-// Called by the monitor wiring, which lands with the next feature commit.
-#[allow(dead_code)]
 pub fn show_kiosk_overlay(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("kiosk-overlay") {
         let _ = app.run_on_main_thread(move || {
@@ -316,8 +312,6 @@ pub fn show_kiosk_overlay(app: &tauri::AppHandle) {
     }
 }
 
-// Called by the monitor wiring, which lands with the next feature commit.
-#[allow(dead_code)]
 pub fn hide_kiosk_overlay(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("kiosk-overlay") {
         let _ = app.run_on_main_thread(move || {

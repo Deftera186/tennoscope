@@ -1266,11 +1266,123 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
     None
 }
 
+/// The kiosk half of the monitor loop.
+///
+/// EE.log opens a kiosk session and its `PopulateGrid()` lines ask for re-anchors, but nothing
+/// in the log ever closes one -- the close verdict is the poller's alone (an OCR miss streak),
+/// delivered through the `gone` flag. Both flags are shared with the poller thread; this struct
+/// owns the lifecycle around them so the wiring can be tested with stub hooks instead of a game,
+/// a window and a thread.
+///
+/// The log machine is a member and not a `monitor_game` local because closing must reset it: the
+/// machine never un-opens, so without a reset the *next* kiosk visit's markers would be swallowed
+/// by the previous session's `open` state.
+pub struct KioskSession {
+    machine: kiosk_log::KioskLogMachine,
+    poller_active: bool,
+    reanchor: Arc<std::sync::atomic::AtomicBool>,
+    gone: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Default for KioskSession {
+    fn default() -> Self {
+        Self {
+            machine: kiosk_log::KioskLogMachine::default(),
+            poller_active: false,
+            reanchor: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            gone: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+}
+
+impl KioskSession {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Feed the same incremental EE.log bytes the reward machine sees. `spawn_poller` receives
+    /// the session's shared flags: `reanchor` is the poller's re-read request (already set for
+    /// the first read), `gone` is its only way back.
+    pub fn observe(
+        &mut self,
+        bytes: &[u8],
+        show: &dyn Fn(),
+        spawn_poller: &dyn Fn(
+            &Arc<std::sync::atomic::AtomicBool>,
+            &Arc<std::sync::atomic::AtomicBool>,
+        ),
+    ) {
+        for event in self.machine.observe_bytes(bytes) {
+            match event {
+                kiosk_log::KioskLogEvent::KioskOpened => {
+                    if self.poller_active {
+                        // The machine already de-duplicates, but both open markers can land in
+                        // one batch and a second poller would race the first for the same flags.
+                        continue;
+                    }
+                    self.poller_active = true;
+                    self.reanchor.store(true, Ordering::Release);
+                    spawn_poller(&self.reanchor, &self.gone);
+                    show();
+                }
+                kiosk_log::KioskLogEvent::GridPopulated => {
+                    if self.poller_active {
+                        self.reanchor.store(true, Ordering::Release);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Did the poller lose the screen? Consumed once; the teardown is `close`'s.
+    pub fn poller_gone(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) -> bool {
+        self.poller_active && self.gone.swap(false, Ordering::AcqRel) && {
+            self.close(kiosk_view, hide);
+            true
+        }
+    }
+
+    /// Tear the session down from the monitor's side -- either consumed after a poller verdict
+    /// or forced because the game process died. Clears the published view so a stale payload
+    /// cannot render over whatever the game drew next, and resets the log machine so a later
+    /// open re-arms.
+    pub fn close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) {
+        if !self.poller_active {
+            return;
+        }
+        self.poller_active = false;
+        self.machine = kiosk_log::KioskLogMachine::default();
+        kiosk_view.clear();
+        hide();
+    }
+}
+
 fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let procfs = GameMemory::new();
     let mut machine = MonitorMachine::new(15);
     let mut reward_state = RewardObserverState::new(1, 1);
     let mut reward_log = RewardLogMachine::default();
+    let mut kiosk_session = KioskSession::new();
+    // The kiosk session's window/thread side effects, as hooks so the session logic itself stays
+    // testable without an AppHandle.
+    let kiosk_show = {
+        let app = app.clone();
+        move || overlay_window::show_kiosk_overlay(&app)
+    };
+    let kiosk_hide = {
+        let app = app.clone();
+        move || overlay_window::hide_kiosk_overlay(&app)
+    };
+    // The recognition poller lands with the next feature commit; the flags are its interface and
+    // the session already runs, so the arm call is logged rather than silent.
+    let kiosk_spawn = |reanchor: &Arc<std::sync::atomic::AtomicBool>,
+                       gone: &Arc<std::sync::atomic::AtomicBool>| {
+        log::debug!(
+            "[DEBUG-kiosk] poller arm requested (reanchor={} gone={})",
+            reanchor.load(Ordering::Acquire),
+            gone.load(Ordering::Acquire)
+        );
+    };
     let mut announced_process = None;
     let mut tracked_resolution: Option<(u32, Option<PathBuf>)> = None;
     let mut early_reward_resolved = false;
@@ -1413,6 +1525,14 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &price_cache,
             );
         }
+        // Same bytes, second machine: the kiosk's lifecycle is independent of the reward screen's
+        // (the two never occur at once in practice, but neither knows about the other).
+        kiosk_session.observe(&log_bytes, &kiosk_show, &kiosk_spawn);
+        if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
+            // The poller's miss-streak verdict and the game process dying are the only closes
+            // there are; both land here.
+            kiosk_session.poller_gone(kiosk_view_cell.inner(), &kiosk_hide);
+        }
         if let Some(names) = visual_reads.lock().ok().and_then(|mut slot| slot.take())
             && !early_reward_resolved
         {
@@ -1455,6 +1575,11 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             }
             if reward_state.miss().hide {
                 overlay_window::hide_reward_overlay(&app);
+            }
+            // No game, no kiosk: the capture source is gone even if the miss streak has not
+            // finished counting.
+            if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
+                kiosk_session.close(kiosk_view_cell.inner(), &kiosk_hide);
             }
         }
         let poll_interval = if reward_log.reward_window_open() {

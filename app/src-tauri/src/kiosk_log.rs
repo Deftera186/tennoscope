@@ -10,10 +10,6 @@
 //! - `InventoryTest.lua: InventoryTest - CurrMode: Selling Prime Parts`
 //! - `Created /Lotus/Interface/InventoryTest.swf`
 //! - `InventoryTest.lua: PopulateGrid()`
-//!
-//! Consumed by the monitor loop once the kiosk poller lands; everything below is dead until
-//! then, which is why the module carries this allowance only for now.
-#![allow(dead_code)]
 
 /// A kiosk event worth acting on: open the overlay, or re-anchor it because the grid was
 /// repopulated (open, filter change, basket edit).
@@ -34,11 +30,6 @@ pub struct KioskLogMachine {
 }
 
 impl KioskLogMachine {
-    /// The kiosk is on screen and the poller should be running.
-    pub const fn open(&self) -> bool {
-        self.open
-    }
-
     /// Feed raw log bytes; complete lines only are processed, partial tails are carried over --
     /// same contract as `RewardLogMachine::observe_bytes`, because both machines are fed from the
     /// same byte stream.
@@ -94,7 +85,6 @@ mod tests {
             m.observe_line(MODE_LINE)
                 .contains(&KioskLogEvent::KioskOpened)
         );
-        assert!(m.open());
         assert_eq!(
             m.observe_line(POPULATE_LINE),
             vec![KioskLogEvent::GridPopulated]
@@ -108,14 +98,12 @@ mod tests {
             m.observe_line(SWF_LINE)
                 .contains(&KioskLogEvent::KioskOpened)
         );
-        assert!(m.open());
     }
 
     #[test]
     fn populate_before_open_is_ignored() {
         let mut m = KioskLogMachine::default();
         assert!(m.observe_line(POPULATE_LINE).is_empty());
-        assert!(!m.open());
     }
 
     #[test]
