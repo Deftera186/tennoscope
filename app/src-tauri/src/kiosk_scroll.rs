@@ -1,38 +1,67 @@
-//! Ask one cheap question of the kiosk grid without reading it: where is it relative to the
-//! anchor?
+//! Ask two cheap questions of the kiosk grid without reading it: is it moving, and where are
+//! its label rows right now?
 //!
 //! A full recognition pass costs one tesseract crop per visible slot -- fine once a second,
-//! impossible thirty. But a capture through grim costs ~25ms, so each tick compares the strip's
-//! row luma profile against the anchor frame's and streams the answer: a confident shift rides
-//! to the frontend as an offset (the chips follow the scroll in real time), a confident zero
-//! means the anchor still holds, and no confident answer at all fades until the next settled
-//! read re-anchors.
+//! impossible thirty. But a capture through grim costs ~25ms, so each tick profiles the strip
+//! and answers both questions from one vector.
 //!
-//! The comparison is normalized cross-correlation (a Pearson r per candidate shift), so the
-//! peak's value is itself the confidence: structure that moved together peaks near 1.0, two
-//! unrelated frames peak near 0.3, and a flat strip has nothing to say at all.
+//! The profile is the count of near-white pixels per row. Label glyphs are the whitest thing
+//! the grid pane draws (measured 2026-08-23: label rows score 200-330, count badges 8-54,
+//! gold thumbnails rarely cross 100), so text rows stand out of the profile sharply enough to
+//! locate directly -- which is what makes the settled read self-locating: the topmost label
+//! band names the grid's offset at ANY scroll position, list ends and clipped rows included,
+//! with no anchor and no accumulated drift to lose.
+//!
+//! Motion is measured frame to frame, never against an older anchor. A static screen at any
+//! offset is static; only the pixels that actually moved between two looks count as motion.
+//! That distinction is load-bearing: an anchor-relative "the grid is 32px from where it was"
+//! verdict on a still screen once read as motion forever, blocked the close streak, and left
+//! a session that neither published nor died (2026-08-23, the undead minute).
+//!
+//! The frame-to-frame comparison is normalized cross-correlation (a Pearson r per candidate
+//! shift over the rows both frames share), so the peak's value is itself the confidence. The
+//! search is deliberately short -- two 60ms-apart looks rarely differ by more than a couple
+//! hundred rows -- because short shifts are unambiguous: the grid's row pitch is 222, and a
+//! search that reaches past half that can mistake one row for the next. Where an older design
+//! searched half the strip and once crowned a false peak 80px away from the truth, this one
+//! refuses to answer rather than guess far.
 
 use image::DynamicImage;
 
-/// How far the grid can move between two looks and still be found: a 33ms tick at a hard flick
-/// of the wheel moves the list a few dozen rows; anything further is not scrolling.
-pub const MAX_SHIFT: i32 = 48;
-
-/// Search the whole strip rather than a fixed window: a scroll that stopped anywhere must
-/// measure, so the caller passes this and the effective range becomes half the strip.
-pub const FULL_RANGE: i32 = i32::MAX;
+/// How far the grid may move between two looks and still be found. A 60ms tick at a hard
+/// flick crosses ~120px; 180 leaves headroom without reaching the 222 row pitch where rows
+/// start impersonating each other.
+pub const FRAME_DELTA_MAX: i32 = 180;
 
 /// Minimum normalized correlation peak accepted as a measurement. A clean shift peaks above
-/// 0.9; two unrelated frames of the same length peak around 0.3 (the max of ~97 noise samples);
-/// the floor sits between them, nearer the noise.
+/// 0.9; two unrelated frames peak around 0.3; the floor sits between them, nearer the noise.
 pub const MIN_PEAK_RATIO: f32 = 0.5;
+
+/// How much the winning shift must beat the best competing shift by. Structure that truly
+/// moved has one sharp peak; periodic or noisy profiles produce rivals, and a tie is exactly
+/// the confident-wrong-answer this module must never emit.
+pub const MIN_PEAK_MARGIN: f32 = 0.08;
+
+/// Minimum ratio between the best band window and the median one for the profile to hold a
+/// grid at all. Live captures measured 11.8, 24.8 and 29.5; a pane with no label rows has no
+/// peak to speak of, so the floor sits far below the signal and far above nothing.
+const MIN_LABEL_CONTRAST: f32 = 3.0;
+/// How bright the best band window must be in absolute profile counts. The contrast gate
+/// alone is not enough: a pane of bare count badges (measured 8-54 per row against a floor
+/// of ~2) concentrates into a window that towers over the median without containing a single
+/// line of text. Real label windows average well over 100 (22 text rows at 250 inside 46).
+const MIN_BAND_MEAN: f32 = 40.0;
+/// How bright a band must be, against the best band in the same pane, to count as rendered.
+/// Measured present bands scored 87 to 108 in the same frame; a band outside the pane's clip
+/// scores near the floor.
+const BAND_PRESENT_RATIO: f32 = 0.35;
 
 /// Normalized cross-correlation of two row profiles: the shift (in rows) that best explains
 /// `next` as `prev` moved vertically, if that shift is confident enough to name.
 ///
-/// Positive means content moved down the screen: `next[i]` is `prev[i - dy]`. Sub-pixel shifts
-/// are not attempted -- the caller only needs to know whether the anchor still holds, and the
-/// next settled read is what re-aligns everything.
+/// Positive means content moved down the screen: `next[i]` is `prev[i - dy]`. Each shift is
+/// scored only over the rows both frames share, so edge effects cannot dilute the true peak,
+/// and the winner must clear both the absolute floor and a margin over the runner-up.
 pub fn estimate_dy(prev: &[f32], next: &[f32], max_shift: i32, min_peak: f32) -> Option<i32> {
     let len = prev.len().min(next.len());
     // The search never reaches past half the strip: every candidate shift needs rows to spare
@@ -54,12 +83,17 @@ pub fn estimate_dy(prev: &[f32], next: &[f32], max_shift: i32, min_peak: f32) ->
         return None;
     }
 
-    let mut best_shift = 0_i32;
-    let mut best_score = f32::NEG_INFINITY;
+    // Best shift and the best shift that is a different peak (>= 8 rows away), so the margin
+    // compares peaks, not a winner against its own shoulder.
+    let (mut best_shift, mut best_score, mut rival_score) =
+        (0_i32, f32::NEG_INFINITY, f32::NEG_INFINITY);
     for shift in -range..=range {
         // next[i] against prev[i - shift], over the rows both cover.
         let lo = shift.max(0) as usize;
         let hi = (len as i32 + shift).min(len as i32) as usize;
+        if hi <= lo {
+            continue;
+        }
         let mut dot = 0.0_f32;
         let mut left = 0.0_f32;
         let mut right = 0.0_f32;
@@ -71,20 +105,120 @@ pub fn estimate_dy(prev: &[f32], next: &[f32], max_shift: i32, min_peak: f32) ->
             left += p_at * p_at;
             right += n[i] * n[i];
         }
-        if hi <= lo {
-            continue;
-        }
         let score = dot / (left * right).sqrt();
         if score > best_score {
+            if (shift - best_shift).abs() >= 8 {
+                rival_score = best_score;
+            }
             best_score = score;
             best_shift = shift;
+        } else if score > rival_score && (shift - best_shift).abs() >= 8 {
+            rival_score = score;
         }
     }
-    (best_score >= min_peak).then_some(best_shift)
+    (best_score >= min_peak && best_score - rival_score >= MIN_PEAK_MARGIN).then_some(best_shift)
 }
 
-/// Mean luma per row over columns `[x, x + w)` -- the strip the tracker looks at. Rows outside
-/// the requested band are not the tracker's business; the caller crops the geometry.
+/// The grid's offset, named by its own label rows.
+///
+/// The grid repeats on `pitch`, so the profile is folded over it: every row votes in exactly
+/// one phase bucket, and the `band`-wide window with the brightest mean names where the label
+/// rows sit. Folding is what makes this work at any scroll position -- three or four bands all
+/// vote for the same phase, so the answer gets stronger the further the player scrolls, where
+/// run-length band detection got weaker. (Its predecessor demanded a 14-row contiguous run
+/// above a brightness floor; real label lines run 11, so it returned `None` on every live
+/// capture and the overlay never appeared.)
+///
+/// The phase alone is not the answer: it names where bands *would* be, and the pane clips, so
+/// the offset returned is the topmost band the pane actually renders. That puts read row 0 on
+/// a real label instead of past the pane's edge.
+///
+/// Precision is the band window's containment plateau, and that is deliberate: a 46-row band
+/// around 32 rows of text can slide ~14 rows and still contain every glyph row, so scores tie
+/// across that range and no tie-break can name the phase more precisely than the text's own
+/// slack. Ties go to the earliest window start (strict improvement only, scanning ascending),
+/// which lands the named top at or above the band's first text row and never below its last --
+/// the property the OCR crop downstream actually needs.
+///
+/// `y0` is the absolute row the profile starts at, `first_label_top` the absolute row of the
+/// unscrolled grid's first label band. `None` means no grid in this profile -- an animation
+/// frame or an emptied filter, not a closed kiosk.
+pub fn label_offset(
+    profile: &[f32],
+    y0: i32,
+    first_label_top: i32,
+    pitch: i32,
+    band: i32,
+) -> Option<i32> {
+    if profile.is_empty() || pitch <= 0 || band <= 0 || band >= pitch {
+        return None;
+    }
+    let (pitch_n, band_n) = (pitch as usize, band as usize);
+    // Fold: every row votes in one bucket. Means, not sums -- the buckets hold unequal row
+    // counts when the strip is not a whole number of pitches.
+    let mut sums = vec![0.0_f32; pitch_n];
+    let mut counts = vec![0.0_f32; pitch_n];
+    for (row, value) in profile.iter().enumerate() {
+        let bucket = (row as i32 + y0 - first_label_top).rem_euclid(pitch) as usize;
+        sums[bucket] += value;
+        counts[bucket] += 1.0;
+    }
+    let folded: Vec<f32> = sums
+        .iter()
+        .zip(&counts)
+        .map(|(sum, count)| if *count > 0.0 { sum / count } else { 0.0 })
+        .collect();
+    // The brightest band-wide window, circularly.
+    let window_at = |start: usize| -> f32 {
+        (0..band_n)
+            .map(|offset| folded[(start + offset) % pitch_n])
+            .sum::<f32>()
+            / band_n as f32
+    };
+    let windows: Vec<f32> = (0..pitch_n).map(window_at).collect();
+    // First strict maximum: the earliest start of the containment plateau (see doc comment).
+    // An explicit fold, because iterator max_by returns the *last* of equal maxima.
+    let phase =
+        windows.iter().enumerate().fold(
+            0_usize,
+            |best, (index, &window)| {
+                if window > windows[best] { index } else { best }
+            },
+        );
+    let mut sorted = windows.clone();
+    sorted.sort_by(f32::total_cmp);
+    let median = sorted[sorted.len() / 2];
+    let peak = windows[phase];
+    if peak < median.max(f32::EPSILON) * MIN_LABEL_CONTRAST || peak < MIN_BAND_MEAN {
+        return None;
+    }
+    // Which bands at that phase does the pane actually render? Score each against the
+    // unfolded profile; the pane's clip edge shows up as a band that scores near nothing.
+    let band_top = |k: i32| first_label_top + phase as i32 + pitch * k;
+    let first_k = (y0 - band_top(0)).div_euclid(pitch);
+    let mut bands = Vec::new();
+    for k in first_k..first_k + profile.len() as i32 / pitch + 2 {
+        let top = band_top(k);
+        let start = top - y0;
+        if start < 0 || start + band > profile.len() as i32 {
+            continue;
+        }
+        let score = profile[start as usize..(start + band) as usize]
+            .iter()
+            .sum::<f32>()
+            / band as f32;
+        bands.push((top, score));
+    }
+    let best = bands.iter().map(|(_, score)| *score).fold(0.0, f32::max);
+    bands
+        .into_iter()
+        .find(|(_, score)| *score >= best * BAND_PRESENT_RATIO)
+        .map(|(top, _)| top - first_label_top)
+}
+/// Near-white pixel count per row over columns `[x, x + w)` -- the strip the tracker looks
+/// at. Rows outside the requested band are not the tracker's business; the caller crops the
+/// geometry. Label glyphs are the whitest structure in the pane, so text rows spike in this
+/// profile while thumbnails and backgrounds stay near the floor.
 pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec<f32> {
     let luma = image.to_luma8();
     let (width, height) = luma.dimensions();
@@ -94,9 +228,11 @@ pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec
     for row in 0..h {
         let mut sum = 0_u32;
         for column in 0..w {
-            sum += u32::from(luma.get_pixel(x + column, y + row)[0]);
+            if luma.get_pixel(x + column, y + row)[0] > 225 {
+                sum += 1;
+            }
         }
-        rows[row as usize] = if w > 0 { sum as f32 / w as f32 } else { 0.0 };
+        rows[row as usize] = sum as f32;
     }
     rows
 }
@@ -105,65 +241,114 @@ pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec
 mod tests {
     use super::*;
 
-    /// A strip with structure: bands of varying brightness, like rows of thumbnails and labels.
-    fn strip(len: usize) -> Vec<f32> {
-        (0..len)
-            .map(|row| {
-                let band = (row / 13) % 5;
-                let base = match band {
-                    0 => 20.0,
-                    1 => 180.0,
-                    2 => 60.0,
-                    3 => 200.0,
-                    _ => 100.0,
-                };
-                base + (row % 7) as f32
-            })
-            .collect()
+    /// A strip with label-like structure at 1080p scale: bands every 222 rows over a textured
+    /// floor, like the real pane -- each band's two text lines carry their own noise-like
+    /// pattern and tone, because real rows show different items. The texture is load-bearing:
+    /// flat floors and ramp patterns correlate positively with each other at every shift
+    /// (Pearson only sees covariance), which manufactures alias peaks no implementation could
+    /// refuse. A uniform floor would make wrong shifts score ~0.95 against a true 1.0.
+    fn label_strip(len: usize, first_label: usize) -> Vec<f32> {
+        // Per-band glyph tones, the way some labels catch more light than others.
+        const TONES: [f32; 4] = [252.0, 188.0, 270.0, 158.0];
+        // One round of xorshift-multiply hashing; enough noise to stand in for glyphs.
+        let pattern = |j: usize, band: usize, line: u64| -> f32 {
+            let mut x = (j as u64).wrapping_mul(37_476_139_368)
+                ^ (band as u64).wrapping_mul(668_265_263)
+                ^ line.wrapping_mul(2_246_822_519);
+            x ^= x >> 13;
+            x = x.wrapping_mul(1_274_126_177);
+            ((x ^ (x >> 16)) % 97) as f32 / 97.0
+        };
+        let mut rows = vec![0.0_f32; len];
+        for (i, row) in rows.iter_mut().enumerate() {
+            // Thumbnails, borders, gradients: the pane's floor is textured, not flat.
+            *row = 4.0 + ((i * 7919) % 23) as f32 * 1.6;
+        }
+        let mut label = first_label;
+        let mut band = 0_usize;
+        while label + 39 <= len {
+            let tone = TONES[band % TONES.len()];
+            for (j, row) in (label..label + 17).enumerate() {
+                rows[row] = tone * (0.30 + 0.70 * pattern(j, band, 1));
+            }
+            for (j, row) in (label + 22..label + 39).enumerate() {
+                if row < len {
+                    rows[row] = tone * (0.26 + 0.70 * pattern(j, band, 2));
+                }
+            }
+            // a count badge above the thumbnail: bright but flat and weak
+            if label >= 127 + 14 {
+                for row in (label - 127)..(label - 113).min(len) {
+                    rows[row] = 30.0;
+                }
+            }
+            band += 1;
+            label += 222;
+        }
+        rows
     }
 
     #[test]
     fn a_shifted_strip_is_recovered_exactly() {
-        let base = strip(400);
+        let base = label_strip(648, 150);
         for dy in [17_i32, -9, 0, 48, -48] {
             let next = shift(&base, dy);
             assert_eq!(
-                estimate_dy(&base, &next, MAX_SHIFT, MIN_PEAK_RATIO),
+                estimate_dy(&base, &next, FRAME_DELTA_MAX, MIN_PEAK_RATIO),
                 Some(dy),
                 "dy={dy}"
             );
         }
     }
 
-    /// A scroll carries no badge announcing how far it went: the tracker searches the whole
-    /// strip, because a capped window read every stop past ~48px as blindness and the cap's
-    /// forced reads then killed sessions mid-scroll (2026-08-23, stopped at dy=-142).
+    /// Two looks 142 rows apart -- a fast flick between 60ms ticks -- still measure: the
+    /// frame-to-frame range exists so real motion is never blindness.
     #[test]
-    fn a_scroll_far_beyond_the_old_window_is_still_measured() {
-        let base = strip(648);
-        for dy in [142_i32, -142, 300, -64] {
+    fn a_fast_flick_between_looks_is_measured() {
+        let base = label_strip(648, 150);
+        for dy in [120_i32, -142, 180, -64] {
             let next = shift(&base, dy);
             assert_eq!(
-                estimate_dy(&base, &next, FULL_RANGE, MIN_PEAK_RATIO),
+                estimate_dy(&base, &next, FRAME_DELTA_MAX, MIN_PEAK_RATIO),
                 Some(dy),
                 "dy={dy}"
             );
         }
     }
 
-    /// The wider the search, the more noise peaks compete -- two unrelated strips at full
-    /// range must still refuse to name a shift.
-    #[test]
-    fn unrelated_strips_do_not_measure_at_full_range() {
-        let left = noise(648, 1);
-        let right = noise(648, 2);
-        assert_eq!(estimate_dy(&left, &right, FULL_RANGE, MIN_PEAK_RATIO), None);
+    /// `new[i] = old[i - dy]` where the source row exists, and fresh floor where it does not:
+    /// real scrolling moves content in and out of the pane, it does not wrap around. (A
+    /// wrap-around helper on a periodic strip manufactures alias peaks at dy±222 that no
+    /// correlation could distinguish from the truth.)
+    fn shift(rows: &[f32], dy: i32) -> Vec<f32> {
+        let len = rows.len() as i64;
+        (0..rows.len())
+            .map(|i| {
+                let source = i as i64 - dy as i64;
+                if source < 0 || source >= len {
+                    4.0 + ((i * 10_4729) % 23) as f32 * 1.6
+                } else {
+                    rows[source as usize]
+                }
+            })
+            .collect()
     }
 
+    /// A whole pitch jumped: rows impersonate each other past half a pitch, so this may
+    /// honestly fail to see the jump -- but whatever it names must be small. A confident far
+    /// shift here would fling the chips; a transient "still" only costs one look before the
+    /// settled read re-anchors the view absolutely.
     #[test]
-    fn flat_strips_are_blind_not_still() {
-        let flat = vec![128.0_f32; 300];
-        assert_eq!(estimate_dy(&flat, &flat, MAX_SHIFT, MIN_PEAK_RATIO), None);
+    fn a_whole_pitch_jump_never_names_a_far_shift() {
+        let base = label_strip(648, 150);
+        let next = shift(&base, 222);
+        match estimate_dy(&base, &next, FRAME_DELTA_MAX, MIN_PEAK_RATIO) {
+            None => {}
+            Some(dy) => assert!(
+                dy.abs() < 8,
+                "a whole-row jump was named as dy={dy}; that is a guess, not a measurement"
+            ),
+        }
     }
 
     #[test]
@@ -173,7 +358,143 @@ mod tests {
         // the one error this module must never make.
         let left = noise(400, 1);
         let right = noise(400, 2);
-        assert_eq!(estimate_dy(&left, &right, MAX_SHIFT, MIN_PEAK_RATIO), None);
+        assert_eq!(
+            estimate_dy(&left, &right, FRAME_DELTA_MAX, MIN_PEAK_RATIO),
+            None
+        );
+    }
+
+    /// A profile whose structure repeats on a period the search can reach: every copy of the
+    /// period scores identically, so no shift carries a margin and the tracker refuses rather
+    /// than pick one. (The copies must sit inside the search range for the tie to exist at
+    /// all -- a half-length alias is structurally unreachable because the range never
+    /// exceeds half the strip.)
+    #[test]
+    fn an_ambiguous_peak_is_refused_even_when_tall() {
+        let mut cell = vec![2.0_f32; 100];
+        for row in &mut cell[30..47] {
+            *row = 250.0;
+        }
+        for row in &mut cell[52..68] {
+            *row = 240.0;
+        }
+        let periodic: Vec<f32> = cell.iter().cycle().take(300).copied().collect();
+        assert_eq!(
+            estimate_dy(&periodic, &periodic, 110, MIN_PEAK_RATIO),
+            None,
+            "a tie between periods 0 and +/-100 is not a measurement"
+        );
+    }
+
+    #[test]
+    fn flat_strips_are_blind_not_still() {
+        let flat = vec![128.0_f32; 300];
+        assert_eq!(
+            estimate_dy(&flat, &flat, FRAME_DELTA_MAX, MIN_PEAK_RATIO),
+            None
+        );
+    }
+
+    // --- the locator ---
+
+    const PITCH: i32 = 222;
+    const BAND: i32 = 46;
+    const STRIP: usize = 790;
+
+    /// A synthetic pane: label bands on the grid's period, each two bright text lines inside a
+    /// 46-row band, with faint badge rows between them. `present` says which bands the pane
+    /// renders -- the ones the player can actually see.
+    fn pane(len: usize, phase: i32, present: &[bool]) -> Vec<f32> {
+        let mut rows = vec![2.0_f32; len];
+        for (k, rendered) in present.iter().enumerate() {
+            if !rendered {
+                continue;
+            }
+            // band top in strip coordinates: the calibration band (343) at `phase`, minus the
+            // strip's own origin (193)
+            let top = 343 + PITCH * k as i32 + phase - 193;
+            for line in [6_i32, 27] {
+                for at in top + line..top + line + 11 {
+                    if at >= 0 && (at as usize) < len {
+                        rows[at as usize] = 250.0;
+                    }
+                }
+            }
+            // a count badge above the thumbnail: bright, but nothing like text
+            let badge = top - 120;
+            for at in badge..badge + 14 {
+                if at >= 0 && (at as usize) < len {
+                    rows[at as usize] = 30.0;
+                }
+            }
+        }
+        rows
+    }
+
+    /// The locator's whole contract, at any scroll position: row 0's crop must contain the
+    /// anchor band's entire text. Text occupies band rows 6..37 inside the 46-row crop, so the
+    /// named offset may sit anywhere from 8 rows above the band top (crop covers -8..38) to 6
+    /// below it (crop covers 6..52) and never clip a glyph -- that containment plateau is why
+    /// the fold cannot name the phase more precisely than the text's own slack, and why it
+    /// never needs to.
+    fn assert_crop_contains_anchor_text(offset: Option<i32>, anchor_phase: i32) {
+        let drift = (offset.expect("an offset was located") - anchor_phase).rem_euclid(PITCH);
+        assert!(
+            drift <= 6 || drift + 8 >= PITCH,
+            "offset {offset:?} does not put row 0's crop over the anchor band at {anchor_phase}: \
+             drift {drift} rows outside the containment plateau"
+        );
+    }
+
+    /// The phases here span where live sessions actually sat on 2026-08-23 (0, -142, -111)
+    /// plus both ends of a pitch, and the anchor is the topmost band whose text lies inside
+    /// the strip -- a band scrolled mostly past the pane's top edge cannot be read by anybody.
+    #[test]
+    fn the_grid_offset_is_named_at_any_scroll_position() {
+        for phase in [0_i32, -33, -111, -142, -200] {
+            let strip = pane(STRIP, phase, &[true, true, true]);
+            let offset = label_offset(&strip, 193, 343, PITCH, BAND);
+            // The first band's text clears the strip top (y=193) only when its top (343 +
+            // phase) sits at or above 187; otherwise the anchor is the next band down.
+            let anchor = if phase >= -156 { phase } else { phase + PITCH };
+            assert_crop_contains_anchor_text(offset, anchor);
+        }
+    }
+
+    /// Four bands render when the phase pushes one in from the bottom; row 0 must anchor on
+    /// the topmost rendered band, so all read rows land on real labels instead of one landing
+    /// past the end.
+    #[test]
+    fn the_topmost_rendered_band_anchors_the_read() {
+        let strip = pane(STRIP, -149, &[true, true, true, true]);
+        assert_crop_contains_anchor_text(label_offset(&strip, 193, 343, PITCH, BAND), -149);
+    }
+
+    /// A phase whose first band is above the pane's clip edge: that band is not rendered, and
+    /// anchoring row 0 on it would read the header. The offset names the first band that is.
+    #[test]
+    fn a_band_the_pane_does_not_render_is_not_the_anchor() {
+        let strip = pane(STRIP, -20, &[false, true, true, true]);
+        assert_crop_contains_anchor_text(label_offset(&strip, 193, 343, PITCH, BAND), -20 + PITCH);
+    }
+
+    /// No labels anywhere -- an animation frame, or a grid filtered down to nothing. The
+    /// locator says so instead of naming an offset, and the caller skips the look. (It does
+    /// NOT mean the kiosk closed: EE.log decides that.)
+    #[test]
+    fn a_pane_without_labels_locates_nothing() {
+        assert_eq!(label_offset(&vec![2.0; STRIP], 193, 343, PITCH, BAND), None);
+        let mut badges = vec![2.0_f32; STRIP];
+        for badge in &mut badges[120..140] {
+            *badge = 30.0;
+        }
+        assert_eq!(label_offset(&badges, 193, 343, PITCH, BAND), None);
+    }
+
+    /// Structure with no periodicity at the grid's pitch is not a grid.
+    #[test]
+    fn noise_does_not_locate() {
+        assert_eq!(label_offset(&noise(STRIP, 3), 193, 343, PITCH, BAND), None);
     }
 
     /// Deterministic pseudo-noise (`x = (x * 7919 + 13) % 1000`), so the test is reproducible.
@@ -190,26 +511,16 @@ mod tests {
     }
 
     #[test]
-    fn row_profiles_average_luma_per_row() {
-        // 2x2 image: one bright row, one dark row.
+    fn row_profiles_count_near_white_pixels_per_row() {
+        // 2x2 image: one all-white row, one mid-gray row.
         let mut image = image::GrayImage::new(2, 2);
         for x in 0..2 {
-            image.put_pixel(x, 0, image::Luma([200]));
+            image.put_pixel(x, 0, image::Luma([240]));
             image.put_pixel(x, 1, image::Luma([100]));
         }
         let dynamic = DynamicImage::ImageLuma8(image);
-        assert_eq!(row_profiles(&dynamic, 0, 0, 2, 2), vec![200.0, 100.0]);
+        assert_eq!(row_profiles(&dynamic, 0, 0, 2, 2), vec![2.0, 0.0]);
         // Out-of-band requests clip rather than panic.
-        assert_eq!(row_profiles(&dynamic, 1, 1, 99, 99), vec![100.0]);
-    }
-
-    /// `new[i] = old[i - dy]` with wrap-around at the edges, so lengths always match.
-    fn shift(rows: &[f32], dy: i32) -> Vec<f32> {
-        (0..rows.len())
-            .map(|i| {
-                let source = (i as i64 - dy as i64).rem_euclid(rows.len() as i64) as usize;
-                rows[source]
-            })
-            .collect()
+        assert_eq!(row_profiles(&dynamic, 1, 1, 99, 99), vec![0.0]);
     }
 }
