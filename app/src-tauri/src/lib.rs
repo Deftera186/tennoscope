@@ -1278,31 +1278,22 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
 
 /// The kiosk half of the monitor loop.
 ///
-/// EE.log opens a kiosk session and its `PopulateGrid()` lines ask for re-anchors, but nothing
-/// in the log ever closes one -- the close verdict is the poller's alone (an OCR miss streak),
-/// delivered through the `gone` flag. Both flags are shared with the poller thread; this struct
-/// owns the lifecycle around them so the wiring can be tested with stub hooks instead of a game,
-/// a window and a thread.
+/// EE.log opens a kiosk session and its `PopulateGrid()` lines ask for re-anchors, and the
+/// same log closes it: `HudVis 0` (or input moving to another screen) sets the session's
+/// `gone` flag, which both stops the poller thread at its next tick and is consumed by the
+/// monitor as the close verdict. Both flags are shared with the poller thread; this struct
+/// owns the lifecycle around them so the wiring can be tested with stub hooks instead of a
+/// game, a window and a thread.
 ///
 /// The log machine is a member and not a `monitor_game` local because closing must reset it: the
 /// machine never un-opens, so without a reset the *next* kiosk visit's markers would be swallowed
 /// by the previous session's `open` state.
+#[derive(Default)]
 pub struct KioskSession {
     machine: kiosk_log::KioskLogMachine,
     poller_active: bool,
     reanchor: Arc<std::sync::atomic::AtomicBool>,
     gone: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl Default for KioskSession {
-    fn default() -> Self {
-        Self {
-            machine: kiosk_log::KioskLogMachine::default(),
-            poller_active: false,
-            reanchor: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            gone: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
-    }
 }
 
 impl KioskSession {
@@ -1312,7 +1303,8 @@ impl KioskSession {
 
     /// Feed the same incremental EE.log bytes the reward machine sees. `spawn_poller` receives
     /// the session's shared flags: `reanchor` is the poller's re-read request (already set for
-    /// the first read), `gone` is its only way back.
+    /// the first read) and `gone` is the stop signal -- set here when the log says the screen
+    /// went away, and read by the poller thread at the top of every tick.
     pub fn observe(
         &mut self,
         bytes: &[u8],
@@ -1323,6 +1315,7 @@ impl KioskSession {
         ),
     ) {
         for event in self.machine.observe_bytes(bytes) {
+            log::debug!("[DEBUG-kiosk] ee event {event:?}");
             match event {
                 kiosk_log::KioskLogEvent::KioskOpened => {
                     if self.poller_active {
@@ -1332,6 +1325,9 @@ impl KioskSession {
                     }
                     self.poller_active = true;
                     self.reanchor.store(true, Ordering::Release);
+                    // Flags outlive sessions; a stop left over from the last one would kill
+                    // this poller on its first tick.
+                    self.gone.store(false, Ordering::Release);
                     spawn_poller(&self.reanchor, &self.gone);
                     show();
                 }
@@ -1341,18 +1337,18 @@ impl KioskSession {
                     }
                 }
                 kiosk_log::KioskLogEvent::KioskClosed => {
-                    // The game hid the kiosk: end the session exactly as a poller verdict
-                    // would. `poller_gone` consumes the flag and tears the overlay down.
-                    if self.poller_active {
-                        self.gone.store(true, Ordering::Release);
-                    }
+                    // The same flag the poller's own verdicts used, so the teardown has one
+                    // path: the monitor picks it up with `take_close` on this very tick, and
+                    // the poller thread sees it and stops looking.
+                    self.gone.store(true, Ordering::Release);
                 }
             }
         }
     }
 
-    /// Did the poller lose the screen? Consumed once; the teardown is `close`'s.
-    pub fn poller_gone(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) -> bool {
+    /// Did the session end? Consumed once; the teardown is `close`'s. The verdict comes from
+    /// the log (`KioskClosed`) -- the poller only ever stops looking, it does not judge.
+    pub fn take_close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) -> bool {
         self.poller_active && self.gone.swap(false, Ordering::AcqRel) && {
             self.close(kiosk_view, hide);
             true
@@ -1459,10 +1455,12 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         };
         let emit_scroll = {
             let app = app.clone();
-            move |_fade: Option<i32>| {
-                // The only scroll verdict left is "the grid moved: fade"; re-anchoring rides
-                // the next published epoch.
-                let _ = app.emit_to("kiosk-overlay", "kiosk-scroll", None::<i32>);
+            move |verdict: Option<i32>| {
+                // The verdict is the offset: `Some(dy)` translates the grid layer, `None`
+                // fades it until the next anchor. (This closure spent a round emitting a
+                // hardcoded `None` -- every verdict read as "fade", and one noisy tick
+                // blanked the overlay for the rest of the session.)
+                let _ = app.emit_to("kiosk-overlay", "kiosk-scroll", verdict);
             }
         };
         spawn_kiosk_poller_with(
@@ -1474,6 +1472,10 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             publish,
             emit_scroll,
             ScreenKioskSource::default,
+        );
+        log::debug!(
+            "[DEBUG-kiosk] poller spawned with {} candidates",
+            kiosk_candidates.len()
         );
     };
     let relic_catalog = shared
@@ -1587,9 +1589,9 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         // (the two never occur at once in practice, but neither knows about the other).
         kiosk_session.observe(&log_bytes, &kiosk_show, &kiosk_spawn);
         if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
-            // The poller's miss-streak verdict and the game process dying are the only closes
-            // there are; both land here.
-            kiosk_session.poller_gone(kiosk_view_cell.inner(), &kiosk_hide);
+            // The log's close line and the game process dying are the only closes there are;
+            // both land here.
+            kiosk_session.take_close(kiosk_view_cell.inner(), &kiosk_hide);
         }
         if let Some(names) = visual_reads.lock().ok().and_then(|mut slot| slot.take())
             && !early_reward_resolved
@@ -2173,10 +2175,6 @@ pub struct KioskPollerTiming {
     /// as offsets, until a two-look pause says the grid has settled.
     pub motion_interval: Duration,
     pub lifetime: Duration,
-    /// How long after spawn the miss streak holds off: the kiosk's own open animation reads
-    /// as blindness and empty frames, and killing the session there costs a wait for the
-    /// game's next marker -- tens of seconds of missing overlay for one fade.
-    pub grace: Duration,
 }
 
 impl KioskPollerTiming {
@@ -2185,7 +2183,6 @@ impl KioskPollerTiming {
             interval: KIOSK_POLL_INTERVAL,
             motion_interval: KIOSK_MOTION_INTERVAL,
             lifetime: POLLER_LIFETIME,
-            grace: KIOSK_OPEN_GRACE,
         }
     }
 }
@@ -2250,36 +2247,24 @@ impl KioskFrameSource for ScreenKioskSource {
     }
 }
 
-/// Upper bound on consecutive motion ticks before a full read is forced: real scrolls last a
-/// couple of seconds, and anything still "moving" after five has stopped being our grid -- the
-/// forced read either re-anchors or starts the miss streak that closes the session.
-/// Miss-streak amnesty after the poller spawns: long enough to ride out the kiosk's open
-/// animation, short enough that a kiosk which never really appears still closes within seconds.
-const KIOSK_OPEN_GRACE: Duration = Duration::from_secs(3);
-
-/// Consecutive *unreadable* drifted looks before a full read is forced anyway. Measurable
-/// motion never escalates -- the grid is demonstrably there, and a mid-scroll read comes back
-/// empty and killed sessions (2026-08-23) -- but a flat or unmatched strip is what a closed or
-/// occluded kiosk looks like, and it never rests: this bound ends that session (~8 looks).
-const KIOSK_DRIFT_READ_LIMIT: u32 = 8;
-
-/// How many consecutive looks must agree with each other (while disagreeing with the anchor)
-/// before a pause in the motion counts as settled. One agreeing pair is a flick's mid-detent
-/// hitch; two is a scroll that has actually stopped.
+/// How many consecutive still looks before the screen counts as settled and the read runs. One
+/// still look can be a flick's mid-detent hitch; two is a scroll that has actually stopped.
 const KIOSK_SETTLE_LOOKS: u32 = 2;
 
 /// The kiosk poller's body, with the screen and the join as parameters.
 ///
-/// The loop's one judgement is what a bad frame means. EE.log never says the kiosk closed, so a
-/// miss streak is the whole close path; but a single miss -- a capture hiccup, a blank read, a
-/// hover card covering most of the grid -- must not publish an emptied view over the last good
-/// one. The anchor cell count is the tie-breaker: a read that lost more than half its cells is an
-/// occlusion, not an emptied kiosk, unless a re-anchor request (open, filter change, basket edit)
-/// says the grid really did just change shape.
+/// This loop does not decide whether the kiosk is open -- EE.log does, on both edges, and it
+/// says so ~50ms after the fact (see `kiosk_log`). That separation is the whole design: for a
+/// while presence was inferred from the reader's own failures, and every hiccup that made a
+/// frame unreadable -- a scroll the tracker could not measure, a locator that found no label
+/// band, a capture that came back torn -- read as "the player left" and tore the overlay down
+/// mid-session. Here an unreadable look costs nothing but that look: the last good view stays
+/// up, and the next tick tries again.
 ///
-/// `emit_scroll` streams the scroll tracker's verdicts to the frontend: `Some(dy)` is the
-/// grid's offset from the anchor in rows (the chips translate by it), `None` fades them until
-/// the next anchor.
+/// So the loop only ever answers "is the grid moving, and if it has stopped, what does it
+/// say". `emit_scroll` streams the tracker's frame-to-frame verdicts to the frontend:
+/// `Some(delta)` is how far the grid moved since the previous look (the chips accumulate it),
+/// `None` fades them until the next settled read re-anchors absolutely.
 // The parameters are one dependency set (flags, timing, candidates) plus one hook each for the
 // three things the loop does (join, publish, scroll); bundling them would hide that shape.
 #[allow(clippy::too_many_arguments)]
@@ -2304,153 +2289,92 @@ where
     std::thread::spawn(move || {
         let mut source = make_source();
         let mut epoch = 0_u64;
-        let mut misses = 0_u32;
-        let mut anchored_cells = 0_usize;
-        let mut scrolled_since_anchor = false;
-        let mut anchor_strip: Option<Vec<f32>> = None;
         let mut last_strip: Option<Vec<f32>> = None;
-        let mut pause_ticks = 0_u32;
-        let mut drift_ticks = 0_u32;
-        let spawned_at = Instant::now();
-        let deadline = spawned_at + timing.lifetime;
+        let mut static_looks = 0_u32;
+        let deadline = Instant::now() + timing.lifetime;
+        // The label geometry the locator measures against, in strip-relative pixels; both
+        // anchors come from the 1080p calibration and scale with the strip's length.
+        let (strip_top, strip_h) = {
+            let (_x, y, _w, h) = kiosk_geometry::grid_strip(1920, 1080);
+            (y, h)
+        };
+        let first_label_top = kiosk_geometry::grid_label_rect(1920, 1080, 0, 0, 0)
+            .map_or(strip_top, |(_x, y, _w, _h)| y);
         while Instant::now() < deadline {
-            // The log machine's close verdict lands in the same flag the poller's own verdicts
-            // use: the game hid the kiosk, so stop looking at it.
+            // The log said the screen went away (or the game did): stop looking at it.
             if gone.load(Ordering::Acquire) {
                 break;
             }
-            // The session's re-anchor request: advance the epoch so the frontend drops whatever
-            // it is showing, and accept the next read as the new anchor even if it holds fewer
-            // cells -- a filter that narrows the grid is not an occlusion.
-            let fresh_anchor = reanchor.swap(false, Ordering::AcqRel);
-            if fresh_anchor {
+            // A re-anchor request (open, filter change, basket edit) advances the epoch so the
+            // frontend drops whatever it is showing.
+            if reanchor.swap(false, Ordering::AcqRel) {
                 epoch += 1;
-                anchor_strip = None;
             }
-            // The cheap look first. The chips' positions are only true for the frame they were
-            // read from, so each tick asks one question of the strip: where is the grid now
-            // relative to the anchor? A measurable answer streams straight to the frontend --
-            // a capture through grim costs ~25ms, so the chips follow the scroll in real time
-            // -- and a two-look pause says the grid has settled for the expensive re-read.
+            // The cheap look first. Motion is frame to frame: only pixels that actually moved
+            // between two looks count, so a still screen is still at ANY offset from anything.
+            // (An anchor-relative "moved" verdict on a still screen once blocked every read
+            // for a minute -- the undead session of 2026-08-23.)
             let current_strip = source.strip_profile();
             let reading = current_strip.as_ref().ok();
-            let mut deferred = false;
-            let mut moving_now = false;
-            let mut drift_dy = 0_i32;
-            if let Some(anchor) = &anchor_strip {
-                let vs_anchor = reading.and_then(|current| {
-                    kiosk_scroll::estimate_dy(
-                        anchor,
-                        current,
-                        kiosk_scroll::FULL_RANGE,
-                        kiosk_scroll::MIN_PEAK_RATIO,
-                    )
-                });
-                match vs_anchor {
-                    // Confidently unmoved: the anchor still holds, go ahead and re-read below.
-                    Some(dy) if dy.abs() <= 1 => {
-                        drift_ticks = 0;
-                        drift_dy = dy;
-                    }
-                    // Moved measurably (stream the offset) or unreadably (fade until it
-                    // resolves): either way the anchor no longer describes the screen.
-                    verdict => {
-                        emit_scroll(verdict);
-                        scrolled_since_anchor = true;
-                        moving_now = verdict.is_some();
-                        if let Some(dy) = verdict {
-                            drift_dy = dy;
-                        }
-                        if moving_now {
-                            // The grid is verifiably still with us and in motion: follow it for
-                            // as long as it lasts. A read forced here would catch rows straddling
-                            // the label bands and come back empty -- the 2026-08-23 mid-scroll
-                            // session kill -- so only a pause settles into one.
-                            let paused = match (&last_strip, reading) {
-                                (Some(prev), Some(current)) => matches!(
-                                    kiosk_scroll::estimate_dy(
-                                        prev,
-                                        current,
-                                        kiosk_scroll::MAX_SHIFT,
-                                        kiosk_scroll::MIN_PEAK_RATIO,
-                                    ),
-                                    Some(d) if d.abs() <= 1,
-                                ),
-                                _ => false,
-                            };
-                            pause_ticks = if paused { pause_ticks + 1 } else { 0 };
-                            deferred = pause_ticks < KIOSK_SETTLE_LOOKS;
-                        } else {
-                            // Unreadable: blindness, occlusion, or a closed kiosk -- something
-                            // that never comes back to rest. The cap forces the verdict read.
-                            drift_ticks += 1;
-                            deferred = drift_ticks <= KIOSK_DRIFT_READ_LIMIT;
-                        }
-                    }
-                }
-            }
+            let frame_delta = match (&last_strip, reading) {
+                (Some(prev), Some(current)) => kiosk_scroll::estimate_dy(
+                    prev,
+                    current,
+                    kiosk_scroll::FRAME_DELTA_MAX,
+                    kiosk_scroll::MIN_PEAK_RATIO,
+                ),
+                _ => None,
+            };
+            let moving = matches!(frame_delta, Some(dy) if dy.abs() > 1);
             last_strip = reading.cloned();
-            if deferred {
+            if moving {
+                // Stream the frame's movement; the frontend accumulates the deltas. Deltas
+                // need no anchor and no range, so the chips follow a scroll of any length.
+                emit_scroll(frame_delta);
+                static_looks = 0;
                 std::thread::sleep(timing.motion_interval);
                 continue;
             }
-            pause_ticks = 0;
-            let opening = spawned_at.elapsed() < timing.grace;
-            let frame = match source.read_kiosk(&candidates, drift_dy) {
-                Ok(frame) => frame,
-                Err(reason) => {
-                    log::warn!("[DEBUG-kiosk] read failed: {reason}");
-                    // A read that raced a resumed scroll is not the kiosk being gone: the strip
-                    // had just measured the grid alive and moving. Only a still screen may
-                    // advance the streak.
-                    if !opening && !moving_now {
-                        misses += 1;
-                    }
-                    if misses >= POLLER_GONE_STREAK {
-                        log::debug!("[DEBUG-kiosk] kiosk gone");
-                        gone.store(true, Ordering::Release);
-                        break;
-                    }
-                    std::thread::sleep(timing.interval);
-                    continue;
-                }
+            // Still (or unreadable this look): a couple of agreeing looks mean settled, and
+            // the settled read locates itself -- the grid's own label rows name the offset, at
+            // any scroll position, so the crops land on the text instead of the gaps.
+            static_looks += 1;
+            if static_looks < KIOSK_SETTLE_LOOKS {
+                std::thread::sleep(timing.motion_interval);
+                continue;
+            }
+            static_looks = 0;
+            let located = reading.and_then(|strip| {
+                let scale = strip.len() as f32 / strip_h as f32;
+                kiosk_scroll::label_offset(
+                    strip,
+                    (strip_top as f32 * scale) as i32,
+                    (first_label_top as f32 * scale) as i32,
+                    (kiosk_geometry::ROW_PITCH_1080 as f32 * scale) as i32,
+                    (kiosk_geometry::LABEL_BAND_H_1080 as f32 * scale) as i32,
+                )
+            });
+            let Some(dy) = located else {
+                // No label band anywhere in the pane: an animation frame, a capture that came
+                // back torn, or a grid the player has filtered down to nothing. None of those
+                // is a closed kiosk, and none of them is worth publishing over a good view.
+                log::debug!("[DEBUG-kiosk] no labels located: skipping this look");
+                std::thread::sleep(timing.interval);
+                continue;
             };
-            let read_something = !frame.cells.is_empty() || !frame.basket.is_empty();
-            let occluded =
-                !fresh_anchor && anchored_cells > 0 && frame.cells.len() * 2 < anchored_cells;
-            if read_something && !occluded {
-                misses = 0;
-                anchored_cells = frame.cells.len();
-                // A settle after drift re-anchors: the fresh epoch tells the frontend to drop
-                // its fade, and the read's absolute positions are the truth again.
-                if scrolled_since_anchor {
-                    epoch += 1;
-                    scrolled_since_anchor = false;
-                }
-                // This frame is the new anchor; its strip is what future ticks compare against.
-                anchor_strip = current_strip.ok();
-                drift_ticks = 0;
-                let mut view = joiner(epoch, &frame);
-                view.scroll_dy = drift_dy;
-                publish(view);
-            } else if opening {
-                // Still inside the open animation: an empty frame here is the fade, not an
-                // emptied kiosk, so the streak holds its breath.
-                misses = 0;
-            } else {
-                // Same rule as the capture-error branch: an empty read against a screen the
-                // strip just measured moving is a raced read, not an emptied kiosk.
-                if !moving_now {
-                    misses += 1;
-                }
-                if misses >= POLLER_GONE_STREAK {
+            match source.read_kiosk(&candidates, dy) {
+                Ok(frame) => {
+                    let mut view = joiner(epoch, &frame);
+                    view.scroll_dy = dy;
                     log::debug!(
-                        "[DEBUG-kiosk] kiosk gone ({} cells read)",
-                        frame.cells.len()
+                        "[DEBUG-kiosk] publish epoch={epoch} cells={} basket={} total={} dy={dy}",
+                        view.cells.len(),
+                        view.basket.len(),
+                        view.total_plat
                     );
-                    gone.store(true, Ordering::Release);
-                    break;
+                    publish(view);
                 }
+                Err(reason) => log::warn!("[DEBUG-kiosk] read failed: {reason}"),
             }
             std::thread::sleep(timing.interval);
         }
@@ -3211,6 +3135,19 @@ fn emit_kiosk_update(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Thread panics otherwise die in whatever terminal spawned the dev server; the log is
+    // where a silent overlay gets diagnosed, so a panic anywhere is an error there too.
+    {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            let thread = std::thread::current();
+            log::error!(
+                "[DEBUG-kiosk] panic in thread {}: {info}",
+                thread.name().unwrap_or("<unnamed>")
+            );
+            default_hook(info);
+        }));
+    }
     // Run the whole app on X11, including under Wayland. The game is a Wine/Proton client and so is
     // always an X11 window, and X11 is the only display server that will tell a program where
     // another application's window is, or let it place a window above that application's fullscreen
@@ -3384,6 +3321,12 @@ mod live_bench {
 
         let t2 = Instant::now();
         let rows = kiosk_ocr::read_basket(&frame, &candidates);
+        for row in &rows {
+            println!(
+                "  basket row {} = {:?} score {:.2}",
+                row.index, row.name, row.score
+            );
+        }
         println!(
             "read_basket (8 crops): {:?} -> {} rows",
             t2.elapsed(),
@@ -3427,8 +3370,8 @@ mod tests {
             _candidates: &[RewardCatalogEntry],
             _dy: i32,
         ) -> Result<KioskRead, &'static str> {
-            // An exhausted script is a vanished screen: the miss streak closes the session
-            // instead of a panic inside the poller thread.
+            // An exhausted script is a vanished screen: the read fails instead of a panic
+            // inside the poller thread. It is NOT a close -- only the log ends a session.
             self.looks
                 .lock()
                 .expect("looks")
@@ -3454,7 +3397,35 @@ mod tests {
         }
     }
 
-    fn run_poller(
+    /// A pane profile at 1080p scale: 790 rows (the whole pane, 193 to 983), bands on the
+    /// grid's pitch, two 11-row text lines per band at +6 and +27, the first band at the
+    /// calibration position (strip row 150 = absolute 343) -- which `label_offset` reads as
+    /// offset zero.
+    fn label_strip() -> Vec<f32> {
+        label_strip_at(0)
+    }
+
+    /// The label strip with its bands moved by `dy` rows, the way a scrolled grid's would be.
+    fn label_strip_at(dy: i64) -> Vec<f32> {
+        let mut rows = vec![2.0_f32; 790];
+        let mut top = 150 + dy;
+        while top < 790 {
+            if top >= 0 {
+                for line in [6_i64, 27] {
+                    for row in 0..11 {
+                        let at = top + line + row;
+                        if at >= 0 && (at as usize) < 790 {
+                            rows[at as usize] = 250.0;
+                        }
+                    }
+                }
+            }
+            top += 222;
+        }
+        rows
+    }
+
+    fn run_poller_with(
         source: ScriptedKiosk,
     ) -> (
         Arc<AtomicBool>,
@@ -3464,7 +3435,9 @@ mod tests {
         let reanchor = Arc::new(AtomicBool::new(false));
         let gone = Arc::new(AtomicBool::new(false));
         let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let deltas: Arc<StdMutex<Vec<Option<i32>>>> = Arc::new(StdMutex::new(Vec::new()));
         let sink = Arc::clone(&published);
+        let delta_sink = Arc::clone(&deltas);
         let handle = spawn_kiosk_poller_with(
             &reanchor,
             &gone,
@@ -3472,7 +3445,6 @@ mod tests {
                 interval: Duration::from_millis(1),
                 motion_interval: Duration::from_millis(1),
                 lifetime: Duration::from_millis(400),
-                grace: Duration::ZERO,
             },
             Arc::new(Vec::new()),
             |epoch, read| {
@@ -3480,80 +3452,72 @@ mod tests {
                 crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
             },
             move |view| sink.lock().expect("published").push(view),
-            |_| {},
+            move |delta| delta_sink.lock().expect("deltas").push(delta),
             move || source,
         );
         handle.join().expect("poller thread");
         (reanchor, gone, published)
     }
 
+    fn run_poller(
+        source: ScriptedKiosk,
+    ) -> (
+        Arc<AtomicBool>,
+        Arc<AtomicBool>,
+        Arc<StdMutex<Vec<KioskView>>>,
+    ) {
+        run_poller_with(source)
+    }
+
     #[test]
-    fn one_failed_capture_is_a_miss_and_the_next_good_frame_publishes() {
-        // Pops come off the back: the first look fails, the second is a good frame. When the
-        // script runs dry the screen counts as vanished, so the session closes afterwards --
-        // what matters here is that the bad frame in between did not stop the publish.
+    fn a_failed_read_is_followed_by_a_good_one() {
+        // The first settle read fails, the next publishes: one miss has never meant the screen
+        // closed. The script runs dry afterwards, which is just more failed reads -- what
+        // matters is that the bad read in between did not stop the publish.
+        // Pops come off the back: the first settle read fails, the second is the good frame.
         let source = ScriptedKiosk::new(vec![
             Ok(KioskRead {
                 cells: vec![scripted_cell("Titania Prime Systems Blueprint")],
                 basket: vec![],
             }),
             Err("window gone"),
-        ]);
+        ])
+        .with_profiles(vec![Some(label_strip()); 8]);
         let (_, _, published) = run_poller(source);
         let published = published.lock().expect("published");
-        assert_eq!(
-            published.len(),
-            1,
-            "the good frame after the miss published"
-        );
+        assert_eq!(published.len(), 1, "the good read after the miss published");
         assert_eq!(
             published[0].cells[0].name,
             "Titania Prime Systems Blueprint"
         );
     }
 
+    /// The poller does not decide whether the kiosk is there. A pane it cannot read costs that
+    /// look and nothing else -- no close, no cleared view -- because EE.log owns presence and
+    /// says so within ~150ms. (Inferring presence from the reader's failures is what tore the
+    /// overlay down mid-session all through 2026-08-23.)
     #[test]
-    fn two_consecutive_capture_failures_close_the_session() {
-        let source = ScriptedKiosk::new(vec![Err("alt-tab"), Err("alt-tab")]);
+    fn an_unreadable_pane_does_not_end_the_session() {
+        let source = ScriptedKiosk::new(vec![]).with_profiles(vec![Some(vec![2.0; 790]); 40]);
         let (_, gone, published) = run_poller(source);
-        assert!(gone.load(Ordering::Acquire));
+        assert!(!gone.load(Ordering::Acquire), "no labels is not a close");
         assert!(published.lock().expect("published").is_empty());
     }
 
+    /// A capture that fails outright is the same kind of nothing: the last good view stands
+    /// and the next look tries again.
     #[test]
-    fn an_occlusion_drops_cells_but_the_anchor_view_stands() {
-        // Anchored on four cells, then a hover card halves the visible set: that frame is a miss,
-        // nothing republishes (the last anchor stays on screen), and only the streak closes.
-        let four = KioskRead {
-            cells: vec![
-                scripted_cell("A"),
-                scripted_cell("B"),
-                scripted_cell("C"),
-                scripted_cell("D"),
-            ],
-            basket: vec![],
-        };
-        let hovered = KioskRead {
-            cells: vec![scripted_cell("A")],
-            basket: vec![],
-        };
-        // Pops come off the back: the anchor read is `four`, then the hover-card frame; the
-        // exhausted script then ends the session like any vanished screen.
-        let source = ScriptedKiosk::new(vec![Ok(hovered), Ok(four)]);
-        let (_, _, published) = run_poller(source);
-        let published = published.lock().expect("published");
-        assert_eq!(published.len(), 1, "only the anchor published");
-        assert_eq!(
-            published[0].cells.len(),
-            4,
-            "the occluded frame must not replace the anchor"
-        );
+    fn failed_captures_do_not_end_the_session() {
+        let source = ScriptedKiosk::new(vec![Err("window gone"), Err("window gone")])
+            .with_profiles(vec![Some(label_strip()); 40]);
+        let (_, gone, _) = run_poller(source);
+        assert!(!gone.load(Ordering::Acquire));
     }
 
     #[test]
     fn a_reanchor_accepts_a_partially_filled_grid() {
-        // The player narrowed a filter: EE.log asked for a fresh anchor and the next read holds
-        // fewer cells. That is not an occlusion -- publish what is there.
+        // The player narrowed a filter: the epoch advanced and the next read holds fewer
+        // cells. That is not an occlusion -- publish what is there.
         let reanchor = Arc::new(AtomicBool::new(true));
         let gone = Arc::new(AtomicBool::new(false));
         let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
@@ -3561,7 +3525,8 @@ mod tests {
         let source = ScriptedKiosk::new(vec![Ok(KioskRead {
             cells: vec![scripted_cell("Only survivor")],
             basket: vec![],
-        })]);
+        })])
+        .with_profiles(vec![Some(label_strip()); 6]);
         let handle = spawn_kiosk_poller_with(
             &reanchor,
             &gone,
@@ -3569,11 +3534,9 @@ mod tests {
                 interval: Duration::from_millis(1),
                 motion_interval: Duration::from_millis(1),
                 lifetime: Duration::from_millis(100),
-                grace: Duration::ZERO,
             },
             Arc::new(Vec::new()),
             |epoch, read| {
-                // Price everything so the join keeps the scripted cells visible.
                 crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
             },
             move |view| sink.lock().expect("published").push(view),
@@ -3590,174 +3553,32 @@ mod tests {
         assert_eq!(published[0].cells.len(), 1);
     }
 
+    /// Motion streams frame-to-frame deltas -- not offsets against some anchor -- and the
+    /// settled read publishes the grid's self-located offset, so the chips land on the rows
+    /// wherever the scroll stopped. (2026-08-23: a stop at -142 read the gaps and died.)
     #[test]
-    fn blindness_before_the_first_anchor_triggers_the_full_read_instead_of_dying() {
-        // The kiosk's own open animation makes the strip unreadable for a moment; two blind
-        // looks used to kill the session there. Until an anchor exists, a blind strip must ask
-        // for the full read -- which either anchors the session or starts the miss streak on
-        // its own terms.
-        let flat = vec![0.5_f32; 128]; // variance-less: every estimate_dy says Blind
-        let good = KioskRead {
-            cells: vec![scripted_cell("Anchor")],
+    fn motion_streams_deltas_and_the_settle_publishes_the_located_offset() {
+        let source = ScriptedKiosk::new(vec![Ok(KioskRead {
+            cells: vec![scripted_cell("Scrolled row")],
             basket: vec![],
-        };
-        let deltas: Arc<StdMutex<Vec<Option<i32>>>> = Arc::new(StdMutex::new(Vec::new()));
-        let sink = Arc::clone(&deltas);
-        let gone = Arc::new(AtomicBool::new(false));
-        let reanchor = Arc::new(AtomicBool::new(false));
-        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
-        let pub_sink = Arc::clone(&published);
-        // Pops come off the back: three blind looks, then a readable frame.
-        let source = ScriptedKiosk::new(vec![
-            Ok(good),
-            Ok(KioskRead {
-                cells: vec![],
-                basket: vec![],
-            }),
-            Ok(KioskRead {
-                cells: vec![],
-                basket: vec![],
-            }),
-        ])
-        .with_profiles(vec![None, Some(flat.clone()), Some(flat)]);
-        let handle = spawn_kiosk_poller_with(
-            &reanchor,
-            &gone,
-            KioskPollerTiming {
-                interval: Duration::from_millis(1),
-                motion_interval: Duration::from_millis(1),
-                lifetime: Duration::from_millis(150),
-                // The whole point: the empty frames land inside the amnesty.
-                grace: Duration::from_millis(80),
-            },
-            Arc::new(Vec::new()),
-            |epoch, read| {
-                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
-            },
-            move |view| pub_sink.lock().expect("published").push(view),
-            move |scroll| sink.lock().expect("deltas").push(scroll),
-            move || source,
-        );
-        handle.join().expect("poller thread");
+        })])
+        // Pops come off the back: the first look is the unscrolled strip, then the scroll.
+        .with_profiles(vec![
+            Some(label_strip_at(-30)),
+            Some(label_strip_at(-30)),
+            Some(label_strip_at(-30)),
+            Some(label_strip_at(-30)),
+            Some(label_strip()),
+        ]);
+        let (_, gone, published) = run_poller(source);
+        assert_eq!(published.lock().expect("published").len(), 1);
         assert_eq!(
-            published.lock().expect("published").len(),
-            1,
-            "the post-blind full read anchored the session"
+            published.lock().expect("published")[0].scroll_dy,
+            -30,
+            "the view carries the label-located phase"
         );
-        // Whether the session later closed is beside the point: the anchor published.
-        assert!(!published.lock().expect("published").is_empty());
-    }
-
-    #[test]
-    fn after_the_grace_window_an_emptied_kiosk_still_closes() {
-        let flat = vec![0.5_f32; 128];
-        let gone = Arc::new(AtomicBool::new(false));
-        let reanchor = Arc::new(AtomicBool::new(false));
-        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
-        let pub_sink = Arc::clone(&published);
-        let deltas: Arc<StdMutex<Vec<Option<i32>>>> = Arc::new(StdMutex::new(Vec::new()));
-        let sink = Arc::clone(&deltas);
-        // Nothing but empty frames forever; grace is 10ms, lifetime 120ms.
-        let source = ScriptedKiosk::new(vec![]).with_profiles(vec![Some(flat)]);
-        let handle = spawn_kiosk_poller_with(
-            &reanchor,
-            &gone,
-            KioskPollerTiming {
-                interval: Duration::from_millis(1),
-                motion_interval: Duration::from_millis(1),
-                lifetime: Duration::from_millis(120),
-                grace: Duration::from_millis(10),
-            },
-            Arc::new(Vec::new()),
-            |epoch, read| {
-                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
-            },
-            move |view| pub_sink.lock().expect("published").push(view),
-            move |scroll| sink.lock().expect("deltas").push(scroll),
-            move || source,
-        );
-        handle.join().expect("poller thread");
-        assert!(
-            gone.load(Ordering::Acquire),
-            "an emptied kiosk must close after grace"
-        );
-        assert!(published.lock().expect("published").is_empty());
-    }
-
-    #[test]
-    fn drift_streams_its_offset_and_rest_reanchors_with_a_fresh_epoch() {
-        // Anchor on a readable strip; then the grid shifts by 8 rows -- the poller streams the
-        // offset and spends NO recognition pass while the rows move; when the strip returns to
-        // the anchored position, the deferred full read publishes under a fresh epoch. After
-        // the script runs dry every look is unreadable, which fades.
-        let base: Vec<f32> = (0_u32..128)
-            .map(|i| (1.0_f32 - (i.abs_diff(63) as f32 / 24.0)).max(0.05))
-            .collect();
-        let shifted_by = |rows: usize| {
-            let mut p = vec![0.05_f32; 128];
-            p[rows..128].copy_from_slice(&base[..128 - rows]);
-            p
-        };
-        let deltas: Arc<StdMutex<Vec<Option<i32>>>> = Arc::new(StdMutex::new(Vec::new()));
-        let sink = Arc::clone(&deltas);
-        let gone = Arc::new(AtomicBool::new(false));
-        let reanchor = Arc::new(AtomicBool::new(false));
-        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
-        let pub_sink = Arc::clone(&published);
-        // Pops come off the back: looks at base, then +8 (drifted), then base again (rest).
-        // Pops come off the back: the reads run Settled -> (drift consumes nothing) -> Reanchored.
-        let source = ScriptedKiosk::new(vec![
-            Ok(KioskRead {
-                cells: vec![scripted_cell("Reanchored")],
-                basket: vec![],
-            }),
-            Ok(KioskRead {
-                cells: vec![],
-                basket: vec![],
-            }),
-            Ok(KioskRead {
-                cells: vec![scripted_cell("Settled")],
-                basket: vec![],
-            }),
-        ])
-        .with_profiles(vec![Some(base.clone()), Some(shifted_by(8)), Some(base)]);
-        let handle = spawn_kiosk_poller_with(
-            &reanchor,
-            &gone,
-            KioskPollerTiming {
-                interval: Duration::from_millis(1),
-                motion_interval: Duration::from_millis(1),
-                lifetime: Duration::from_millis(150),
-                grace: Duration::ZERO,
-            },
-            Arc::new(Vec::new()),
-            |epoch, read| {
-                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
-            },
-            move |view| pub_sink.lock().expect("published").push(view),
-            move |fade| sink.lock().expect("deltas").push(fade),
-            move || source,
-        );
-        handle.join().expect("poller thread");
-        let deltas = deltas.lock().expect("deltas");
-        assert_eq!(
-            deltas.first(),
-            Some(&Some(8)),
-            "the drift itself streamed its offset: {deltas:?}"
-        );
-        assert!(
-            deltas.iter().skip(1).all(|d| d.is_none()),
-            "only the post-script blindness fades: {deltas:?}"
-        );
-        let published = published.lock().expect("published");
-        assert_eq!(published.len(), 2, "recognition waited for rest");
-        assert_eq!(published[0].cells[0].name, "Settled");
-        assert_eq!(published[1].cells[0].name, "Reanchored");
-        assert_eq!(
-            published[1].epoch,
-            published[0].epoch + 1,
-            "rest re-anchors"
-        );
+        // Whether the script's exhaustion later closed the session is beside the point.
+        let _ = gone.load(Ordering::Acquire);
     }
 
     #[test]
