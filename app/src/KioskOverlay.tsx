@@ -65,6 +65,9 @@ export default function KioskOverlay() {
   const [faded, setFaded] = useState(false)
   const [offset, setOffset] = useState(0)
   const epochSeen = useRef(-1)
+  // How many scroll deltas have landed. A settled read that started before the last one is
+  // a measurement of a grid that no longer exists, and its absolute must be dropped.
+  const scrollSeq = useRef(0)
 
   useEffect(() => {
     document.documentElement.classList.add('overlay-mode')
@@ -76,13 +79,20 @@ export default function KioskOverlay() {
     // loading, so the event is only a nudge and `get_kiosk_view` is the source of truth.
     const refresh = async () => {
       try {
+        const seqAtRead = scrollSeq.current
         const next = await getKioskView()
         if (!active) return
         if (!next) { setView(null); return }
         if (next.epoch !== epochSeen.current) {
           setFaded(false)
-          // The settled read ran with bands shifted by the scroll, so the view's offset is
-          // where the grid now sits: re-anchor to it, do not snap back to zero.
+        }
+        // Every settled read measured where the grid sits right now, so its offset is
+        // authoritative whenever nothing has moved since the read began -- not just when
+        // an anchor marks it. Adopting only anchors let each look's estimation error
+        // compound unrestrained, until the chips drifted clean off their cards mid-session
+        // (the misalignment of 2026-08-23: an unscrolled grid reported 8px off, and stayed
+        // 8px wrong all visit because nothing ever re-anchored).
+        if (seqAtRead === scrollSeq.current) {
           setOffset(next.scroll_dy)
         }
         epochSeen.current = next.epoch
@@ -97,6 +107,7 @@ export default function KioskOverlay() {
       if (!active) return
       if (event.payload === null) { setFaded(true); return }
       const delta = event.payload
+      scrollSeq.current += 1
       setOffset(previous => previous + delta)
     }).then(stop => { if (active) unlistenScroll = stop; else stop() })
 

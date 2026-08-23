@@ -117,6 +117,44 @@ describe('kiosk overlay route', () => {
     expect(grid).not.toHaveClass('kiosk-faded')
   })
 
+  it('re-anchors to a settled read even when nothing re-anchored', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const grid = await screen.findByTestId('kiosk-grid')
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' }))
+
+    // The stream rides the grid while it moves...
+    events.listeners['kiosk-scroll']?.({ payload: 40 })
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(40 * var(--h)))' }))
+
+    // ...and the next settled read reports where the grid truly is. Nothing marked the
+    // moment (no reopen, no populate: the epoch is unchanged), but the read is still a
+    // measurement -- leaving it unadopted lets every estimate's error compound forever.
+    backend.getKioskView.mockResolvedValue({ ...sampleView, scroll_dy: -8 })
+    events.listeners['kiosk-updated']?.()
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(-8 * var(--h)))' }))
+  })
+
+  it('lets a delta that landed mid-read win over the read\'s older absolute', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const grid = await screen.findByTestId('kiosk-grid')
+    await screen.findByTitle('Titania Prime Systems Blueprint')
+
+    let release: (view: KioskView | null) => void = () => {}
+    backend.getKioskView.mockImplementation(
+      () => new Promise<KioskView | null>(resolve => { release = resolve }),
+    )
+    events.listeners['kiosk-updated']?.()
+    // The read is in flight when the grid moves: its answer will predate this delta, so
+    // adopting it would snap the chips back to where the grid used to be.
+    events.listeners['kiosk-scroll']?.({ payload: 7 })
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(7 * var(--h)))' }))
+
+    release({ ...sampleView, epoch: 4, total_plat: 99, scroll_dy: -50 })
+    // The read itself still lands -- fresh prices, new epoch -- but its offset must not.
+    await screen.findByText('99p')
+    expect(grid).toHaveStyle({ transform: 'translateY(calc(7 * var(--h)))' })
+  })
+
   it('fades on an unreadable verdict and re-anchors with the view scroll offset', async () => {
     render(<AppRoute pathname="/kiosk" />)
     const grid = await screen.findByTestId('kiosk-grid')
