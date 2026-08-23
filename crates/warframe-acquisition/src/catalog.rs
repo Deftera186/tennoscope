@@ -131,6 +131,14 @@ impl CatalogIndex {
             if !is_prime_parent(&parent.name) {
                 continue;
             }
+            // A prime Frame's tradable parts are their blueprints -- the game's kiosk labels one
+            // "Styanax Prime Neuroptics Blueprint" and warframe.market sells it under that name --
+            // while WFCD's component list names the part the blueprint builds. Spell it the way
+            // the two vocabularies that price and read it do, or the kiosk's closed-set match
+            // lands on the shorter built-part name (a different item) and the price join, keyed
+            // by the market spelling, finds nothing. Weapon parts drop as built items whose two
+            // spellings already agree.
+            let frame = classify_item(parent) == Some(Category::Frame);
             for component in &parent.components {
                 if !component.tradable
                     || (component.ducats.is_none() && component.prime_selling_price.is_none())
@@ -138,10 +146,13 @@ impl CatalogIndex {
                     continue;
                 }
                 let component_name = validated_name(&component.name)?;
+                let parent_name = validated_name(&parent.name)?;
                 let name = if component_name.contains("Prime") {
                     component_name
+                } else if frame && !component_name.ends_with("Blueprint") {
+                    format!("{parent_name} {component_name} Blueprint")
                 } else {
-                    format!("{} {component_name}", validated_name(&parent.name)?)
+                    format!("{parent_name} {component_name}")
                 };
                 index.insert(
                     &component.unique_name,

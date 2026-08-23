@@ -283,6 +283,39 @@ fn warframe_part_blueprints_find_their_ducat_value() {
     assert_eq!(ducats("Ayatan Amber Star"), None);
 }
 
+/// The kiosk reads the game's own labels and joins prices against warframe.market's, and both
+/// spell a prime Frame's tradable part by its blueprint -- "Styanax Prime Neuroptics Blueprint".
+/// The component loop named it after the part the blueprint builds, so the kiosk's closed-set
+/// match landed on the nearest shorter name ("Styanax Prime Neuroptics" -- a different item) and
+/// the price join, keyed by the market spelling, found nothing: the tile went unpriced while its
+/// basket row showed a dash (2026-08-24). Weapon parts are built items in both vocabularies and
+/// keep their bare names.
+#[test]
+fn a_prime_frames_components_are_named_by_their_blueprint() {
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[{
+          "uniqueName":"/Lotus/Powersuits/Lavos/LavosPrime","name":"Lavos Prime",
+          "type":"Warframe","category":"Warframes","masterable":true,
+          "components":[
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeChassisBlueprint","name":"Chassis","tradable":true,"ducats":15,"primeSellingPrice":15},
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeNeuropticsBlueprint","name":"Neuroptics","tradable":true,"ducats":15,"primeSellingPrice":15},
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeBlueprint","name":"Blueprint","tradable":true,"ducats":45,"primeSellingPrice":45}
+          ]
+        }]"#,
+    )
+    .unwrap();
+    let names: Vec<_> = catalog
+        .reward_entries()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    assert!(names.contains(&"Lavos Prime Chassis Blueprint".to_owned()));
+    assert!(names.contains(&"Lavos Prime Neuroptics Blueprint".to_owned()));
+    // The frame's own blueprint component already ends in "Blueprint"; it must not grow a second.
+    assert!(names.contains(&"Lavos Prime Blueprint".to_owned()));
+    assert!(!names.iter().any(|name| name == "Lavos Prime Chassis"));
+}
+
 /// The collection joins ducats onto its rows by catalog path, the same route enrichment already
 /// takes, so the index hands over a table keyed that way. Prime parents and plain equipment
 /// resolve in the index but hold no ducats of their own: only the components do.
