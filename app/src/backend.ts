@@ -45,7 +45,15 @@ export interface AppView {
 }
 export interface SetupStatus { risk_accepted: boolean }
 
+/** One grid tile's corner chip; a chip existing already says its platinum resolved. */
+export interface CellChip { col: number; row: number; name: string; platinum: number | null; owned: number }
+/** One basket row's pair beside the game's own ducat number. */
+export interface BasketChip { index: number; name: string; platinum: number | null; ducats: number }
+/** One poller epoch's whole overlay payload. */
+export interface KioskView { epoch: number; cells: CellChip[]; basket: BasketChip[]; total_plat: number }
+
 export const getView = () => invoke<AppView>('get_view')
+export const getKioskView = () => invoke<KioskView | null>('get_kiosk_view')
 export const refreshInventory = () => invoke<AppView>('refresh_inventory')
 export const refreshPrices = (ids: string[]) => invoke<AppView>('refresh_prices', { itemIds: ids })
 export const loadFakeSession = () => invoke<AppView>('load_fake_session')
