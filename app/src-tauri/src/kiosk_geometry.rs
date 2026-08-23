@@ -119,6 +119,24 @@ pub fn total_row_pair(width: u32, height: u32) -> (f32, f32) {
     )
 }
 
+/// The grid pane region the scroll tracker profiles: every column's width, from just above the
+/// first thumbnail row to just below the last label band, `(x, y, w, h)` in pixels.
+///
+/// The pane, not the window: the basket beside it never moves, and rows outside it (title bar,
+/// navigation) carry no scroll information -- including them only dilutes the correlation.
+pub fn grid_strip(width: u32, height: u32) -> (u32, u32, u32, u32) {
+    let left = col_left(width, height, 0) - fx(6.0) * height as f32;
+    let right = col_left(width, height, GRID_COLS - 1) + (TILE_W + fx(6.0)) * height as f32;
+    let top = ROW_TOPS[0] * height as f32 - fx(6.0) * height as f32;
+    let bottom = (ROW_TOPS[GRID_ROWS - 1] + LABEL_DY + LABEL_H + fx(8.0)) * height as f32;
+    (
+        left.round() as u32,
+        top.round() as u32,
+        (right - left).round() as u32,
+        (bottom - top).round() as u32,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,5 +215,13 @@ mod basket_label_tests {
     fn basket_label_band_hugs_the_baseline_and_stops_before_the_ducat_column() {
         assert_eq!(basket_label_rect(1920, 1080, 0), Some((1256, 222, 492, 26)));
         assert_eq!(basket_label_rect(1920, 1080, BASKET_ROWS), None);
+    }
+
+    #[test]
+    fn the_scroll_strip_spans_the_pane() {
+        // Six columns on a 206 pitch from x=68, tile width 198: 68..1096+198, inset 6 each
+        // side; vertically from above row 0's thumbnails (197) to below row 2's label band
+        // (640 + 142 + 46 + 8).
+        assert_eq!(grid_strip(1920, 1080), (62, 191, 1240, 645));
     }
 }
