@@ -307,6 +307,22 @@ pub(crate) fn capture_game_window() -> Result<(WindowRect, image::DynamicImage),
         visible.paste_x,
         visible.paste_y,
     );
+    // On a wlroots compositor the frame crosses the process boundary as raw P6 bytes instead of
+    // an encoded image, which is the difference between a ~25ms capture and a ~750ms one -- the
+    // xcap path stays as the fallback for X11 sessions and missing/broken grim.
+    #[cfg(target_os = "linux")]
+    if let Some(frame) = capture_visible_grim(&visible) {
+        let mut window_frame = image::RgbaImage::new(rect.width, rect.height);
+        image::imageops::replace(
+            &mut window_frame,
+            &frame,
+            i64::from(visible.paste_x),
+            i64::from(visible.paste_y),
+        );
+        return Ok((rect, image::DynamicImage::ImageRgba8(window_frame)));
+    }
+    #[cfg(target_os = "linux")]
+    log::debug!("[DEBUG-capture] grim unavailable or failed; falling back to xcap");
     let whole = monitor
         .capture_image()
         .map_err(|_| "could not capture the game window")?;
@@ -314,6 +330,46 @@ pub(crate) fn capture_game_window() -> Result<(WindowRect, image::DynamicImage),
         rect,
         window_frame_from_monitor(&whole, monitor_width, monitor_height, rect, visible),
     ))
+}
+
+/// Capture the visible part of the game window with `grim`, the wlroots screenshot tool.
+///
+/// The region is in compositor layout coordinates -- exactly what `visible_region` already
+/// computes -- so grim reads the right monitor by construction, the multi-monitor trap that
+/// forced whole-monitor captures through xcap does not apply.
+#[cfg(target_os = "linux")]
+fn capture_visible_grim(visible: &VisibleRegion) -> Option<image::DynamicImage> {
+    let geometry = format!(
+        "{},{} {}x{}",
+        visible.x, visible.y, visible.width, visible.height
+    );
+    let output = std::process::Command::new("grim")
+        .args(["-t", "ppm", "-g", &geometry, "-"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        log::debug!(
+            "[DEBUG-capture] grim failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return None;
+    }
+    decode_grim_ppm(&output.stdout, visible.width, visible.height)
+}
+
+/// Decode grim's binary PPM (`-t ppm`) output into a frame of the requested region size.
+///
+/// A scaled output hands back physical pixels for a logical region; resampling down to what was
+/// asked is the same rule the xcap path applies to a scaled monitor capture, and it is what keeps
+/// the fraction-based crops meaning the same thing on both.
+#[cfg(target_os = "linux")]
+fn decode_grim_ppm(bytes: &[u8], width: u32, height: u32) -> Option<image::DynamicImage> {
+    let decoded = image::load_from_memory(bytes).ok()?;
+    if decoded.dimensions() == (width, height) {
+        Some(decoded)
+    } else {
+        Some(decoded.resize_exact(width, height, image::imageops::FilterType::Lanczos3))
+    }
 }
 
 /// Cut the game window out of a whole-monitor capture and lay it into a window-sized frame.
@@ -759,8 +815,8 @@ mod tests {
     use image::GenericImageView;
 
     use super::{
-        VisibleRegion, WindowRect, visible_region, warframe_window_from_xwininfo_tree,
-        window_frame_from_monitor,
+        VisibleRegion, WindowRect, decode_grim_ppm, visible_region,
+        warframe_window_from_xwininfo_tree, window_frame_from_monitor,
     };
 
     /// A flat monitor capture, tagged so a frame can be traced back to the screen it came from.
@@ -949,5 +1005,38 @@ mod tests {
             height: 600,
         };
         assert_eq!(visible_region(elsewhere, 0, 0, 1920, 1080), None);
+    }
+
+    /// grim hands back a binary P6 when asked for `-t ppm`. The decoder has to read that exact
+    /// shape -- header, maxval, raw RGB -- because the whole fast path rests on it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_grim_ppm_frame_decodes_to_its_stated_size() {
+        let ppm = b"P6\n4 3\n255\n\0\0\x01\0\0\x02\0\0\x03\0\0\x04\0\0\x05\0\0\x06\0\0\x07\0\0\x08\0\0\x09\0\0\x0a\0\0\x0b\0\0\x0c";
+        let frame = decode_grim_ppm(ppm, 4, 3).expect("decodes");
+        assert_eq!(frame.dimensions(), (4, 3));
+        assert_eq!(frame.get_pixel(0, 0).0[..3], [0, 0, 1]);
+        assert_eq!(frame.get_pixel(3, 2).0[..3], [0, 0, 12]);
+    }
+
+    /// A scaled output hands back more pixels than the logical region asked for; the frame is
+    /// resampled down to what the caller requested, exactly like the xcap path resamples a
+    /// scaled monitor capture, so the fraction-based crops keep meaning the same thing.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_scaled_grim_frame_is_resampled_to_the_requested_region() {
+        let ppm = b"P6\n2 2\n255\n\x10\0\0\0\x10\0\0\0\x10\0\0\x10";
+        let frame = decode_grim_ppm(ppm, 4, 4).expect("decodes");
+        assert_eq!(frame.dimensions(), (4, 4));
+    }
+
+    /// Anything that is not a complete P6 -- a truncated capture, an error page, an empty
+    /// stdout from a failed spawn -- is an absence, not a panic.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn garbage_is_not_a_frame() {
+        assert!(decode_grim_ppm(b"", 4, 3).is_none());
+        assert!(decode_grim_ppm(b"P6\n4 3\n255\n\0\0", 4, 3).is_none());
+        assert!(decode_grim_ppm(b"P5\n4 3\n255\n", 4, 3).is_none());
     }
 }
