@@ -311,7 +311,7 @@ pub(crate) fn capture_game_window() -> Result<(WindowRect, image::DynamicImage),
     // an encoded image, which is the difference between a ~25ms capture and a ~750ms one -- the
     // xcap path stays as the fallback for X11 sessions and missing/broken grim.
     #[cfg(target_os = "linux")]
-    if let Some(frame) = capture_visible_grim(&visible) {
+    if let Some(frame) = capture_visible_grim(origin_x, origin_y, &visible) {
         let mut window_frame = image::RgbaImage::new(rect.width, rect.height);
         image::imageops::replace(
             &mut window_frame,
@@ -334,27 +334,42 @@ pub(crate) fn capture_game_window() -> Result<(WindowRect, image::DynamicImage),
 
 /// Capture the visible part of the game window with `grim`, the wlroots screenshot tool.
 ///
-/// The region is in compositor layout coordinates -- exactly what `visible_region` already
-/// computes -- so grim reads the right monitor by construction, the multi-monitor trap that
-/// forced whole-monitor captures through xcap does not apply.
+/// `visible_region` yields monitor-relative offsets -- the right thing to crop a monitor-sized
+/// xcap frame with -- while grim's `-g` wants absolute compositor-layout coordinates, so the
+/// monitor's own origin goes back on here. Getting this wrong does not fail: grim happily
+/// photographs whatever sits at the relative offset on the wrong output, and the read dies
+/// seconds later with "0 cells" -- the 2026-08-23 no-overlay report.
 #[cfg(target_os = "linux")]
-fn capture_visible_grim(visible: &VisibleRegion) -> Option<image::DynamicImage> {
-    let geometry = format!(
-        "{},{} {}x{}",
-        visible.x, visible.y, visible.width, visible.height
-    );
+fn capture_visible_grim(
+    origin_x: i32,
+    origin_y: i32,
+    visible: &VisibleRegion,
+) -> Option<image::DynamicImage> {
+    let geometry = grim_geometry(origin_x, origin_y, visible);
     let output = std::process::Command::new("grim")
         .args(["-t", "ppm", "-g", &geometry, "-"])
         .output()
         .ok()?;
     if !output.status.success() {
         log::debug!(
-            "[DEBUG-capture] grim failed: {}",
+            "[DEBUG-capture] grim {geometry} failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
         return None;
     }
     decode_grim_ppm(&output.stdout, visible.width, visible.height)
+}
+
+/// The `-g` argument for a region: absolute compositor coordinates plus ` WxH`.
+#[cfg(target_os = "linux")]
+fn grim_geometry(origin_x: i32, origin_y: i32, visible: &VisibleRegion) -> String {
+    format!(
+        "{},{} {}x{}",
+        origin_x + visible.x as i32,
+        origin_y + visible.y as i32,
+        visible.width,
+        visible.height
+    )
 }
 
 /// Decode grim's binary PPM (`-t ppm`) output into a frame of the requested region size.
@@ -815,7 +830,7 @@ mod tests {
     use image::GenericImageView;
 
     use super::{
-        VisibleRegion, WindowRect, decode_grim_ppm, visible_region,
+        VisibleRegion, WindowRect, decode_grim_ppm, grim_geometry, visible_region,
         warframe_window_from_xwininfo_tree, window_frame_from_monitor,
     };
 
@@ -1028,6 +1043,35 @@ mod tests {
         let ppm = b"P6\n2 2\n255\n\x10\0\0\0\x10\0\0\0\x10\0\0\x10";
         let frame = decode_grim_ppm(ppm, 4, 4).expect("decodes");
         assert_eq!(frame.dimensions(), (4, 4));
+    }
+
+    /// grim's `-g` takes absolute compositor-layout coordinates, but `visible_region` produces
+    /// monitor-relative ones. The game lives on the second monitor on this desktop, so passing
+    /// the relative region through verbatim is precisely how grim photographs the wrong screen
+    /// while every log line looks healthy.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn grim_geometry_is_absolute_compositor_coordinates() {
+        let fullscreen = VisibleRegion {
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            paste_x: 0,
+            paste_y: 0,
+        };
+        assert_eq!(grim_geometry(1920, 0, &fullscreen), "1920,0 1920x1080");
+        // A windowed game part-way onto its monitor keeps its absolute placement, and a
+        // negative monitor origin carries through.
+        let clipped = VisibleRegion {
+            x: 100,
+            y: 50,
+            width: 800,
+            height: 600,
+            paste_x: 0,
+            paste_y: 0,
+        };
+        assert_eq!(grim_geometry(-1920, 0, &clipped), "-1820,50 800x600");
     }
 
     /// Anything that is not a complete P6 -- a truncated capture, an error page, an empty
