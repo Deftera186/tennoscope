@@ -63,9 +63,11 @@ pub const LABEL_BAND_H_1080: i32 = 46;
 const LABEL_DY: f32 = fx(122.0);
 /// Label crop height: the two-line geometry's bottom edge (+190) plus the upward growth.
 const LABEL_H: f32 = fx(68.0);
-/// Chip inset from the tile's right edge, and rise above the card top.
-const CHIP_INSET: f32 = fx(6.0);
-const CHIP_RISE: f32 = fx(2.0);
+/// Each card border stroke's position in design pixels, measured off a live 1080p capture
+/// (the lit columns were 264/265, 471/472, 679/680, 1094/1095, 1302/1303; col3 interpolated
+/// on the 207.6px pitch the others confirm). A chip's right edge sits on these, flush with
+/// its card's top-right corner -- see `tile_anchor`.
+const COL_RIGHT_1080: [f32; 6] = [264.0, 471.5, 679.5, 887.0, 1094.5, 1302.5];
 
 /// Digit baseline of the first basket row; rows follow on a 38 1/3px pitch.
 const BASKET_FIRST_BASELINE: f32 = fx(243.0);
@@ -124,13 +126,20 @@ pub fn grid_label_rect(
 }
 
 /// Where a grid chip's top-right corner sits, in pixels.
+///
+/// The corner is the card border stroke's own position, measured per column off a live
+/// capture (2026-08-24): the 207.5px column pitch rasterizes each border on a different
+/// half-pixel, and a pitch formula rounded once per chip drifted up to 5px by the last
+/// column -- the player asked for pixel-for-pixel and the formula could not deliver it.
 pub fn tile_anchor(width: u32, height: u32, col: usize, row: usize) -> Option<(f32, f32)> {
     if col >= GRID_COLS || row >= GRID_ROWS {
         return None;
     }
-    let right = col_left(width, height, col) + TILE_W * height as f32;
-    let top = ROW_TOPS[row] * height as f32 - CHIP_RISE * height as f32;
-    Some((right - CHIP_INSET * height as f32, top))
+    // An edge on the stroke's centre renders as its floor: the stroke's last full pixel.
+    let scale = height as f32 / 1080.0;
+    let x = (width as f32 / 2.0 + (COL_RIGHT_1080[col] - 960.0) * scale).floor();
+    let y = ROW_TOPS[row] * height as f32;
+    Some((x, y))
 }
 
 /// A basket row's pair right edge and digit baseline, in pixels: `(right_x, baseline_y)`.
@@ -209,10 +218,10 @@ mod tests {
             "a band pushed past the frame has nothing to read"
         );
         let (x, y) = tile_anchor(1920, 1080, 0, 0).unwrap();
-        assert_eq!((x.round(), y.round()), (260.0, 197.0));
+        assert_eq!((x.round(), y.round()), (264.0, 199.0));
         // Chip anchors track the measured card corners, not the assumed ones.
         let (x5, y5) = tile_anchor(1920, 1080, 5, 2).unwrap();
-        assert_eq!((x5.round(), y5.round()), (1298.0, 641.0));
+        assert_eq!((x5.round(), y5.round()), (1302.0, 643.0));
         let (left, baseline) = basket_row_pair(1920, 1080, 0).unwrap();
         assert_eq!((left.round(), baseline.round()), (1750.0, 243.0));
         // Pitch 38 1/3: the seventh row's digits sit at 473 on the fixture.

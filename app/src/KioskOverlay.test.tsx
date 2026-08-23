@@ -59,11 +59,10 @@ describe('kiosk overlay route', () => {
   it('anchors grid chips at their calibrated tile corners', async () => {
     render(<AppRoute pathname="/kiosk" />)
     const [first, last] = await screen.findAllByTestId('kiosk-grid-chip')
-    // The 50% already carries the design centre (960), so the offset is the raw edge minus it:
-    // col0,row0 right edge = 76 + 0 + 190 - 6 = 260 -> 50% - 700; top = 199 - 2.
-    expect(first).toHaveStyle({ left: 'calc(50% + -700 * var(--h))', top: 'calc(197 * var(--h))' })
-    // col5,row2: right = 76 + 207.5*5 + 190 - 6 = 1297.5 -> 50% + 338; top = 643 - 2.
-    expect(last).toHaveStyle({ left: 'calc(50% + 338 * var(--h))', top: 'calc(641 * var(--h))' })
+    // Per-column measured border strokes: col0's chip right edge on x=264, col5's on x=1302,
+    // tops flush with the card border rows. The 50% already carries the design centre (960).
+    expect(first).toHaveStyle({ left: 'calc(50% + -696 * var(--h))', top: 'calc(199 * var(--h))' })
+    expect(last).toHaveStyle({ left: 'calc(50% + 342 * var(--h))', top: 'calc(643 * var(--h))' })
   })
 
   it('right-aligns basket pairs onto the game ducat column', async () => {

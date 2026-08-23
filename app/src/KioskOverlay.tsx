@@ -15,12 +15,14 @@ const CAL = 1080
 const fx = (px: number) => px / CAL
 const fcx = (px: number) => (px - 960) / CAL
 
-const COL_PITCH = fx(207.5)
-const TILE_W = fx(190)
-const GRID_LEFT = fcx(76)
+/*
+ * Each card border stroke, measured per column off a live capture. The 207.5px pitch
+ * rasterizes borders on alternating half-pixels, so a pitch formula rounded once per chip
+ * drifted up to 5px by the last column; the measured positions are the only pixel-exact
+ * source. Chips sit flush with their card's top-right corner.
+ */
+const COL_RIGHTS = [264, 471.5, 679.5, 887, 1094.5, 1302.5].map(fcx)
 const ROW_TOPS = [199, 421, 643].map(fx)
-const CHIP_INSET = fx(6)
-const CHIP_RISE = fx(2)
 
 /// Digits' baseline sits ~3 design px above a line-height-1 box's bottom edge.
 const PAIR_DESCENT = fx(3)
@@ -32,15 +34,16 @@ const BASKET_PITCH = fx(115 / 3)
 const TOTAL_PAIR_RIGHT = fcx(1717)
 const TOTAL_BASELINE = fx(875)
 
-/** Design pixels -> CSS calc against `--h`, for a `left` anchored at the window centre. */
-const cx = (fraction: number) => `calc(50% + ${Math.round(fraction * CAL)} * var(--h))`
+/** Design pixels -> CSS calc against `--h`, for a `left` anchored at the window centre. An
+ * edge on a border stroke's centre renders as its floor: the stroke's last full pixel. */
+const cx = (fraction: number) => `calc(50% + ${Math.floor(fraction * CAL)} * var(--h))`
 /** Design pixels -> CSS calc from the top edge. */
 const y = (fraction: number) => `calc(${Math.round(fraction * CAL)} * var(--h))`
 
 function gridChipStyle(col: number, row: number): React.CSSProperties {
   return {
-    left: cx(GRID_LEFT + COL_PITCH * col + TILE_W - CHIP_INSET),
-    top: y(ROW_TOPS[row] - CHIP_RISE),
+    left: cx(COL_RIGHTS[col]),
+    top: y(ROW_TOPS[row]),
     transform: 'translateX(-100%)',
   }
 }
