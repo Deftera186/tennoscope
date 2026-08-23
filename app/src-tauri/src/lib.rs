@@ -2378,6 +2378,12 @@ where
             };
             match source.read_kiosk(&candidates, dy) {
                 Ok(frame) => {
+                    // A read costs the better part of a second of OCR. A close that landed
+                    // while it ran means this frame describes a screen that is already gone,
+                    // and publishing it would refill the state the teardown just cleared.
+                    if gone.load(Ordering::Acquire) {
+                        break;
+                    }
                     let mut view = joiner(epoch, &frame);
                     view.scroll_dy = dy;
                     log::debug!(
@@ -3362,6 +3368,8 @@ mod tests {
     struct ScriptedKiosk {
         looks: StdMutex<Vec<Result<KioskRead, &'static str>>>,
         profiles: StdMutex<Vec<Option<Vec<f32>>>>,
+        /// Set as a read begins: the log's close line landing while OCR is still running.
+        closes_mid_read: Option<Arc<AtomicBool>>,
     }
 
     impl ScriptedKiosk {
@@ -3369,11 +3377,17 @@ mod tests {
             Self {
                 looks: StdMutex::new(looks),
                 profiles: StdMutex::new(vec![None]),
+                closes_mid_read: None,
             }
         }
 
         fn with_profiles(mut self, profiles: Vec<Option<Vec<f32>>>) -> Self {
             self.profiles = StdMutex::new(profiles);
+            self
+        }
+
+        fn closing_mid_read(mut self, gone: &Arc<AtomicBool>) -> Self {
+            self.closes_mid_read = Some(Arc::clone(gone));
             self
         }
     }
@@ -3384,6 +3398,9 @@ mod tests {
             _candidates: &[RewardCatalogEntry],
             _dy: i32,
         ) -> Result<KioskRead, &'static str> {
+            if let Some(gone) = &self.closes_mid_read {
+                gone.store(true, Ordering::Release);
+            }
             // An exhausted script is a vanished screen: the read fails instead of a panic
             // inside the poller thread. It is NOT a close -- only the log ends a session.
             self.looks
@@ -3526,6 +3543,46 @@ mod tests {
             .with_profiles(vec![Some(label_strip()); 40]);
         let (_, gone, _) = run_poller(source);
         assert!(!gone.load(Ordering::Acquire));
+    }
+
+    /// A close that lands while the reader is inside tesseract must not publish what it was
+    /// holding. The stop is checked at the top of a tick, but a read costs the better part of a
+    /// second, so the frame in flight describes a screen that is already gone: publishing it
+    /// refills the state the teardown just cleared, and the next visit opens on the previous
+    /// grid's chips until its own first read lands.
+    #[test]
+    fn a_close_during_a_read_publishes_nothing() {
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let sink = Arc::clone(&published);
+        let source = ScriptedKiosk::new(vec![Ok(KioskRead {
+            cells: vec![scripted_cell("Stale by the time it lands")],
+            basket: vec![],
+        })])
+        .with_profiles(vec![Some(label_strip()); 6])
+        .closing_mid_read(&gone);
+        let handle = spawn_kiosk_poller_with(
+            &reanchor,
+            &gone,
+            KioskPollerTiming {
+                interval: Duration::from_millis(1),
+                motion_interval: Duration::from_millis(1),
+                lifetime: Duration::from_millis(200),
+            },
+            Arc::new(Vec::new()),
+            |epoch, read| {
+                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, &[], |_| Some(1))
+            },
+            move |view| sink.lock().expect("published").push(view),
+            |_| (),
+            move || source,
+        );
+        handle.join().expect("poller thread");
+        assert!(
+            published.lock().expect("published").is_empty(),
+            "a frame read across the close belongs to a screen that is gone"
+        );
     }
 
     #[test]
