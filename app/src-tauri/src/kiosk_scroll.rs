@@ -18,6 +18,10 @@ use image::DynamicImage;
 /// of the wheel moves the list a few dozen rows; anything further is not scrolling.
 pub const MAX_SHIFT: i32 = 48;
 
+/// Search the whole strip rather than a fixed window: a scroll that stopped anywhere must
+/// measure, so the caller passes this and the effective range becomes half the strip.
+pub const FULL_RANGE: i32 = i32::MAX;
+
 /// Minimum normalized correlation peak accepted as a measurement. A clean shift peaks above
 /// 0.9; two unrelated frames of the same length peak around 0.3 (the max of ~97 noise samples);
 /// the floor sits between them, nearer the noise.
@@ -31,9 +35,10 @@ pub const MIN_PEAK_RATIO: f32 = 0.5;
 /// next settled read is what re-aligns everything.
 pub fn estimate_dy(prev: &[f32], next: &[f32], max_shift: i32, min_peak: f32) -> Option<i32> {
     let len = prev.len().min(next.len());
-    // Correlation needs rows to spare on both sides of every candidate shift, and a strip that
-    // short has no business guessing anyway.
-    if (len as i32) < 2 * max_shift + 8 {
+    // The search never reaches past half the strip: every candidate shift needs rows to spare
+    // on both sides, and a strip that cannot afford that has no business guessing.
+    let range = max_shift.min(len as i32 / 2 - 4);
+    if range < 4 {
         return None;
     }
     let (prev, next) = (&prev[..len], &next[..len]);
@@ -51,7 +56,7 @@ pub fn estimate_dy(prev: &[f32], next: &[f32], max_shift: i32, min_peak: f32) ->
 
     let mut best_shift = 0_i32;
     let mut best_score = f32::NEG_INFINITY;
-    for shift in -max_shift..=max_shift {
+    for shift in -range..=range {
         // next[i] against prev[i - shift], over the rows both cover.
         let lo = shift.max(0) as usize;
         let hi = (len as i32 + shift).min(len as i32) as usize;
@@ -128,6 +133,31 @@ mod tests {
                 "dy={dy}"
             );
         }
+    }
+
+    /// A scroll carries no badge announcing how far it went: the tracker searches the whole
+    /// strip, because a capped window read every stop past ~48px as blindness and the cap's
+    /// forced reads then killed sessions mid-scroll (2026-08-23, stopped at dy=-142).
+    #[test]
+    fn a_scroll_far_beyond_the_old_window_is_still_measured() {
+        let base = strip(648);
+        for dy in [142_i32, -142, 300, -64] {
+            let next = shift(&base, dy);
+            assert_eq!(
+                estimate_dy(&base, &next, FULL_RANGE, MIN_PEAK_RATIO),
+                Some(dy),
+                "dy={dy}"
+            );
+        }
+    }
+
+    /// The wider the search, the more noise peaks compete -- two unrelated strips at full
+    /// range must still refuse to name a shift.
+    #[test]
+    fn unrelated_strips_do_not_measure_at_full_range() {
+        let left = noise(648, 1);
+        let right = noise(648, 2);
+        assert_eq!(estimate_dy(&left, &right, FULL_RANGE, MIN_PEAK_RATIO), None);
     }
 
     #[test]
