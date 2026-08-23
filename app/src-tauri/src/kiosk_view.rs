@@ -44,6 +44,40 @@ pub struct KioskView {
     pub total_plat: u64,
 }
 
+/// The poller's latest published epoch, shared with the `/kiosk` window's `get_kiosk_view`
+/// command.
+///
+/// A lock-poisoned cell can only mean a panic while publishing; the degradation that matters is
+/// that the overlay hides (reads come back empty) rather than that the app dies, so every method
+/// degrades instead of propagating.
+#[derive(Default)]
+pub struct KioskState(std::sync::Mutex<Option<KioskView>>);
+
+impl KioskState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Publish a fresh epoch's view; readers hold a copy until the next publish or a clear.
+    pub fn set(&self, view: KioskView) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = Some(view);
+        }
+    }
+
+    /// The latest view, or `None` when nothing has been published (or the kiosk has closed).
+    pub fn get(&self) -> Option<KioskView> {
+        self.0.lock().ok().and_then(|slot| slot.clone())
+    }
+
+    /// Close semantics: nothing is drawn over whatever the game shows next.
+    pub fn clear(&self) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = None;
+        }
+    }
+}
+
 /// Join recognized slots against the catalogue, the price table and the collection.
 ///
 /// `price` and `owned` are closures so tests (and later the poller, which layers the market cache

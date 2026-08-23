@@ -95,6 +95,47 @@ fn overlay_geometry(
         }))
 }
 
+/// The kiosk overlay's rectangle: the game window, all of it.
+///
+/// The reward strip spans only the card block because its columns line up with cards that never
+/// move. The kiosk chips ride a scrolling grid, so they have to move *inside* the overlay window
+/// rather than have the window moved under them -- which only works if the window owns the whole
+/// game rect to scroll within.
+pub fn kiosk_overlay_geometry(
+    screen_width: u32,
+    screen_height: u32,
+    screen_x: i32,
+    screen_y: i32,
+) -> OverlayGeometry {
+    OverlayGeometry {
+        x: screen_x,
+        y: screen_y,
+        width: screen_width,
+        height: screen_height,
+    }
+}
+
+fn kiosk_geometry(window: &WebviewWindow) -> tauri::Result<Option<OverlayGeometry>> {
+    let game_rect = warframe_window_rect();
+    let monitor = if game_rect.is_none() {
+        window
+            .primary_monitor()?
+            .or(window.current_monitor()?)
+            .or_else(|| window.available_monitors().ok()?.into_iter().next())
+    } else {
+        None
+    };
+    Ok(game_rect
+        .map(|rect| kiosk_overlay_geometry(rect.width, rect.height, rect.x, rect.y))
+        .or_else(|| {
+            monitor.map(|monitor| {
+                let size = monitor.size();
+                let position = monitor.position();
+                kiosk_overlay_geometry(size.width, size.height, position.x, position.y)
+            })
+        }))
+}
+
 /// What to tell the player when the game window could not be located.
 ///
 /// On Windows an exclusive-fullscreen game owns the display outright: it is absent from the window
@@ -142,6 +183,25 @@ pub fn configure_reward_overlay(window: &WebviewWindow, cards: usize) -> tauri::
 
 pub(crate) fn warframe_window_rect() -> Option<WindowRect> {
     crate::reward_ocr::warframe_window_rect().ok()
+}
+
+/// Same trio of window styles as the reward strip -- click-through, no activation, topmost --
+/// sized to the whole game window instead of a card block. See `configure_reward_overlay` for why
+/// each of the three is load-bearing.
+// Called by the monitor wiring, which lands with the next feature commit.
+#[allow(dead_code)]
+pub fn configure_kiosk_overlay(window: &WebviewWindow) -> tauri::Result<()> {
+    if let Some(geometry) = kiosk_geometry(window)? {
+        window.set_size(PhysicalSize::new(geometry.width, geometry.height))?;
+        window.set_position(PhysicalPosition::new(geometry.x, geometry.y))?;
+    }
+    window.set_focusable(false)?;
+    window.set_ignore_cursor_events(true)?;
+    window.set_always_on_top(true)?;
+    if std::env::var_os("TENNOSCOPE_OPAQUE_OVERLAY").is_some() {
+        window.set_background_color(Some(tauri::window::Color(14, 16, 22, 255)))?;
+    }
+    Ok(())
 }
 
 /// Put the overlay above the game on any window manager or compositor.
@@ -228,6 +288,41 @@ pub fn hide_reward_overlay(app: &tauri::AppHandle) {
             trace_overlay("hide");
             let _ = window.hide();
             trace_overlay("hidden");
+        });
+    }
+}
+
+// Called by the monitor wiring, which lands with the next feature commit.
+#[allow(dead_code)]
+pub fn show_kiosk_overlay(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("kiosk-overlay") {
+        let _ = app.run_on_main_thread(move || {
+            trace_overlay("show kiosk");
+            #[cfg(target_os = "linux")]
+            if let Ok(Some(geometry)) = kiosk_geometry(&window) {
+                if show_over_game(&window, geometry) {
+                    trace_overlay(&format!(
+                        "kiosk shown override-redirect {}x{} at {},{}",
+                        geometry.width, geometry.height, geometry.x, geometry.y
+                    ));
+                    return;
+                }
+            }
+            let _ = configure_kiosk_overlay(&window);
+            let _ = window.show();
+            let _ = window.set_always_on_top(true);
+            trace_overlay("kiosk shown via plain window");
+        });
+    }
+}
+
+// Called by the monitor wiring, which lands with the next feature commit.
+#[allow(dead_code)]
+pub fn hide_kiosk_overlay(app: &tauri::AppHandle) {
+    if let Some(window) = app.get_webview_window("kiosk-overlay") {
+        let _ = app.run_on_main_thread(move || {
+            trace_overlay("hide kiosk");
+            let _ = window.hide();
         });
     }
 }

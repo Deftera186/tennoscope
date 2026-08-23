@@ -63,11 +63,14 @@ mod reward_log;
 mod reward_observer;
 mod reward_ocr;
 mod reward_source;
+pub use kiosk_view::{KioskState, KioskView};
 pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
     ee_log_rotation_keep_from, ee_log_session_start_utc, ee_log_stale_prefix_end,
 };
-pub use overlay_window::{OverlayGeometry, WindowRect, borderless_notice, reward_overlay_geometry};
+pub use overlay_window::{
+    OverlayGeometry, WindowRect, borderless_notice, kiosk_overlay_geometry, reward_overlay_geometry,
+};
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
@@ -2713,6 +2716,21 @@ fn hide_reward_overlay(app: AppHandle, state: State<'_, SharedRuntime>) {
     overlay_window::hide_reward_overlay(&app);
 }
 
+/// The kiosk window pulls the latest epoch through this rather than receiving the payload in the
+/// event, so a missed `kiosk-updated` (window still loading, webview busy) costs one fetch
+/// instead of a stale overlay until the next poll.
+#[tauri::command]
+fn get_kiosk_view(kiosk: State<'_, KioskState>) -> Option<KioskView> {
+    kiosk.get()
+}
+
+/// Tell the kiosk window a new epoch is published; it fetches the view itself.
+// Called from the kiosk poller, which lands two tasks from now.
+#[allow(dead_code)]
+fn emit_kiosk_update(app: &AppHandle) {
+    let _ = app.emit_to("kiosk-overlay", "kiosk-updated", ());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Run the whole app on X11, including under Wayland. The game is a Wine/Proton client and so is
@@ -2808,6 +2826,9 @@ pub fn run() {
                 .map(|state| state.setup.risk_accepted)
                 .unwrap_or(false);
             app.manage(runtime);
+            // The kiosk window's whole IPC surface: `get_kiosk_view` pulls whatever the poller
+            // last published, so the cell exists from the start, empty until a kiosk opens.
+            app.manage(kiosk_view::KioskState::default());
             if should_refresh {
                 start_collection_prices(Arc::clone(app.state::<SharedRuntime>().inner()));
                 start_monitor(
@@ -2826,6 +2847,7 @@ pub fn run() {
             load_fake_session,
             show_reward_overlay,
             hide_reward_overlay,
+            get_kiosk_view,
             market_status,
             market_sign_in,
             market_link_token,
