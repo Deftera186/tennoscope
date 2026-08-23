@@ -123,19 +123,18 @@ where
             .map(|w| (w..slots.len()).step_by(workers).collect())
             .collect::<Vec<_>>();
         type CropReads = Vec<Option<(String, f32)>>;
-    let handles: Vec<std::thread::ScopedJoinHandle<'_, CropReads>> =
-            per_worker
-                .clone()
-                .into_iter()
-                .map(|indices| {
-                    scope.spawn(move || {
-                        indices
-                            .iter()
-                            .map(|&i| read_slot(image, width, height, rect(&slots[i]), candidates))
-                            .collect::<Vec<_>>()
-                    })
+        let handles: Vec<std::thread::ScopedJoinHandle<'_, CropReads>> = per_worker
+            .clone()
+            .into_iter()
+            .map(|indices| {
+                scope.spawn(move || {
+                    indices
+                        .iter()
+                        .map(|&i| read_slot(image, width, height, rect(&slots[i]), candidates))
+                        .collect::<Vec<_>>()
                 })
-                .collect();
+            })
+            .collect();
         // Join first (all workers done), then reorder against the owned index lists.
         let chunk_results: Vec<Vec<Option<(String, f32)>>> = handles
             .into_iter()
