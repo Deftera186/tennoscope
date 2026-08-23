@@ -53,50 +53,102 @@ fn scratch_file() -> PathBuf {
 }
 
 /// Read every grid slot independently; slots below the floor are simply not returned.
+///
+/// The slots share nothing but the source frame, and one tesseract spawn costs about as much
+/// as the whole crop's preprocessing, so the reads run across a small pool of threads: the
+/// poller's whole budget is one interval, and 26 sequential spawns spend several of them.
 pub fn read_grid(image: &DynamicImage, candidates: &[RewardCatalogEntry]) -> Vec<GridCell> {
     let (width, height) = image.dimensions();
-    let mut cells = Vec::new();
-    for row in 0..crate::kiosk_geometry::GRID_ROWS {
-        for col in 0..crate::kiosk_geometry::GRID_COLS {
-            if let Some(read) = read_slot(
-                image,
-                width,
-                height,
-                crate::kiosk_geometry::grid_label_rect(width, height, col, row),
-                candidates,
-            ) {
-                cells.push(GridCell {
-                    col,
-                    row,
-                    name: read.0,
-                    score: read.1,
-                });
-            }
-        }
-    }
-    cells
+    let slots: Vec<(usize, usize)> = (0..crate::kiosk_geometry::GRID_ROWS)
+        .flat_map(|row| (0..crate::kiosk_geometry::GRID_COLS).map(move |col| (col, row)))
+        .collect();
+    let reads = read_slots(image, width, height, &slots, candidates, |slot| {
+        crate::kiosk_geometry::grid_label_rect(width, height, slot.0, slot.1)
+    });
+    slots
+        .into_iter()
+        .zip(reads)
+        .filter_map(|((col, row), read)| {
+            read.map(|(name, score)| GridCell {
+                col,
+                row,
+                name,
+                score,
+            })
+        })
+        .collect()
 }
 
 /// Read every visible basket row independently; rows past the list's end read blank and drop out.
 pub fn read_basket(image: &DynamicImage, candidates: &[RewardCatalogEntry]) -> Vec<BasketRow> {
     let (width, height) = image.dimensions();
-    let mut rows = Vec::new();
-    for index in 0..crate::kiosk_geometry::BASKET_ROWS {
-        if let Some(read) = read_slot(
-            image,
-            width,
-            height,
-            basket_label_rect(width, height, index),
-            candidates,
-        ) {
-            rows.push(BasketRow {
-                index,
-                name: read.0,
-                score: read.1,
-            });
-        }
+    let slots: Vec<usize> = (0..crate::kiosk_geometry::BASKET_ROWS).collect();
+    let reads = read_slots(image, width, height, &slots, candidates, |index| {
+        basket_label_rect(width, height, *index)
+    });
+    slots
+        .into_iter()
+        .zip(reads)
+        .filter_map(|(index, read)| read.map(|(name, score)| BasketRow { index, name, score }))
+        .collect()
+}
+
+/// Read every slot's rect in parallel, preserving input order; failed or sub-floor reads come
+/// back as `None` and simply drop out of the caller's view.
+fn read_slots<T>(
+    image: &DynamicImage,
+    width: u32,
+    height: u32,
+    slots: &[T],
+    candidates: &[RewardCatalogEntry],
+    rect: impl Fn(&T) -> Option<(u32, u32, u32, u32)> + Sync + Send,
+) -> Vec<Option<(String, f32)>>
+where
+    T: Sync,
+{
+    let workers = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(slots.len())
+        .min(12);
+    if workers <= 1 {
+        return slots
+            .iter()
+            .map(|slot| read_slot(image, width, height, rect(slot), candidates))
+            .collect();
     }
-    rows
+    let rect = &rect;
+    std::thread::scope(|scope| {
+        // Round-robin the slots across workers, then weave the results back into order.
+        let per_worker: Vec<Vec<usize>> = (0..workers)
+            .map(|w| (w..slots.len()).step_by(workers).collect())
+            .collect::<Vec<_>>();
+        type CropReads = Vec<Option<(String, f32)>>;
+    let handles: Vec<std::thread::ScopedJoinHandle<'_, CropReads>> =
+            per_worker
+                .clone()
+                .into_iter()
+                .map(|indices| {
+                    scope.spawn(move || {
+                        indices
+                            .iter()
+                            .map(|&i| read_slot(image, width, height, rect(&slots[i]), candidates))
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+        // Join first (all workers done), then reorder against the owned index lists.
+        let chunk_results: Vec<Vec<Option<(String, f32)>>> = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("kiosk ocr worker"))
+            .collect();
+        let mut reads = vec![None; slots.len()];
+        for (chunk, indices) in chunk_results.into_iter().zip(per_worker.iter()) {
+            for (&i, read) in indices.iter().zip(chunk) {
+                reads[i] = read;
+            }
+        }
+        reads
+    })
 }
 
 fn read_slot(

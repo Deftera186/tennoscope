@@ -77,6 +77,7 @@ fn timing() -> KioskPollerTiming {
         interval: std::time::Duration::from_millis(1),
         motion_interval: std::time::Duration::from_millis(1),
         lifetime: std::time::Duration::from_secs(5),
+        grace: std::time::Duration::ZERO,
     }
 }
 

@@ -690,6 +690,9 @@ pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
         .cloned()
         .unwrap_or_else(|| "tesseract".into());
     let mut command = Command::new(&program);
+    // One recognition thread per spawn: tesseract's own OpenMP pooling oversubscribes the
+    // machine when several crops are read side by side, and the kiosk poller does exactly that.
+    command.env("OMP_THREAD_LIMIT", "1");
     // The bundled engine's `eng.traineddata` sits beside it, not in the install prefix it was
     // compiled with, so it has to be told where to look. `--tessdata-dir` rather than the
     // `TESSDATA_PREFIX` environment variable because setting one of those is `unsafe` since the
