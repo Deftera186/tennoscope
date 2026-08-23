@@ -81,7 +81,9 @@ export default function KioskOverlay() {
         if (!next) { setView(null); return }
         if (next.epoch !== epochSeen.current) {
           setFaded(false)
-          setOffset(0)
+          // The settled read ran with bands shifted by the scroll, so the view's offset is
+          // where the grid now sits: re-anchor to it, do not snap back to zero.
+          setOffset(next.scroll_dy)
         }
         epochSeen.current = next.epoch
         setView(next)
@@ -114,19 +116,25 @@ export default function KioskOverlay() {
     <div
       className={faded ? 'kiosk-strip kiosk-faded' : 'kiosk-strip'}
       data-testid="kiosk-strip"
-      style={{ transform: `translateY(calc(${offset} * var(--h)))` }}
     >
-      {view?.cells.map(cell =>
-        <span
-          key={`${cell.col}:${cell.row}`}
-          className="kiosk-chip"
-          data-testid="kiosk-grid-chip"
-          style={gridChipStyle(cell.col, cell.row)}
-          title={cell.name}
-        >
-          <MetalMark metal="plat" className="kiosk-mark"/>{cell.platinum}p
-        </span>
-      )}
+      {/* Only the grid scrolls; the basket pane is fixed in the game, so its chips stay put. */}
+      <div
+        className="kiosk-grid"
+        data-testid="kiosk-grid"
+        style={{ transform: `translateY(calc(${offset} * var(--h)))` }}
+      >
+        {view?.cells.map(cell =>
+          <span
+            key={`${cell.col}:${cell.row}`}
+            className="kiosk-chip"
+            data-testid="kiosk-grid-chip"
+            style={gridChipStyle(cell.col, cell.row)}
+            title={cell.name}
+          >
+            <MetalMark metal="plat" className="kiosk-mark"/>{cell.platinum}p
+          </span>
+        )}
+      </div>
       {view?.basket.map(row =>
         <span
           key={row.index}

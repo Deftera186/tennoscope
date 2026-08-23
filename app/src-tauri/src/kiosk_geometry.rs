@@ -76,17 +76,28 @@ fn col_left(width: u32, height: u32, col: usize) -> f32 {
 }
 
 /// The OCR crop over one tile's label: `(x, y, w, h)` in pixels, or `None` past the grid.
+///
+/// `dy` is the grid's tracked scroll offset in pixels: the calibration names where rows sit
+/// unscrolled, and a read taken mid-scroll has to look where the rows actually are.
 pub fn grid_label_rect(
     width: u32,
     height: u32,
     col: usize,
     row: usize,
+    dy: i32,
 ) -> Option<(u32, u32, u32, u32)> {
     if col >= GRID_COLS || row >= GRID_ROWS {
         return None;
     }
     let x = col_left(width, height, col).round() as u32;
-    let y = (ROW_TOPS[row] * height as f32 + LABEL_DY * height as f32).round() as u32;
+    let y_f = (ROW_TOPS[row] + LABEL_DY) * height as f32 + dy as f32;
+    if y_f < 0.0 {
+        return None;
+    }
+    let y = y_f.round() as u32;
+    if y_f + (LABEL_H * height as f32) > height as f32 {
+        return None;
+    }
     Some((
         x,
         y,
@@ -153,14 +164,26 @@ mod tests {
     #[test]
     fn the_1920x1080_calibration_reproduces_the_fixture() {
         assert_eq!(
-            grid_label_rect(1920, 1080, 0, 0),
+            grid_label_rect(1920, 1080, 0, 0, 0),
             Some((76, 343, 190, 46)),
             "row 0 col 0 label band"
         );
         assert_eq!(
-            grid_label_rect(1920, 1080, 5, 2),
+            grid_label_rect(1920, 1080, 5, 2, 0),
             Some((1114, 787, 190, 46)),
             "last column, last row"
+        );
+        // A scrolled grid sits off its calibration rows by the tracked drift: the reads shift
+        // with it (2026-08-23's dead session stopped at dy=-142).
+        assert_eq!(
+            grid_label_rect(1920, 1080, 0, 0, -142),
+            Some((76, 201, 190, 46)),
+            "label band follows the scroll"
+        );
+        assert_eq!(
+            grid_label_rect(1920, 1080, 0, 2, 500),
+            None,
+            "a band pushed past the frame has nothing to read"
         );
         let (x, y) = tile_anchor(1920, 1080, 0, 0).unwrap();
         assert_eq!((x.round(), y.round()), (260.0, 197.0));
@@ -179,7 +202,7 @@ mod tests {
     /// Height fractions keep every pitch proportional on a smaller 16:9 window.
     #[test]
     fn a_smaller_16x9_window_scales_by_height_and_stays_centred() {
-        let (x, _, w, _) = grid_label_rect(1280, 720, 1, 1).unwrap();
+        let (x, _, w, _) = grid_label_rect(1280, 720, 1, 1, 0).unwrap();
         // left = 640 + (76 - 960 + 207.5) * 720/1080
         assert_eq!(
             x,
@@ -192,8 +215,8 @@ mod tests {
     /// Past-the-grid slots have no rectangle to read.
     #[test]
     fn out_of_range_slots_are_none() {
-        assert_eq!(grid_label_rect(1920, 1080, 6, 0), None);
-        assert_eq!(grid_label_rect(1920, 1080, 0, 3), None);
+        assert_eq!(grid_label_rect(1920, 1080, 6, 0, 0), None);
+        assert_eq!(grid_label_rect(1920, 1080, 0, 3, 0), None);
         assert_eq!(tile_anchor(1920, 1080, 6, 0), None);
         assert_eq!(basket_row_pair(1920, 1080, BASKET_ROWS), None);
     }

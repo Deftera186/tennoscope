@@ -30,6 +30,7 @@ const sampleView: KioskView = {
     { index: 1, name: 'Fulmin Prime Receiver', platinum: null },
   ],
   total_plat: 6,
+  scroll_dy: 0,
 }
 
 describe('kiosk overlay route', () => {
@@ -99,34 +100,39 @@ describe('kiosk overlay route', () => {
     expect(screen.queryByTestId('kiosk-grid-chip')).not.toBeInTheDocument()
   })
 
-  it('follows streamed scroll offsets on the strip transform', async () => {
+  it('follows streamed scroll offsets on the grid layer, basket pinned', async () => {
     render(<AppRoute pathname="/kiosk" />)
-    const strip = await screen.findByTestId('kiosk-strip')
-    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+    const grid = await screen.findByTestId('kiosk-grid')
+    const basket = (await screen.findAllByTestId('kiosk-basket-chip'))[0]
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' }))
 
     events.listeners['kiosk-scroll']?.({ payload: 5 })
-    await waitFor(() => expect(strip).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' }))
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' }))
     // Offsets are absolute against the anchor, not increments: a second verdict replaces,
-    // it does not accumulate.
+    // it does not accumulate. The basket pane never scrolls, so it carries no transform.
     events.listeners['kiosk-scroll']?.({ payload: 9 })
-    await waitFor(() => expect(strip).toHaveStyle({ transform: 'translateY(calc(9 * var(--h)))' }))
-    expect(strip).not.toHaveClass('kiosk-faded')
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(9 * var(--h)))' }))
+    expect(basket).not.toHaveStyle({ transform: 'translateY(calc(9 * var(--h)))' })
+    expect(grid).not.toHaveClass('kiosk-faded')
   })
 
-  it('fades on an unreadable verdict and resets the transform when a fresh epoch anchors', async () => {
+  it('fades on an unreadable verdict and re-anchors with the view scroll offset', async () => {
     render(<AppRoute pathname="/kiosk" />)
+    const grid = await screen.findByTestId('kiosk-grid')
     const strip = await screen.findByTestId('kiosk-strip')
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
 
     events.listeners['kiosk-scroll']?.({ payload: 12 })
-    await waitFor(() => expect(strip).toHaveStyle({ transform: 'translateY(calc(12 * var(--h)))' }))
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(12 * var(--h)))' }))
     events.listeners['kiosk-scroll']?.({ payload: null })
     await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
 
-    backend.getKioskView.mockResolvedValue({ ...sampleView, epoch: 4 })
+    // The settled read ran with bands shifted by the scroll, so the view says where the grid
+    // now sits: the offset re-anchors to it instead of snapping back to zero.
+    backend.getKioskView.mockResolvedValue({ ...sampleView, epoch: 4, scroll_dy: -142 })
     events.listeners['kiosk-updated']?.()
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
-    expect(strip).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' })
+    expect(grid).toHaveStyle({ transform: 'translateY(calc(-142 * var(--h)))' })
     expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
   })
 })

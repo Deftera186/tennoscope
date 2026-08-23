@@ -1166,6 +1166,10 @@
 }
 .kiosk-strip.kiosk-faded { opacity: 0; }
 
+/* The scroll-follow transform rides this layer only: grid chips track the grid, while the
+   basket pane's chips stay fixed exactly like the game's own. */
+.kiosk-grid { position: absolute; inset: 0; }
+
 .kiosk-chip {
   position: absolute; display: inline-flex; align-items: center; gap: calc(3 * var(--h));
   padding: calc(2 * var(--h)) calc(5 * var(--h));

@@ -38,6 +38,7 @@ impl KioskFrameSource for ScriptedKiosk {
     fn read_kiosk(
         &mut self,
         _candidates: &[RewardCatalogEntry],
+        _dy: i32,
     ) -> Result<KioskRead, &'static str> {
         let (flag, frame) = self
             .frames
@@ -114,6 +115,7 @@ struct RunOutcome {
     epochs: Vec<u64>,
     totals: Vec<u64>,
     scrolls: Vec<Option<i32>>,
+    dys: Vec<i32>,
     gone: bool,
 }
 
@@ -128,15 +130,20 @@ fn run_joining(
     let epochs = Arc::new(Mutex::new(Vec::new()));
     let totals = Arc::new(Mutex::new(Vec::new()));
     let scrolls = Arc::new(Mutex::new(Vec::new()));
+    let dys = Arc::new(Mutex::new(Vec::new()));
     let sink = {
         let epochs = Arc::clone(&epochs);
         let totals = Arc::clone(&totals);
+        let dys = Arc::clone(&dys);
         move |view: KioskView| {
             if let Ok(mut slot) = epochs.lock() {
                 slot.push(view.epoch);
             }
             if let Ok(mut slot) = totals.lock() {
                 slot.push(view.total_plat);
+            }
+            if let Ok(mut slot) = dys.lock() {
+                slot.push(view.scroll_dy);
             }
             on_publish(view);
         }
@@ -183,6 +190,9 @@ fn run_joining(
             .map(|slot| slot.into_inner().unwrap())
             .unwrap_or_default(),
         scrolls: Arc::try_unwrap(scrolls)
+            .map(|slot| slot.into_inner().unwrap())
+            .unwrap_or_default(),
+        dys: Arc::try_unwrap(dys)
             .map(|slot| slot.into_inner().unwrap())
             .unwrap_or_default(),
         gone: gone.load(Ordering::Acquire),
@@ -419,5 +429,65 @@ fn an_empty_read_while_the_grid_moves_is_not_the_kiosk_gone() {
         outcome.scrolls.iter().filter(|v| v.is_some()).count() >= 15,
         "the session streamed long after the empty settle read: {:?}",
         outcome.scrolls
+    );
+}
+
+/// The settle read happens where the rows actually are, and the published view says so: the
+/// scroll's measured offset rides the view so the chips land on the scrolled grid, not the
+/// calibration rows. (2026-08-23's session stopped at dy=-142 and died reading the gaps.)
+#[test]
+fn the_settle_read_publishes_the_scrolled_offset() {
+    let base = bands(400);
+    let moved = shift_rows(&base, -142);
+    let outcome = run_with_strips(
+        vec![(false, read(18, 3)), (false, read(18, 3))],
+        vec![base.clone(), moved.clone(), moved.clone(), moved],
+    );
+    assert_eq!(outcome.totals, vec![21, 21], "anchor and settle published");
+    assert_eq!(outcome.dys, vec![0, -142], "the view carries the phase");
+}
+
+/// The log machine's close verdict shares the poller's `gone` flag: once it is set from
+/// outside, the poller stops looking at a kiosk the game has already hidden -- no further
+/// reads, no further publishes.
+#[test]
+fn an_external_close_verdict_stops_the_poller() {
+    let base = bands(400);
+    let strips: Vec<Vec<f32>> = std::iter::repeat_n(base, 200).collect();
+    let frames = vec![
+        (false, read(18, 3)),
+        (false, read(6, 2)), // must never be read
+    ];
+    let reanchor = Arc::new(AtomicBool::new(true));
+    let gone = Arc::new(AtomicBool::new(false));
+    let totals = Arc::new(Mutex::new(Vec::new()));
+    let totals_sink = Arc::clone(&totals);
+    let gone_arg = Arc::clone(&gone);
+    let handle = spawn_kiosk_poller_with(
+        &reanchor,
+        &gone_arg,
+        timing(),
+        candidates(),
+        |_epoch, _frame| KioskView::default(),
+        move |view: KioskView| {
+            if let Ok(mut slot) = totals_sink.lock() {
+                slot.push(view.total_plat);
+            }
+        },
+        |_| (),
+        move || {
+            let mut source = ScriptedKiosk::scripted(frames);
+            source.strips = Mutex::new(strips);
+            source
+        },
+    );
+    // The anchor publishes; then the log's close verdict lands.
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    gone_arg.store(true, Ordering::Release);
+    handle.join().expect("poller thread panicked");
+    assert_eq!(
+        totals.lock().unwrap().len(),
+        1,
+        "the anchor published once, then the external verdict stopped the poller"
     );
 }

@@ -57,14 +57,18 @@ fn scratch_file() -> PathBuf {
 /// The slots share nothing but the source frame, and one tesseract spawn costs about as much
 /// as the whole crop's preprocessing, so the reads run across a small pool of threads: the
 /// poller's whole budget is one interval, and 26 sequential spawns spend several of them.
-pub fn read_grid(image: &DynamicImage, candidates: &[RewardCatalogEntry]) -> Vec<GridCell> {
+pub fn read_grid(
+    image: &DynamicImage,
+    candidates: &[RewardCatalogEntry],
+    dy: i32,
+) -> Vec<GridCell> {
     let luma = image.to_luma8();
     let (width, height) = image.dimensions();
     let slots: Vec<(usize, usize)> = (0..crate::kiosk_geometry::GRID_ROWS)
         .flat_map(|row| (0..crate::kiosk_geometry::GRID_COLS).map(move |col| (col, row)))
         .collect();
     let reads = read_slots(&luma, image, width, height, &slots, candidates, |slot| {
-        crate::kiosk_geometry::grid_label_rect(width, height, slot.0, slot.1)
+        crate::kiosk_geometry::grid_label_rect(width, height, slot.0, slot.1, dy)
     });
     slots
         .into_iter()
@@ -241,7 +245,7 @@ mod tests {
     #[test]
     fn reads_known_grid_cells_from_the_fixture() {
         let img = image::open(FIXTURE).unwrap();
-        let cells = read_grid(&img, &candidates());
+        let cells = read_grid(&img, &candidates(), 0);
         for (expected, col, row) in [
             ("Titania Prime Systems Blueprint", 0usize, 0usize),
             ("Tiberon Prime Barrel", 0, 1),
@@ -254,6 +258,20 @@ mod tests {
             assert_eq!(hit.name, expected, "cell ({col},{row})");
             assert!(hit.score >= 0.85, "cell ({col},{row}) score {}", hit.score);
         }
+    }
+
+    /// A scrolled grid is read where the rows actually are: shifted one full row pitch down,
+    /// row 0's band lands on row 1's labels -- the 2026-08-23 session that died at dy=-142,
+    /// had the reads been phase-corrected, would have read its rows exactly like this.
+    #[test]
+    fn a_scrolled_grid_is_read_at_the_shifted_bands() {
+        let img = image::open(FIXTURE).unwrap();
+        let cells = read_grid(&img, &candidates(), 222);
+        let hit = cells
+            .iter()
+            .find(|c| c.col == 0 && c.row == 0)
+            .expect("row 0 col 0 read through the shifted band");
+        assert_eq!(hit.name, "Tiberon Prime Barrel");
     }
 
     #[test]

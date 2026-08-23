@@ -38,6 +38,10 @@ pub struct KioskView {
     pub cells: Vec<CellChip>,
     pub basket: Vec<BasketChip>,
     pub total_plat: u64,
+    /// The grid's scroll offset from the calibration rows, in design pixels: the reads were
+    /// taken with the label bands shifted by exactly this, so the chips belong this far from
+    /// their unscrolled positions. The basket pane never scrolls and needs no offset.
+    pub scroll_dy: i32,
 }
 
 /// The poller's latest published epoch, shared with the `/kiosk` window's `get_kiosk_view`
@@ -115,6 +119,7 @@ pub fn build_view(
 
     KioskView {
         epoch,
+        scroll_dy: 0,
         cells,
         basket,
         total_plat,

@@ -50,7 +50,13 @@ export interface CellChip { col: number; row: number; name: string; platinum: nu
 /** One basket row's platinum value; the game already draws the row's ducats. */
 export interface BasketChip { index: number; name: string; platinum: number | null }
 /** One poller epoch's whole overlay payload. */
-export interface KioskView { epoch: number; cells: CellChip[]; basket: BasketChip[]; total_plat: number }
+export interface KioskView {
+  epoch: number
+  cells: CellChip[]
+  basket: BasketChip[]
+  total_plat: number
+  scroll_dy: number
+}
 
 export const getView = () => invoke<AppView>('get_view')
 export const getKioskView = () => invoke<KioskView | null>('get_kiosk_view')
