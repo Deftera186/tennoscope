@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use app_lib::report::{
     EeLogState, ReportMeta, ReportRequest, assemble_report_text, collect_report, log_files,
-    sanitize, utc_stamp,
+    sanitize, utc_stamp, utc_stamp_at,
 };
 
 fn meta(app_data: &std::path::Path, log_dir: &std::path::Path) -> ReportMeta {
@@ -68,17 +68,23 @@ fn sanitize_ignores_embedded_fragments() {
 
 #[test]
 fn utc_stamp_is_civil_and_sorted() {
-    let stamp = utc_stamp();
+    // 2026-08-05 14:12:33.456 UTC, a fixed instant so the assertions below don't depend on
+    // the day this test happens to run.
+    let stamp = utc_stamp_at(std::time::Duration::new(1_785_939_153, 456_000_000));
+    assert_eq!(stamp, "2026-08-05-141233456");
     assert_eq!(stamp.len(), 20, "YYYY-MM-DD-HHMMSSmmm: {stamp}");
     assert!(stamp.is_ascii(), "stamp is plain ASCII: {stamp}");
-    let digits: Vec<char> = stamp.chars().filter(|c| c.is_ascii_digit()).collect();
-    assert_eq!(digits.len(), 17);
     assert_eq!(stamp.chars().filter(|c| *c == '-').count(), 3);
-    let (year, rest) = stamp.split_once('-').expect("year");
+
+    // utc_stamp() itself still runs against the real clock, so only check its shape.
+    let live = utc_stamp();
+    assert_eq!(live.len(), 20, "YYYY-MM-DD-HHMMSSmmm: {live}");
+    let digits: Vec<char> = live.chars().filter(|c| c.is_ascii_digit()).collect();
+    assert_eq!(digits.len(), 17);
+    let (year, rest) = live.split_once('-').expect("year");
     assert_eq!(year.len(), 4);
     assert!(year.chars().all(|c| c.is_ascii_digit()));
     let (month, rest) = rest.split_once('-').expect("month");
-    assert_eq!(month, "08", "month is zero-padded: {month}");
     let month: u32 = month.parse().expect("month number");
     assert!((1..=12).contains(&month));
     let (day, time) = rest.split_once('-').expect("day");
@@ -87,15 +93,15 @@ fn utc_stamp_is_civil_and_sorted() {
     let (hour, rest) = time.split_at(2);
     let (minutes, seconds_ms) = rest.split_at(2);
     let (seconds, millis) = seconds_ms.split_at(2);
-    assert_eq!(millis.len(), 3, "milliseconds present: {stamp}");
+    assert_eq!(millis.len(), 3, "milliseconds present: {live}");
     let hour: u32 = hour.parse().expect("hour number");
     let minutes: u32 = minutes.parse().expect("minutes number");
     let seconds: u32 = seconds.parse().expect("seconds number");
     let millis: u32 = millis.parse().expect("millis number");
-    assert!(hour < 24, "hour in range: {stamp}");
-    assert!(minutes < 60, "minutes in range: {stamp}");
-    assert!(seconds < 60, "seconds in range: {stamp}");
-    assert!(millis < 1000, "millis in range: {stamp}");
+    assert!(hour < 24, "hour in range: {live}");
+    assert!(minutes < 60, "minutes in range: {live}");
+    assert!(seconds < 60, "seconds in range: {live}");
+    assert!(millis < 1000, "millis in range: {live}");
 }
 
 #[test]

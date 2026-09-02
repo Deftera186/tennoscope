@@ -325,7 +325,17 @@ fn replace_bounded(text: &str, needle: &str, replacement: &str) -> String {
 /// The milliseconds make two reports within the same second land in different
 /// folders instead of silently overwriting each other.
 pub fn utc_stamp() -> String {
-    let (year, month, day, hour, minute, second, millis) = utc_parts();
+    utc_stamp_at(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default(),
+    )
+}
+
+/// `utc_stamp`, but for a caller-supplied duration since the epoch — lets tests assert on a
+/// fixed, known instant instead of the real clock.
+pub fn utc_stamp_at(elapsed: std::time::Duration) -> String {
+    let (year, month, day, hour, minute, second, millis) = parts_from(elapsed);
     format!("{year:04}-{month:02}-{day:02}-{hour:02}{minute:02}{second:02}{millis:03}")
 }
 
