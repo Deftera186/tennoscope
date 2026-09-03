@@ -15,6 +15,8 @@ chmod +x TennoScope_*_amd64.AppImage
 ./TennoScope_*_amd64.AppImage
 ```
 
+On KDE, the AppImage uses the screen-sharing portal for reward capture. KDE cannot grant an AppImage its silent screenshot permission because the executable path changes when the image is mounted or extracted. Install the deb, rpm, Arch, or Gentoo package instead if you want silent KDE capture.
+
 Some distributions no longer install FUSE 2 compatibility by default. Prefer installing the distribution's FUSE 2 compatibility package. For a one-off fallback, AppImage supports extraction-and-run mode:
 
 ```bash

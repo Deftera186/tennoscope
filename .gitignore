@@ -20,6 +20,10 @@ __pycache__/
 # Third-party tool output
 Extracted/
 
+# `--appimage-extract` always unpacks into ./squashfs-root next to the invoking shell, so a
+# manual AppImage inspection leaves this behind in the repo root.
+squashfs-root/
+
 # The Windows bundle's vendored Tesseract, fetched by scripts/vendor-windows-tesseract.ps1. The
 # directory itself is tracked because tauri.windows.conf.json globs it and a glob that matches
 # nothing is a build error, not an empty resource set.
