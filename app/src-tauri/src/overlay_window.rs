@@ -74,8 +74,8 @@ pub fn reward_overlay_geometry(
 fn overlay_geometry(
     window: &WebviewWindow,
     cards: usize,
+    game_rect: Option<WindowRect>,
 ) -> tauri::Result<Option<OverlayGeometry>> {
-    let game_rect = warframe_window_rect();
     let monitor = if game_rect.is_none() {
         window
             .primary_monitor()?
@@ -129,19 +129,12 @@ pub const fn placement_notice(
     }
 }
 
-/// The notice for the game as it is right now, or `None` when there is nothing to say.
-pub fn overlay_placement_notice() -> Option<&'static str> {
-    placement_notice(
-        matches!(
-            warframe_window_rect_with_origin(),
-            Some((_, GameRectOrigin::X11))
-        ),
-        crate::reward_capture::session_kind(),
-    )
-}
-
-pub fn configure_reward_overlay(window: &WebviewWindow, cards: usize) -> tauri::Result<()> {
-    let geometry = overlay_geometry(window, cards)?;
+fn configure_reward_overlay(
+    window: &WebviewWindow,
+    cards: usize,
+    game_rect: Option<WindowRect>,
+) -> tauri::Result<()> {
+    let geometry = overlay_geometry(window, cards, game_rect)?;
     if let Some(geometry) = geometry {
         window.set_size(PhysicalSize::new(geometry.width, geometry.height))?;
         window.set_position(PhysicalPosition::new(geometry.x, geometry.y))?;
@@ -162,10 +155,6 @@ pub fn configure_reward_overlay(window: &WebviewWindow, cards: usize) -> tauri::
         window.set_background_color(Some(tauri::window::Color(14, 16, 22, 255)))?;
     }
     Ok(())
-}
-
-pub(crate) fn warframe_window_rect() -> Option<WindowRect> {
-    warframe_window_rect_with_origin().map(|(rect, _)| rect)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -266,12 +255,18 @@ fn trace_overlay(action: &str) {
 
 /// `cards` is how many rewards are on screen, so the strip lands on the block the game actually
 /// drew rather than on a four-card block it may not have.
-pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
+pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) -> Option<&'static str> {
+    let located = warframe_window_rect_with_origin();
+    let notice = placement_notice(
+        matches!(located, Some((_, GameRectOrigin::X11))),
+        crate::reward_capture::session_kind(),
+    );
+    let game_rect = located.map(|(rect, _)| rect);
     if let Some(window) = app.get_webview_window("reward-overlay") {
         let _ = app.run_on_main_thread(move || {
             trace_overlay(&format!("show cards={cards}"));
             #[cfg(target_os = "linux")]
-            if let Ok(Some(geometry)) = overlay_geometry(&window, cards) {
+            if let Ok(Some(geometry)) = overlay_geometry(&window, cards, game_rect) {
                 if show_over_game(&window, geometry) {
                     trace_overlay(&format!(
                         "shown override-redirect {}x{} at {},{}",
@@ -280,7 +275,7 @@ pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
                     return;
                 }
             }
-            let _ = configure_reward_overlay(&window, cards);
+            let _ = configure_reward_overlay(&window, cards, game_rect);
             let _ = window.show();
             // Showing a window puts it at the top of its own band, which on Windows is enough to
             // drop it out of the topmost band it was placed in. Re-asserting after the show is what
@@ -289,6 +284,7 @@ pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
             trace_overlay("shown via plain window");
         });
     }
+    notice
 }
 
 pub fn hide_reward_overlay(app: &tauri::AppHandle) {

@@ -291,7 +291,7 @@ describe('MVP desktop interface', () => {
     expect(screen.queryByRole('slider'), 'and a preference is not a disclosure').not.toBeInTheDocument()
   })
 
-  it.each(['X11/XWayland', 'wlroots', 'KWin'])('explains automatic capture without portal controls for %s', async () => {
+  it('explains automatic capture without portal controls', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: false })
     render(<App />)
     await screen.findByRole('heading', { name: 'Your collection' })

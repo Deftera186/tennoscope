@@ -240,11 +240,6 @@ pub struct CaptureShape {
     pub monitor_height: u32,
 }
 
-/// Whether this capture looks different from the last one worth logging.
-pub fn capture_shape_changed(previous: Option<CaptureShape>, current: CaptureShape) -> bool {
-    previous != Some(current)
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CaptureLogLevel {
     Info,
@@ -259,11 +254,11 @@ fn capture_log_level(changed: bool) -> CaptureLogLevel {
     }
 }
 
-/// Update one capture instance's Info-suppression state and report whether this shape changed.
 fn capture_shapes_changed(previous: &[CaptureShape], current: &[CaptureShape]) -> bool {
     previous != current
 }
 
+/// Update one capture instance's Info-suppression state and report whether its shape list changed.
 fn update_capture_shapes(previous: &mut Vec<CaptureShape>, current: Vec<CaptureShape>) -> bool {
     let changed = capture_shapes_changed(previous, &current);
     *previous = current;
@@ -392,13 +387,6 @@ impl GameCapture {
         }
     }
 
-    /// Return the channel-only portal handle. Constructing and using this handle never negotiates;
-    /// an explicit setup/settings action must already have installed the worker's live session.
-    #[cfg(target_os = "linux")]
-    fn portal(&mut self) -> &mut portal::PortalCapture {
-        &mut self.portal
-    }
-
     /// What this desktop can offer, asked only when it can still matter.
     ///
     /// An XWayland game or an X11 session never reaches a Wayland backend, so probing one would
@@ -457,7 +445,7 @@ impl GameCapture {
             // A KWin failure stays a KWin failure: falling through to the portal here would
             // trade a fixable authorization error for a permission prompt mid-mission.
             FrameBackend::Kwin => self.kwin.capture_monitors()?,
-            FrameBackend::Portal => self.portal().capture_monitors()?,
+            FrameBackend::Portal => self.portal.capture_monitors()?,
         };
         // No portal off Linux, so the only reachable origin is X11 and the frame is xcap's. The
         // decision still runs above, because that is where "no Warframe window found" comes from.
@@ -533,10 +521,9 @@ mod tests {
     use crate::overlay_window::WindowRect;
 
     use super::{
-        BackendAvailability, CaptureLogLevel, CaptureShape, FrameBackend, MonitorFrame, RectOrigin,
-        SessionKind, capture_choice, capture_geometry_line, capture_log_level,
-        capture_shape_changed, capture_shapes_changed, capture_sources, capture_sources_from,
-        prepare_captures, session_kind_from, update_capture_shapes,
+        BackendAvailability, CaptureShape, FrameBackend, MonitorFrame, RectOrigin, SessionKind,
+        capture_choice, capture_geometry_line, capture_shapes_changed, capture_sources,
+        capture_sources_from, prepare_captures, session_kind_from, update_capture_shapes,
     };
 
     fn shape(origin: RectOrigin, backend: FrameBackend, x: i32) -> CaptureShape {
@@ -671,49 +658,6 @@ mod tests {
         });
 
         assert_eq!(capture_sources_from(&snapshot), Some(("portal", "portal")));
-    }
-
-    /// Mutation caught: treating a missing previous shape as unchanged would omit all geometry
-    /// from the first stable-build report and recreate the undiagnosable 2026-08-22 state.
-    #[test]
-    fn the_first_capture_is_logged_at_info() {
-        let changed = capture_shape_changed(None, shape(RectOrigin::X11, FrameBackend::X11, 0));
-        assert!(changed);
-        assert_eq!(capture_log_level(changed), CaptureLogLevel::Info);
-    }
-
-    /// Mutation caught: logging equal shapes at Info would emit a line every 400ms and evict the
-    /// history this memoization exists to preserve. Routine OCR diagnostics stay at Debug.
-    #[test]
-    fn an_unchanged_shape_is_logged_only_at_debug() {
-        let current = shape(RectOrigin::X11, FrameBackend::X11, 0);
-        let changed = capture_shape_changed(Some(current), current);
-        assert!(!changed);
-        assert_eq!(capture_log_level(changed), CaptureLogLevel::Debug);
-    }
-
-    /// Mutation caught: ignoring window and monitor coordinates would hide a transition to the
-    /// monitor at x=1920, and lowering the transition to Debug would hide it from reports.
-    #[test]
-    fn moving_to_another_monitor_is_logged_once_at_info() {
-        let changed = capture_shape_changed(
-            Some(shape(RectOrigin::X11, FrameBackend::X11, 0)),
-            shape(RectOrigin::X11, FrameBackend::X11, 1920),
-        );
-        assert!(changed);
-        assert_eq!(capture_log_level(changed), CaptureLogLevel::Info);
-    }
-
-    /// Mutation caught: ignoring `RectOrigin` would suppress a transition between an X11 window
-    /// rectangle and monitor geometry supplied by a native Wayland backend.
-    #[test]
-    fn changing_backend_is_logged_once_at_info() {
-        let changed = capture_shape_changed(
-            Some(shape(RectOrigin::X11, FrameBackend::Portal, 0)),
-            shape(RectOrigin::Portal, FrameBackend::Portal, 0),
-        );
-        assert!(changed);
-        assert_eq!(capture_log_level(changed), CaptureLogLevel::Info);
     }
 
     /// Mutation caught: sharing suppression state between `GameCapture` instances would suppress

@@ -19,12 +19,13 @@ const AVAILABILITY_RETRY_INTERVAL: std::time::Duration = std::time::Duration::fr
 const CAPTURE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 const ERR_UNAVAILABLE: &str = "direct Wayland screen capture is unavailable";
 const ERR_CAPTURE_FAILED: &str = "could not capture the game window";
-const ERR_NO_OUTPUTS: &str = "no Warframe window found";
+const ERR_NO_OUTPUTS: &str = "direct Wayland capture reported no outputs";
 
 #[derive(Clone, Copy)]
 struct AvailabilityState {
     available: bool,
     checked_at: std::time::Instant,
+    probing: bool,
 }
 
 impl AvailabilityState {
@@ -32,17 +33,25 @@ impl AvailabilityState {
         Self {
             available,
             checked_at,
+            probing: false,
         }
     }
 
-    fn should_probe(self, now: std::time::Instant) -> bool {
-        !self.available
-            && now.saturating_duration_since(self.checked_at) >= AVAILABILITY_RETRY_INTERVAL
+    fn claim_probe(&mut self, now: std::time::Instant) -> bool {
+        if self.available
+            || self.probing
+            || now.saturating_duration_since(self.checked_at) < AVAILABILITY_RETRY_INTERVAL
+        {
+            return false;
+        }
+        self.probing = true;
+        true
     }
 
     fn record(&mut self, available: bool, checked_at: std::time::Instant) {
         self.available = available;
         self.checked_at = checked_at;
+        self.probing = false;
     }
 }
 
@@ -56,12 +65,6 @@ fn probe_available() -> bool {
     globals.contents().with_list(|list| {
         has_screencopy_interface(list.iter().map(|global| global.interface.as_str()))
     })
-}
-
-fn collect_generation<T>(
-    results: impl IntoIterator<Item = Result<T, &'static str>>,
-) -> Result<Vec<T>, &'static str> {
-    results.into_iter().collect()
 }
 
 pub(crate) fn has_screencopy_interface<I, S>(interfaces: I) -> bool
@@ -125,13 +128,21 @@ pub fn available() -> bool {
             std::sync::Mutex::new(AvailabilityState::new(probe_available(), now))
         });
     let now = std::time::Instant::now();
-    let mut state = AVAILABLE
+    let should_probe = AVAILABLE
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.should_probe(now) {
-        state.record(probe_available(), now);
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .claim_probe(now);
+    if should_probe {
+        let probed = probe_available();
+        AVAILABLE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .record(probed, std::time::Instant::now());
     }
-    state.available
+    AVAILABLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .available
 }
 
 /// A persistent direct connection. Output discovery and protocol setup happen once per reader,
@@ -175,33 +186,36 @@ impl DirectCapture {
     fn capture_generation(
         connection: &mut WayshotConnection,
     ) -> Result<Vec<(WindowRect, MonitorFrame)>, &'static str> {
-        if connection.get_all_outputs().is_empty() {
+        let outputs = connection.get_all_outputs();
+        if outputs.is_empty() {
             return Err(ERR_NO_OUTPUTS);
         }
 
-        let outputs = connection.get_all_outputs().to_vec();
-        collect_generation(outputs.into_iter().map(|output| {
-            let region = output.logical_region.inner;
-            let rect = WindowRect {
-                x: region.position.x,
-                y: region.position.y,
-                width: region.size.width,
-                height: region.size.height,
-            };
-            let image = connection
-                .screenshot_outputs(std::slice::from_ref(&output), false)
-                .map_err(|_| ERR_CAPTURE_FAILED)?;
-            Ok((
-                rect,
-                MonitorFrame {
-                    image: image.to_rgba8(),
-                    origin_x: rect.x,
-                    origin_y: rect.y,
-                    width: rect.width,
-                    height: rect.height,
-                },
-            ))
-        }))
+        outputs
+            .iter()
+            .map(|output| {
+                let region = output.logical_region.inner;
+                let rect = WindowRect {
+                    x: region.position.x,
+                    y: region.position.y,
+                    width: region.size.width,
+                    height: region.size.height,
+                };
+                let image = connection
+                    .screenshot_outputs(std::slice::from_ref(output), false)
+                    .map_err(|_| ERR_CAPTURE_FAILED)?;
+                Ok((
+                    rect,
+                    MonitorFrame {
+                        image: image.to_rgba8(),
+                        origin_x: rect.x,
+                        origin_y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
+                    },
+                ))
+            })
+            .collect()
     }
 
     fn capture_once(&mut self) -> Result<Vec<(WindowRect, MonitorFrame)>, &'static str> {
@@ -248,15 +262,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn negative_probe_retries_after_interval_and_success_stays_cached() {
+    fn availability_probe_claim_is_exclusive_and_success_stays_cached() {
         let start = std::time::Instant::now();
         let mut state = AvailabilityState::new(false, start);
 
-        assert!(!state.should_probe(start + AVAILABILITY_RETRY_INTERVAL / 2));
-        assert!(state.should_probe(start + AVAILABILITY_RETRY_INTERVAL));
+        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL / 2));
+        assert!(state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL));
+        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL * 2));
 
-        state.record(true, start + AVAILABILITY_RETRY_INTERVAL);
-        assert!(!state.should_probe(start + AVAILABILITY_RETRY_INTERVAL * 100));
+        let failed_at = start + AVAILABILITY_RETRY_INTERVAL;
+        state.record(false, failed_at);
+        assert!(!state.claim_probe(failed_at + AVAILABILITY_RETRY_INTERVAL / 2));
+        assert!(state.claim_probe(failed_at + AVAILABILITY_RETRY_INTERVAL));
+
+        state.record(true, failed_at + AVAILABILITY_RETRY_INTERVAL);
+        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL * 100));
+    }
+
+    #[test]
+    fn zero_outputs_reports_the_compositor_state() {
+        assert_eq!(ERR_NO_OUTPUTS, "direct Wayland capture reported no outputs");
+        assert_ne!(ERR_NO_OUTPUTS, "no Warframe window found");
     }
 
     #[test]
@@ -273,11 +299,5 @@ mod tests {
             retry_after,
             now + CAPTURE_RETRY_INTERVAL
         ));
-    }
-
-    #[test]
-    fn one_failed_output_makes_the_generation_fail_closed() {
-        let result = collect_generation([Ok(1_u8), Err(ERR_CAPTURE_FAILED)]);
-        assert_eq!(result, Err(ERR_CAPTURE_FAILED));
     }
 }

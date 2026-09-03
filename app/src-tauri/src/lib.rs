@@ -2379,6 +2379,7 @@ fn publish_reward_result(
         .map(RewardObservation::certain)
         .collect::<Vec<_>>();
     let transition = observer.observe(observations);
+    let mut overlay_notice = None;
     if transition.publish {
         apply_reward_observations(
             shared,
@@ -2386,7 +2387,7 @@ fn publish_reward_result(
             &transition.choices,
             &BTreeMap::new(),
         );
-        overlay_window::show_reward_overlay(app, transition.choices.len());
+        overlay_notice = overlay_window::show_reward_overlay(app, transition.choices.len());
         let _ = app.emit_to("reward-overlay", "reward-updated", ());
         spawn_market_price_fetch(
             &transition.choices,
@@ -2410,7 +2411,7 @@ fn publish_reward_result(
         // Read the cards but could not find the window to draw over: on Windows that is exclusive
         // fullscreen, and the player is the only one who can fix it. Said here rather than in the
         // README because a strip that silently fails to appear reads as a broken app.
-        if let Some(notice) = overlay_window::overlay_placement_notice() {
+        if let Some(notice) = overlay_notice {
             let _ = runtime.core.record_capture_degraded(notice);
         }
         if result.diagnostic == RewardSourceDiagnostic::Disagreement {

@@ -679,6 +679,7 @@ struct KwinSession {
 struct AvailabilityState {
     available: bool,
     checked_at: Instant,
+    probing: bool,
 }
 
 impl AvailabilityState {
@@ -686,17 +687,25 @@ impl AvailabilityState {
         Self {
             available,
             checked_at,
+            probing: false,
         }
     }
 
-    fn should_probe(self, now: Instant) -> bool {
-        !self.available
-            && now.saturating_duration_since(self.checked_at) >= AVAILABILITY_RETRY_INTERVAL
+    fn claim_probe(&mut self, now: Instant) -> bool {
+        if self.available
+            || self.probing
+            || now.saturating_duration_since(self.checked_at) < AVAILABILITY_RETRY_INTERVAL
+        {
+            return false;
+        }
+        self.probing = true;
+        true
     }
 
     fn record(&mut self, available: bool, checked_at: Instant) {
         self.available = available;
         self.checked_at = checked_at;
+        self.probing = false;
     }
 }
 
@@ -739,13 +748,21 @@ pub fn available_cached() -> bool {
             std::sync::Mutex::new(AvailabilityState::new(probe_available(), now))
         });
     let now = Instant::now();
-    let mut state = AVAILABLE
+    let should_probe = AVAILABLE
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if state.should_probe(now) {
-        state.record(probe_available(), now);
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .claim_probe(now);
+    if should_probe {
+        let probed = probe_available();
+        AVAILABLE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .record(probed, Instant::now());
     }
-    state.available
+    AVAILABLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .available
 }
 
 pub struct KwinCapture {
@@ -942,15 +959,21 @@ mod tests {
     }
 
     #[test]
-    fn negative_probe_retries_after_interval_and_success_stays_cached() {
-        let start = std::time::Instant::now();
+    fn availability_probe_claim_is_exclusive_and_success_stays_cached() {
+        let start = Instant::now();
         let mut state = AvailabilityState::new(false, start);
 
-        assert!(!state.should_probe(start + AVAILABILITY_RETRY_INTERVAL / 2));
-        assert!(state.should_probe(start + AVAILABILITY_RETRY_INTERVAL));
+        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL / 2));
+        assert!(state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL));
+        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL * 2));
 
-        state.record(true, start + AVAILABILITY_RETRY_INTERVAL);
-        assert!(!state.should_probe(start + AVAILABILITY_RETRY_INTERVAL * 100));
+        let failed_at = start + AVAILABILITY_RETRY_INTERVAL;
+        state.record(false, failed_at);
+        assert!(!state.claim_probe(failed_at + AVAILABILITY_RETRY_INTERVAL / 2));
+        assert!(state.claim_probe(failed_at + AVAILABILITY_RETRY_INTERVAL));
+
+        state.record(true, failed_at + AVAILABILITY_RETRY_INTERVAL);
+        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL * 100));
     }
 
     #[test]
