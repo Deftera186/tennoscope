@@ -18,6 +18,25 @@ fn risk_disclosure_is_asked_once_and_persists_acceptance() {
 }
 
 #[test]
+fn setup_files_from_before_capture_status_preserve_acceptance() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("setup.json");
+    fs::write(&path, r#"{"risk_accepted":true}"#).unwrap();
+
+    assert!(read_setup_status(&path).unwrap().risk_accepted);
+}
+
+#[test]
+fn persisted_setup_contains_only_durable_state() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("setup.json");
+    accept_setup_risk(&path).unwrap();
+
+    let wire = fs::read_to_string(path).unwrap();
+    assert_eq!(wire, r#"{"risk_accepted":true}"#);
+}
+
+#[test]
 fn only_a_complete_inventory_sync_log_line_triggers_refresh() {
     assert!(contains_inventory_sync_trigger(
         b"123 Inventory sync done\n"
