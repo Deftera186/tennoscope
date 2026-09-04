@@ -348,7 +348,16 @@ fn replace_bounded(text: &str, needle: &str, replacement: &str) -> String {
 /// The milliseconds make two reports within the same second land in different
 /// folders instead of silently overwriting each other.
 pub fn utc_stamp() -> String {
-    let (year, month, day, hour, minute, second, millis) = utc_parts();
+    utc_stamp_at(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default(),
+    )
+}
+
+/// Format a caller-supplied duration since the Unix epoch for deterministic tests.
+fn utc_stamp_at(elapsed: std::time::Duration) -> String {
+    let (year, month, day, hour, minute, second, millis) = parts_from(elapsed);
     format!("{year:04}-{month:02}-{day:02}-{hour:02}{minute:02}{second:02}{millis:03}")
 }
 
@@ -499,6 +508,12 @@ mod tests {
         assert_eq!(civil_from_days(11_022), (2000, 3, 6));
         assert_eq!(civil_from_days(20_670), (2026, 8, 5));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn utc_stamp_is_exact_for_a_known_instant() {
+        let elapsed = std::time::Duration::new(1_785_939_153, 456_000_000);
+        assert_eq!(super::utc_stamp_at(elapsed), "2026-08-05-141233456");
     }
 
     #[test]
