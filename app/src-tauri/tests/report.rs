@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use app_lib::report::{
     EeLogState, ReportMeta, ReportRequest, assemble_report_text, collect_report, log_files,
-    sanitize, utc_stamp, utc_stamp_at,
+    sanitize, utc_stamp,
 };
 
 fn meta(app_data: &std::path::Path, log_dir: &std::path::Path) -> ReportMeta {
@@ -68,15 +68,6 @@ fn sanitize_ignores_embedded_fragments() {
 
 #[test]
 fn utc_stamp_is_civil_and_sorted() {
-    // 2026-08-05 14:12:33.456 UTC, a fixed instant so the assertions below don't depend on
-    // the day this test happens to run.
-    let stamp = utc_stamp_at(std::time::Duration::new(1_785_939_153, 456_000_000));
-    assert_eq!(stamp, "2026-08-05-141233456");
-    assert_eq!(stamp.len(), 20, "YYYY-MM-DD-HHMMSSmmm: {stamp}");
-    assert!(stamp.is_ascii(), "stamp is plain ASCII: {stamp}");
-    assert_eq!(stamp.chars().filter(|c| *c == '-').count(), 3);
-
-    // utc_stamp() itself still runs against the real clock, so only check its shape.
     let live = utc_stamp();
     assert_eq!(live.len(), 20, "YYYY-MM-DD-HHMMSSmmm: {live}");
     let digits: Vec<char> = live.chars().filter(|c| c.is_ascii_digit()).collect();
@@ -85,6 +76,11 @@ fn utc_stamp_is_civil_and_sorted() {
     assert_eq!(year.len(), 4);
     assert!(year.chars().all(|c| c.is_ascii_digit()));
     let (month, rest) = rest.split_once('-').expect("month");
+    assert_eq!(month.len(), 2, "month is zero-padded: {month}");
+    assert!(
+        month.chars().all(|c| c.is_ascii_digit()),
+        "month is digits: {month}"
+    );
     let month: u32 = month.parse().expect("month number");
     assert!((1..=12).contains(&month));
     let (day, time) = rest.split_once('-').expect("day");
@@ -389,6 +385,42 @@ const ROW_JSON: &str = r#"{
     {"stage": "memory_permission", "state": "ready", "message": "memory read ready"}
   ]
 }"#;
+
+/// Mutation caught: omitting, duplicating, or moving the display line below Diagnostics would
+/// break the stable report-header contract regardless of live environment values.
+#[test]
+fn assemble_report_text_puts_the_environment_between_title_and_diagnostics() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let text = assemble_report_text(
+        &meta(dir.path(), dir.path()),
+        "{}",
+        EeLogState::NotRequested,
+    )
+    .expect("text builds");
+    let lines: Vec<&str> = text.lines().collect();
+
+    assert_eq!(
+        lines.first(),
+        Some(&"TennoScope 0.5.0 (stable) — linux/x86_64 — 2026-08-05 14:12:33 UTC"),
+        "header was:\n{text}"
+    );
+    assert_eq!(lines.get(1), Some(&""), "header was:\n{text}");
+    assert!(
+        lines
+            .get(2)
+            .is_some_and(|line| line.starts_with("Display: ")),
+        "header was:\n{text}"
+    );
+    assert_eq!(lines.get(3), Some(&"Diagnostics"), "header was:\n{text}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("Display: "))
+            .count(),
+        1,
+        "report must contain exactly one display header line:\n{text}"
+    );
+}
 
 #[test]
 fn assemble_report_text_renders_human_readable_rows_only() {

@@ -154,6 +154,22 @@ pub fn sanitize_ee_log(text: &str) -> String {
     EMAIL.replace_all(&out, "[redacted-email]").into_owned()
 }
 
+/// The display-server facts a capture bug is diagnosed from.
+pub fn environment_line(
+    session: crate::reward_capture::SessionKind,
+    desktop: Option<&str>,
+    rect_source: Option<&str>,
+    backend: Option<&str>,
+) -> String {
+    format!(
+        "Display: {} session — {} — rect_source={} — frame_backend={}\n",
+        session.label(),
+        desktop.unwrap_or("unknown desktop"),
+        rect_source.unwrap_or("unknown"),
+        backend.unwrap_or("unknown"),
+    )
+}
+
 pub fn assemble_report_text(
     meta: &ReportMeta,
     health_json: &str,
@@ -171,6 +187,13 @@ pub fn assemble_report_text(
         "TennoScope {} ({}) — {} — {}\n\n",
         meta.version, meta.profile, meta.os_arch, meta.timestamp
     );
+    let (rect_source, frame_backend) = crate::reward_capture::last_capture_sources();
+    text.push_str(&environment_line(
+        crate::reward_capture::session_kind(),
+        std::env::var("XDG_CURRENT_DESKTOP").ok().as_deref(),
+        rect_source,
+        frame_backend,
+    ));
     text.push_str("Diagnostics\n");
     text.push_str(&diagnostics_rows(health_json)?);
     text.push('\n');
@@ -332,9 +355,8 @@ pub fn utc_stamp() -> String {
     )
 }
 
-/// `utc_stamp`, but for a caller-supplied duration since the epoch — lets tests assert on a
-/// fixed, known instant instead of the real clock.
-pub fn utc_stamp_at(elapsed: std::time::Duration) -> String {
+/// Format a caller-supplied duration since the Unix epoch for deterministic tests.
+fn utc_stamp_at(elapsed: std::time::Duration) -> String {
     let (year, month, day, hour, minute, second, millis) = parts_from(elapsed);
     format!("{year:04}-{month:02}-{day:02}-{hour:02}{minute:02}{second:02}{millis:03}")
 }
@@ -440,7 +462,45 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::civil_from_days;
+    use crate::reward_capture::SessionKind;
+
+    use super::{civil_from_days, environment_line};
+
+    /// Mutation caught: omitting or reordering either source would restore the guesswork that
+    /// made native-Wayland failures difficult to diagnose. Every pixel backend needs a distinct,
+    /// machine-searchable value, independently of the rectangle source.
+    #[test]
+    fn the_environment_line_reports_every_frame_backend_independently() {
+        for (rect_source, frame_backend) in [
+            ("x11", "x11"),
+            ("wayland", "wayland"),
+            ("wayland", "kwin"),
+            ("portal", "portal"),
+            ("x11", "portal"),
+        ] {
+            assert_eq!(
+                environment_line(
+                    SessionKind::Wayland,
+                    Some("KDE"),
+                    Some(rect_source),
+                    Some(frame_backend),
+                ),
+                format!(
+                    "Display: wayland session — KDE — rect_source={rect_source} — frame_backend={frame_backend}\n"
+                )
+            );
+        }
+    }
+
+    /// Mutation caught: unwrapping either absent observation would prevent reports before the
+    /// first capture, while empty fallbacks would leave their meaning ambiguous.
+    #[test]
+    fn an_unknown_desktop_and_backend_are_still_reported() {
+        assert_eq!(
+            environment_line(SessionKind::X11, None, None, None),
+            "Display: x11 session — unknown desktop — rect_source=unknown — frame_backend=unknown\n"
+        );
+    }
 
     #[test]
     fn civil_from_days_is_exact_on_known_epochs() {
@@ -448,6 +508,12 @@ mod tests {
         assert_eq!(civil_from_days(11_022), (2000, 3, 6));
         assert_eq!(civil_from_days(20_670), (2026, 8, 5));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn utc_stamp_is_exact_for_a_known_instant() {
+        let elapsed = std::time::Duration::new(1_785_939_153, 456_000_000);
+        assert_eq!(super::utc_stamp_at(elapsed), "2026-08-05-141233456");
     }
 
     #[test]

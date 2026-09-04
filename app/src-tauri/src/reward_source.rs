@@ -253,20 +253,29 @@ impl RewardSourceCoordinator {
         local_choice: Option<&str>,
         deadline: Duration,
         abort: &AtomicBool,
-    ) -> Option<RewardSourceResult> {
+    ) -> Result<RewardSourceResult, &'static str> {
         let started = Instant::now();
         let mut attempts = 0_u32;
+        let mut last_reason: &'static str;
         loop {
             if abort.load(Ordering::Acquire) {
                 log::debug!(
                     "[DEBUG-visual] aborted after {}ms: the screen is already gone",
                     started.elapsed().as_millis()
                 );
-                return None;
+                return Err("the reward screen closed first");
             }
             attempts += 1;
             let attempt = visual.choices(candidates);
             trace_visual_read(attempts, started.elapsed(), &attempt);
+            // Keep the last real reason: a deadline is when we stopped, not why we failed.
+            match &attempt {
+                Err(reason) => last_reason = *reason,
+                Ok(names) if names.len() != expected => {
+                    last_reason = "the reward screen showed a different number of cards"
+                }
+                Ok(_) => last_reason = "the reward screen did not show the logged reward",
+            }
             if let Some(names) =
                 attempt
                     .ok()
@@ -275,7 +284,7 @@ impl RewardSourceCoordinator {
                         local_choice.is_none_or(|local| names.iter().any(|name| name == local))
                     })
             {
-                return Some(RewardSourceResult {
+                return Ok(RewardSourceResult {
                     choices: RewardChoiceSet {
                         names,
                         source: RewardChoiceSource::Ocr,
@@ -285,7 +294,7 @@ impl RewardSourceCoordinator {
                 });
             }
             if started.elapsed() >= deadline {
-                return None;
+                return Err(last_reason);
             }
             std::thread::sleep(
                 VISUAL_RETRY_INTERVAL.min(deadline.saturating_sub(started.elapsed())),
@@ -350,4 +359,60 @@ fn trace_visual_read(attempt: u32, elapsed: Duration, outcome: &Result<Vec<Strin
         "[DEBUG-visual] attempt={attempt} elapsed_ms={} outcome={outcome:?}",
         elapsed.as_millis(),
     );
+}
+
+#[cfg(test)]
+mod visual_reason_tests {
+    use std::sync::atomic::AtomicBool;
+    use std::time::Duration;
+
+    use warframe_acquisition::RewardCatalogEntry;
+
+    use super::{RewardSourceCoordinator, VisualRewardSource};
+    struct AlwaysFails(&'static str);
+
+    impl VisualRewardSource for AlwaysFails {
+        fn choices(
+            &mut self,
+            _candidates: &[RewardCatalogEntry],
+        ) -> Result<Vec<String>, &'static str> {
+            Err(self.0)
+        }
+    }
+
+    /// The 2026-08-22 report blamed log parsing for a capture failure. The reason has to survive
+    /// the read loop, or the health message can only guess.
+    #[test]
+    fn a_failed_read_reports_why_it_failed() {
+        let coordinator = RewardSourceCoordinator::new(false);
+        let pool = [RewardCatalogEntry {
+            name: "Forma Blueprint".to_owned(),
+            ducats: 0,
+        }];
+        let outcome = coordinator.visual_choices(
+            &mut AlwaysFails("no Warframe window found"),
+            &pool,
+            2,
+            None,
+            Duration::from_millis(1),
+            &AtomicBool::new(false),
+        );
+        assert_eq!(outcome.err(), Some("no Warframe window found"));
+    }
+
+    /// An aborted read is not a capture failure -- the screen simply closed first -- so it must
+    /// not be reported as one.
+    #[test]
+    fn an_aborted_read_says_the_screen_went_away() {
+        let coordinator = RewardSourceCoordinator::new(false);
+        let outcome = coordinator.visual_choices(
+            &mut AlwaysFails("no Warframe window found"),
+            &[],
+            2,
+            None,
+            Duration::from_millis(50),
+            &AtomicBool::new(true),
+        );
+        assert_eq!(outcome.err(), Some("the reward screen closed first"));
+    }
 }

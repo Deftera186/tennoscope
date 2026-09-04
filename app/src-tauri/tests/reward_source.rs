@@ -480,17 +480,16 @@ fn visual_choices_are_dropped_when_the_logged_local_reward_is_absent() {
         calls: 0,
     };
     // The log is exact about the local player's reward, so a read missing it is wrong somewhere.
-    assert!(
-        RewardSourceCoordinator::new(false)
-            .visual_choices(
-                &mut visual,
-                &catalog(),
-                4,
-                Some("Z"),
-                Duration::ZERO,
-                &AtomicBool::new(false)
-            )
-            .is_none()
+    assert_eq!(
+        RewardSourceCoordinator::new(false).visual_choices(
+            &mut visual,
+            &catalog(),
+            4,
+            Some("Z"),
+            Duration::ZERO,
+            &AtomicBool::new(false)
+        ),
+        Err("the reward screen did not show the logged reward")
     );
 }
 
@@ -500,17 +499,16 @@ fn visual_choices_are_dropped_when_the_card_count_is_wrong() {
         names: Ok(vec!["A".into(), "B".into()]),
         calls: 0,
     };
-    assert!(
-        RewardSourceCoordinator::new(false)
-            .visual_choices(
-                &mut visual,
-                &catalog(),
-                4,
-                None,
-                Duration::ZERO,
-                &AtomicBool::new(false)
-            )
-            .is_none()
+    assert_eq!(
+        RewardSourceCoordinator::new(false).visual_choices(
+            &mut visual,
+            &catalog(),
+            4,
+            None,
+            Duration::ZERO,
+            &AtomicBool::new(false)
+        ),
+        Err("the reward screen showed a different number of cards")
     );
 }
 
@@ -520,17 +518,16 @@ fn a_failed_capture_publishes_nothing() {
         names: Err("no Warframe window found"),
         calls: 0,
     };
-    assert!(
-        RewardSourceCoordinator::new(false)
-            .visual_choices(
-                &mut visual,
-                &catalog(),
-                4,
-                Some("A"),
-                Duration::ZERO,
-                &AtomicBool::new(false)
-            )
-            .is_none()
+    assert_eq!(
+        RewardSourceCoordinator::new(false).visual_choices(
+            &mut visual,
+            &catalog(),
+            4,
+            Some("A"),
+            Duration::ZERO,
+            &AtomicBool::new(false)
+        ),
+        Err("no Warframe window found")
     );
 }
 
@@ -582,17 +579,16 @@ fn visual_choices_give_up_at_the_deadline() {
         calls: 0,
         names: Vec::new(),
     };
-    assert!(
-        RewardSourceCoordinator::new(false)
-            .visual_choices(
-                &mut visual,
-                &catalog(),
-                4,
-                None,
-                Duration::from_millis(250),
-                &AtomicBool::new(false)
-            )
-            .is_none()
+    assert_eq!(
+        RewardSourceCoordinator::new(false).visual_choices(
+            &mut visual,
+            &catalog(),
+            4,
+            None,
+            Duration::from_millis(250),
+            &AtomicBool::new(false)
+        ),
+        Err("a reward card read as blank")
     );
     assert!(visual.calls >= 2, "should have retried before giving up");
 }
@@ -635,7 +631,7 @@ fn a_screen_that_has_already_gone_stops_the_retry_instead_of_blocking_the_monito
         &gone,
     );
 
-    assert!(result.is_none());
+    assert_eq!(result, Err("the reward screen closed first"));
     assert_eq!(
         attempts.load(std::sync::atomic::Ordering::Acquire),
         0,

@@ -11,7 +11,26 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.8.0-rc2] - 2026-09-04
+
+### Fixed
+
+- **Windows builds no longer compile Linux-only X11 capture code.** The native-Wayland release
+  candidate left its XCB imports and two X11 retry tests visible on Windows, which prevented the
+  Windows installer from building even though those capture paths run only on Linux.
+
+## [0.8.0-rc1] - 2026-09-04
+
 ### Added
+
+- **Native-Wayland Warframe now has automatic, prompt-free capture where the compositor supports
+  it.** Linux still takes an X11/XWayland game window first; when Warframe runs with
+  `PROTON_ENABLE_WAYLAND=1`, capture tries wlroots screencopy, then KWin ScreenShot2, then an
+  already-authorized portal ScreenCast session. Gameplay never opens a desktop chooser. First run
+  still records only the read-only access risk disclosure; portal permission is granted separately
+  from Settings when that fallback is needed. Installed deb, rpm, Arch and Gentoo packages can use
+  KDE's silent ScreenShot2 path. AppImages cannot receive that KWin authorization and use the
+  portal fallback instead.
 
 - **The masthead is the window's titlebar.** The main window runs with the compositor's own
   decorations off, so on a desktop where nobody knows the window-management keys — KDE most of
@@ -22,6 +41,15 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   taking the caution colour only under the pointer of close. The maximize control names itself
   by its next action and follows the real window state, so snapping from the keyboard keeps it
   honest.
+
+### Fixed
+
+- **Wayland sessions no longer dim the desktop when a fissure starts.** Reward polling could replay
+  a ScreenCast restore token after the game opened; desktop portals may ignore a stale token and
+  launch their interactive monitor picker, which dims the desktop and starts `slurp` on wlroots.
+  Gameplay capture can no longer negotiate with the portal. It uses an already-live session only
+  after X11/XWayland, wlroots screencopy and KWin ScreenShot2 are unavailable; otherwise polling
+  reports a capture error without opening a chooser.
 
 ## [0.7.0] - 2026-08-22
 
@@ -474,7 +502,9 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc2...HEAD
+[0.8.0-rc2]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc1...v0.8.0-rc2
+[0.8.0-rc1]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...v0.8.0-rc1
 [0.7.0]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Deftera186/tennoscope/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Deftera186/tennoscope/compare/v0.5.7...v0.6.0
