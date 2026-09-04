@@ -188,7 +188,7 @@ jobs:
             libegl-dev \
             libwayland-dev \
             libxcb1-dev \
-            cpio \
+            libarchive-tools \
             rpm \
             tesseract-ocr \
             tesseract-ocr-eng

@@ -68,9 +68,8 @@ for bundle in "$@"; do
     rpm)
       require_command awk
       require_command rpm
-      require_command cpio
+      require_command bsdtar
       require_command mktemp
-      require_command rpm2cpio
       ;;
   esac
 done
@@ -359,19 +358,12 @@ assert_deb_artifact() {
 assert_rpm_artifact() {
   bundle_dir="$repo_root/target/release/bundle/rpm"
   built=$(single_bundle_artifact "$bundle_dir" rpm)
-  package_archive_tmp=$(mktemp "${TMPDIR:-/tmp}/tennoscope-rpm.XXXXXX.cpio") || {
-    echo "could not create temporary storage for the rpm payload" >&2
-    exit 1
-  }
-  rpm2cpio "$built" >"$package_archive_tmp" || {
-    echo "failed to read rpm artifact $built" >&2
-    exit 1
-  }
+  package_archive_tmp=
   package_listing_tmp=$(mktemp "${TMPDIR:-/tmp}/tennoscope-rpm-list.XXXXXX") || {
     echo "could not create temporary storage for the rpm payload listing" >&2
     exit 1
   }
-  cpio -it --quiet <"$package_archive_tmp" >"$package_listing_tmp" || {
+  bsdtar -tf "$built" >"$package_listing_tmp" || {
     echo "failed to list rpm artifact $built" >&2
     exit 1
   }
@@ -382,7 +374,7 @@ assert_rpm_artifact() {
     echo "could not create temporary storage to extract the rpm" >&2
     exit 1
   }
-  (cd "$package_extract_tmp" && cpio -id --quiet <"$package_archive_tmp") || {
+  bsdtar -xf "$built" -C "$package_extract_tmp" || {
     echo "failed to extract rpm artifact $built" >&2
     exit 1
   }
@@ -390,8 +382,6 @@ assert_rpm_artifact() {
   assert_rpm_dependency "$built" "pipewire-libs"
   rm -rf "$package_extract_tmp"
   package_extract_tmp=
-  rm -f "$package_archive_tmp"
-  package_archive_tmp=
 }
 
 cd "$repo_root"
