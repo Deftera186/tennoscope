@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const backend = vi.hoisted(() => ({
-  getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(), refreshPrices: vi.fn(),
+  getSetupStatus: vi.fn(), acceptRiskDisclosure: vi.fn(), authorizeScreenCapture: vi.fn(), getView: vi.fn(), refreshInventory: vi.fn(), refreshPrices: vi.fn(),
   marketStatus: vi.fn(), marketSignIn: vi.fn(), marketLinkToken: vi.fn(), marketSignOut: vi.fn(),
   refreshOrders: vi.fn(), removeOrder: vi.fn(), setOrderQuantity: vi.fn(),
   setMarketPresence: vi.fn(), createOrder: vi.fn(), updateOrder: vi.fn(),
@@ -22,6 +22,16 @@ vi.mock('./window', () => windowApi)
 
 import App from './App'
 import type { AppView } from './backend'
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 
 const view: AppView = {
   collection: {
@@ -98,6 +108,7 @@ describe('MVP desktop interface', () => {
     backend.setMarketPresence.mockResolvedValue(view)
     backend.createOrder.mockResolvedValue(view)
     overlay.showRewardOverlay.mockResolvedValue(undefined)
+    backend.authorizeScreenCapture.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: false })
     overlay.hideRewardOverlay.mockResolvedValue(undefined)
     // Every mount reads the window's state once and subscribes for more; tests that never touch
     // the controls still need those promises to resolve.
@@ -119,6 +130,20 @@ describe('MVP desktop interface', () => {
     expect(backend.acceptRiskDisclosure).toHaveBeenCalledOnce()
     expect(await screen.findByRole('heading', { name: 'Your collection' })).toBeInTheDocument()
   })
+
+  it('accepts the first-run risk without authorizing capture or showing chooser instructions', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: false, desktop_capture_action_available: true })
+    backend.acceptRiskDisclosure.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    render(<App />)
+
+    expect(await screen.findByRole('button', { name: 'Accept risk and continue' })).toBeInTheDocument()
+    expect(screen.queryByText(/screen chooser|select every display|desktop capture/i)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Accept risk and continue' }))
+
+    expect(backend.authorizeScreenCapture).not.toHaveBeenCalled()
+    expect(await screen.findByRole('heading', { name: 'Your collection' })).toBeInTheDocument()
+  })
+
 
   it('shows useful collection summary and responsive navigation semantics', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
@@ -265,6 +290,195 @@ describe('MVP desktop interface', () => {
     expect(screen.getByText(/process inspection may carry/i)).toBeInTheDocument()
     expect(screen.queryByRole('slider'), 'and a preference is not a disclosure').not.toBeInTheDocument()
   })
+
+  it('explains automatic capture without portal controls', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: false })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(screen.getByText('Screen capture is automatic. Desktop sharing is only needed when Warframe is launched with PROTON_ENABLE_WAYLAND=1 and this compositor has no direct capture API.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Captured screens|Set up screen capture|Change captured screens|Allow desktop capture/i })).not.toBeInTheDocument()
+    expect(backend.authorizeScreenCapture).not.toHaveBeenCalled()
+  })
+
+  it('explains portal consequences before offering the explicit desktop capture action', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    const action = screen.getByRole('button', { name: 'Allow desktop capture' })
+    const chooser = screen.getByText(/desktop opens its own screen chooser/i)
+    expect(screen.getByText(/select every display where Warframe may run/i)).toBeInTheDocument()
+    expect(screen.getByText(/KDE\/GNOME may show an active screen-sharing indicator/i)).toBeInTheDocument()
+    expect(screen.getByText(/TennoScope releases the session when the game exits/i)).toBeInTheDocument()
+    expect(chooser.compareDocumentPosition(action) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(backend.authorizeScreenCapture).not.toHaveBeenCalled()
+
+    await userEvent.click(action)
+    expect(backend.authorizeScreenCapture).toHaveBeenCalledOnce()
+  })
+
+  it('keeps an empty desktop capture live region mounted before status changes', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(document.querySelector('.capture-status')).toBeEmptyDOMElement()
+  })
+
+  it('does not restart portal authorization after leaving and returning to Settings', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    const authorization = deferred<{ risk_accepted: boolean; desktop_capture_action_available: boolean }>()
+    backend.authorizeScreenCapture.mockReturnValueOnce(authorization.promise)
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Allow desktop capture' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Collection' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    const action = screen.getByRole('button', { name: 'Allowing desktop capture…' })
+    expect(action).toBeDisabled()
+    expect(action).toHaveAttribute('aria-busy', 'true')
+    fireEvent.click(action)
+    expect(backend.authorizeScreenCapture).toHaveBeenCalledOnce()
+    await act(async () => { authorization.resolve({ risk_accepted: true, desktop_capture_action_available: false }) })
+  })
+
+  it('shows and hides the portal action from setup status refreshed by the existing poll', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus
+      .mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: false })
+      .mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: true })
+      .mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: false })
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(screen.queryByRole('button', { name: 'Allow desktop capture' })).not.toBeInTheDocument()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    expect(screen.getByRole('button', { name: 'Allow desktop capture' })).toBeInTheDocument()
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    expect(screen.queryByRole('button', { name: 'Allow desktop capture' })).not.toBeInTheDocument()
+  })
+
+  it('keeps live view polling while desktop authorization is pending', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    const authorization = deferred<{ risk_accepted: boolean; desktop_capture_action_available: boolean }>()
+    backend.authorizeScreenCapture.mockReturnValueOnce(authorization.promise)
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow desktop capture' }))
+
+    const before = backend.getView.mock.calls.length
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+
+    expect(backend.getView.mock.calls.length).toBeGreaterThan(before)
+    await act(async () => { authorization.resolve({ risk_accepted: true, desktop_capture_action_available: false }) })
+  })
+
+  it('does not apply the startup retry loop to periodic setup polls', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    render(<App />)
+    await act(async () => {})
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+
+    expect(backend.getSetupStatus).toHaveBeenLastCalledWith(1)
+  })
+
+  it('keeps authorization status when an older setup poll resolves later', async () => {
+    vi.useFakeTimers()
+    const poll = deferred<{ risk_accepted: boolean; desktop_capture_action_available: boolean }>()
+    backend.getSetupStatus
+      .mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: true })
+      .mockReturnValueOnce(poll.promise)
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    fireEvent.click(screen.getByRole('button', { name: 'Allow desktop capture' }))
+    await act(async () => {})
+    expect(screen.queryByRole('button', { name: 'Allow desktop capture' })).not.toBeInTheDocument()
+    expect(screen.getByText('Desktop capture allowed.')).toBeInTheDocument()
+
+    await act(async () => { poll.resolve({ risk_accepted: true, desktop_capture_action_available: true }) })
+    expect(screen.queryByRole('button', { name: 'Allow desktop capture' })).not.toBeInTheDocument()
+    expect(screen.getByText('Desktop capture allowed.')).toBeInTheDocument()
+  })
+
+  it('preserves capture authorization status while navigating away and back', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Allow desktop capture' }))
+    expect(screen.getByText('Desktop capture allowed.')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: 'Collection' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+
+    expect(screen.getByText('Desktop capture allowed.')).toBeInTheDocument()
+  })
+
+  it('announces when desktop capture needs permission again', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus
+      .mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: true })
+      .mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: true })
+    render(<App />)
+    await act(async () => {})
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow desktop capture' }))
+    await act(async () => {})
+    expect(screen.getByText('Desktop capture allowed.')).toBeInTheDocument()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    expect(screen.getByRole('button', { name: 'Allow desktop capture' })).toBeInTheDocument()
+    expect(screen.getByText('Desktop capture needs permission again.')).toBeInTheDocument()
+    expect(screen.queryByText('Desktop capture allowed.')).not.toBeInTheDocument()
+  })
+
+  it('keeps collection and navigation usable when desktop capture authorization is rejected', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    backend.authorizeScreenCapture.mockRejectedValueOnce(new Error('permission denied'))
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Allow desktop capture' }))
+
+    expect(await screen.findByText(/desktop capture was denied or is unavailable.*try again/i)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Collection' }))
+    expect(screen.getByRole('heading', { name: 'Your collection' })).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Collection items' })).toBeInTheDocument()
+  })
+
+  it('announces portal authorization progress and reports unavailable capture accurately', async () => {
+    backend.getSetupStatus.mockResolvedValue({ risk_accepted: true, desktop_capture_action_available: true })
+    const authorization = deferred<{ risk_accepted: boolean; desktop_capture_action_available: boolean }>()
+    backend.authorizeScreenCapture.mockReturnValueOnce(authorization.promise)
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    const action = screen.getByRole('button', { name: 'Allow desktop capture' })
+
+    await userEvent.click(action)
+    expect(action).toHaveAttribute('aria-busy', 'true')
+
+    authorization.reject(new Error('portal unavailable'))
+    expect(await screen.findByText(
+      'Desktop capture was denied or is unavailable. Check that desktop screen sharing works, then try again.',
+    )).toBeInTheDocument()
+  })
+
 
   it('refreshes inventory and announces live state', async () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
@@ -846,18 +1060,25 @@ describe('MVP desktop interface', () => {
       expect(windowApi.minimizeWindow).toHaveBeenCalledOnce()
     })
 
-    it('maximizes the window from the masthead, named by its next action', async () => {
-      render(<App/>)
+    it('tracks external maximize changes and stops listening on unmount', async () => {
+      let onResize: (() => void) | undefined
+      const unlisten = vi.fn()
+      windowApi.watchWindowResized.mockImplementation(async callback => {
+        onResize = callback
+        return unlisten
+      })
+      const rendered = render(<App/>)
       const maximize = await screen.findByRole('button', { name: 'Maximize window' })
-      await waitFor(() => expect(windowApi.readWindowMaximized).toHaveBeenCalled())
       await userEvent.click(maximize)
       expect(windowApi.toggleMaximizeWindow).toHaveBeenCalledOnce()
-    })
+      await waitFor(() => expect(windowApi.watchWindowResized).toHaveBeenCalled())
 
-    it('names the same control restore while maximized', async () => {
       windowApi.readWindowMaximized.mockResolvedValue(true)
-      render(<App/>)
-      expect(await screen.findByRole('button', { name: 'Restore window' })).toBeInTheDocument()
+      await act(async () => { onResize?.() })
+      expect(maximize).toHaveAccessibleName('Restore window')
+
+      rendered.unmount()
+      expect(unlisten).toHaveBeenCalledOnce()
     })
 
     it('closes the window from the masthead', async () => {

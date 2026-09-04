@@ -45,7 +45,7 @@ Package names vary by release. A typical current Tauri 2 toolchain starts with:
 
 ```bash
 sudo apt update
-sudo apt install build-essential curl file libayatana-appindicator3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev wget
+sudo apt install build-essential cpio curl file libayatana-appindicator3-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev rpm wget
 ```
 
 Install Node.js, Corepack/pnpm, and Rust separately using your preferred distribution-supported method. Building a `.deb` does not publish or configure an APT repository.
@@ -55,7 +55,7 @@ Install Node.js, Corepack/pnpm, and Rust separately using your preferred distrib
 A typical current Tauri 2 toolchain starts with:
 
 ```bash
-sudo dnf install curl file gcc gcc-c++ libappindicator-gtk3-devel librsvg2-devel libxdo-devel make openssl-devel webkit2gtk4.1-devel wget
+sudo dnf install cpio curl file gcc gcc-c++ libappindicator-gtk3-devel librsvg2-devel libxdo-devel make openssl-devel rpm-build rpmdevtools webkit2gtk4.1-devel wget
 ```
 
 Install Node.js, Corepack/pnpm, and Rust separately. Building an `.rpm` does not create a DNF/Copr repository or sign the package.
@@ -64,6 +64,7 @@ Install Node.js, Corepack/pnpm, and Rust separately. Building an `.rpm` does not
 
 - AppImage builds are the broadest single-file output but still depend on a sufficiently compatible Linux userspace; see [appimage.md](appimage.md).
 - Native package maintainers should declare runtime WebKitGTK/GTK dependencies generated or required by Tauri rather than bundling system libraries blindly.
-- The relic overlay shells out to `tesseract` with English data; window location and the crop pipeline are in-process now, so `xwininfo` and ImageMagick are no longer needed. The collection browser runs without OCR, so declare tesseract as a weak dependency — `Recommends` on deb and rpm, `optdepends` on Arch — not a hard one.
+- The relic overlay shells out to `tesseract` with English data; the collection browser runs without OCR, so declare tesseract as a weak dependency — `Recommends` on deb and rpm, `optdepends` on Arch — not a hard one. ImageMagick is no longer needed, but Wine virtual-desktop child discovery still runs `xwininfo -root -tree`; install the distribution's `xwininfo` package (`x11-utils` on Debian/Ubuntu) for that mode.
 - Do not package the application with setuid bits or broad ptrace capabilities. Document Yama requirements instead.
+- On KDE, silent ScreenShot2 capture requires launching an installed TennoScope package whose desktop entry declares `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2`. If capture says it was not authorized, close the checkout or raw binary and run the installed package. Downstream packages must preserve that desktop-entry key. AppImages cannot use this KWin authorization path and use the portal fallback instead.
 - Preserve `LICENSE`, `THIRD_PARTY_NOTICES.md`, and WFCD attribution in binary distributions.

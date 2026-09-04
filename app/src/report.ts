@@ -10,13 +10,14 @@ export async function copyReport(): Promise<void> {
 
 export async function saveReport(): Promise<CollectedReport> {
   const result = await collectReport()
-  // The reveal is a convenience -- on a Steam Deck in Game Mode there is no file manager to open.
-  // Losing it must not lose the folder path, which is the only thing the player actually needs.
-  try {
-    await revealItemInDir(result.folder_path)
-  } catch {
+  // The reveal is a convenience -- on a Steam Deck in Game Mode there is no file manager to open,
+  // and on Linux it is a D-Bus call to org.freedesktop.FileManager1 (or the OpenURI portal as a
+  // fallback) that can sit unanswered far longer than a user will wait. The report is already
+  // saved by this point, so the button must not stay busy on this best-effort step: fire it and
+  // forget it instead of awaiting it.
+  void revealItemInDir(result.folder_path).catch(() => {
     // ignored on purpose
-  }
+  })
   return result
 }
 

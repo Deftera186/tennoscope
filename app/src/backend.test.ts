@@ -5,6 +5,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke }))
 
 import {
   acceptRiskDisclosure,
+  authorizeScreenCapture,
   getSetupStatus,
   marketLinkToken,
   marketSignIn,
@@ -21,18 +22,23 @@ describe('typed Tauri command bridge', () => {
   beforeEach(() => invoke.mockReset())
 
   it('uses stable setup and refresh command names', async () => {
-    invoke.mockResolvedValueOnce({ risk_accepted: false })
-    await expect(getSetupStatus()).resolves.toEqual({ risk_accepted: false })
+    invoke.mockResolvedValueOnce({ risk_accepted: false, desktop_capture_action_available: true })
+    await expect(getSetupStatus()).resolves.toEqual({ risk_accepted: false, desktop_capture_action_available: true })
     expect(invoke).toHaveBeenCalledWith('get_setup_status')
 
-    invoke.mockResolvedValueOnce({ risk_accepted: true })
-    await acceptRiskDisclosure()
+    invoke.mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: true })
+    await expect(acceptRiskDisclosure()).resolves.toEqual({ risk_accepted: true, desktop_capture_action_available: true })
     expect(invoke).toHaveBeenCalledWith('accept_risk_disclosure')
+
+    invoke.mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: false })
+    await expect(authorizeScreenCapture()).resolves.toEqual({ risk_accepted: true, desktop_capture_action_available: false })
+    expect(invoke).toHaveBeenCalledWith('authorize_screen_capture')
 
     invoke.mockResolvedValueOnce({ collection: { items: [], total_entries: 0 } })
     await refreshInventory()
     expect(invoke).toHaveBeenCalledWith('refresh_inventory')
   })
+
 
   it('waits out a backend that has not finished starting', async () => {
     invoke

@@ -25,14 +25,9 @@ The MVP excludes macOS support — Warframe has no macOS client — as well as F
 
 ### First Run
 
-Setup performs four explicit actions:
-
-1. Explain that the application reads the Warframe process and that even read-only inspection may create account-policy or anti-cheat risk.
-2. Acquire screen-capture permission through PipeWire and `xdg-desktop-portal` on Wayland. X11 uses direct capture.
-3. Verify game-process discovery, capture availability, reader-definition trust, and local storage.
-4. Record setup completion so later launches require no manual inventory screens or repeated prompts unless a portal revokes capture permission.
-
-Read-only memory acquisition is enabled by default after disclosure. There is no guided inventory scan.
+Setup presents the process-inspection risk disclosure and records its acceptance. It does not ask
+for screen-sharing permission or require a monitor choice. Read-only memory acquisition is enabled
+by default after disclosure. There is no guided inventory scan.
 
 ### Normal Launch
 
@@ -68,11 +63,15 @@ Memory access has one adapter per platform behind the same `MemoryReader`/`Proce
 
 #### Screen Observer
 
-Screen Observer hides PipeWire portal sessions, compositor differences, X11 and Windows Graphics Capture, frame selection, and reward recognition. Capture and the preprocessing pipeline are in-process on both platforms; the only external tool is Tesseract, which Windows bundles and Linux takes from the distribution. Its interface emits a reward-screen observation containing recognized catalog identities and confidence. It neither prices rewards nor renders the overlay.
-
-Wayland requires a functioning PipeWire plus `xdg-desktop-portal` backend. The tested matrix includes representative GNOME, KDE, wlroots, and Hyprland sessions. Minimal window managers must install and configure a compatible portal backend.
-
-Windows captures through Windows Graphics Capture rather than GDI, because `BitBlt` against a D3D swapchain returns a black frame. Placement is the one capability that does not reach parity: an override-redirect X11 window sits above a fullscreen Wine client, but nothing short of a swapchain hook draws over an exclusive-fullscreen Windows game. Borderless is therefore a documented requirement, surfaced in the health panel rather than only in the README.
+Screen Observer hides X11/XWayland capture, native-Wayland compositor capture, portal ScreenCast,
+and Windows Graphics Capture behind one frame-selection and reward-recognition path. Capture and
+preprocessing are in-process on both platforms; Tesseract provides OCR, and Linux uses `xwininfo`
+only to discover a game nested inside a Wine virtual desktop. On Linux, X11/XWayland wins whenever
+it finds the game.
+A native-Wayland game then tries wlroots screencopy, KWin ScreenShot2, and finally an
+already-live portal ScreenCast session; gameplay never negotiates a portal session or opens a
+desktop chooser. Windows captures through Windows Graphics Capture rather than GDI, because
+`BitBlt` against a D3D swapchain returns a black frame.
 
 #### Observation Pipeline
 
@@ -185,7 +184,7 @@ Routine game changes should require only a reader-definition update. A major int
 
 - **Unknown build or broken memory discovery:** disable memory synchronization, keep the last coherent inventory, continue compatible passive and screen features, and expose the exact backend failure in diagnostics.
 - **Snapshot validation failure:** commit nothing and record a local diagnostic outcome.
-- **Portal permission revoked:** request capture permission again without blocking inventory synchronization.
+- **Game window unavailable to capture:** leave the desktop unchanged, keep inventory synchronization running, and expose the exact capture failure in diagnostics.
 - **Uncertain reward recognition:** label that reward uncertain and exclude it from best-choice ranking.
 - **Catalog unavailable:** use the last valid catalog and show its age.
 - **Market unavailable:** use timestamped cached prices and show their age; never present them as current.
@@ -215,9 +214,14 @@ The supported release artifacts are:
 - Fedora `.rpm`; and
 - AppImage as a cross-distribution fallback.
 
-Package definitions declare WebKitGTK, PipeWire, portal, and other system dependencies appropriate to each distribution. AppImage cannot replace the host's compositor portal integration. Flatpak is excluded because its sandbox conflicts with default process-memory inspection; it may be designed later with a host helper or reduced capabilities.
+Package definitions declare WebKitGTK and the other system dependencies appropriate to each
+distribution. Flatpak is excluded because its sandbox conflicts with default process-memory
+inspection; it may be designed later with a host helper or reduced capabilities.
 
-The initial verification matrix covers the supported distribution families, X11, GNOME Wayland, KDE Wayland, a wlroots compositor, and Hyprland. Packaging more distributions is welcome after the core matrix is stable.
+The verification matrix covers the supported distribution families, X11 sessions, Wayland
+sessions running Warframe through XWayland, and native-Wayland Warframe launched with
+`PROTON_ENABLE_WAYLAND=1` through wlroots screencopy, installed KWin packages, or the portal
+fallback.
 
 ## Testing Strategy
 
@@ -230,7 +234,7 @@ Interfaces are the test surfaces. Tests assert observable snapshots, reward view
 - Local Store tests cover atomic replacement, audit history, rollback, schema migration, and recovery from interrupted writes.
 - External Data tests use deterministic adapters for current, stale, malformed, and unavailable sources.
 - End-to-end tests feed a fake game session through acquisition, storage, reward advice, and presentation state.
-- Manual release verification exercises portal setup, permission restoration, click-through overlay placement, multi-monitor behavior, process detection, and packaging on the supported Linux matrix.
+- Manual release verification exercises automatic X11/XWayland and native-Wayland capture, confirms gameplay never opens a portal chooser, checks click-through overlay placement and multi-monitor movement, and covers process detection and packaging on the supported Linux matrix.
 
 Real player memory or screenshots are not committed to the repository unless explicitly sanitized and licensed for that purpose.
 
@@ -238,14 +242,14 @@ Real player memory or screenshots are not committed to the repository unless exp
 
 The MVP is successful when a supported Linux installation can:
 
-1. complete disclosure and capture setup once;
+1. complete the process-inspection disclosure once;
 2. automatically detect Wine- or Proton-hosted Warframe on later launches;
 3. produce a coherent automatic collection/mastery snapshot without opening specific in-game screens;
 4. accurately apply inventory additions and legitimate deletions;
 5. detect an English relic reward screen and display four enriched advisor cards without intercepting game input;
 6. retain useful collection and price data while external sources are offline;
-7. degrade explicitly without corrupting collection state when a reader or portal fails; and
-8. install and run from the supported Arch, Gentoo, Debian/Ubuntu, Fedora, and AppImage artifacts across the stated X11/Wayland matrix.
+7. degrade explicitly without corrupting collection state when a reader or capture fails; and
+8. install and run from the supported Arch, Gentoo, Debian/Ubuntu, Fedora, and AppImage artifacts across the stated X11, XWayland, and native-Wayland capture matrix.
 
 ## License
 

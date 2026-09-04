@@ -74,8 +74,8 @@ pub fn reward_overlay_geometry(
 fn overlay_geometry(
     window: &WebviewWindow,
     cards: usize,
+    game_rect: Option<WindowRect>,
 ) -> tauri::Result<Option<OverlayGeometry>> {
-    let game_rect = warframe_window_rect();
     let monitor = if game_rect.is_none() {
         window
             .primary_monitor()?
@@ -97,27 +97,44 @@ fn overlay_geometry(
 
 /// What to tell the player when the game window could not be located.
 ///
-/// On Windows an exclusive-fullscreen game owns the display outright: it is absent from the window
-/// enumeration the overlay measures against, and no window style draws above it. Borderless is the
-/// fix, so the panel names it. Linux has no such gap -- the override-redirect strip sits above a
-/// Wine fullscreen game -- so there is nothing to ask for there.
-pub const fn borderless_notice(found: bool) -> Option<&'static str> {
-    if found || !cfg!(windows) {
+/// On Windows an exclusive-fullscreen game owns the display outright: it is absent from the
+/// window enumeration and no window style draws above it, so borderless is the fix.
+///
+/// On Linux the advice is the same but the reason is different. A native Wayland game is
+/// invisible to X11 window enumeration no matter what mode it is in, so the capture path falls
+/// back to casting the monitor -- which only lines up with the cards when the game fills that
+/// monitor. This used to return `None` on every non-Windows platform, so the one user who hit
+/// it was told nothing at all.
+pub const fn placement_notice(
+    exact_window_found: bool,
+    session: crate::reward_capture::SessionKind,
+) -> Option<&'static str> {
+    if exact_window_found {
         return None;
     }
-    Some(
-        "Warframe window not found. Set Display Mode to Borderless in the game's options; \
-         the overlay cannot draw over exclusive fullscreen.",
-    )
+    if cfg!(windows) {
+        return Some(
+            "Warframe window not found. Set Display Mode to Borderless in the game's options; \
+             the overlay cannot draw over exclusive fullscreen.",
+        );
+    }
+    match session {
+        crate::reward_capture::SessionKind::Wayland => Some(
+            "Warframe window not found. On Wayland the overlay reads the whole monitor, so set \
+             Display Mode to Borderless (or Fullscreen) and keep the game on one screen.",
+        ),
+        crate::reward_capture::SessionKind::X11 => {
+            Some("Warframe window not found. Set Display Mode to Borderless in the game's options.")
+        }
+    }
 }
 
-/// The notice for the game as it is right now, or `None` when there is nothing to say.
-pub fn overlay_placement_notice() -> Option<&'static str> {
-    borderless_notice(warframe_window_rect().is_some())
-}
-
-pub fn configure_reward_overlay(window: &WebviewWindow, cards: usize) -> tauri::Result<()> {
-    let geometry = overlay_geometry(window, cards)?;
+fn configure_reward_overlay(
+    window: &WebviewWindow,
+    cards: usize,
+    game_rect: Option<WindowRect>,
+) -> tauri::Result<()> {
+    let geometry = overlay_geometry(window, cards, game_rect)?;
     if let Some(geometry) = geometry {
         window.set_size(PhysicalSize::new(geometry.width, geometry.height))?;
         window.set_position(PhysicalPosition::new(geometry.x, geometry.y))?;
@@ -140,20 +157,58 @@ pub fn configure_reward_overlay(window: &WebviewWindow, cards: usize) -> tauri::
     Ok(())
 }
 
-pub(crate) fn warframe_window_rect() -> Option<WindowRect> {
-    crate::reward_ocr::warframe_window_rect().ok()
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GameRectOrigin {
+    X11,
+    MatchedCapture,
+}
+
+fn warframe_window_rect_with_origin() -> Option<(WindowRect, GameRectOrigin)> {
+    use crate::reward_capture::{GameRectSource, x11::X11Capture};
+    preferred_game_rect(
+        X11Capture::new().game_rect().ok(),
+        crate::reward_ocr::latest_matched_rect(),
+    )
+}
+
+fn preferred_game_rect(
+    x11_rect: Option<WindowRect>,
+    matched_rect: Option<WindowRect>,
+) -> Option<(WindowRect, GameRectOrigin)> {
+    x11_rect
+        .map(|rect| (rect, GameRectOrigin::X11))
+        .or_else(|| matched_rect.map(|rect| (rect, GameRectOrigin::MatchedCapture)))
 }
 
 /// Put the overlay above the game on any window manager or compositor.
 ///
 /// The window is made *override-redirect*, which takes it out of the window manager's hands
-/// altogether: it is never reparented, restacked, focused or tiled, and its position is the one we
-/// give it. That is what makes the behaviour identical everywhere. The alternatives each cover only
+/// altogether: it is never reparented, restacked, or tiled, and its position is the one we give
+/// it. That is what makes the behaviour identical everywhere. The alternatives each cover only
 /// part of the field -- `wlr-layer-shell` is absent on GNOME, `_NET_WM_STATE_ABOVE` is ignored by
 /// sway, and neither can be relied on to beat a fullscreen game.
 ///
 /// It only works because the whole app runs on X11 (see `run`), in the same display server and the
 /// same coordinate space as the Wine/Proton game window it has to line up with.
+///
+/// Focus is the one thing override-redirect does not settle by itself on a wlroots compositor
+/// (sway, and anything else built on wlroots). `set_accept_focus(false)` only clears the ICCCM
+/// `WM_HINTS` input field, which pure X11 window managers honour but which sway's XWayland
+/// override-redirect path (`unmanaged_handle_map` in `sway/desktop/xwayland.c`) never looks at:
+/// it decides purely from `_NET_WM_WINDOW_TYPE`, and a plain GTK window (type `NORMAL`, or no type
+/// at all) is treated as *wanting* focus, so sway hands the overlay's surface keyboard focus and
+/// activation the instant it maps. For a native-Wayland game client (`PROTON_ENABLE_WAYLAND=1`,
+/// e.g. the `warframe-wayland` launcher) that focus steal deactivates its `xdg_toplevel`, and
+/// winewayland.drv's fullscreen-focus-loss handling can leave the game's own render loop stalled
+/// -- confirmed live: the game froze on-screen the instant the overlay mapped, and refocusing it
+/// with `swaymsg '[app_id="warframe.x64.exe"] focus'` was what unstuck it. XWayland Warframe never
+/// showed this because the game's own window shares the same X11/XWM focus semantics as the
+/// overlay there, and winex11.drv's borderless mode does not tie itself to activation the same way.
+///
+/// The fix is to give the override-redirect window a `_NET_WM_WINDOW_TYPE` that is on wlroots'
+/// exclusion list for `wlr_xwayland_or_surface_wants_focus` (utility, tooltip, notification, menu,
+/// splash, combo, dnd, or a popup/dropdown menu) instead of the default `NORMAL`. `Utility` is the
+/// closest fit for a strip that only ever displays, never accepts input.
 #[cfg(target_os = "linux")]
 fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
     use gtk::prelude::{GtkWindowExt, WidgetExt};
@@ -169,6 +224,9 @@ fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
         return false;
     };
     gdk_window.set_override_redirect(true);
+    // Stops wlroots compositors (sway) from handing this window keyboard focus/activation on map
+    // -- see the doc comment above for why that matters beyond just stealing input.
+    gdk_window.set_type_hint(gtk::gdk::WindowTypeHint::Utility);
     let width = i32::try_from(geometry.width).unwrap_or(966);
     let height = i32::try_from(geometry.height).unwrap_or(156);
     // The overlay is one column per card, sized to the game's own card block, so extra width is
@@ -197,12 +255,18 @@ fn trace_overlay(action: &str) {
 
 /// `cards` is how many rewards are on screen, so the strip lands on the block the game actually
 /// drew rather than on a four-card block it may not have.
-pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
+pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) -> Option<&'static str> {
+    let located = warframe_window_rect_with_origin();
+    let notice = placement_notice(
+        matches!(located, Some((_, GameRectOrigin::X11))),
+        crate::reward_capture::session_kind(),
+    );
+    let game_rect = located.map(|(rect, _)| rect);
     if let Some(window) = app.get_webview_window("reward-overlay") {
         let _ = app.run_on_main_thread(move || {
             trace_overlay(&format!("show cards={cards}"));
             #[cfg(target_os = "linux")]
-            if let Ok(Some(geometry)) = overlay_geometry(&window, cards) {
+            if let Ok(Some(geometry)) = overlay_geometry(&window, cards, game_rect) {
                 if show_over_game(&window, geometry) {
                     trace_overlay(&format!(
                         "shown override-redirect {}x{} at {},{}",
@@ -211,7 +275,7 @@ pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
                     return;
                 }
             }
-            let _ = configure_reward_overlay(&window, cards);
+            let _ = configure_reward_overlay(&window, cards, game_rect);
             let _ = window.show();
             // Showing a window puts it at the top of its own band, which on Windows is enough to
             // drop it out of the topmost band it was placed in. Re-asserting after the show is what
@@ -220,6 +284,7 @@ pub fn show_reward_overlay(app: &tauri::AppHandle, cards: usize) {
             trace_overlay("shown via plain window");
         });
     }
+    notice
 }
 
 pub fn hide_reward_overlay(app: &tauri::AppHandle) {
@@ -229,5 +294,61 @@ pub fn hide_reward_overlay(app: &tauri::AppHandle) {
             let _ = window.hide();
             trace_overlay("hidden");
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GameRectOrigin, WindowRect, placement_notice, preferred_game_rect};
+    use crate::reward_capture::SessionKind;
+
+    /// Current X11 geometry is fresher than the last OCR-matched rectangle after the game moves.
+    #[test]
+    fn overlay_prefers_current_x11_geometry_then_uses_the_ocr_match() {
+        let x11 = WindowRect {
+            x: 50,
+            y: 60,
+            width: 1600,
+            height: 900,
+        };
+        let matched = WindowRect {
+            x: 1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+
+        assert_eq!(
+            preferred_game_rect(Some(x11), Some(matched)),
+            Some((x11, GameRectOrigin::X11))
+        );
+        assert_eq!(
+            preferred_game_rect(None, Some(matched)),
+            Some((matched, GameRectOrigin::MatchedCapture))
+        );
+        assert_eq!(preferred_game_rect(None, None), None);
+    }
+
+    /// Exact X11 geometry needs no advice, including for XWayland under a Wayland session.
+    #[test]
+    fn an_exact_window_match_says_nothing() {
+        assert!(placement_notice(true, SessionKind::X11).is_none());
+        assert!(placement_notice(true, SessionKind::Wayland).is_none());
+    }
+
+    /// An OCR match can supply monitor geometry without proving that the game fills that monitor.
+    /// Wayland players still need the display-mode guidance in that case.
+    #[test]
+    fn a_missing_exact_window_on_wayland_names_borderless_and_fullscreen() {
+        let notice = placement_notice(false, SessionKind::Wayland)
+            .expect("a Wayland session without exact window geometry has something to say");
+        let lower = notice.to_lowercase();
+        assert!(lower.contains("borderless"), "notice was: {notice}");
+        assert!(lower.contains("fullscreen"), "notice was: {notice}");
+    }
+
+    #[test]
+    fn a_missing_window_on_an_x11_session_also_explains_itself() {
+        assert!(placement_notice(false, SessionKind::X11).is_some());
     }
 }

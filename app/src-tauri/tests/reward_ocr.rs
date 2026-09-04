@@ -466,7 +466,7 @@ fn ocr_prefers_the_bundled_tesseract_over_the_one_on_path() {
 /// is indistinguishable from OCR simply not working, and is the shape of the reports that survived
 /// two geometry fixes.
 ///
-/// This is the reason `capture_game_window` resamples a mismatched capture back to the region it
+/// This is the reason live capture resamples a mismatched capture back to the region it
 /// asked for: reading the oversized frame fails, reading it after the resample does not.
 #[test]
 fn a_capture_at_the_wrong_scale_must_be_resampled_before_it_reads() {

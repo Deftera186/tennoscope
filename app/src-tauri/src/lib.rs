@@ -48,6 +48,11 @@ const POLLER_WATCH_INTERVAL: Duration = Duration::from_millis(400);
 /// Consecutive failed reads before the screen counts as closed. Cards read blank often enough
 /// mid-screen that one miss is not evidence.
 const POLLER_GONE_STREAK: u32 = 2;
+/// Consecutive routine misses before one is worth a warning.
+///
+/// Before cards are found the poller runs every two seconds, so fifteen uninterrupted routine
+/// misses represent roughly thirty seconds without a usable reward read.
+const ROUTINE_MISS_WARNING_STREAK: u32 = 15;
 /// Upper bound on how long a single fissure mission is worth watching for.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 
@@ -55,6 +60,7 @@ pub mod market_account;
 mod monitor;
 mod overlay_window;
 pub mod report;
+pub mod reward_capture;
 mod reward_log;
 mod reward_observer;
 mod reward_ocr;
@@ -63,16 +69,16 @@ pub use monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, MonitorResult,
     ee_log_rotation_keep_from, ee_log_session_start_utc, ee_log_stale_prefix_end,
 };
-pub use overlay_window::{OverlayGeometry, WindowRect, borderless_notice, reward_overlay_geometry};
+pub use overlay_window::{OverlayGeometry, WindowRect, placement_notice, reward_overlay_geometry};
+pub use reward_capture::x11::{largest_warframe_window, warframe_window_from_xwininfo_tree};
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
 pub use reward_ocr::{
     MAX_CARDS, ScreenRewardSource, TESSERACT_EXECUTABLE, best_match, card_block_left,
-    card_block_width, largest_warframe_window, luma, normalize_contrast, ocr_crop, prepare_crop,
-    read_cards, read_cards_in, tesseract_program, threshold_inverted,
-    warframe_window_from_xwininfo_tree,
+    card_block_width, luma, normalize_contrast, ocr_crop, prepare_crop, read_cards, read_cards_in,
+    tesseract_program, threshold_inverted,
 };
 pub use reward_source::{
     BoundMemoryRewardSource, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSet,
@@ -83,6 +89,12 @@ pub use reward_source::{
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SetupStatus {
     pub risk_accepted: bool,
+    pub desktop_capture_action_available: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PersistedSetupStatus {
+    risk_accepted: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,7 +112,12 @@ pub fn resolve_local_paths(app_data: &Path) -> LocalPaths {
 
 pub fn read_setup_status(path: &Path) -> Result<SetupStatus, String> {
     match fs::read(path) {
-        Ok(bytes) => Ok(serde_json::from_slice(&bytes).unwrap_or_default()),
+        Ok(bytes) => Ok(serde_json::from_slice::<PersistedSetupStatus>(&bytes)
+            .map(|stored| SetupStatus {
+                risk_accepted: stored.risk_accepted,
+                ..SetupStatus::default()
+            })
+            .unwrap_or_default()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SetupStatus::default()),
         Err(_) => Err("setup status could not be read".to_owned()),
     }
@@ -112,15 +129,62 @@ pub fn accept_setup_risk(path: &Path) -> Result<SetupStatus, String> {
     }
     let status = SetupStatus {
         risk_accepted: true,
+        ..SetupStatus::default()
     };
     let temporary = path.with_extension("tmp");
     fs::write(
         &temporary,
-        serde_json::to_vec(&status).map_err(|_| "setup status could not be saved")?,
+        serde_json::to_vec(&PersistedSetupStatus {
+            risk_accepted: status.risk_accepted,
+        })
+        .map_err(|_| "setup status could not be saved")?,
     )
     .map_err(|_| "setup status could not be saved")?;
     fs::rename(temporary, path).map_err(|_| "setup status could not be saved")?;
     Ok(status)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CaptureSetupInput {
+    game_running: bool,
+    x11_game_window: bool,
+    wlroots_available: bool,
+    kwin_available: bool,
+    portal_session_live: bool,
+}
+
+fn desktop_capture_action_available(input: CaptureSetupInput) -> bool {
+    let capture_ready = input.x11_game_window
+        || input.wlroots_available
+        || input.kwin_available
+        || input.portal_session_live;
+    input.game_running && !capture_ready
+}
+
+fn current_setup_status(stored: SetupStatus, game_running: bool) -> SetupStatus {
+    let mut input = CaptureSetupInput {
+        game_running,
+        x11_game_window: false,
+        wlroots_available: false,
+        kwin_available: false,
+        portal_session_live: false,
+    };
+    if game_running {
+        input.x11_game_window = reward_capture::x11_game_window_available();
+        #[cfg(target_os = "linux")]
+        if !input.x11_game_window {
+            input.wlroots_available = reward_capture::direct::available();
+            input.kwin_available =
+                !input.wlroots_available && reward_capture::kwin::available_cached();
+            input.portal_session_live = !input.wlroots_available
+                && !input.kwin_available
+                && reward_capture::portal::PortalCapture::has_live_session();
+        }
+    }
+    SetupStatus {
+        risk_accepted: stored.risk_accepted,
+        desktop_capture_action_available: desktop_capture_action_available(input),
+    }
 }
 
 pub fn contains_inventory_sync_trigger(bytes: &[u8]) -> bool {
@@ -139,6 +203,8 @@ struct Runtime {
     refresh_in_flight: bool,
     overlay_preview_until: Option<Instant>,
     monitor_started: bool,
+    /// Updated by the existing process watcher; setup status never starts a second watcher.
+    game_running: bool,
     /// Last-known EE.log path, cached so reports can include it even after the game exits.
     last_ee_log_path: Option<PathBuf>,
     // Survives across missions on purpose: the same relic pools recur all evening, so a price
@@ -371,12 +437,19 @@ fn publish_presence(runtime: &mut Runtime) -> Result<AppView, String> {
 }
 
 #[tauri::command]
-fn get_setup_status(state: State<'_, SharedRuntime>) -> Result<SetupStatus, String> {
-    Ok(state
-        .lock()
-        .map_err(|_| "application state is unavailable".to_owned())?
-        .setup
-        .clone())
+async fn get_setup_status(state: State<'_, SharedRuntime>) -> Result<SetupStatus, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let (stored, game_running) = {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            (runtime.setup.clone(), runtime.game_running)
+        };
+        Ok(current_setup_status(stored, game_running))
+    })
+    .await
+    .map_err(|_| "setup task failed".to_owned())?
 }
 
 #[tauri::command]
@@ -386,12 +459,24 @@ async fn accept_risk_disclosure(
 ) -> Result<SetupStatus, String> {
     let shared = Arc::clone(state.inner());
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let mut runtime = shared
-            .lock()
-            .map_err(|_| "application state is unavailable".to_owned())?;
-        let status = accept_setup_risk(&runtime.setup_path)?;
-        runtime.setup = status.clone();
-        Ok(status)
+        // The lock is dropped before `accept_setup_risk` writes and before `current_setup_status`
+        // probes the display server: both can block for seconds, and holding the central runtime
+        // mutex across them stalls every other command and monitor update.
+        let setup_path = {
+            let runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            runtime.setup_path.clone()
+        };
+        let stored = accept_setup_risk(&setup_path)?;
+        let game_running = {
+            let mut runtime = shared
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            runtime.setup = stored.clone();
+            runtime.game_running
+        };
+        Ok(current_setup_status(stored, game_running))
     })
     .await
     .map_err(|_| "setup task failed".to_owned())?;
@@ -402,6 +487,31 @@ async fn accept_risk_disclosure(
     result
 }
 
+#[tauri::command]
+async fn authorize_screen_capture(
+    app: AppHandle,
+    state: State<'_, SharedRuntime>,
+) -> Result<SetupStatus, String> {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (app, state);
+        Err("desktop capture is unavailable".to_owned())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        tauri::async_runtime::spawn_blocking(reward_capture::portal::PortalCapture::authorize)
+            .await
+            .map_err(|_| "desktop capture task failed".to_owned())?
+            .map_err(str::to_owned)?;
+
+        let status = get_setup_status(state.clone()).await?;
+        if status.risk_accepted {
+            start_monitor(Arc::clone(state.inner()), app);
+        }
+        Ok(status)
+    }
+}
 #[tauri::command]
 async fn refresh_inventory(state: State<'_, SharedRuntime>) -> Result<AppView, String> {
     refresh_shared(Arc::clone(state.inner())).await
@@ -1170,6 +1280,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         refresh_in_flight: false,
         overlay_preview_until: None,
         monitor_started: false,
+        game_running: false,
         last_ee_log_path: None,
         live_prices,
         market: market_account::MarketSession::new(warframe_market::open_credential_store(
@@ -1259,6 +1370,16 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
     None
 }
 
+fn should_close_portal(previous: Option<u32>, current: Option<u32>) -> bool {
+    previous.is_some() && current.is_none()
+}
+
+fn confirmed_process_observation<T: Copy, E>(
+    discovered: &Result<Option<T>, E>,
+) -> Option<Option<T>> {
+    discovered.as_ref().ok().copied()
+}
+
 fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let procfs = GameMemory::new();
     let mut machine = MonitorMachine::new(15);
@@ -1311,6 +1432,11 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let visual_reads = Arc::new(Mutex::new(None::<Vec<String>>));
     let visual_polling = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let visual_screen_gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // This thread owns one screen reader for the game session rather than rebuilding it from both
+    // `ResponsesComplete` and `ChoicesReady`. The source has no interactive setup: every read
+    // locates Warframe again, so moving the X11/XWayland window to another monitor is followed
+    // automatically.
+    let mut reward_screen: Option<ScreenRewardSource> = None;
 
     loop {
         let now = SystemTime::now()
@@ -1318,15 +1444,32 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             .unwrap_or_default()
             .as_secs();
         let discovered = procfs.discover();
-        let process = discovered.as_ref().ok().and_then(|process| *process);
-        if process != announced_process {
-            if process.is_some()
-                && let Ok(mut runtime) = shared.lock()
-            {
-                let _ = runtime.core.record_game_process_ready();
+        if let Some(process) = confirmed_process_observation(&discovered) {
+            if process != announced_process {
+                if should_close_portal(
+                    announced_process.map(|process: GameProcess| process.pid()),
+                    process.map(|process| process.pid()),
+                ) {
+                    #[cfg(target_os = "linux")]
+                    if let Err(reason) = reward_capture::portal::PortalCapture::close() {
+                        log::warn!(
+                            "[DEBUG-capture] could not close the screencast session ({reason}); \
+                             the screen-sharing indicator may stay lit until this process exits"
+                        );
+                    }
+                }
+                if let Ok(mut runtime) = shared.lock() {
+                    runtime.game_running = process.is_some();
+                    if process.is_some() {
+                        let _ = runtime.core.record_game_process_ready();
+                    }
+                }
+                announced_process = process;
             }
-            announced_process = process;
         }
+        // A discovery error is not evidence that Warframe exited. Keep the last confirmed process
+        // for reward teardown and event handling until procfs reports an actual absence.
+        let process = confirmed_process_observation(&discovered).unwrap_or(announced_process);
         let (input, log_bytes) = match discovered {
             Ok(None) => (
                 MonitorInput::absent(now, procfs.launcher_present()),
@@ -1390,6 +1533,9 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                 &reward_catalog,
                 &mut reward_memory,
                 &coordinator,
+                // Built on the first reward event and kept for the game session. Each capture
+                // locates Warframe again, including after the window moves to another monitor.
+                reward_screen.get_or_insert_with(ScreenRewardSource::new),
                 &mut reward_state,
                 &mut early_reward_resolved,
                 &mut pending_reward_squad,
@@ -1449,6 +1595,13 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             if reward_state.miss().hide {
                 overlay_window::hide_reward_overlay(&app);
             }
+            reward_ocr::clear_latest_matched_rect();
+            // Hand the screen cast back now the game is gone -- see `reward_screen`'s declaration
+            // for why the release belongs here and not on `RewardLogEvent::Closed`. A no-op on
+            // every poll after the first, and on the X11 path where there was never a cast.
+            if reward_screen.take().is_some() {
+                log::debug!("[DEBUG-capture] game gone; released the monitor thread's capture");
+            }
         }
         let poll_interval = if reward_log.reward_window_open() {
             Duration::from_millis(10)
@@ -1501,6 +1654,9 @@ fn handle_reward_event(
     reward_catalog: &[RewardCatalogEntry],
     memory_state: &mut LiveMemoryRewardState,
     coordinator: &RewardSourceCoordinator,
+    // The monitor thread's own screen reader, borrowed rather than built here. See
+    // `monitor_game`'s `reward_screen`.
+    visual: &mut dyn VisualRewardSource,
     observer: &mut RewardObserverState,
     early_reward_resolved: &mut bool,
     pending_reward_squad: &mut Option<PendingRewardSquad>,
@@ -1571,6 +1727,7 @@ fn handle_reward_event(
                     squad,
                     memory_state,
                     coordinator,
+                    visual,
                     observer,
                     shared,
                     app,
@@ -1579,6 +1736,7 @@ fn handle_reward_event(
                     visual_screen_gone,
                     now,
                 )
+                .is_ok()
             {
                 *early_reward_resolved = true;
             }
@@ -1640,10 +1798,11 @@ fn handle_reward_event(
                 }
                 return;
             };
-            if try_publish_player_records(
+            match try_publish_player_records(
                 squad,
                 memory_state,
                 coordinator,
+                visual,
                 observer,
                 shared,
                 app,
@@ -1652,11 +1811,18 @@ fn handle_reward_event(
                 visual_screen_gone,
                 now,
             ) {
-                *early_reward_resolved = true;
-            } else if let Ok(mut runtime) = shared.lock() {
-                let _ = runtime
-                    .core
-                    .record_capture_degraded("Structured reward records were incomplete");
+                Ok(()) => *early_reward_resolved = true,
+                // Name the subsystem that actually failed. This used to report
+                // "Structured reward records were incomplete" for a capture failure, which sent
+                // the 2026-08-22 investigation looking at EE.log parsing that had worked
+                // perfectly.
+                Err(reason) => {
+                    if let Ok(mut runtime) = shared.lock() {
+                        let _ = runtime
+                            .core
+                            .record_capture_degraded(format!("Screen capture failed: {reason}"));
+                    }
+                }
             }
         }
         RewardLogEvent::Closed => {
@@ -1704,6 +1870,7 @@ fn try_publish_player_records(
     squad: &PendingRewardSquad,
     memory_state: &LiveMemoryRewardState,
     coordinator: &RewardSourceCoordinator,
+    visual: &mut dyn VisualRewardSource,
     observer: &mut RewardObserverState,
     shared: &SharedRuntime,
     app: &AppHandle,
@@ -1711,7 +1878,40 @@ fn try_publish_player_records(
     price_cache: &MarketPriceCache,
     visual_screen_gone: &std::sync::atomic::AtomicBool,
     now: u64,
-) -> bool {
+) -> Result<(), &'static str> {
+    let result = read_squad_cards(
+        squad,
+        memory_state,
+        coordinator,
+        visual,
+        reward_catalog,
+        visual_screen_gone,
+    )?;
+    publish_reward_result(
+        result,
+        observer,
+        shared,
+        app,
+        reward_catalog,
+        price_cache,
+        now,
+    );
+    Ok(())
+}
+
+/// Read the squad's cards off the screen, against the pool their own relics resolve to.
+///
+/// Split from `try_publish_player_records` so the read uses the caller's held visual source rather
+/// than constructing an unrelated source inside the reward event path. `publish_reward_result`
+/// needs a live `AppHandle`, so keeping it out also leaves this seam reachable from a unit test.
+fn read_squad_cards(
+    squad: &PendingRewardSquad,
+    memory_state: &LiveMemoryRewardState,
+    coordinator: &RewardSourceCoordinator,
+    visual: &mut dyn VisualRewardSource,
+    reward_catalog: &[RewardCatalogEntry],
+    visual_screen_gone: &std::sync::atomic::AtomicBool,
+) -> Result<RewardSourceResult, &'static str> {
     let local_choice = squad.local_reward_path.as_deref().and_then(|path| {
         memory_state
             .candidates()
@@ -1726,26 +1926,14 @@ fn try_publish_player_records(
     // Matching a card against the squad's own relic pool rather than the whole catalog is what
     // keeps a garbled read on the right item; a few dozen names, not a few thousand.
     let pool = relic_pool_entries(memory_state.candidates(), reward_catalog);
-    let Some(result) = coordinator.visual_choices(
-        &mut ScreenRewardSource::new(),
+    coordinator.visual_choices(
+        visual,
         &pool,
         squad.screen_order.len(),
         local_choice.as_deref(),
         VISUAL_READ_DEADLINE,
         visual_screen_gone,
-    ) else {
-        return false;
-    };
-    publish_reward_result(
-        result,
-        observer,
-        shared,
-        app,
-        reward_catalog,
-        price_cache,
-        now,
-    );
-    true
+    )
 }
 
 /// Watch for the reward screen instead of waiting to be told about it.
@@ -1848,6 +2036,23 @@ impl RelicPool {
 /// older one -- failed every attempt.
 pub type SharedRelicPool = Arc<Mutex<RelicPool>>;
 
+/// Whether this poll failure deserves a warning, given how many times its reason has repeated.
+///
+/// Blank cards and pool misses are routine away from the reward screen, so only a sustained streak
+/// warns. Other failures indicate broken capture and warn immediately. Each class warns only once
+/// per uninterrupted streak.
+fn poll_failure_is_worth_warning(reason: &str, consecutive: u32) -> bool {
+    let routine = matches!(
+        reason,
+        "a reward card read as blank" | "reward card text did not match the relic pool"
+    );
+    if routine {
+        consecutive == ROUTINE_MISS_WARNING_STREAK
+    } else {
+        consecutive == 1
+    }
+}
+
 /// How often the poller looks, before and after it has found the cards.
 ///
 /// Two rates because the poller does two jobs. Before the cards it may wait minutes, so it looks
@@ -1890,7 +2095,10 @@ pub fn spawn_reward_screen_poller_with<S, F>(
 ) -> Option<std::thread::JoinHandle<()>>
 where
     F: FnOnce() -> S + Send + 'static,
-    S: VisualRewardSource + Send + 'static,
+    // The source is constructed inside the spawned thread, then born, read and dropped there.
+    // Keeping the factory `Send` is sufficient; requiring `S: Send` would impose a constraint the
+    // ownership model does not need.
+    S: VisualRewardSource + 'static,
 {
     // Claim the flag only once this call is definitely going to spawn. Taking it first and then
     // bailing on an empty pool leaves it set with no thread behind it, and since only a running
@@ -1920,6 +2128,8 @@ where
         // overlay up for seconds after the screen it describes has gone.
         let mut found = false;
         let mut misses = 0_u32;
+        let mut last_reason: Option<&'static str> = None;
+        let mut repeated = 0_u32;
         while visual_polling.load(Ordering::Acquire) && Instant::now() < deadline {
             // Re-read the pool every poll rather than capturing it at arm time. Squadmates' relics
             // are still loading when this thread starts, and a card missing from the pool fails the
@@ -1934,7 +2144,20 @@ where
             }
             let outcome = VisualRewardSource::choices(&mut source, &current);
             if let Err(reason) = &outcome {
-                log::warn!("[DEBUG-poller] poll failed: {reason}");
+                if last_reason == Some(*reason) {
+                    repeated = repeated.saturating_add(1);
+                } else {
+                    last_reason = Some(*reason);
+                    repeated = 1;
+                }
+                if poll_failure_is_worth_warning(reason, repeated) {
+                    log::warn!("[DEBUG-poller] poll failed: {reason}");
+                } else {
+                    log::debug!("[DEBUG-poller] poll failed: {reason} (x{repeated})");
+                }
+            } else {
+                last_reason = None;
+                repeated = 0;
             }
             match outcome {
                 // However many cards the screen has -- the reader reports the layout it found, and
@@ -2156,6 +2379,7 @@ fn publish_reward_result(
         .map(RewardObservation::certain)
         .collect::<Vec<_>>();
     let transition = observer.observe(observations);
+    let mut overlay_notice = None;
     if transition.publish {
         apply_reward_observations(
             shared,
@@ -2163,7 +2387,7 @@ fn publish_reward_result(
             &transition.choices,
             &BTreeMap::new(),
         );
-        overlay_window::show_reward_overlay(app, transition.choices.len());
+        overlay_notice = overlay_window::show_reward_overlay(app, transition.choices.len());
         let _ = app.emit_to("reward-overlay", "reward-updated", ());
         spawn_market_price_fetch(
             &transition.choices,
@@ -2187,7 +2411,7 @@ fn publish_reward_result(
         // Read the cards but could not find the window to draw over: on Windows that is exclusive
         // fullscreen, and the player is the only one who can fix it. Said here rather than in the
         // README because a strip that silently fails to appear reads as a broken app.
-        if let Some(notice) = overlay_window::overlay_placement_notice() {
+        if let Some(notice) = overlay_notice {
             let _ = runtime.core.record_capture_degraded(notice);
         }
         if result.diagnostic == RewardSourceDiagnostic::Disagreement {
@@ -2799,12 +3023,12 @@ pub fn run() {
                 reward_ocr::use_bundled_tesseract(&resources);
             }
             let runtime = initialize_runtime(app.handle())?;
-            let should_refresh = runtime
+            let startup = runtime
                 .lock()
-                .map(|state| state.setup.risk_accepted)
-                .unwrap_or(false);
+                .map(|state| current_setup_status(state.setup.clone(), state.game_running))
+                .unwrap_or_default();
             app.manage(runtime);
-            if should_refresh {
+            if startup.risk_accepted {
                 start_collection_prices(Arc::clone(app.state::<SharedRuntime>().inner()));
                 start_monitor(
                     Arc::clone(app.state::<SharedRuntime>().inner()),
@@ -2817,6 +3041,7 @@ pub fn run() {
             get_view,
             get_setup_status,
             accept_risk_disclosure,
+            authorize_screen_capture,
             refresh_inventory,
             refresh_prices,
             load_fake_session,
@@ -2843,11 +3068,309 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn main_window_does_not_advertise_a_minimum_height_to_x11() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid Tauri config");
+        let main = config["app"]["windows"]
+            .as_array()
+            .expect("window list")
+            .iter()
+            .find(|window| window["label"] == "main")
+            .expect("main window");
+
+        assert!(
+            main.get("minHeight").is_none(),
+            "an X11 compositor may tile below the hint; WebKitGTK can stay blank until another resize"
+        );
+    }
+
+    fn setup_input() -> CaptureSetupInput {
+        CaptureSetupInput {
+            game_running: false,
+            x11_game_window: false,
+            wlroots_available: false,
+            kwin_available: false,
+            portal_session_live: false,
+        }
+    }
+
+    #[test]
+    fn direct_capture_paths_do_not_expose_the_portal_action() {
+        for input in [
+            CaptureSetupInput {
+                game_running: true,
+                x11_game_window: true,
+                ..setup_input()
+            },
+            CaptureSetupInput {
+                game_running: true,
+                wlroots_available: true,
+                ..setup_input()
+            },
+            CaptureSetupInput {
+                game_running: true,
+                kwin_available: true,
+                ..setup_input()
+            },
+        ] {
+            assert!(!desktop_capture_action_available(input));
+        }
+    }
+
+    #[test]
+    fn native_wayland_without_a_direct_backend_exposes_the_portal_action() {
+        assert!(desktop_capture_action_available(CaptureSetupInput {
+            game_running: true,
+            ..setup_input()
+        }));
+    }
+
+    #[test]
+    fn no_running_game_does_not_claim_desktop_capture_is_required() {
+        assert!(!desktop_capture_action_available(setup_input()));
+    }
+
+    #[test]
+    fn a_live_portal_session_hides_the_action() {
+        let live = CaptureSetupInput {
+            game_running: true,
+            portal_session_live: true,
+            ..setup_input()
+        };
+        assert!(!desktop_capture_action_available(live));
+    }
+
+    #[test]
+    fn portal_close_is_requested_once_when_the_game_exits() {
+        assert!(should_close_portal(Some(42), None));
+        assert!(!should_close_portal(None, None));
+        assert!(!should_close_portal(None, Some(42)));
+        assert!(!should_close_portal(Some(42), Some(42)));
+        assert!(!should_close_portal(Some(42), Some(43)));
+    }
+
+    #[test]
+    fn a_discovery_error_is_not_a_confirmed_game_exit() {
+        let failure: Result<Option<u32>, &str> = Err("procfs was temporarily unreadable");
+        assert_eq!(confirmed_process_observation(&failure), None);
+        assert_eq!(
+            confirmed_process_observation::<u32, &str>(&Ok(None)),
+            Some(None)
+        );
+    }
+
     use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
+
+    /// Mutation caught: treating routine blank and pool misses like capture failures would warn on
+    /// every ordinary gameplay poll again.
+    #[test]
+    fn a_single_routine_miss_is_not_a_warning() {
+        assert!(!poll_failure_is_worth_warning(
+            "a reward card read as blank",
+            1
+        ));
+        assert!(!poll_failure_is_worth_warning(
+            "reward card text did not match the relic pool",
+            1
+        ));
+    }
+
+    /// Mutation caught: using an off-by-one or `>=` threshold would either miss the one warning or
+    /// repeat it after roughly 30 seconds of uninterrupted pre-detection routine misses.
+    #[test]
+    fn a_persistent_routine_miss_warns_once_at_the_threshold() {
+        assert!(poll_failure_is_worth_warning(
+            "a reward card read as blank",
+            15
+        ));
+        assert!(!poll_failure_is_worth_warning(
+            "a reward card read as blank",
+            16
+        ));
+    }
+
+    /// Mutation caught: applying routine-miss handling to a capture failure would delay its first
+    /// warning, while accepting every occurrence would bury the report in repeats.
+    #[test]
+    fn a_missing_window_warns_immediately_but_does_not_repeat() {
+        assert!(poll_failure_is_worth_warning("no Warframe window found", 1));
+        assert!(!poll_failure_is_worth_warning(
+            "no Warframe window found",
+            2
+        ));
+        assert!(!poll_failure_is_worth_warning(
+            "no Warframe window found",
+            249
+        ));
+    }
 
     #[test]
     fn monitor_path_changed_fires_on_the_first_observation() {
         assert!(monitor_path_changed(None, 42, None));
+    }
+
+    /// A screen reader that records reads on the injected instance.
+    ///
+    /// Reads landing on this instance prove the event path reuses its caller-owned source instead
+    /// of constructing an unrelated reader for each event.
+    struct CountedScreen {
+        cards: Vec<String>,
+        /// The pool of the last read, so a test can check what the read was matched against.
+        seen: Vec<String>,
+        /// Reads that landed on *this* instance. The discriminating counter: a
+        /// `read_squad_cards` that built a source of its own would leave this at zero however many
+        /// times it was called, because the reads would land on its private instance instead.
+        reads: u32,
+    }
+
+    impl CountedScreen {
+        fn new(cards: &[&str]) -> Self {
+            Self {
+                cards: cards.iter().map(|name| (*name).to_owned()).collect(),
+                seen: Vec::new(),
+                reads: 0,
+            }
+        }
+    }
+
+    impl VisualRewardSource for CountedScreen {
+        fn choices(
+            &mut self,
+            candidates: &[RewardCatalogEntry],
+        ) -> Result<Vec<String>, &'static str> {
+            self.reads += 1;
+            self.seen = candidates
+                .iter()
+                .map(|entry| entry.name.clone())
+                .collect::<Vec<_>>();
+            Ok(self.cards.clone())
+        }
+    }
+
+    fn squad_of(names: &[&str], local_reward_path: Option<&str>) -> PendingRewardSquad {
+        PendingRewardSquad {
+            screen_order: names.iter().map(|name| (*name).to_owned()).collect(),
+            local_reward_path: local_reward_path.map(str::to_owned),
+        }
+    }
+
+    fn memory_state_for(needles: Vec<warframe_acquisition::RewardNeedle>) -> LiveMemoryRewardState {
+        let mut state = LiveMemoryRewardState::new(RewardMemoryScanner::new(
+            4096,
+            1024 * 1024,
+            Duration::from_millis(1),
+        ));
+        state.prepare_candidates(&needles);
+        state
+    }
+
+    /// The read must land on the source it was handed, not on one built inside.
+    ///
+    /// The assertion is on reads landing on this instance. Counting test-side constructions would
+    /// not catch an implementation that quietly built a private source.
+    #[test]
+    fn the_screen_read_lands_on_the_source_it_was_given() {
+        let mut screen = CountedScreen::new(&["A", "B"]);
+        let state = memory_state_for(vec![
+            warframe_acquisition::RewardNeedle::new("A", ["/Lotus/A"]).expect("needle"),
+            warframe_acquisition::RewardNeedle::new("B", ["/Lotus/B"]).expect("needle"),
+        ]);
+
+        let result = read_squad_cards(
+            &squad_of(&["one", "two"], None),
+            &state,
+            &RewardSourceCoordinator::new(false),
+            &mut screen,
+            &[],
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .expect("the injected screen's cards are published");
+
+        assert_eq!(result.choices.names, vec!["A".to_owned(), "B".to_owned()]);
+        assert_eq!(
+            screen.reads, 1,
+            "the read went somewhere other than the source it was given"
+        );
+    }
+
+    /// A whole fissure run's worth of reward events must reuse its caller-owned source.
+    ///
+    /// `try_publish_player_records` is reached twice per reward screen -- from `ResponsesComplete`
+    /// and again from `ChoicesReady`. Eight reward events must therefore produce eight reads on the
+    /// same instance. A count of zero here means the event path ignored the source it was given and
+    /// built an unrelated reader instead.
+    #[test]
+    fn a_run_of_reward_screens_reads_through_the_same_source_every_time() {
+        let mut screen = CountedScreen::new(&["A", "B"]);
+        let state = memory_state_for(vec![
+            warframe_acquisition::RewardNeedle::new("A", ["/Lotus/A"]).expect("needle"),
+            warframe_acquisition::RewardNeedle::new("B", ["/Lotus/B"]).expect("needle"),
+        ]);
+        let coordinator = RewardSourceCoordinator::new(false);
+        let squad = squad_of(&["one", "two"], None);
+
+        // Four fissures, both reward events each.
+        for _ in 0..8 {
+            assert!(
+                read_squad_cards(
+                    &squad,
+                    &state,
+                    &coordinator,
+                    &mut screen,
+                    &[],
+                    &std::sync::atomic::AtomicBool::new(false),
+                )
+                .is_ok(),
+                "every read should publish"
+            );
+        }
+
+        assert_eq!(
+            screen.reads, 8,
+            "eight reward events did not all read through the one source they were given"
+        );
+    }
+
+    /// The pool a card is matched against is the squad's own relics, not the whole catalog.
+    ///
+    /// Pinned because `read_squad_cards` is what builds that pool, and carving it out of
+    /// `try_publish_player_records` moved the construction with it. A read handed the full catalog
+    /// is the 2026-08-20 failure mode: the closed-set match cannot say "not in the pool", it returns
+    /// the nearest name it was given, so a too-wide pool publishes confident nonsense.
+    #[test]
+    fn the_read_is_matched_against_the_squads_own_relic_pool() {
+        let mut screen = CountedScreen::new(&["A", "B"]);
+        let state = memory_state_for(vec![
+            warframe_acquisition::RewardNeedle::new("A", ["/Lotus/A"]).expect("needle"),
+            warframe_acquisition::RewardNeedle::new("B", ["/Lotus/B"]).expect("needle"),
+        ]);
+        // The catalog knows a reward this squad's relics cannot drop.
+        let catalog = ["A", "B", "Elsewhere Prime Blueprint"]
+            .into_iter()
+            .map(|name| RewardCatalogEntry {
+                name: name.to_owned(),
+                ducats: 0,
+            })
+            .collect::<Vec<_>>();
+
+        read_squad_cards(
+            &squad_of(&["one", "two"], None),
+            &state,
+            &RewardSourceCoordinator::new(false),
+            &mut screen,
+            &catalog,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .expect("the cards are published");
+
+        assert_eq!(
+            screen.seen,
+            vec!["A".to_owned(), "B".to_owned()],
+            "the read was matched against something other than the squad's own relic pool"
+        );
     }
 
     #[test]
@@ -2923,6 +3446,7 @@ mod tests {
             refresh_in_flight: false,
             overlay_preview_until: None,
             monitor_started: false,
+            game_running: false,
             last_ee_log_path: None,
             live_prices: MarketPriceCache::new(),
             market: market_account::MarketSession::new(Box::new(MemoryStore::default())),
@@ -2931,6 +3455,107 @@ mod tests {
             presence_auto: false,
             presence_wanted: None,
         }))
+    }
+
+    /// A visual capture failure must not make healthy inventory acquisition or EE.log monitoring
+    /// look broken; each health row describes a distinct subsystem.
+    #[test]
+    fn capture_failure_degrades_only_capture_health() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        let mut runtime = shared.lock().expect("lock");
+
+        runtime
+            .core
+            .record_game_process_ready()
+            .expect("game reader becomes ready");
+        runtime
+            .core
+            .record_log_monitor_ready()
+            .expect("EE.log becomes ready");
+        let before = runtime.core.current_view().expect("view reads");
+        let before_collection_ids = before
+            .collection()
+            .items()
+            .iter()
+            .map(|item| item.id().to_owned())
+            .collect::<Vec<_>>();
+        let before_game_reader = (
+            before.health().game_reader().state(),
+            before.health().game_reader().message().to_owned(),
+            before
+                .health()
+                .game_reader()
+                .last_success()
+                .map(str::to_owned),
+        );
+        let before_log_monitor = (
+            before.health().log_monitor().state(),
+            before.health().log_monitor().message().to_owned(),
+            before
+                .health()
+                .log_monitor()
+                .last_success()
+                .map(str::to_owned),
+        );
+        let before_stage_states = before
+            .health()
+            .acquisition_stages()
+            .iter()
+            .map(|stage| stage.state())
+            .collect::<Vec<_>>();
+
+        let after = runtime
+            .core
+            .record_capture_degraded("Screen capture failed: compositor refused the frame")
+            .expect("capture failure publishes");
+
+        assert_eq!(
+            after.health().capture().state(),
+            app_core::HealthState::Degraded
+        );
+        assert_eq!(
+            after
+                .collection()
+                .items()
+                .iter()
+                .map(|item| item.id())
+                .collect::<Vec<_>>(),
+            before_collection_ids
+        );
+        assert_eq!(
+            (
+                after.health().game_reader().state(),
+                after.health().game_reader().message().to_owned(),
+                after
+                    .health()
+                    .game_reader()
+                    .last_success()
+                    .map(str::to_owned),
+            ),
+            before_game_reader
+        );
+        assert_eq!(
+            after
+                .health()
+                .acquisition_stages()
+                .iter()
+                .map(|stage| stage.state())
+                .collect::<Vec<_>>(),
+            before_stage_states
+        );
+        assert_eq!(
+            (
+                after.health().log_monitor().state(),
+                after.health().log_monitor().message().to_owned(),
+                after
+                    .health()
+                    .log_monitor()
+                    .last_success()
+                    .map(str::to_owned),
+            ),
+            before_log_monitor
+        );
     }
 
     /// A fetch that is still in flight when a sign-out happens must not publish over it: a stale

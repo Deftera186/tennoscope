@@ -182,10 +182,11 @@ fix.
 ## Known limits
 
 - **No macOS.** Warframe has no macOS client, so there is nothing to read.
-- **Overlay placement on Linux** draws an override-redirect X11 window over the game
-  rectangle, which is window-manager independent: Warframe is an X11 client under Wine
-  and Proton alike, and the app joins it there rather than asking the compositor for
-  anything. Verified on sway; other compositors are untested rather than unsupported.
+- **Overlay placement on Linux** uses a click-through, override-redirect X11 window. Placement
+  against Warframe's game rectangle is verified for ordinary X11/XWayland play. A native-Wayland
+  game launched with `PROTON_ENABLE_WAYLAND=1` exposes no game rectangle, so placement uses its
+  captured output, depends on the compositor, and assumes Borderless or Fullscreen on one screen.
+  TennoScope shows an explicit display-mode notice when it cannot find the game window.
 - **Overlay placement on Windows** uses a topmost, click-through, never-activated
   window. That beats a borderless game and cannot beat an exclusive-fullscreen one,
   which is why Borderless is a requirement rather than a suggestion. If a driver or
