@@ -8,6 +8,7 @@
 use std::process::Command;
 #[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
+#[cfg(target_os = "linux")]
 use xcb::{
     Connection, XidNew,
     x::{Drawable, GetImage, GetWindowAttributes, ImageFormat, ImageOrder, Window},
@@ -396,6 +397,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     use std::io::ErrorKind;
 
+    #[cfg(target_os = "linux")]
     use super::{
         XWININFO_RETRY_INTERVAL, shared_xwininfo_retry_ready, x11_image_to_rgba,
         xwininfo_error_reason, xwininfo_retry_ready,
@@ -427,6 +429,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn failed_tree_walks_are_rate_limited() {
         let now = std::time::Instant::now();
@@ -443,6 +446,7 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn independent_callers_share_the_failed_tree_walk_cooldown() {
         let start = std::time::Instant::now();
