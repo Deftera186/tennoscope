@@ -18,6 +18,12 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   preserving the correct collection name, Prime Part category, artwork, ducat value and market
   price lookup.
 
+- **XWayland reward capture no longer reads blank or unrelated pixels on Wayland desktops.** The
+  game window is still discovered through X11, but its own drawable now supplies the frame instead
+  of sending monitor capture through a desktop portal whose coordinates may not match that window.
+  This restores reward OCR on Sway/XWayland and addresses the same coordinate mismatch reported on
+  KDE Plasma in issue #7.
+
 ## [0.8.0-rc2] - 2026-09-04
 
 ### Fixed
