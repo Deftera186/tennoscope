@@ -127,6 +127,7 @@ impl FrameBackend {
     }
 }
 
+#[cfg(target_os = "linux")]
 /// Which X11 surface supplies pixels once X11 has found the game.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum X11FrameTarget {
@@ -134,6 +135,7 @@ enum X11FrameTarget {
     Window,
 }
 
+#[cfg(target_os = "linux")]
 /// xcap's monitor path opens the desktop portal on Wayland, whose frame can use a different
 /// coordinate space from the discovered XWayland window. Capture that window's drawable instead.
 const fn x11_frame_target(session: SessionKind) -> X11FrameTarget {
@@ -536,10 +538,11 @@ mod tests {
 
     use super::{
         BackendAvailability, CaptureShape, FrameBackend, MonitorFrame, RectOrigin, SessionKind,
-        X11FrameTarget, capture_choice, capture_geometry_line, capture_shapes_changed,
-        capture_sources, capture_sources_from, prepare_captures, session_kind_from,
-        update_capture_shapes, x11_frame_target,
+        capture_choice, capture_geometry_line, capture_shapes_changed, capture_sources,
+        capture_sources_from, prepare_captures, session_kind_from, update_capture_shapes,
     };
+    #[cfg(target_os = "linux")]
+    use super::{X11FrameTarget, x11_frame_target};
 
     fn shape(origin: RectOrigin, backend: FrameBackend, x: i32) -> CaptureShape {
         CaptureShape {
@@ -852,6 +855,7 @@ mod tests {
         assert_eq!(choice.x11_rect, Some(rect));
     }
 
+    #[cfg(target_os = "linux")]
     /// Regression for issue #7: xcap's monitor capture enters the desktop portal on Wayland and
     /// can return desktop-sized pixels that do not share the XWayland window's coordinate space.
     /// The discovered game drawable must therefore be captured directly.

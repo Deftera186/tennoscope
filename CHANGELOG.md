@@ -11,6 +11,15 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.8.0-rc5] - 2026-09-05
+
+### Fixed
+
+- **Windows CI and installer builds accept the XWayland capture fix.** The helper that chooses
+  between X11 monitor and window drawables now compiles only on Linux, matching its sole caller,
+  instead of failing Windows Clippy as unused code before the release workflow could build assets.
+
+
 ## [0.8.0-rc4] - 2026-09-05
 
 ### Fixed
@@ -517,7 +526,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc4...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc5...HEAD
+[0.8.0-rc5]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc4...v0.8.0-rc5
 [0.8.0-rc4]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc3...v0.8.0-rc4
 [0.8.0-rc3]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc2...v0.8.0-rc3
 [0.8.0-rc2]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc1...v0.8.0-rc2
