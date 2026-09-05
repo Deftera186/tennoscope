@@ -11,6 +11,8 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.8.0-rc6] - 2026-09-05
+
 ### Fixed
 
 - **The AppImage launches its bundled TennoScope binary again.** The native-package desktop
@@ -535,7 +537,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc5...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc6...HEAD
+[0.8.0-rc6]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc5...v0.8.0-rc6
 [0.8.0-rc5]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc4...v0.8.0-rc5
 [0.8.0-rc4]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc3...v0.8.0-rc4
 [0.8.0-rc3]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc2...v0.8.0-rc3
