@@ -138,24 +138,35 @@ impl CatalogIndex {
                     continue;
                 }
                 let component_name = validated_name(&component.name)?;
+                let parent_name = validated_name(&parent.name)?;
                 let name = if component_name.contains("Prime") {
                     component_name
                 } else {
-                    format!("{} {component_name}", validated_name(&parent.name)?)
+                    format!("{parent_name} {component_name}")
                 };
-                index.insert(
-                    &component.unique_name,
-                    CatalogMetadata {
-                        name,
-                        category: Some(Category::PrimePart),
-                        masterable: false,
-                        max_rank: 0,
-                        fusion_limit: None,
-                        image_name: validated_image_name(component.image_name.as_deref())?,
-                        ducats: component.ducats.unwrap_or(0),
-                    },
-                    true,
-                )?;
+                let metadata = CatalogMetadata {
+                    name,
+                    category: Some(Category::PrimePart),
+                    masterable: false,
+                    max_rank: 0,
+                    fusion_limit: None,
+                    image_name: validated_image_name(component.image_name.as_deref())?,
+                    ducats: component.ducats.unwrap_or(0),
+                };
+                index.insert(&component.unique_name, metadata.clone(), true)?;
+
+                // The inventory calls a Prime Neuroptics blueprint `...HelmetBlueprint`, while
+                // WFCD carries its trade metadata only on `...HelmetComponent`. Indexing that
+                // deterministic sibling path keeps display, category, artwork and ducats on one
+                // identity. Do not rename the component: relic rewards deliberately resolve it as
+                // `... Neuroptics` after trimming their own ` Blueprint` suffix.
+                if metadata.name.ends_with(" Prime Neuroptics")
+                    && let Some(stem) = component.unique_name.strip_suffix("HelmetComponent")
+                {
+                    let mut recipe = metadata;
+                    recipe.name.push_str(" Blueprint");
+                    index.insert(&format!("{stem}HelmetBlueprint"), recipe, true)?;
+                }
             }
         }
         Ok(index)

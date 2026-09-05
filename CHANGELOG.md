@@ -11,6 +11,13 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Fixed
+
+- **Prime Neuroptics blueprints are no longer shown as helmets or left without prices.** Their
+  inventory-only `HelmetBlueprint` paths now resolve to the matching Neuroptics catalog identity,
+  preserving the correct collection name, Prime Part category, artwork, ducat value and market
+  price lookup.
+
 ## [0.8.0-rc2] - 2026-09-04
 
 ### Fixed

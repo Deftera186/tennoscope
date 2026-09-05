@@ -53,6 +53,14 @@ impl RelicRewardIndex {
 }
 
 fn reward_catalog_paths(name: &str, catalog: &CatalogIndex) -> Vec<String> {
+    // Relic rewards conventionally add ` Blueprint` to component names. Prefer the component
+    // identity even when the catalog also has an exact inventory-recipe alias for that wording.
+    if let Some(component_name) = name.strip_suffix(" Blueprint") {
+        let paths = catalog.paths_for_name(component_name);
+        if !paths.is_empty() {
+            return paths;
+        }
+    }
     let exact = catalog.paths_for_name(name);
     if !exact.is_empty() {
         return exact;
