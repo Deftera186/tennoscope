@@ -11,6 +11,8 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.8.0-rc4] - 2026-09-05
+
 ### Fixed
 
 - **Prime Neuroptics blueprints are no longer shown as helmets or left without prices.** Their
@@ -515,7 +517,9 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc2...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc4...HEAD
+[0.8.0-rc4]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc3...v0.8.0-rc4
+[0.8.0-rc3]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc2...v0.8.0-rc3
 [0.8.0-rc2]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc1...v0.8.0-rc2
 [0.8.0-rc1]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...v0.8.0-rc1
 [0.7.0]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...v0.7.0
