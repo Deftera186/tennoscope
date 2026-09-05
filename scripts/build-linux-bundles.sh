@@ -246,8 +246,8 @@ assert_appimage_runs_on_x11() {
 # excludelist compiled into it. Tauri pins a 2024 linuxdeploy, and upstream
 # added libwayland-client.so.0 to that list after it was built. The host's Mesa
 # EGL vendor cannot use that older bundled copy, so remove it before the one
-# repack operation. The repack is still required when the library is absent:
-# it also removes the KWin permission claim that an AppImage cannot satisfy.
+# repack operation. The AppImage also needs a PATH-resolved Exec command: the
+# absolute path required by installed packages does not exist on another host.
 patch_and_repack_appimage() {
   bundle_dir="$repo_root/target/release/bundle/appimage"
   appdir="$bundle_dir/TennoScope.AppDir"
@@ -260,10 +260,6 @@ patch_and_repack_appimage() {
     echo "linuxdeploy's AppImage plugin was not found or executable at $packer" >&2
     exit 1
   }
-  appimage_exec_line=$(desktop_field_line "$desktop" "Exec=") || {
-    echo "the generated AppImage desktop entry must have exactly one Exec field" >&2
-    exit 1
-  }
   appimage_icon_line=$(desktop_field_line "$desktop" "Icon=") || {
     echo "the generated AppImage desktop entry must have exactly one Icon field" >&2
     exit 1
@@ -274,7 +270,8 @@ patch_and_repack_appimage() {
     exit 1
   }
   awk '
-    $0 !~ /^X-KDE-DBUS-Restricted-Interfaces=/ { print }
+    /^Exec=/ { print "Exec=tennoscope"; next }
+    !/^X-KDE-DBUS-Restricted-Interfaces=/ { print }
   ' "$desktop" >"$appimage_patch_tmp" || {
     echo "could not apply the AppImage desktop policy" >&2
     exit 1
@@ -290,7 +287,7 @@ patch_and_repack_appimage() {
     echo "the AppImage desktop entry must not claim KWin screenshot permission" >&2
     exit 1
   fi
-  assert_exact_desktop_field "$desktop" "Exec=" "$appimage_exec_line" \
+  assert_exact_desktop_field "$desktop" "Exec=" "Exec=tennoscope" \
     "the generated AppImage launch command"
   assert_exact_desktop_field "$desktop" "Icon=" "$appimage_icon_line" \
     "the generated AppImage icon"
@@ -319,7 +316,7 @@ patch_and_repack_appimage() {
     echo "the final AppImage desktop entry must not claim KWin screenshot permission" >&2
     exit 1
   fi
-  assert_exact_desktop_field "$extracted_desktop" "Exec=" "$appimage_exec_line" \
+  assert_exact_desktop_field "$extracted_desktop" "Exec=" "Exec=tennoscope" \
     "the final AppImage launch command"
   assert_exact_desktop_field "$extracted_desktop" "Icon=" "$appimage_icon_line" \
     "the final AppImage icon"

@@ -11,6 +11,15 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Fixed
+
+- **The AppImage launches its bundled TennoScope binary again.** The native-package desktop
+  template names `/usr/bin/tennoscope` so KDE can authorize installed packages for ScreenShot2,
+  but that path was copied into the portable image too. On systems without another TennoScope
+  installation, AppRun exited immediately with “No such file or directory.” AppImage
+  post-processing now restores its PATH-resolved `tennoscope` command while leaving deb, rpm,
+  Arch and Gentoo launch identity unchanged.
+
 ## [0.8.0-rc5] - 2026-09-05
 
 ### Fixed
