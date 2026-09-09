@@ -2,11 +2,16 @@ use std::{cell::Cell, fs};
 use tempfile::tempdir;
 use warframe_acquisition::{
     CatalogCache, CatalogCacheError, CatalogFetch, CatalogLoadSource, CatalogSource,
-    RelicCatalogCache, RelicCatalogSource,
+    RelicCatalogCache, RelicCatalogSource, WFCD_ALL_JSON_URL,
 };
 
 const VALID: &[u8] = br#"[{"uniqueName":"/Lotus/Powersuits/Test/Test","name":"Test Frame","type":"Warframe","category":"Warframes","masterable":true}]"#;
 const VALID_RELICS: &[u8] = br#"[{"uniqueName":"/Lotus/Types/Game/Projections/TestABronze","rewards":[{"item":{"name":"Forma Blueprint"}}]}]"#;
+
+#[test]
+fn item_catalog_uses_the_supported_aggregate_endpoint() {
+    assert_eq!(WFCD_ALL_JSON_URL, "https://api.warframestat.us/items");
+}
 
 struct Source {
     result: Result<Vec<u8>, CatalogFetch>,

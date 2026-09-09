@@ -155,17 +155,21 @@ impl CatalogIndex {
                 };
                 index.insert(&component.unique_name, metadata.clone(), true)?;
 
-                // The inventory calls a Prime Neuroptics blueprint `...HelmetBlueprint`, while
-                // WFCD carries its trade metadata only on `...HelmetComponent`. Indexing that
-                // deterministic sibling path keeps display, category, artwork and ducats on one
-                // identity. Do not rename the component: relic rewards deliberately resolve it as
-                // `... Neuroptics` after trimming their own ` Blueprint` suffix.
-                if metadata.name.ends_with(" Prime Neuroptics")
-                    && let Some(stem) = component.unique_name.strip_suffix("HelmetComponent")
-                {
-                    let mut recipe = metadata;
-                    recipe.name.push_str(" Blueprint");
-                    index.insert(&format!("{stem}HelmetBlueprint"), recipe, true)?;
+                // Inventory stores Prime Warframe part recipes as `...Blueprint`, while WFCD
+                // publishes their trade metadata on deterministic `...Component` siblings. Keep
+                // the component identity for relic rewards and add the recipe identity used by
+                // collection rows. Helmet is the canonical path name for Neuroptics.
+                for (component_suffix, recipe_suffix) in [
+                    ("ChassisComponent", "ChassisBlueprint"),
+                    ("SystemsComponent", "SystemsBlueprint"),
+                    ("HelmetComponent", "HelmetBlueprint"),
+                ] {
+                    if let Some(stem) = component.unique_name.strip_suffix(component_suffix) {
+                        let mut recipe = metadata.clone();
+                        recipe.name.push_str(" Blueprint");
+                        index.insert(&format!("{stem}{recipe_suffix}"), recipe, true)?;
+                        break;
+                    }
                 }
             }
         }

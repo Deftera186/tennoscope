@@ -467,6 +467,10 @@
    the gold the reward screen already gives this currency, so the two prices on a prime part are
    told apart by their metals and not by position alone. */
 .price.ducat-reading b { color: var(--gold); }
+.ducat-unavailable {
+  font-family: var(--face-register); font-size: .5rem; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--platinum-deep);
+}
 
 /* The worth figure is the one number on this page standing in a row of plain counts, so it is the
    one that has to say it is money rather than a tally. Room enough for the real icon. */

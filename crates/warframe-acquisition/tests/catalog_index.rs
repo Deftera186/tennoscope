@@ -305,6 +305,42 @@ fn prime_helmet_recipes_resolve_as_neuroptics_blueprints_with_prices() {
     assert_eq!(component.category(), Some(Category::PrimePart));
 }
 
+#[test]
+fn prime_warframe_component_records_resolve_inventory_blueprint_paths() {
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[{
+          "uniqueName":"/Lotus/Powersuits/Lavos/LavosPrime","name":"Lavos Prime",
+          "type":"Warframe","category":"Warframes","masterable":true,
+          "components":[
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeChassisComponent","name":"Chassis","tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"LavosPrimeChassis.png"},
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeSystemsComponent","name":"Systems","tradable":true,"ducats":45,"primeSellingPrice":45,"imageName":"LavosPrimeSystems.png"}
+          ]
+        }]"#,
+    )
+    .unwrap();
+
+    for (path, name, ducats, image) in [
+        (
+            "/Lotus/Types/Recipes/Warframes/LavosPrimeChassisBlueprint",
+            "Lavos Prime Chassis Blueprint",
+            15,
+            "LavosPrimeChassis.png",
+        ),
+        (
+            "/Lotus/Types/Recipes/Warframes/LavosPrimeSystemsBlueprint",
+            "Lavos Prime Systems Blueprint",
+            45,
+            "LavosPrimeSystems.png",
+        ),
+    ] {
+        let recipe = catalog.resolve(path).expect("inventory recipe alias");
+        assert_eq!(recipe.name(), name);
+        assert_eq!(recipe.category(), Some(Category::PrimePart));
+        assert_eq!(recipe.ducats(), ducats);
+        assert_eq!(recipe.image_name(), Some(image));
+    }
+}
+
 /// The reward screen offers "Lavos Prime Chassis Blueprint"; the catalog names the component that
 /// blueprint builds. Comparing the two spellings with `==` priced every Warframe part on the reward
 /// screen at zero ducats and reported it as not owned, while weapon parts, which are spelled the

@@ -58,7 +58,7 @@ fn complete_payload_becomes_one_coherent_aggregated_snapshot() {
     let recipe = by_id("/Lotus/Types/Recipes/Weapons/LexPrimeBlueprint");
     assert_eq!(recipe.quantity, 1);
     assert_eq!(recipe.item.name, "Lex Prime Blueprint");
-    assert_eq!(recipe.item.category, Category::Blueprint);
+    assert_eq!(recipe.item.category, Category::PrimePart);
 
     let resource = by_id("/Lotus/Types/Items/MiscItems/ArgonCrystal");
     assert_eq!(resource.item.category, Category::Resource);
@@ -78,6 +78,21 @@ fn complete_payload_becomes_one_coherent_aggregated_snapshot() {
             .iter()
             .all(|entry| !entry.item.id.as_str().ends_with("ZeroMarker"))
     );
+}
+
+#[test]
+fn ordinary_recipes_remain_blueprints_without_catalog_metadata() {
+    let payload = br#"{
+      "LastInventorySync":1,
+      "Suits":[],"LongGuns":[],"Pistols":[],"Melee":[],"Sentinels":[],"MiscItems":[],
+      "Recipes":[{"ItemType":"/Lotus/Types/Recipes/Components/FormaBlueprint","ItemCount":1}],
+      "PendingRecipes":[],"SentinelWeapons":[],"SpaceSuits":[],"SpaceMelee":[],"SpaceGuns":[],
+      "KubrowPets":[],"OperatorAmps":[],"MechSuits":[],"XPInfo":[]
+    }"#;
+
+    let snapshot = InventoryJsonDecoder::default().decode(payload).unwrap();
+
+    assert_eq!(snapshot.entries()[0].item.category, Category::Blueprint);
 }
 
 #[test]

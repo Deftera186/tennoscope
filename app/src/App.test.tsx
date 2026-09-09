@@ -192,7 +192,7 @@ describe('MVP desktop interface', () => {
     expect(screen.getByRole('article', { name: 'Lex Prime Receiver' })).toBeInTheDocument()
     expect(screen.queryByRole('article', { name: 'Rhino' })).not.toBeInTheDocument()
     await userEvent.clear(search)
-    await userEvent.click(screen.getByRole('button', { name: 'Prime Part' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Prime Parts' }))
     expect(screen.getByRole('article', { name: 'Lex Prime Receiver' })).toBeInTheDocument()
     expect(screen.queryByRole('article', { name: 'Braton' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'All categories' }))
@@ -204,7 +204,7 @@ describe('MVP desktop interface', () => {
     backend.getSetupStatus.mockResolvedValue({ risk_accepted: true })
     render(<App />)
     await screen.findByRole('heading', { name: 'Your collection' })
-    for (const label of ['Frame', 'Weapon', 'Companion', 'Prime Part', 'Relic', 'Resource', 'Blueprint', 'Vehicle', 'Mod', 'Arcane']) {
+    for (const label of ['Frame', 'Weapon', 'Companion', 'Prime Parts', 'Relic', 'Resource', 'Blueprint', 'Vehicle', 'Mod', 'Arcane']) {
       expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
     }
     await userEvent.click(within(screen.getByRole('group', { name: 'Sort collection' })).getByRole('button', { name: 'Quantity' }))
@@ -663,10 +663,11 @@ describe('MVP desktop interface', () => {
       ...view,
       collection: {
         ...view.collection,
-        total_entries: 2,
+        total_entries: 3,
         items: [
           { id: 'paris-prime-string', name: 'Paris Prime String', category: 'prime_part', quantity: 3, mastered: false, platinum: 6, ducats: 15, live: false, priceable: true },
           { id: 'ash-prime-systems', name: 'Ash Prime Systems', category: 'prime_part', quantity: 0, mastered: false, ducats: 100, live: false, priceable: false },
+          { id: 'caliban-prime-chassis-blueprint', name: 'Caliban Prime Chassis Blueprint', category: 'prime_part', quantity: 1, mastered: false, live: false, priceable: true },
         ],
       },
     })
@@ -682,6 +683,10 @@ describe('MVP desktop interface', () => {
     const missing = screen.getByRole('article', { name: 'Ash Prime Systems' })
     expect(within(missing).getByText('100')).toBeInTheDocument()
     expect(within(missing).queryByText(/total/), 'nothing is banked from a part that is not held').not.toBeInTheDocument()
+
+    const unavailable = screen.getByRole('article', { name: 'Caliban Prime Chassis Blueprint' })
+    expect(within(unavailable).getByText('Ducat value unavailable')).toBeInTheDocument()
+    expect(unavailable).toHaveTextContent('Prime Parts')
 
     const band = screen.getByTestId('band-ducats')
     expect(within(band).getByText('45')).toBeInTheDocument()
@@ -712,7 +717,7 @@ describe('MVP desktop interface', () => {
           { id: 'lex-prime-receiver', name: 'Lex Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, live: false, priceable: true, ducats: 15 },
           { id: 'paris-prime-string', name: 'Paris Prime String', category: 'prime_part', quantity: 2, mastered: false, live: false, priceable: true, ducats: 45 },
           { id: 'ash-prime-systems', name: 'Ash Prime Systems', category: 'prime_part', quantity: 1, mastered: false, live: false, priceable: true, ducats: 100 },
-          { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 3, mastered: false, live: false, priceable: false, ducats: 45 },
+          { id: 'forma-blueprint', name: 'Forma Blueprint', category: 'blueprint', quantity: 3, mastered: false, live: false, priceable: false },
         ],
       },
     })
@@ -724,10 +729,10 @@ describe('MVP desktop interface', () => {
     const names = screen.getAllByRole('article').map(article => article.getAttribute('aria-label'))
     expect(names).toEqual([
       'Ash Prime Systems',      // 100
-      'Forma Blueprint',        // 45, before Paris on the name
       'Paris Prime String',     // 45
       'Lex Prime Receiver',     // 15
       'Braton',                 // no ducats, sunk below every reading
+      'Forma Blueprint',        // ordinary recipes do not carry Ducat metadata
     ])
   })
 

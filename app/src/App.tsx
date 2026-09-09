@@ -47,7 +47,7 @@ const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: str
   { value: 'frame', label: 'Frame', tally: 'F' },
   { value: 'weapon', label: 'Weapon', tally: 'W' },
   { value: 'companion', label: 'Companion', tally: 'C' },
-  { value: 'prime_part', label: 'Prime Part', tally: 'P' },
+  { value: 'prime_part', label: 'Prime Parts', tally: 'P' },
   { value: 'relic', label: 'Relic', tally: 'R' },
   { value: 'resource', label: 'Resource', tally: 'S' },
   { value: 'blueprint', label: 'Blueprint', tally: 'B' },
@@ -770,11 +770,13 @@ function CollectionEntry({ item, showDucats, listedOrder, sellable, onSell, onUp
         {/* Baro's price, beside the market's. It is a fact of the item rather than of a holding,
             so it reads on a missing part too, where the platinum span above stays silent -- and it
             totals like platinum does, because a stack of parts banks a stack of ducats. */}
-        {showDucats && item.ducats !== undefined && <span className="price ducat-reading">
-          <MetalMark metal="ducat" alt="ducat "/>
-          <b>{item.ducats}</b>
-          {item.quantity > 1 && <em>{item.ducats * item.quantity} total</em>}
-        </span>}
+        {showDucats && (item.ducats !== undefined
+          ? <span className="price ducat-reading">
+            <MetalMark metal="ducat" alt="ducat "/>
+            <b>{item.ducats}</b>
+            {item.quantity > 1 && <em>{item.ducats * item.quantity} total</em>}
+          </span>
+          : item.category === 'prime_part' && <span className="ducat-unavailable">Ducat value unavailable</span>)}
       </div>
       {item.live && <p className="freshness">checked live</p>}
       {remaining && (selling
