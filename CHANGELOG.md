@@ -11,50 +11,7 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
-## [0.8.0-rc6] - 2026-09-05
-
-### Fixed
-
-- **The AppImage launches its bundled TennoScope binary again.** The native-package desktop
-  template names `/usr/bin/tennoscope` so KDE can authorize installed packages for ScreenShot2,
-  but that path was copied into the portable image too. On systems without another TennoScope
-  installation, AppRun exited immediately with “No such file or directory.” AppImage
-  post-processing now restores its PATH-resolved `tennoscope` command while leaving deb, rpm,
-  Arch and Gentoo launch identity unchanged.
-
-## [0.8.0-rc5] - 2026-09-05
-
-### Fixed
-
-- **Windows CI and installer builds accept the XWayland capture fix.** The helper that chooses
-  between X11 monitor and window drawables now compiles only on Linux, matching its sole caller,
-  instead of failing Windows Clippy as unused code before the release workflow could build assets.
-
-
-## [0.8.0-rc4] - 2026-09-05
-
-### Fixed
-
-- **Prime Neuroptics blueprints are no longer shown as helmets or left without prices.** Their
-  inventory-only `HelmetBlueprint` paths now resolve to the matching Neuroptics catalog identity,
-  preserving the correct collection name, Prime Part category, artwork, ducat value and market
-  price lookup.
-
-- **XWayland reward capture no longer reads blank or unrelated pixels on Wayland desktops.** The
-  game window is still discovered through X11, but its own drawable now supplies the frame instead
-  of sending monitor capture through a desktop portal whose coordinates may not match that window.
-  This restores reward OCR on Sway/XWayland and addresses the same coordinate mismatch reported on
-  KDE Plasma in issue #7.
-
-## [0.8.0-rc2] - 2026-09-04
-
-### Fixed
-
-- **Windows builds no longer compile Linux-only X11 capture code.** The native-Wayland release
-  candidate left its XCB imports and two X11 retry tests visible on Windows, which prevented the
-  Windows installer from building even though those capture paths run only on Linux.
-
-## [0.8.0-rc1] - 2026-09-04
+## [0.8.0] - 2026-09-10
 
 ### Added
 
@@ -77,6 +34,14 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   by its next action and follows the real window state, so snapping from the keyboard keeps it
   honest.
 
+### Changed
+
+- **Prime items now live in Prime Parts instead of being split across Prime Parts and
+  Blueprints.** Prime recipe holdings resolve to their canonical catalog identity, so component
+  names, artwork, categories, market prices and ducat values stay together. Ordinary crafting
+  recipes remain under Blueprints, and a Prime item whose catalog data genuinely has no ducat
+  value now says it is unavailable instead of leaving a blank price.
+
 ### Fixed
 
 - **Wayland sessions no longer dim the desktop when a fissure starts.** Reward polling could replay
@@ -85,6 +50,23 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   Gameplay capture can no longer negotiate with the portal. It uses an already-live session only
   after X11/XWayland, wlroots screencopy and KWin ScreenShot2 are unavailable; otherwise polling
   reports a capture error without opening a chooser.
+
+- **XWayland reward capture no longer reads blank or unrelated pixels on Wayland desktops.** The
+  game window is still discovered through X11, but its own drawable now supplies the frame instead
+  of sending monitor capture through a desktop portal whose coordinates may not match that window.
+  This restores reward OCR on Sway/XWayland and addresses the same coordinate mismatch reported on
+  KDE Plasma in issue #7.
+
+- **The AppImage launches its bundled TennoScope binary again.** The native-package desktop
+  template names `/usr/bin/tennoscope` so KDE can authorize installed packages for ScreenShot2,
+  but that path was copied into the portable image too. On systems without another TennoScope
+  installation, AppRun exited immediately with “No such file or directory.” AppImage
+  post-processing now restores its PATH-resolved `tennoscope` command while leaving deb, rpm,
+  Arch and Gentoo launch identity unchanged.
+
+- **Windows CI and installer builds accept the native-Wayland capture changes.** Linux-only X11
+  imports, retry tests and drawable-selection helpers no longer reach Windows builds, so all
+  release artifacts can be produced from the same commit.
 
 ## [0.7.0] - 2026-08-22
 
@@ -537,13 +519,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc6...HEAD
-[0.8.0-rc6]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc5...v0.8.0-rc6
-[0.8.0-rc5]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc4...v0.8.0-rc5
-[0.8.0-rc4]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc3...v0.8.0-rc4
-[0.8.0-rc3]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc2...v0.8.0-rc3
-[0.8.0-rc2]: https://github.com/Deftera186/tennoscope/compare/v0.8.0-rc1...v0.8.0-rc2
-[0.8.0-rc1]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...v0.8.0-rc1
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Deftera186/tennoscope/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Deftera186/tennoscope/compare/v0.5.7...v0.6.0
