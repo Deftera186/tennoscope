@@ -88,6 +88,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Test transient download recovery
+        run: ./scripts/test-download-with-retry.ps1
+        shell: pwsh
+
       # The reward tests shell out to tesseract on every platform. Windows gets the same portable
       # UB-Mannheim build the installer bundles -- scripts/vendor-windows-tesseract.ps1 -- rather
       # than a Chocolatey package, which makes CI read through the engine players actually run.
