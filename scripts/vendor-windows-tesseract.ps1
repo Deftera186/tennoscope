@@ -14,6 +14,8 @@
 # named here and 404s; check https://digi.bib.uni-mannheim.de/tesseract/ before bumping, because
 # the failure lands in the release build rather than in CI.
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'download-with-retry.ps1')
+
 
 $version = '5.4.0.20240606'
 $url = "https://digi.bib.uni-mannheim.de/tesseract/tesseract-ocr-w64-setup-$version.exe"
@@ -27,7 +29,7 @@ if (Test-Path (Join-Path $vendor 'tesseract.exe')) {
 }
 
 $installer = Join-Path $env:RUNNER_TEMP 'tesseract-setup.exe'
-Invoke-WebRequest -Uri $url -OutFile $installer
+Invoke-DownloadWithRetry -Uri $url -OutFile $installer
 Remove-Item -Recurse -Force $staging -ErrorAction SilentlyContinue
 & 7z x $installer "-o$staging" | Out-Null
 
