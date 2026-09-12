@@ -1592,6 +1592,7 @@ impl KioskSession {
         self.reap_finished_pollers();
     }
 }
+#[cfg(target_os = "linux")]
 fn should_close_portal(previous: Option<u32>, current: Option<u32>) -> bool {
     previous.is_some() && current.is_none()
 }
@@ -4245,6 +4246,7 @@ mod tests {
         assert!(!desktop_capture_action_available(live));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn portal_close_is_requested_once_when_the_game_exits() {
         assert!(should_close_portal(Some(42), None));
