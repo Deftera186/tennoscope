@@ -150,23 +150,44 @@ impl CatalogIndex {
                 let name = if component_name.contains("Prime") {
                     component_name
                 } else if frame && !component_name.ends_with("Blueprint") {
-                    format!("{parent_name} {component_name} Blueprint")
+                    let component_name = format!("{parent_name} {component_name}");
+                    if component.unique_name.ends_with("Component") {
+                        component_name
+                    } else {
+                        format!("{component_name} Blueprint")
+                    }
                 } else {
                     format!("{parent_name} {component_name}")
                 };
-                index.insert(
-                    &component.unique_name,
-                    CatalogMetadata {
-                        name,
-                        category: Some(Category::PrimePart),
-                        masterable: false,
-                        max_rank: 0,
-                        fusion_limit: None,
-                        image_name: validated_image_name(component.image_name.as_deref())?,
-                        ducats: component.ducats.unwrap_or(0),
-                    },
-                    true,
-                )?;
+                let metadata = CatalogMetadata {
+                    name,
+                    category: Some(Category::PrimePart),
+                    masterable: false,
+                    max_rank: 0,
+                    fusion_limit: None,
+                    image_name: validated_image_name(component.image_name.as_deref())?,
+                    ducats: component.ducats.unwrap_or(0),
+                };
+                index.insert(&component.unique_name, metadata.clone(), true)?;
+
+                // Inventory stores Prime Warframe part recipes as `...Blueprint`, while WFCD
+                // publishes their trade metadata on deterministic `...Component` siblings. Keep
+                // the component identity for relic rewards and add the recipe identity used by
+                // collection rows. Helmet is the canonical path name for Neuroptics.
+                for (component_suffix, recipe_suffix) in [
+                    ("ChassisComponent", "ChassisBlueprint"),
+                    ("SystemsComponent", "SystemsBlueprint"),
+                    ("HelmetComponent", "HelmetBlueprint"),
+                ] {
+                    if let Some(stem) = component.unique_name.strip_suffix(component_suffix) {
+                        let mut recipe = metadata.clone();
+                        if !recipe.name.ends_with(" Blueprint") {
+                            recipe.name.push_str(" Blueprint");
+                        }
+                        index.insert(&format!("{stem}{recipe_suffix}"), recipe, true)?;
+                        break;
+                    }
+                }
             }
         }
         Ok(index)

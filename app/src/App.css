@@ -76,16 +76,29 @@
   background: var(--touchstone);
 }
 
+/* Row one is the titlebar: two children only, so `space-between` puts the office mark on one edge
+   and the window controls on the other with the whole span between them left as drag surface. It
+   used to hold the state cluster as a third child, which `space-between` stranded in mid-air
+   because it pins the first and last child and splits the slack around whatever is between them. */
 .masthead-top {
   display: flex; align-items: center; justify-content: space-between; gap: var(--course);
-  padding: var(--step) clamp(var(--step), 3vw, var(--field)) var(--tight);
+  padding: var(--tight) clamp(var(--step), 3vw, var(--field));
 }
 
 .office { display: flex; align-items: baseline; gap: .6rem; min-width: 0; }
 .office-name { font-family: var(--face-mark); font-size: 1.2rem; font-weight: 700; letter-spacing: .01em; text-transform: uppercase; color: var(--platinum); }
 .office-role { font-family: var(--face-register); font-size: .56rem; letter-spacing: .18em; text-transform: uppercase; color: var(--platinum-deep); white-space: nowrap; }
 
-.masthead-state { display: flex; align-items: center; gap: var(--step); min-width: 0; }
+/* Row two: the register's own business, navigation holding the left edge and the reader's state
+   against the right. The row owns the padding both children used to carry separately, so the tabs
+   and the state cluster sit on one optical line. The bottom padding is the nav's: it keeps the
+   cartouche points clear of the masthead rule instead of piercing it. */
+.masthead-work {
+  display: flex; align-items: center; gap: var(--course);
+  padding: 0 clamp(var(--step), 3vw, var(--field)) 9px;
+}
+
+.masthead-state { display: flex; flex: none; align-items: center; gap: var(--step); min-width: 0; }
 
 /* Assay state. Form and colour together — never colour alone. */
 .assay-state { display: flex; align-items: center; gap: .6rem; min-width: 0; }
@@ -106,7 +119,10 @@
 .assay-state.idle .assay-state-text strong { color: var(--platinum-dim); }
 .assay-state.degraded .assay-state-text strong { color: var(--gold); }
 .assay-state.failed .assay-state-text strong { color: var(--oxblood); }
-.assay-state-text small { max-width: min(46vw, 34rem); overflow: hidden; color: var(--platinum-deep); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+/* The message shares its row with the navigation now, so it is capped to what is left rather than
+   to half the window: the reader's verdict and the refresh stamp must not be pushed off the bar by
+   a long sentence. Ellipsis, and the Diagnostics screen carries the message in full. */
+.assay-state-text small { max-width: min(22vw, 17rem); overflow: hidden; color: var(--platinum-deep); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
 
 .date-letter {
   padding-left: var(--step);
@@ -114,6 +130,27 @@
   font-family: var(--face-register); font-size: .6rem; letter-spacing: .1em;
   color: var(--platinum-dim); white-space: nowrap; cursor: help;
 }
+
+/* The masthead-top row is the window's titlebar: its `deep` drag region answers every press on
+   the bar except those landing on controls, which Tauri's drag script leaves clickable. */
+
+.window-controls {
+  display: flex; align-items: center; gap: .3rem; flex: none;
+  padding-left: var(--step); border-left: 1px solid var(--rule);
+}
+
+/* The three controls are drawn quiet -- a hairline on hover, not a raised plate -- because
+   they sit beside the refresh stamp and must not read as part of the page's own business.
+   Close takes the caution colour, which is how this register already says "final". */
+.window-control {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; padding: 0; border: 1px solid transparent; border-radius: 0;
+  background: none; color: var(--platinum-dim);
+  transition: color .12s ease, border-color .12s ease, background .12s ease;
+}
+.window-control svg { width: .65rem; height: .65rem; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: square; }
+.window-control:hover { color: var(--platinum); border-color: var(--rule-control); }
+.window-control.close:hover { background: var(--oxblood); border-color: var(--oxblood); color: var(--touchstone); }
 
 /* The office stamp coming down. */
 .stamp {
@@ -130,9 +167,9 @@
 
 /* Navigation as a row of hallmark cartouches. Semantically an ordinary tab row:
    real buttons, aria-current, full keyboard operation. */
-/* Bottom padding so the cartouche points float clear of the masthead rule instead
-   of piercing it. A struck mark sits on the plate; it does not cross the engraving. */
-.hallmark-row { display: flex; gap: var(--hair); padding: 0 clamp(var(--step), 3vw, var(--field)) 9px; overflow-x: auto; scrollbar-width: none; }
+/* The row owns the padding now; the nav only takes the slack and yields it, so a narrow window
+   scrolls the tabs instead of shoving the state cluster off the bar. */
+.hallmark-row { display: flex; flex: 1 1 auto; gap: var(--hair); min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .hallmark-row::-webkit-scrollbar { display: none; }
 
 .punch {
@@ -430,6 +467,10 @@
    the gold the reward screen already gives this currency, so the two prices on a prime part are
    told apart by their metals and not by position alone. */
 .price.ducat-reading b { color: var(--gold); }
+.ducat-unavailable {
+  font-family: var(--face-register); font-size: .5rem; font-weight: 600;
+  letter-spacing: .08em; text-transform: uppercase; color: var(--platinum-deep);
+}
 
 /* The worth figure is the one number on this page standing in a row of plain counts, so it is the
    one that has to say it is money rather than a tally. Room enough for the real icon. */
@@ -594,6 +635,8 @@
 .setting h3, .clause h3 { margin: 0 0 var(--tight); font-family: var(--face-mark); font-size: 1.4rem; font-weight: 700; letter-spacing: -.015em; text-transform: uppercase; color: var(--platinum); }
 .setting .prose { font-size: .84rem; }
 .setting .band-note { margin: 0; }
+.capture-notice { margin: 0 0 var(--course); padding: var(--step); border-block: 1px solid var(--gold-dim); background: var(--plate); color: var(--platinum-dim); font-size: .8rem; line-height: 1.6; }
+.capture-status:empty { display: none; }
 
 /* The gauge and its reading, side by side: a slider whose value you have to go and look for
    somewhere else is a control that answers a question nobody asked it. */
@@ -698,6 +741,8 @@
 .seal:active:not(:disabled) { box-shadow: var(--strike-deep); }
 .seal:disabled { opacity: .5; cursor: wait; }
 
+
+
 /* ------------------------------------------------------------------- states */
 
 .error-banner {
@@ -797,18 +842,19 @@
 }
 
 @media (max-width: 640px) {
-  /* The window's minimum is 360px. Nothing in the masthead may refuse to shrink,
-     or the whole document overflows horizontally. */
-  .masthead-top { flex-wrap: wrap; gap: var(--tight); }
+  /* The window's minimum is 360px. The two masthead rows keep their shape there: row one is only
+     the office mark and the window controls, and row two keeps navigation beside the state cluster
+     by dropping the state's message line -- Diagnostics carries it in full -- and letting the tabs
+     scroll. Nothing in the bar may refuse to shrink, or the whole document overflows sideways. */
   .office-role { display: none; }
-  .masthead-state { width: 100%; justify-content: flex-start; gap: var(--tight); min-width: 0; }
-  .assay-state { flex: 1 1 auto; min-width: 0; }
-  .assay-state-text small { max-width: none; }
+  .masthead-work { gap: var(--tight); }
+  .masthead-state { gap: var(--tight); }
+  .assay-state-text small { display: none; }
   .date-letter { flex: none; padding-left: var(--tight); font-size: .55rem; }
   /* Collapse to the glyph only. sr-only, never display:none — these buttons take
      their accessible name from this text, and the Preview buttons have no glyph
      at all, so the rule is scoped to the masthead. */
-  .masthead .stamp { flex: none; margin-left: auto; padding: .6rem .7rem; }
+  .masthead .stamp { flex: none; padding: .6rem .7rem; }
   .masthead .stamp > span,
   .punch-name {
     position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;

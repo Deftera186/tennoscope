@@ -23,6 +23,34 @@ use warframe_acquisition::RewardCatalogEntry;
 
 use crate::{overlay_window::WindowRect, reward_source::VisualRewardSource};
 
+static LATEST_MATCHED_RECT: std::sync::Mutex<Option<WindowRect>> = std::sync::Mutex::new(None);
+
+pub(crate) fn latest_matched_rect() -> Option<WindowRect> {
+    *LATEST_MATCHED_RECT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn set_matched_rect(snapshot: &std::sync::Mutex<Option<WindowRect>>, rect: WindowRect) {
+    *snapshot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(rect);
+}
+
+pub(crate) fn publish_latest_matched_rect(rect: WindowRect) {
+    set_matched_rect(&LATEST_MATCHED_RECT, rect);
+}
+
+fn clear_matched_rect(snapshot: &std::sync::Mutex<Option<WindowRect>>) {
+    *snapshot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+pub(crate) fn clear_latest_matched_rect() {
+    clear_matched_rect(&LATEST_MATCHED_RECT);
+}
+
 /// Card geometry, calibrated from a labelled 1920x1080 reward screen: four cards on a 242px pitch
 /// from x=478, i.e. a block centred on x=960.
 ///
@@ -107,7 +135,12 @@ fn scratch_file(kind: &str, extension: &str) -> PathBuf {
     ))
 }
 
-pub struct ScreenRewardSource;
+/// The screen reader holds one capture object across its reads. The object itself is cheap; keeping
+/// it here preserves per-source geometry-change suppression while each read still locates the
+/// Warframe window and its current monitor again.
+pub struct ScreenRewardSource {
+    capture: crate::reward_capture::GameCapture,
+}
 
 impl Default for ScreenRewardSource {
     fn default() -> Self {
@@ -117,16 +150,38 @@ impl Default for ScreenRewardSource {
 
 impl ScreenRewardSource {
     pub fn new() -> Self {
-        Self
+        Self {
+            capture: crate::reward_capture::GameCapture::new(),
+        }
     }
 }
 
 impl VisualRewardSource for ScreenRewardSource {
     fn choices(&mut self, candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
-        let (_, frame) = capture_game_window()?;
-        read_cards_in(&frame, candidates)
-            .map(|cards| cards.into_iter().map(|(name, _)| name).collect())
+        let frames = self.capture.capture_candidates()?;
+        read_capture_candidates(&frames, &LATEST_MATCHED_RECT, |frame| {
+            read_cards_in(frame, candidates)
+                .map(|cards| cards.into_iter().map(|(name, _)| name).collect())
+        })
     }
+}
+
+fn read_capture_candidates<T>(
+    candidates: &[crate::reward_capture::CapturedFrame],
+    matched_rect: &std::sync::Mutex<Option<WindowRect>>,
+    mut read: impl FnMut(&DynamicImage) -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
+    let mut last_reason = "no Warframe window found";
+    for candidate in candidates {
+        match read(&candidate.image) {
+            Ok(value) => {
+                set_matched_rect(matched_rect, candidate.rect);
+                return Ok(value);
+            }
+            Err(reason) => last_reason = reason,
+        }
+    }
+    Err(last_reason)
 }
 
 /// Read the card titles out of a reward-screen image and match each to the relic pool.
@@ -156,8 +211,8 @@ pub fn read_cards(
     read_cards_in(&frame, candidates)
 }
 
-/// The same read against an already-decoded frame, which is what the live path has -- the capture
-/// never touches the disk now that xcap hands back pixels.
+/// The same read against an already-decoded frame, which is what the live path has -- screen
+/// capture stays in memory.
 pub fn read_cards_in(
     image: &DynamicImage,
     candidates: &[RewardCatalogEntry],
@@ -250,17 +305,12 @@ fn read_cards_at(
     Ok(read)
 }
 
-/// The game's window title. Warframe titles its window the same on every platform and under every
-/// launcher, which its window *class* does not do -- that is `steam_app_230410` under Steam and
-/// `warframe.x64.exe` under bare Wine.
-const WINDOW_TITLE: &str = "Warframe";
-
 /// Locate the game window and capture it.
 ///
-/// This used to shell out to `xwininfo -root -tree` and then `import`, which meant a Linux install
-/// needed x11-utils and ImageMagick and a Windows one could not work at all. xcap does both, in
-/// process, on both platforms -- on Windows through Windows Graphics Capture, which is the only
-/// path that can read a D3D swapchain at all; GDI's `BitBlt` returns a black frame.
+/// Linux window discovery uses xcap's X11 enumeration with an `xwininfo` fallback for nested Wine
+/// virtual desktops. Linux monitor pixels are read directly from the X root so a Wayland desktop
+/// cannot make xcap open its screenshot portal. Windows uses xcap's Windows Graphics Capture path,
+/// which can read the game's D3D swapchain where GDI `BitBlt` returns a black frame.
 ///
 /// The monitor is captured and cropped rather than the window captured directly: xcap's
 /// `Window::capture_image` returns a stale frame for game windows on Windows (xcap#131), and a
@@ -268,68 +318,38 @@ const WINDOW_TITLE: &str = "Warframe";
 /// moment ago.
 ///
 /// The whole monitor is captured and cropped *here* rather than through `capture_region`, because
-/// `capture_region` ignores which monitor it was asked. Measured on a two-output XWayland desktop
+/// `capture_region` ignored which monitor it was asked. Measured on a two-output XWayland desktop
 /// with xcap 0.9.8: `HDMI-A-1` at origin (0,0) and `HDMI-A-2` at (1920,0), and
 /// `capture_region(0, 0, 1920, 1080)` returned byte-identical frames for both -- both of them
-/// `HDMI-A-1`'s pixels. `capture_image()` on the same two monitors differs exactly as it should.
-/// So a game on any monitor but the first read the first monitor's pixels, every card missed the
-/// relic pool, and the overlay never appeared while the log showed a poller running normally --
-/// which is precisely the 2026-08-20 report, where the four cards were sitting on the second
-/// monitor and read as `WOH DIGeil` and similar.
-pub(crate) fn capture_game_window() -> Result<(WindowRect, image::DynamicImage), &'static str> {
-    let rect = warframe_window_rect()?;
-    let monitor = xcap::Monitor::from_point(rect.x, rect.y)
-        .map_err(|_| "the game window is not on any monitor")?;
-    let (origin_x, origin_y) = (
-        monitor.x().map_err(|_| "could not read the monitor")?,
-        monitor.y().map_err(|_| "could not read the monitor")?,
-    );
-    let (monitor_width, monitor_height) = (
-        monitor.width().map_err(|_| "could not read the monitor")?,
-        monitor.height().map_err(|_| "could not read the monitor")?,
-    );
-    let visible = visible_region(rect, origin_x, origin_y, monitor_width, monitor_height)
-        .ok_or("the game window is not on any monitor")?;
-    // The crops are fractions of this rectangle, so a wrong rectangle reads the wrong pixels and
-    // every card comes back blank -- indistinguishable, from outside, from OCR failing. On a
-    // multi-monitor desktop the monitor origin is the other half of that: a game on a screen at a
-    // negative origin captures from a different place than the window rect alone suggests.
-    log::debug!(
-        "[DEBUG-capture] window={},{} {}x{} monitor={origin_x},{origin_y} region={},{} {}x{} paste={},{}",
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
-        visible.x,
-        visible.y,
-        visible.width,
-        visible.height,
-        visible.paste_x,
-        visible.paste_y,
-    );
-    // On a wlroots compositor the frame crosses the process boundary as raw P6 bytes instead of
-    // an encoded image, which is the difference between a ~25ms capture and a ~750ms one -- the
-    // xcap path stays as the fallback for X11 sessions and missing/broken grim.
-    #[cfg(target_os = "linux")]
-    if let Some(frame) = capture_visible_grim(origin_x, origin_y, &visible) {
-        let mut window_frame = image::RgbaImage::new(rect.width, rect.height);
-        image::imageops::replace(
-            &mut window_frame,
-            &frame,
-            i64::from(visible.paste_x),
-            i64::from(visible.paste_y),
-        );
-        return Ok((rect, image::DynamicImage::ImageRgba8(window_frame)));
-    }
-    #[cfg(target_os = "linux")]
-    log::debug!("[DEBUG-capture] grim unavailable or failed; falling back to xcap");
-    let whole = monitor
-        .capture_image()
-        .map_err(|_| "could not capture the game window")?;
-    Ok((
-        rect,
-        window_frame_from_monitor(&whole, monitor_width, monitor_height, rect, visible),
-    ))
+/// `HDMI-A-1`'s pixels. So a game on any monitor but the first read the first monitor's pixels,
+/// every card missed the relic pool, and the overlay never appeared while the log showed a poller
+/// running normally -- precisely the 2026-08-20 report, where the four cards were sitting on the
+/// second monitor and read as `WOH DIGeil` and similar.
+///
+/// `GameCapture` supplies the X11/XWayland window and its containing monitor on every read. Keeping
+/// the crop here makes the multi-monitor coordinate transform independent of window discovery.
+///
+/// Wrappers rather than a move because the crop maths is what the multi-monitor tests below pin
+/// down, and those tests are the measured record of the 2026-08-20 wrong-monitor bug. Re-exporting
+/// keeps them where they are, against the definitions they were written for.
+pub(crate) fn visible_region_for(
+    rect: WindowRect,
+    origin_x: i32,
+    origin_y: i32,
+    monitor_width: u32,
+    monitor_height: u32,
+) -> Option<VisibleRegion> {
+    visible_region(rect, origin_x, origin_y, monitor_width, monitor_height)
+}
+
+pub(crate) fn window_frame_from_monitor_for(
+    whole: &image::RgbaImage,
+    monitor_width: u32,
+    monitor_height: u32,
+    rect: WindowRect,
+    visible: VisibleRegion,
+) -> image::DynamicImage {
+    window_frame_from_monitor(whole, monitor_width, monitor_height, rect, visible)
 }
 
 /// Capture the visible part of the game window with `grim`, the wlroots screenshot tool.
@@ -389,8 +409,8 @@ fn decode_grim_ppm(bytes: &[u8], width: u32, height: u32) -> Option<image::Dynam
 
 /// Cut the game window out of a whole-monitor capture and lay it into a window-sized frame.
 ///
-/// Split from `capture_game_window` because everything above it is xcap talking to the compositor
-/// and everything here is arithmetic on pixels. The monitor-mixup bug lived in this half but could
+/// Split from live capture because everything above it talks to the compositor and everything here
+/// is arithmetic on pixels. The monitor-mixup bug lived in this half but could
 /// only be reached through the other, so nothing could test it; this is the seam that makes the
 /// multi-monitor case assertable without a second physical screen.
 fn window_frame_from_monitor(
@@ -424,7 +444,7 @@ fn window_frame_from_monitor(
         &resampled
     };
     // Crop here rather than asking `capture_region` for the piece, because it hands back the first
-    // monitor's pixels whatever monitor it belongs to -- see the note above `capture_game_window`.
+    // monitor's pixels whatever monitor it belongs to -- see the live-capture note above.
     let captured =
         image::imageops::crop_imm(whole, visible.x, visible.y, visible.width, visible.height)
             .to_image();
@@ -448,7 +468,7 @@ fn window_frame_from_monitor(
 /// offset alone is worse than failing: the region would then be captured from the wrong place and
 /// the reward crops would silently read the pixels next to the cards.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct VisibleRegion {
+pub(crate) struct VisibleRegion {
     x: u32,
     y: u32,
     width: u32,
@@ -487,98 +507,6 @@ fn visible_axis(start: i32, origin: i32, span: u32, monitor: u32) -> Option<(u32
         u32::try_from(clipped).ok()?,
         u32::try_from(visible.max(0)).ok()?,
         u32::try_from(clipped - offset).ok()?,
-    ))
-}
-
-/// Where the game's window is, in the desktop's own coordinates.
-pub(crate) fn warframe_window_rect() -> Result<WindowRect, &'static str> {
-    let windows = xcap::Window::all().map_err(|_| "could not enumerate windows")?;
-    let found = largest_warframe_window(windows.iter().filter_map(|window| {
-        Some((
-            window.title().ok()?,
-            WindowRect {
-                x: window.x().ok()?,
-                y: window.y().ok()?,
-                width: window.width().ok()?,
-                height: window.height().ok()?,
-            },
-        ))
-    }));
-    if let Some(rect) = found {
-        return Ok(rect);
-    }
-    // In Wine's virtual-desktop mode the game window is nested inside the desktop window rather
-    // than being a top-level client, and xcap enumerates via `_NET_CLIENT_LIST_STACKING`, which
-    // lists only top-level managed clients. Walking the whole root tree is what finds it, and that
-    // is what this fallback is for -- it is the configuration the tree walk was written for.
-    #[cfg(target_os = "linux")]
-    if let Some((_, rect)) = warframe_window_from_xwininfo_tree(&xwininfo_tree()) {
-        return Ok(rect);
-    }
-    Err("no Warframe window found")
-}
-
-/// Pick the game's window out of a list of candidates.
-///
-/// Wine spawns several 1x1 helper windows that share the game's title, and on Windows the launcher
-/// briefly holds a window of its own, so the first match is routinely not the game. The largest
-/// exact-title match is. The 100px floor drops the helpers before size even matters.
-pub fn largest_warframe_window(
-    candidates: impl Iterator<Item = (String, WindowRect)>,
-) -> Option<WindowRect> {
-    candidates
-        .filter(|(title, _)| title == WINDOW_TITLE)
-        .map(|(_, rect)| rect)
-        .filter(|rect| rect.width >= 100 && rect.height >= 100)
-        .max_by_key(|rect| u64::from(rect.width) * u64::from(rect.height))
-}
-
-#[cfg(target_os = "linux")]
-fn xwininfo_tree() -> String {
-    Command::new("xwininfo")
-        .args(["-root", "-tree"])
-        .output()
-        .map(|tree| String::from_utf8_lossy(&tree.stdout).into_owned())
-        .unwrap_or_default()
-}
-
-/// Pick the game's window out of `xwininfo -root -tree` output.
-///
-/// Each line ends with the window's size-and-offset and then its absolute position:
-/// `0x1400003 "Warframe": ("Warframe" "steam_app_230410")  1920x1080+1920+0  +1920+0`
-///
-/// The absolute position is in X root coordinates, which for an XWayland client is the
-/// compositor's own output layout -- a window on a second monitor reports that monitor's offset --
-/// so the rectangle can be handed straight to the overlay.
-///
-/// Wine spawns several 1x1 helper windows that share the game's title, and in virtual-desktop mode
-/// the real window is nested rather than top-level, so the largest match wins rather than the
-/// first one seen.
-pub fn warframe_window_from_xwininfo_tree(tree: &str) -> Option<(String, WindowRect)> {
-    tree.lines()
-        .filter(|line| line.contains("\"Warframe\":"))
-        .filter_map(parse_window_line)
-        .filter(|(_, rect)| rect.width >= 100 && rect.height >= 100)
-        .max_by_key(|(_, rect)| u64::from(rect.width) * u64::from(rect.height))
-}
-
-fn parse_window_line(line: &str) -> Option<(String, WindowRect)> {
-    let id = line.split_whitespace().next()?;
-    let mut tail = line.split_whitespace().rev();
-    let absolute = tail.next()?;
-    let size = tail.next()?;
-    let (width, rest) = size.split_once('x')?;
-    let height: String = rest.chars().take_while(char::is_ascii_digit).collect();
-    // A negative offset prints as `+-100`, so the leading `+` is a separator and not a sign.
-    let (x, y) = absolute.strip_prefix('+')?.split_once('+')?;
-    Some((
-        id.to_owned(),
-        WindowRect {
-            x: x.parse().ok()?,
-            y: y.parse().ok()?,
-            width: width.parse().ok()?,
-            height: height.parse().ok()?,
-        },
     ))
 }
 
@@ -791,7 +719,96 @@ fn normalise(text: &str) -> String {
         .collect()
 }
 
+/// How near-exact a fragment of a read must be before it may name the whole card.
+///
+/// Scoring fragments is what lets a card be found under the specks Tesseract returns at
+/// `--psm 11`, but it cannot be done at `MATCH_FLOOR`: `blueprint` is a suffix of most rewards
+/// and alone scores 0.64 against `Forma Blueprint`, so a mis-crop that recovers one generic word
+/// would resolve to a confident wrong reward. Measured: `WOH DIGeil / Blueprint` -- this file's
+/// own 2026-08-20 wrong-monitor read -- scored 0.56 and was rejected before fragments were
+/// scored, and 0.64 and accepted after. A fragment has to be a near-exact match to speak.
+const PARTIAL_MATCH_FLOOR: f32 = 0.85;
+
+/// The card's text split on blank lines, each group's own lines rejoined with a space.
+///
+/// Blank means whitespace-only rather than exactly `"\n\n"`: tesseract's stdout is passed through
+/// `String::from_utf8_lossy` with no newline normalisation, so on Windows the separator is
+/// `"\r\n\r\n"`, and a blank line that carries a stray space is common on a dark card. Splitting
+/// on the literal `"\n\n"` left both shapes as a single group, which made this whole mechanism
+/// silently inert exactly where it was most needed.
+fn text_groups(text: &str) -> Vec<String> {
+    let mut groups = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            if !current.is_empty() {
+                groups.push(current.join(" "));
+                current.clear();
+            }
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        groups.push(current.join(" "));
+    }
+    groups.retain(|group| !normalise(group).is_empty());
+    groups
+}
+
+/// The best pool match for a card.
+///
+/// Two thresholds, because the two kinds of read carry different weight. The whole text is what
+/// the card actually said, so it is scored without a floor here; `read_cards_at` applies
+/// `MATCH_FLOOR` to the returned score. The whole text resolves a wrapped name, where
+/// `Dual Zoren Prime` and `Blueprint` each match nothing alone. A fragment is a guess about which
+/// part of the read is the name, so it only counts here at `PARTIAL_MATCH_FLOOR`: that is what
+/// recovers `Forma Blueprint` from under three specks of noise (0.64 -> 1.0) without letting a
+/// lone `Blueprint` name a card it cannot identify.
+///
+/// Still a closed-set match -- it returns the nearest pool name, never "not in the pool" -- so
+/// the floors are the only guard against a confident wrong answer.
 pub fn best_match(text: &str, candidates: &[RewardCatalogEntry]) -> Option<(String, f32)> {
+    let whole = best_match_of(text, candidates);
+    let groups = text_groups(text);
+    let mut fragments = groups.clone();
+    for start in 0..groups.len() {
+        fragments.push(groups[start..].join(" "));
+    }
+    // Deduped on the normalised form, because `normalise` strips the separators that are the only
+    // difference between a wrapped name and its rejoined groups -- on raw text every such pair
+    // scores twice. Seeding with the whole text drops the `start == 0` run, which normalises to
+    // exactly it. That is to avoid a redundant pass over the pool, not to protect a floor: the
+    // whole text is scored above without a local floor either way, and a duplicate of it can only
+    // tie that score, never change the result whose score the caller checks against `MATCH_FLOOR`.
+    let mut seen = vec![normalise(text)];
+    let mut distinct = Vec::with_capacity(fragments.len());
+    for fragment in fragments {
+        let normalised = normalise(&fragment);
+        if normalised.is_empty() || seen.contains(&normalised) {
+            continue;
+        }
+        seen.push(normalised);
+        distinct.push(fragment);
+    }
+    let best_fragment = distinct
+        .iter()
+        .filter_map(|fragment| best_match_of(fragment, candidates))
+        .filter(|(_, score)| *score >= PARTIAL_MATCH_FLOOR)
+        .max_by(|(_, left), (_, right)| left.total_cmp(right));
+    match (whole, best_fragment) {
+        (Some(whole), Some(fragment)) => Some(if fragment.1 > whole.1 {
+            fragment
+        } else {
+            whole
+        }),
+        (whole, fragment) => whole.or(fragment),
+    }
+}
+
+/// One read against the pool. This is the whole of what `best_match` used to be.
+fn best_match_of(text: &str, candidates: &[RewardCatalogEntry]) -> Option<(String, f32)> {
     let read = normalise(text);
     if read.is_empty() {
         return None;
@@ -829,14 +846,122 @@ fn edit_distance(left: &str, right: &str) -> usize {
 mod tests {
     use image::GenericImageView;
 
+    use std::sync::Mutex;
+
+    use crate::reward_capture::{CapturedFrame, FrameBackend, RectOrigin};
+
     use super::{
-        VisibleRegion, WindowRect, decode_grim_ppm, grim_geometry, visible_region,
-        warframe_window_from_xwininfo_tree, window_frame_from_monitor,
+        VisibleRegion, WindowRect, clear_matched_rect, read_capture_candidates, visible_region,
+        window_frame_from_monitor,
     };
+    #[cfg(target_os = "linux")]
+    use super::{decode_grim_ppm, grim_geometry};
 
     /// A flat monitor capture, tagged so a frame can be traced back to the screen it came from.
     fn monitor(width: u32, height: u32, tag: u8) -> image::RgbaImage {
         image::RgbaImage::from_pixel(width, height, image::Rgba([tag, tag, tag, 255]))
+    }
+
+    fn candidate(x: i32, tag: u8) -> CapturedFrame {
+        CapturedFrame {
+            rect: WindowRect {
+                x,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            image: image::DynamicImage::ImageRgba8(monitor(1, 1, tag)),
+            rect_origin: RectOrigin::X11,
+            frame_backend: FrameBackend::X11,
+        }
+    }
+
+    /// Mutation caught: publishing before OCR or returning the first failure would leave the
+    /// overlay on monitor A even though only monitor B contained the reward screen.
+    #[test]
+    fn failed_candidate_a_then_successful_b_publishes_b() {
+        let matched = Mutex::new(None);
+        let frames = [candidate(0, 10), candidate(1920, 20)];
+
+        let result = read_capture_candidates(&frames, &matched, |image| {
+            if image.to_rgba8().get_pixel(0, 0)[0] == 20 {
+                Ok(vec!["Forma Blueprint".to_owned()])
+            } else {
+                Err("reward card text did not match the relic pool")
+            }
+        });
+
+        assert_eq!(result, Ok(vec!["Forma Blueprint".to_owned()]));
+        assert_eq!(*matched.lock().unwrap(), Some(frames[1].rect));
+    }
+
+    /// Mutation caught: writing each attempted rect would publish the final failed monitor even
+    /// though no candidate had proven it contained Warframe's reward screen.
+    #[test]
+    fn all_failed_candidates_publish_nothing_and_keep_the_last_reason() {
+        let matched = Mutex::new(None);
+        let frames = [candidate(0, 10), candidate(1920, 20)];
+
+        let result: Result<(), &'static str> =
+            read_capture_candidates(&frames, &matched, |image| {
+                if image.to_rgba8().get_pixel(0, 0)[0] == 10 {
+                    Err("a reward card read as blank")
+                } else {
+                    Err("reward card text did not match the relic pool")
+                }
+            });
+
+        assert_eq!(result, Err("reward card text did not match the relic pool"));
+        assert_eq!(*matched.lock().unwrap(), None);
+    }
+
+    /// Mutation caught: `lock().ok()` would silently stop publishing forever after one panic
+    /// poisoned the process-wide matched-rect snapshot.
+    #[test]
+    fn matched_rect_publication_recovers_a_poisoned_snapshot() {
+        let matched = Mutex::new(None);
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = matched.lock().unwrap();
+            panic!("poison the local matched-rect snapshot");
+        });
+        let frame = candidate(1920, 20);
+
+        let result = read_capture_candidates(std::slice::from_ref(&frame), &matched, |_| Ok(()));
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(
+            *matched
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            Some(frame.rect)
+        );
+    }
+
+    /// Mutation caught: game-exit teardown hid the overlay but retained the previous session's
+    /// monitor rectangle, so previews could be positioned against stale geometry.
+    #[test]
+    fn clearing_matched_rect_removes_the_previous_session() {
+        let matched = Mutex::new(Some(candidate(1920, 20).rect));
+        clear_matched_rect(&matched);
+        assert_eq!(*matched.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn clearing_matched_rect_recovers_a_poisoned_snapshot() {
+        let matched = Mutex::new(Some(candidate(1920, 20).rect));
+        let _ = std::panic::catch_unwind(|| {
+            let _guard = matched.lock().unwrap();
+            panic!("poison the local matched-rect snapshot");
+        });
+
+        clear_matched_rect(&matched);
+
+        assert_eq!(
+            *matched
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            None
+        );
     }
 
     /// The reward screen must be cut from the capture of the monitor the game is actually on.
@@ -937,33 +1062,6 @@ mod tests {
             "the frame is window sized whatever the framebuffer's scale"
         );
         assert_eq!(frame.to_rgba8().get_pixel(1900, 1070)[0], 200);
-    }
-
-    /// Real `xwininfo -root -tree` lines. Warframe's IME helpers carry the same class name as the
-    /// game window and one of them carries its title too, so picking the first match by name alone
-    /// grabs a 1x1 window and captures nothing.
-    #[test]
-    fn only_the_real_game_window_is_picked_up() {
-        let helpers = [
-            r#"0x2a00002 "Warframe": ("steam_app_warframe" "steam_app_warframe")  1x1+0+0  +0+0"#,
-            r#"0x1e00003 "Warframe": ("steam_app_warframe" "steam_app_warframe")  5x5+0+0  +0+0"#,
-            r#"0x1600001 "Warframe": ("steam_app_warframe" "steam_app_warframe")  111x1+8+34  +8+34"#,
-        ];
-        for helper in helpers {
-            assert!(
-                warframe_window_from_xwininfo_tree(helper).is_none(),
-                "accepted {helper}"
-            );
-        }
-
-        let game = r#"0x2a00001 "Warframe": ("steam_app_warframe" "steam_app_warframe")  1920x1080+1920+0  +1920+0"#;
-        let tree = format!("{}\n{game}\n", helpers.join("\n"));
-        let (id, rect) = warframe_window_from_xwininfo_tree(&tree).unwrap();
-        assert_eq!(id, "0x2a00001");
-        assert_eq!(
-            (rect.x, rect.y, rect.width, rect.height),
-            (1920, 0, 1920, 1080)
-        );
     }
 
     /// `capture_region` rejects an out-of-bounds region rather than clipping it, so a game window
@@ -1082,5 +1180,148 @@ mod tests {
         assert!(decode_grim_ppm(b"", 4, 3).is_none());
         assert!(decode_grim_ppm(b"P6\n4 3\n255\n\0\0", 4, 3).is_none());
         assert!(decode_grim_ppm(b"P5\n4 3\n255\n", 4, 3).is_none());
+    }
+    fn pool_entry(name: &str) -> super::RewardCatalogEntry {
+        super::RewardCatalogEntry {
+            name: name.to_owned(),
+            ducats: 0,
+        }
+    }
+
+    /// The 2026-08-22 report's own slot 1: Tesseract returns three noise fragments above the
+    /// real name. Scoring the whole blob puts this at 0.636 against a 0.6 floor, so one more
+    /// speck of noise would have discarded a correct read.
+    #[test]
+    fn a_card_read_with_noise_above_it_scores_on_its_own_line() {
+        let pool = [
+            pool_entry("Forma Blueprint"),
+            pool_entry("Wisp Prime Neuroptics Blueprint"),
+            pool_entry("Dual Zoren Prime Blueprint"),
+        ];
+        let (name, score) = super::best_match("&\n\nvr\n\ni STrTl\n\nForma Blueprint", &pool)
+            .expect("a noisy read still resolves");
+        assert_eq!(name, "Forma Blueprint");
+        assert!(
+            score > 0.9,
+            "scored {score}: the noise is still being scored against the pool"
+        );
+    }
+
+    /// The reason the whole-text candidate has to stay: the game wraps a long reward name onto
+    /// two lines, and each line alone matches nothing.
+    #[test]
+    fn a_wrapped_reward_name_still_matches_across_its_lines() {
+        let pool = [
+            pool_entry("Dual Zoren Prime Blueprint"),
+            pool_entry("Forma Blueprint"),
+        ];
+        let (name, score) = super::best_match("Dual Zoren Prime\n\nBlueprint", &pool)
+            .expect("a wrapped name resolves");
+        assert_eq!(name, "Dual Zoren Prime Blueprint");
+        assert!(score > 0.99, "scored {score} on an exact wrapped read");
+    }
+
+    /// Scoring more candidates must not invent a match out of pure noise: the floor is the only
+    /// thing standing between a garbled read and a confident wrong answer.
+    #[test]
+    fn pure_noise_still_scores_below_the_match_floor() {
+        let pool = [
+            pool_entry("Forma Blueprint"),
+            pool_entry("Wisp Prime Neuroptics Blueprint"),
+        ];
+        for noise in ["&\n\nvr\n\ni STrTl", "xx\n\nzzz qq"] {
+            let score = super::best_match(noise, &pool)
+                .map(|(_, score)| score)
+                .unwrap_or_default();
+            assert!(
+                score < super::MATCH_FLOOR,
+                "{noise:?} scored {score}, at or above the {} floor",
+                super::MATCH_FLOOR
+            );
+        }
+
+        // Asserted as an absence rather than a low score: a score of 0.0 from `unwrap_or_default`
+        // is below the floor whatever the implementation does, so it would pass vacuously.
+        assert!(
+            super::best_match("\n\n\n", &pool).is_none(),
+            "a read with no alphanumerics has nothing to match and must be an absence"
+        );
+    }
+
+    /// A mis-crop that recovers one generic word must not name a card. `Blueprint` is a suffix on
+    /// most Warframe rewards, so alone it identifies nothing -- yet it scores 0.64 against
+    /// `Forma Blueprint`, over the 0.6 floor.
+    ///
+    /// `WOH DIGeil` is this file's own recorded read of the 2026-08-20 wrong-monitor capture. That
+    /// bug surfaced as `reward card text did not match the relic pool`; scoring fragments at
+    /// `MATCH_FLOOR` would have turned it into a confident wrong reward instead.
+    #[test]
+    fn a_mis_cropped_read_that_recovers_one_generic_word_is_rejected() {
+        let pool = [
+            pool_entry("Forma Blueprint"),
+            pool_entry("Wisp Prime Neuroptics Blueprint"),
+            pool_entry("Dual Zoren Prime Blueprint"),
+        ];
+        for mis_crop in ["WOH DIGeil\n\nBlueprint", "aaaa bbbb\n\ncccc\n\nBlueprint"] {
+            let score = super::best_match(mis_crop, &pool)
+                .map(|(_, score)| score)
+                .unwrap_or_default();
+            assert!(
+                score < super::MATCH_FLOOR,
+                "{mis_crop:?} scored {score}, at or above the {} floor: one generic word is \
+                 naming a card it cannot identify",
+                super::MATCH_FLOOR
+            );
+        }
+    }
+
+    /// `ocr_crop` hands back tesseract's stdout through `String::from_utf8_lossy` with no newline
+    /// normalisation, and Windows is a supported capture path, so grouping that keys on the
+    /// literal `"\n\n"` is inert on exactly the platform half of the users are on.
+    #[test]
+    fn noise_above_a_name_is_read_through_a_windows_line_ending() {
+        let pool = [
+            pool_entry("Forma Blueprint"),
+            pool_entry("Wisp Prime Neuroptics Blueprint"),
+        ];
+        let (name, score) =
+            super::best_match("&\r\n\r\nvr\r\n\r\ni STrTl\r\n\r\nForma Blueprint", &pool)
+                .expect("a CRLF read still resolves");
+        assert_eq!(name, "Forma Blueprint");
+        assert!(score > 0.9, "scored {score} on a CRLF read");
+    }
+
+    /// A "blank" line off a dark card routinely carries a stray space, which is not an empty
+    /// string. Treating blank as whitespace-only is what keeps the groups separated.
+    #[test]
+    fn a_blank_line_carrying_a_space_still_separates_groups() {
+        let pool = [
+            pool_entry("Forma Blueprint"),
+            pool_entry("Wisp Prime Neuroptics Blueprint"),
+        ];
+        let (name, score) = super::best_match("&\n \nvr\n \ni STrTl\n \nForma Blueprint", &pool)
+            .expect("a read whose blank lines carry spaces still resolves");
+        assert_eq!(name, "Forma Blueprint");
+        assert!(score > 0.9, "scored {score} on a space-separated read");
+    }
+
+    /// The case between the other two: noise above a name that is itself wrapped. Neither the
+    /// whole text nor any single group matches here -- only a trailing run of groups does, which
+    /// is what makes that loop load-bearing rather than decoration.
+    #[test]
+    fn a_trailing_run_of_groups_recovers_a_wrapped_name_under_noise() {
+        let pool = [
+            pool_entry("Dual Zoren Prime Blueprint"),
+            pool_entry("Forma Blueprint"),
+            pool_entry("Wisp Prime Neuroptics Blueprint"),
+        ];
+        let (name, score) = super::best_match("vr\n\nDual Zoren Prime\n\nBlueprint", &pool)
+            .expect("a wrapped name under noise resolves");
+        assert_eq!(name, "Dual Zoren Prime Blueprint");
+        // Asserted near-exact, not merely over the floor: the whole-text read already carries this
+        // input to 0.92, because two chars of noise against a 25-char read is a small penalty. So
+        // a `> 0.9` assertion passes with the trailing-run loop deleted and pins nothing. Only the
+        // rejoined run `Dual Zoren Prime Blueprint` reaches 1.0.
+        assert!(score > 0.99, "scored {score} on a wrapped name under noise");
     }
 }

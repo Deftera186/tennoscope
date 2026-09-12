@@ -13,9 +13,17 @@ const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverla
 const report = vi.hoisted(() => ({
   copyReport: vi.fn(), saveReport: vi.fn(), openIssue: vi.fn(), ISSUE_URL: 'https://example.com/issues/new',
 }))
+const windowApi = vi.hoisted(() => ({
+  minimizeWindow: vi.fn(),
+  toggleMaximizeWindow: vi.fn(),
+  closeWindow: vi.fn(),
+  readWindowMaximized: vi.fn().mockResolvedValue(false),
+  watchWindowResized: vi.fn().mockResolvedValue(() => {}),
+}))
 vi.mock('./backend', () => backend)
 vi.mock('./overlay', () => overlay)
 vi.mock('./report', () => report)
+vi.mock('./window', () => windowApi)
 
 import App from './App'
 import type { AppView } from './backend'

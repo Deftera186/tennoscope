@@ -1,6 +1,6 @@
 # Maintainer: Deftera186 <https://github.com/Deftera186/tennoscope/issues>
 pkgname=tennoscope
-pkgver=0.7.0
+pkgver=0.8.0
 pkgrel=1
 pkgdesc='Local-first Linux Warframe collection and relic companion'
 arch=('x86_64')
@@ -8,15 +8,17 @@ url='https://github.com/Deftera186/tennoscope'
 license=('GPL-3.0-only')
 # gtk3 and webkit2gtk-4.1 drag most of the rest in transitively, but the binary links these
 # directly (namcap flags them as "implicitly satisfied"), so name them rather than rely on
-# another package's dependency list not changing. libgbm/libwayland-client/libxcb are xcap's
-# capture path; xdg-utils is tauri-plugin-opener shelling out to xdg-open from Diagnostics.
-depends=('cairo' 'dbus' 'gdk-pixbuf2' 'glib2' 'gtk3' 'hicolor-icon-theme' 'libsoup3' 'libxcb'
-         'mesa' 'wayland' 'webkit2gtk-4.1' 'xdg-utils')
-# The relic overlay shells out to tesseract; the collection browser works without it. Window
-# location and the crop pipeline used to be xwininfo and ImageMagick and are now in-process.
+# another package's dependency list not changing. libpipewire/libxcb/mesa/wayland are the
+# capture paths; xdg-utils is tauri-plugin-opener shelling out to xdg-open from Diagnostics.
+depends=('cairo' 'dbus' 'gdk-pixbuf2' 'glib2' 'gtk3' 'hicolor-icon-theme' 'libpipewire' 'libsoup3'
+         'libxcb' 'mesa' 'wayland' 'webkit2gtk-4.1' 'xdg-utils')
+# The relic overlay shells out to tesseract; the collection browser works without it. Wine
+# virtual-desktop child discovery shells out to xwininfo; ordinary window discovery stays
+# in-process.
 optdepends=(
   'tesseract: read the reward card titles for the relic overlay'
   'tesseract-data-eng: English data for reward card recognition'
+  'xorg-xwininfo: find Warframe inside a Wine virtual desktop'
 )
 # Beyond the toolchain, these are xcap's: its Linux capture path depends on pipewire
 # unconditionally for the portal route and generates the bindings with bindgen (hence clang), and

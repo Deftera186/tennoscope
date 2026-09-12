@@ -651,6 +651,19 @@ fn validate_item_type(path: &str) -> bool {
 fn category_from_path(path: &str) -> Category {
     if path.contains("/Projections/") {
         Category::Relic
+    } else if path.contains("/Recipes/") {
+        // Prime recipe holdings are the tradeable blueprint itself, not an instruction category.
+        // Keeping them with Prime Parts puts their market and Ducat decisions in one place even
+        // when a stale catalogue cannot provide richer metadata for a newly released item.
+        if path
+            .rsplit('/')
+            .next()
+            .is_some_and(|name| name.contains("Prime"))
+        {
+            Category::PrimePart
+        } else {
+            Category::Blueprint
+        }
     } else if path.contains("/Powersuits/") || path.contains("/MechSuits/") {
         Category::Frame
     } else if path.contains("/Weapons/")
@@ -660,8 +673,6 @@ fn category_from_path(path: &str) -> Category {
         Category::Weapon
     } else if path.contains("/Sentinel") || path.contains("/Kubrow") || path.contains("/Pets/") {
         Category::Companion
-    } else if path.contains("/Recipes/") {
-        Category::Blueprint
     } else {
         Category::Resource
     }
@@ -691,13 +702,21 @@ fn accumulated_entry(
     fallback_category: Category,
     catalog: Option<&CatalogIndex>,
 ) -> AccumulatedEntry {
+    let path_category = category_from_path(path);
+    let category =
+        if fallback_category == Category::Blueprint && path_category == Category::PrimePart {
+            Category::PrimePart
+        } else {
+            catalog
+                .and_then(|catalog| catalog.resolve(path))
+                .and_then(|metadata| metadata.category())
+                .unwrap_or(fallback_category)
+        };
     let metadata = catalog.and_then(|catalog| catalog.resolve(path));
     AccumulatedEntry {
         path: path.to_owned(),
         name: metadata.map(|metadata| metadata.name().to_owned()),
-        category: metadata
-            .and_then(|metadata| metadata.category())
-            .unwrap_or(fallback_category),
+        category,
         quantity: 0,
         mastered: false,
         masterable: metadata.is_some_and(|metadata| metadata.masterable()),

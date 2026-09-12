@@ -33,15 +33,24 @@ The two block each other; emerge one or the other.
 
 ## Runtime dependencies
 
-Both pull in the WebKitGTK stack, plus the relic overlay's one external tool,
-`app-text/tesseract`, whose English data is installed unconditionally. Window location and the
-crop pipeline used to need `x11-apps/xwininfo` and `media-gfx/imagemagick`; both are in-process
-now and neither is a dependency any more.
+Both pull in the WebKitGTK stack, plus the relic overlay's external OCR tool,
+`app-text/tesseract`, whose English data is installed unconditionally. ImageMagick is no longer
+needed. Wine virtual-desktop child discovery still runs `xwininfo -root -tree`, so install
+`x11-apps/xwininfo` when using that mode.
+
+## KDE screen-capture authorization
+
+KWin permits silent ScreenShot2 capture only when TennoScope is installed with its desktop entry.
+If capture says it was not authorized, close the checkout or raw `target/` binary and launch the
+installed `games-util/tennoscope` or `games-util/tennoscope-bin` package. Downstream ebuilds must
+preserve `X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2` in that desktop entry.
+AppImages cannot use this KWin authorization path and use the portal fallback instead.
 
 ## Building an untagged commit
 
-There is no ebuild for this: a local checkout has no immutable `SRC_URI` to point at. Build the
-bundle directly and run it out of `target/`.
+There is no ebuild for this: a local checkout has no immutable `SRC_URI` to point at. Do not run
+the raw `target/` binary for KDE capture because it has no installed desktop-entry identity.
+Build the AppImage instead; it uses the portal fallback.
 
 ```bash
 ./scripts/build-linux-bundles.sh appimage

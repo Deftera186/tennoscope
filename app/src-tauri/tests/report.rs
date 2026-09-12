@@ -68,17 +68,19 @@ fn sanitize_ignores_embedded_fragments() {
 
 #[test]
 fn utc_stamp_is_civil_and_sorted() {
-    let stamp = utc_stamp();
-    assert_eq!(stamp.len(), 20, "YYYY-MM-DD-HHMMSSmmm: {stamp}");
-    assert!(stamp.is_ascii(), "stamp is plain ASCII: {stamp}");
-    let digits: Vec<char> = stamp.chars().filter(|c| c.is_ascii_digit()).collect();
+    let live = utc_stamp();
+    assert_eq!(live.len(), 20, "YYYY-MM-DD-HHMMSSmmm: {live}");
+    let digits: Vec<char> = live.chars().filter(|c| c.is_ascii_digit()).collect();
     assert_eq!(digits.len(), 17);
-    assert_eq!(stamp.chars().filter(|c| *c == '-').count(), 3);
-    let (year, rest) = stamp.split_once('-').expect("year");
+    let (year, rest) = live.split_once('-').expect("year");
     assert_eq!(year.len(), 4);
     assert!(year.chars().all(|c| c.is_ascii_digit()));
     let (month, rest) = rest.split_once('-').expect("month");
-    assert_eq!(month, "08", "month is zero-padded: {month}");
+    assert_eq!(month.len(), 2, "month is zero-padded: {month}");
+    assert!(
+        month.chars().all(|c| c.is_ascii_digit()),
+        "month is digits: {month}"
+    );
     let month: u32 = month.parse().expect("month number");
     assert!((1..=12).contains(&month));
     let (day, time) = rest.split_once('-').expect("day");
@@ -87,15 +89,15 @@ fn utc_stamp_is_civil_and_sorted() {
     let (hour, rest) = time.split_at(2);
     let (minutes, seconds_ms) = rest.split_at(2);
     let (seconds, millis) = seconds_ms.split_at(2);
-    assert_eq!(millis.len(), 3, "milliseconds present: {stamp}");
+    assert_eq!(millis.len(), 3, "milliseconds present: {live}");
     let hour: u32 = hour.parse().expect("hour number");
     let minutes: u32 = minutes.parse().expect("minutes number");
     let seconds: u32 = seconds.parse().expect("seconds number");
     let millis: u32 = millis.parse().expect("millis number");
-    assert!(hour < 24, "hour in range: {stamp}");
-    assert!(minutes < 60, "minutes in range: {stamp}");
-    assert!(seconds < 60, "seconds in range: {stamp}");
-    assert!(millis < 1000, "millis in range: {stamp}");
+    assert!(hour < 24, "hour in range: {live}");
+    assert!(minutes < 60, "minutes in range: {live}");
+    assert!(seconds < 60, "seconds in range: {live}");
+    assert!(millis < 1000, "millis in range: {live}");
 }
 
 #[test]
@@ -383,6 +385,42 @@ const ROW_JSON: &str = r#"{
     {"stage": "memory_permission", "state": "ready", "message": "memory read ready"}
   ]
 }"#;
+
+/// Mutation caught: omitting, duplicating, or moving the display line below Diagnostics would
+/// break the stable report-header contract regardless of live environment values.
+#[test]
+fn assemble_report_text_puts_the_environment_between_title_and_diagnostics() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let text = assemble_report_text(
+        &meta(dir.path(), dir.path()),
+        "{}",
+        EeLogState::NotRequested,
+    )
+    .expect("text builds");
+    let lines: Vec<&str> = text.lines().collect();
+
+    assert_eq!(
+        lines.first(),
+        Some(&"TennoScope 0.5.0 (stable) — linux/x86_64 — 2026-08-05 14:12:33 UTC"),
+        "header was:\n{text}"
+    );
+    assert_eq!(lines.get(1), Some(&""), "header was:\n{text}");
+    assert!(
+        lines
+            .get(2)
+            .is_some_and(|line| line.starts_with("Display: ")),
+        "header was:\n{text}"
+    );
+    assert_eq!(lines.get(3), Some(&"Diagnostics"), "header was:\n{text}");
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("Display: "))
+            .count(),
+        1,
+        "report must contain exactly one display header line:\n{text}"
+    );
+}
 
 #[test]
 fn assemble_report_text_renders_human_readable_rows_only() {

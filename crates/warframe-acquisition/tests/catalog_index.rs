@@ -1,5 +1,5 @@
 use warframe_acquisition::{
-    CatalogIndex, InventoryJsonDecoder, SnapshotDecoder, reward_name_matches,
+    CatalogIndex, InventoryJsonDecoder, PriceTable, SnapshotDecoder, reward_name_matches,
 };
 use warframe_domain::Category;
 
@@ -248,6 +248,97 @@ fn unsafe_artwork_names_are_omitted_without_discarding_the_catalog() {
             .image_name(),
         None
     );
+}
+
+/// The game stores owned Prime Neuroptics blueprints under an internal `HelmetBlueprint` recipe
+/// path, while WFCD publishes their trade metadata on the matching `HelmetComponent`. Treating the
+/// recipe as an ordinary blueprint exposes "Helmet" to the collection and loses both market and
+/// ducat prices.
+#[test]
+fn prime_helmet_recipes_resolve_as_neuroptics_blueprints_with_prices() {
+    const RECIPE: &str = "/Lotus/Types/Recipes/WarframeRecipes/XakuPrimeHelmetBlueprint";
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[{
+          "uniqueName":"/Lotus/Powersuits/BrokenFrame/XakuPrime","name":"Xaku Prime",
+          "type":"Warframe","category":"Warframes","masterable":true,
+          "components":[{
+            "uniqueName":"/Lotus/Types/Recipes/WarframeRecipes/XakuPrimeHelmetComponent",
+            "name":"Neuroptics","tradable":true,"ducats":15,"primeSellingPrice":15,
+            "imageName":"GenericWarframePrimeHelmet.png"
+          }]
+        }]"#,
+    )
+    .unwrap();
+    let payload = format!(
+        r#"{{
+          "LastInventorySync":1,
+          "Suits":[],"LongGuns":[],"Pistols":[],"Melee":[],"Sentinels":[],"MiscItems":[],
+          "Recipes":[{{"ItemType":"{RECIPE}","ItemCount":2}}],"PendingRecipes":[],
+          "SpaceSuits":[],"SpaceMelee":[],"SpaceGuns":[],"SentinelWeapons":[],
+          "KubrowPets":[],"OperatorAmps":[],"MechSuits":[],"XPInfo":[]
+        }}"#
+    );
+    let snapshot = InventoryJsonDecoder::with_catalog(&catalog)
+        .decode(payload.as_bytes())
+        .unwrap();
+    let neuroptics = &snapshot.entries()[0];
+
+    assert_eq!(neuroptics.item.name, "Xaku Prime Neuroptics Blueprint");
+    assert_eq!(neuroptics.item.category, Category::PrimePart);
+    assert_eq!(
+        neuroptics.item.image_name.as_deref(),
+        Some("GenericWarframePrimeHelmet.png")
+    );
+    assert_eq!(catalog.ducat_table().get(RECIPE), Some(15));
+
+    let prices = PriceTable::from_dump_json(
+        br#"{"Xaku Prime Neuroptics Blueprint":[{"order_type":"sell","median":12.0,"volume":8}]}"#,
+        "2026-09-05",
+    )
+    .unwrap();
+    assert_eq!(prices.price_for(&neuroptics.item.name), Some(12));
+
+    let component = catalog
+        .resolve("/Lotus/Types/Recipes/WarframeRecipes/XakuPrimeHelmetComponent")
+        .unwrap();
+    assert_eq!(component.name(), "Xaku Prime Neuroptics");
+    assert_eq!(component.category(), Some(Category::PrimePart));
+}
+
+#[test]
+fn prime_warframe_component_records_resolve_inventory_blueprint_paths() {
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[{
+          "uniqueName":"/Lotus/Powersuits/Lavos/LavosPrime","name":"Lavos Prime",
+          "type":"Warframe","category":"Warframes","masterable":true,
+          "components":[
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeChassisComponent","name":"Chassis","tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"LavosPrimeChassis.png"},
+            {"uniqueName":"/Lotus/Types/Recipes/Warframes/LavosPrimeSystemsComponent","name":"Systems","tradable":true,"ducats":45,"primeSellingPrice":45,"imageName":"LavosPrimeSystems.png"}
+          ]
+        }]"#,
+    )
+    .unwrap();
+
+    for (path, name, ducats, image) in [
+        (
+            "/Lotus/Types/Recipes/Warframes/LavosPrimeChassisBlueprint",
+            "Lavos Prime Chassis Blueprint",
+            15,
+            "LavosPrimeChassis.png",
+        ),
+        (
+            "/Lotus/Types/Recipes/Warframes/LavosPrimeSystemsBlueprint",
+            "Lavos Prime Systems Blueprint",
+            45,
+            "LavosPrimeSystems.png",
+        ),
+    ] {
+        let recipe = catalog.resolve(path).expect("inventory recipe alias");
+        assert_eq!(recipe.name(), name);
+        assert_eq!(recipe.category(), Some(Category::PrimePart));
+        assert_eq!(recipe.ducats(), ducats);
+        assert_eq!(recipe.image_name(), Some(image));
+    }
 }
 
 /// The reward screen offers "Lavos Prime Chassis Blueprint"; the catalog names the component that

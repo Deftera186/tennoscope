@@ -11,6 +11,63 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-10
+
+### Added
+
+- **Native-Wayland Warframe now has automatic, prompt-free capture where the compositor supports
+  it.** Linux still takes an X11/XWayland game window first; when Warframe runs with
+  `PROTON_ENABLE_WAYLAND=1`, capture tries wlroots screencopy, then KWin ScreenShot2, then an
+  already-authorized portal ScreenCast session. Gameplay never opens a desktop chooser. First run
+  still records only the read-only access risk disclosure; portal permission is granted separately
+  from Settings when that fallback is needed. Installed deb, rpm, Arch and Gentoo packages can use
+  KDE's silent ScreenShot2 path. AppImages cannot receive that KWin authorization and use the
+  portal fallback instead.
+
+- **The masthead is the window's titlebar.** The main window runs with the compositor's own
+  decorations off, so on a desktop where nobody knows the window-management keys — KDE most of
+  all — there was nothing to grab to move it and no buttons to minimize, maximize or close it.
+  The masthead now carries Tauri's deep drag region, making the whole bar a grab handle while
+  every control standing on it stays clickable, and a quiet group of three square marks —
+  minimize, maximize/restore, close — takes its right edge, drawn in the page-mark grammar and
+  taking the caution colour only under the pointer of close. The maximize control names itself
+  by its next action and follows the real window state, so snapping from the keyboard keeps it
+  honest.
+
+### Changed
+
+- **Prime items now live in Prime Parts instead of being split across Prime Parts and
+  Blueprints.** Prime recipe holdings resolve to their canonical catalog identity, so component
+  names, artwork, categories, market prices and ducat values stay together. Ordinary crafting
+  recipes remain under Blueprints, and a Prime item whose catalog data genuinely has no ducat
+  value now says it is unavailable instead of leaving a blank price.
+
+### Fixed
+
+- **Wayland sessions no longer dim the desktop when a fissure starts.** Reward polling could replay
+  a ScreenCast restore token after the game opened; desktop portals may ignore a stale token and
+  launch their interactive monitor picker, which dims the desktop and starts `slurp` on wlroots.
+  Gameplay capture can no longer negotiate with the portal. It uses an already-live session only
+  after X11/XWayland, wlroots screencopy and KWin ScreenShot2 are unavailable; otherwise polling
+  reports a capture error without opening a chooser.
+
+- **XWayland reward capture no longer reads blank or unrelated pixels on Wayland desktops.** The
+  game window is still discovered through X11, but its own drawable now supplies the frame instead
+  of sending monitor capture through a desktop portal whose coordinates may not match that window.
+  This restores reward OCR on Sway/XWayland and addresses the same coordinate mismatch reported on
+  KDE Plasma in issue #7.
+
+- **The AppImage launches its bundled TennoScope binary again.** The native-package desktop
+  template names `/usr/bin/tennoscope` so KDE can authorize installed packages for ScreenShot2,
+  but that path was copied into the portable image too. On systems without another TennoScope
+  installation, AppRun exited immediately with “No such file or directory.” AppImage
+  post-processing now restores its PATH-resolved `tennoscope` command while leaving deb, rpm,
+  Arch and Gentoo launch identity unchanged.
+
+- **Windows CI and installer builds accept the native-Wayland capture changes.** Linux-only X11
+  imports, retry tests and drawable-selection helpers no longer reach Windows builds, so all
+  release artifacts can be produced from the same commit.
+
 ## [0.7.0] - 2026-08-22
 
 ### Added
@@ -462,7 +519,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Deftera186/tennoscope/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/Deftera186/tennoscope/compare/v0.5.7...v0.6.0

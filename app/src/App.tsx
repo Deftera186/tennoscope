@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import './App.css'
 import {
   acceptRiskDisclosure,
+  authorizeScreenCapture,
   getSetupStatus,
   getView,
   marketLinkToken,
@@ -21,10 +22,12 @@ import {
   type CollectionItem,
   type HealthState,
   type ItemCategory,
+  type SetupStatus,
   type Presence,
 } from './backend'
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
 import { copyReport, openIssue, saveReport } from './report'
+import { closeWindow, minimizeWindow, readWindowMaximized, toggleMaximizeWindow, watchWindowResized } from './window'
 import { RewardCards } from './RewardCards'
 import { MetalMark } from './MetalMark'
 import { OrdersView } from './OrdersView'
@@ -44,7 +47,7 @@ const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: str
   { value: 'frame', label: 'Frame', tally: 'F' },
   { value: 'weapon', label: 'Weapon', tally: 'W' },
   { value: 'companion', label: 'Companion', tally: 'C' },
-  { value: 'prime_part', label: 'Prime Part', tally: 'P' },
+  { value: 'prime_part', label: 'Prime Parts', tally: 'P' },
   { value: 'relic', label: 'Relic', tally: 'R' },
   { value: 'resource', label: 'Resource', tally: 'S' },
   { value: 'blueprint', label: 'Blueprint', tally: 'B' },
@@ -104,8 +107,46 @@ function Mark({ name, className = 'punch-glyph' }: { name: Page | 'refresh' | 's
   return <svg className={className} viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="square" strokeLinejoin="miter">{paths[name]}</svg>
 }
 
+/**
+ * Minimize, maximize and close, drawn in the same square-stroke grammar as the page marks. The
+ * maximize control is named by what it does next -- restore while maximized -- because a button
+ * whose name never changes cannot say which press undoes the other.
+ */
+function WindowControls() {
+  const [maximized, setMaximized] = useState(false)
+  useEffect(() => {
+    let active = true
+    let unlisten: (() => void) | undefined
+    void readWindowMaximized().then(value => { if (active) setMaximized(value) })
+    void watchWindowResized(() => {
+      void readWindowMaximized().then(value => { if (active) setMaximized(value) })
+    }).then(fn => {
+      if (active) unlisten = fn
+      else fn()
+    })
+    return () => {
+      active = false
+      unlisten?.()
+    }
+  }, [])
+  return <div className="window-controls" role="group" aria-label="Window">
+    <button type="button" className="window-control" aria-label="Minimize window" onClick={() => { void minimizeWindow() }}>
+      <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1 5h8"/></svg>
+    </button>
+    <button type="button" className="window-control" aria-label={maximized ? 'Restore window' : 'Maximize window'} onClick={() => { void toggleMaximizeWindow() }}>
+      {maximized
+        ? <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 3.5h5v5h-5zM6.5 3.5v-2h-5v5h2"/></svg>
+        : <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 1.5h7v7h-7z"/></svg>}
+    </button>
+    <button type="button" className="window-control close" aria-label="Close window" onClick={() => { void closeWindow() }}>
+      <svg viewBox="0 0 10 10" aria-hidden="true"><path d="M1 1l8 8M9 1L1 9"/></svg>
+    </button>
+  </div>
+}
+
 function App() {
   const [accepted, setAccepted] = useState<boolean | null>(null)
+  const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null)
   const [view, setView] = useState<AppView | null>(null)
   const [page, setPage] = useState<Page>('collection')
   const [busy, setBusy] = useState(false)
@@ -117,8 +158,12 @@ function App() {
   const [ordersBusy, setOrdersBusy] = useState(false)
   const [ordersError, setOrdersError] = useState<string | null>(null)
   const [ordersNote, setOrdersNote] = useState<string | null>(null)
+  const [captureNote, setCaptureNote] = useState<string | null>(null)
   const viewGeneration = useRef(0)
   const foregroundInFlight = useRef(0)
+  const setupGeneration = useRef(0)
+  const captureAuthorizationInFlight = useRef(false)
+  const [captureAuthorizationBusy, setCaptureAuthorizationBusy] = useState(false)
 
   const requestView = useCallback(async (request: () => Promise<AppView>, failure: string) => {
     const generation = ++viewGeneration.current
@@ -135,6 +180,9 @@ function App() {
 
   const runForeground = useCallback(async (operation: () => Promise<void>) => {
     foregroundInFlight.current += 1
+    // A write owns the setup state it returns. Retire any poll that started before the write so
+    // its older snapshot cannot land after the operation has completed.
+    setupGeneration.current += 1
     try { await operation() }
     finally { foregroundInFlight.current -= 1 }
   }, [])
@@ -155,6 +203,7 @@ function App() {
   useEffect(() => {
     getSetupStatus()
       .then(async status => {
+        setSetupStatus(status)
         setAccepted(status.risk_accepted)
         if (status.risk_accepted) {
           await requestView(getView, 'The local application backend is unavailable.')
@@ -174,14 +223,24 @@ function App() {
     const schedule = () => { if (active) timer = setTimeout(poll, 2500) }
     const poll = async () => {
       if (document.hidden || foregroundInFlight.current > 0) { schedule(); return }
-      await requestView(getView, 'The live backend view could not be updated.')
+      const generation = ++setupGeneration.current
+      await Promise.all([
+        requestView(getView, 'The live backend view could not be updated.'),
+        getSetupStatus(1).then(status => {
+          if (active && generation === setupGeneration.current) setSetupStatus(status)
+        }).catch(() => {
+          // `getView` owns the shared backend failure banner. Keep the last known capture action
+          // rather than hiding it because one capability poll failed.
+        }),
+      ])
       schedule()
     }
     schedule()
     return () => {
       active = false
+      setupGeneration.current += 1
       viewGeneration.current += 1
-      if (timer) clearTimeout(timer)
+      clearTimeout(timer)
     }
   }, [accepted, requestView])
 
@@ -190,13 +249,14 @@ function App() {
     return () => clearInterval(timer)
   }, [])
 
-  async function accept() {
+  async function completeSetup() {
     setBusy(true)
     setError(null)
     try {
       await runForeground(async () => {
-        await acceptRiskDisclosure()
-        setAccepted(true)
+        const status = await acceptRiskDisclosure()
+        setSetupStatus(status)
+        setAccepted(status.risk_accepted)
         await requestView(getView, 'The local application backend is unavailable.')
       })
     } catch {
@@ -206,6 +266,21 @@ function App() {
     }
   }
 
+  async function authorizeCapture() {
+    if (captureAuthorizationInFlight.current) return
+    captureAuthorizationInFlight.current = true
+    setCaptureAuthorizationBusy(true)
+    // The desktop chooser is human-paced and may remain open indefinitely. Retire setup polls
+    // already in flight, but leave view polling alive while the chooser owns the user's attention.
+    const generation = ++setupGeneration.current
+    try {
+      const status = await authorizeScreenCapture()
+      if (generation === setupGeneration.current) setSetupStatus(status)
+    } finally {
+      captureAuthorizationInFlight.current = false
+      setCaptureAuthorizationBusy(false)
+    }
+  }
   async function refresh() {
     setBusy(true)
     setError(null)
@@ -299,17 +374,47 @@ function App() {
   }
 
   if (accepted === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
-  if (!accepted) return <SetupScreen busy={busy} error={error} onAccept={accept}/>
+  if (accepted === false) return <SetupScreen busy={busy} error={error} onContinue={() => { void completeSetup() }}/>
+
 
   const liveState = view?.health.game_reader.state ?? 'degraded'
   const freshness = snapshotFreshness(view?.collection.snapshot, clock)
   return <div className="assay">
     <header className="masthead">
-      <div className="masthead-top">
+      {/* Row one is the window's titlebar and nothing else: the office mark and the three window
+          controls, with the whole span between them a grab handle. `deep` leaves every control on
+          the bar clickable; Tauri's drag script stops at buttons on its own. The register's own
+          business — reader state, freshness, refresh — belongs to the app, so it sits on the row
+          below with the navigation rather than competing with window chrome for this line. */}
+      <div className="masthead-top" data-tauri-drag-region="deep">
         <div className="office">
           <span className="office-name">TennoScope</span>
           <span className="office-role">Local assay register</span>
         </div>
+        <WindowControls/>
+      </div>
+      {/* Row two carries the register's own business. The navigation holds the left edge and keeps
+          its horizontal scroll; the reader's state, the snapshot's age and the refresh stamp sit
+          against the right, so neither group is stranded mid-bar and the state gains no row of its
+          own in a 760px-tall window. */}
+      <div className="masthead-work">
+        <nav className="hallmark-row" aria-label="Primary">
+          {(['collection', 'rewards', 'orders', 'diagnostics', 'settings', 'about'] as const).map(item => <button
+            key={item}
+            type="button"
+            aria-label={pageLabel[item]}
+            className={page === item ? 'punch struck' : 'punch'}
+            aria-current={page === item ? 'page' : undefined}
+            onClick={() => openPage(item)}
+          >
+            <span className="punch-face">
+              <Mark name={item}/>
+              <span className="punch-name">{pageLabel[item]}</span>
+              {item === 'rewards' && view?.reward.cards.length ? <em className="punch-count">{view.reward.cards.length}</em> : null}
+              {item === 'orders' && view?.market_account.flagged ? <em className="punch-count">{view.market_account.flagged}</em> : null}
+            </span>
+          </button>)}
+        </nav>
         <div className="masthead-state">
           <div className={`assay-state ${liveState}`}>
             <span className="state-mark" aria-hidden="true"/>
@@ -324,23 +429,6 @@ function App() {
           </button>
         </div>
       </div>
-      <nav className="hallmark-row" aria-label="Primary">
-        {(['collection', 'rewards', 'orders', 'diagnostics', 'settings', 'about'] as const).map(item => <button
-          key={item}
-          type="button"
-          aria-label={pageLabel[item]}
-          className={page === item ? 'punch struck' : 'punch'}
-          aria-current={page === item ? 'page' : undefined}
-          onClick={() => openPage(item)}
-        >
-          <span className="punch-face">
-            <Mark name={item}/>
-            <span className="punch-name">{pageLabel[item]}</span>
-            {item === 'rewards' && view?.reward.cards.length ? <em className="punch-count">{view.reward.cards.length}</em> : null}
-            {item === 'orders' && view?.market_account.flagged ? <em className="punch-count">{view.market_account.flagged}</em> : null}
-          </span>
-        </button>)}
-      </nav>
     </header>
 
     <main className="sheet">
@@ -375,7 +463,7 @@ function App() {
           error={ordersError}
         />}
         {page === 'diagnostics' && <DiagnosticsPage view={view}/>}
-        {page === 'settings' && <SettingsPage view={view} priceFloor={priceFloor} onPriceFloor={floor => {
+        {page === 'settings' && <SettingsPage view={view} priceFloor={priceFloor} desktopCaptureActionAvailable={setupStatus?.desktop_capture_action_available ?? false} captureAuthorizationBusy={captureAuthorizationBusy} captureNote={captureNote} onCaptureNote={setCaptureNote} onAuthorizeCapture={authorizeCapture} onPriceFloor={floor => {
           setPriceFloor(floor)
           writePriceFloor(floor)
         }}/>}
@@ -386,7 +474,7 @@ function App() {
 }
 
 /** The certificate of assay: the one-time disclosure, read before anything is inspected. */
-function SetupScreen({ busy, error, onAccept }: { busy: boolean; error: string | null; onAccept: () => void }) {
+function SetupScreen({ busy, error, onContinue }: { busy: boolean; error: string | null; onContinue: () => void }) {
   return <main className="certificate">
     <section className="certificate-sheet" aria-labelledby="setup-title">
       <div className="office">
@@ -409,12 +497,13 @@ function SetupScreen({ busy, error, onAccept }: { busy: boolean; error: string |
       </div>
       <p className="footnote">After acceptance, automatic read-only acquisition is enabled by default. You can revisit this disclosure in About.</p>
       {error && <p className="error-banner" role="alert">{error}</p>}
-      <button type="button" className="seal" onClick={onAccept} disabled={busy}>
+      <button type="button" className="seal" onClick={onContinue} disabled={busy}>
         {busy ? 'Saving locally…' : 'Accept risk and continue'}<span aria-hidden="true">→</span>
       </button>
     </section>
   </main>
 }
+
 
 function LoadingView() {
   return <section className="page" aria-live="polite">
@@ -681,11 +770,13 @@ function CollectionEntry({ item, showDucats, listedOrder, sellable, onSell, onUp
         {/* Baro's price, beside the market's. It is a fact of the item rather than of a holding,
             so it reads on a missing part too, where the platinum span above stays silent -- and it
             totals like platinum does, because a stack of parts banks a stack of ducats. */}
-        {showDucats && item.ducats !== undefined && <span className="price ducat-reading">
-          <MetalMark metal="ducat" alt="ducat "/>
-          <b>{item.ducats}</b>
-          {item.quantity > 1 && <em>{item.ducats * item.quantity} total</em>}
-        </span>}
+        {showDucats && (item.ducats !== undefined
+          ? <span className="price ducat-reading">
+            <MetalMark metal="ducat" alt="ducat "/>
+            <b>{item.ducats}</b>
+            {item.quantity > 1 && <em>{item.ducats * item.quantity} total</em>}
+          </span>
+          : item.category === 'prime_part' && <span className="ducat-unavailable">Ducat value unavailable</span>)}
       </div>
       {item.live && <p className="freshness">checked live</p>}
       {remaining && (selling
@@ -825,7 +916,7 @@ function DiagnosticsPage({ view }: { view: AppView }) {
   </div>
 }
 
-function SettingsPage({ view, priceFloor, onPriceFloor }: { view: AppView; priceFloor: number; onPriceFloor: (floor: number) => void }) {
+function SettingsPage({ view, priceFloor, desktopCaptureActionAvailable, captureAuthorizationBusy, captureNote, onCaptureNote, onAuthorizeCapture, onPriceFloor }: { view: AppView; priceFloor: number; desktopCaptureActionAvailable: boolean; captureAuthorizationBusy: boolean; captureNote: string | null; onCaptureNote: (note: string | null) => void; onAuthorizeCapture: () => Promise<void>; onPriceFloor: (floor: number) => void }) {
   // The slider's own readout. A floor that only moves a figure on another page is a knob with no
   // dial: this says, at the moment it is dragged, exactly which holding it just wrote off.
   const counted = view.collection.items.filter(item => (sellableValue(item, priceFloor) ?? 0) > 0)
@@ -866,6 +957,8 @@ function SettingsPage({ view, priceFloor, onPriceFloor }: { view: AppView; price
         <p className="band-note">{figure(counted.length)} stacks counted · {figure(total)} platinum sellable</p>
       </div>
 
+      <DesktopCaptureSetting actionAvailable={desktopCaptureActionAvailable} busy={captureAuthorizationBusy} note={captureNote} onNote={onCaptureNote} onAuthorize={onAuthorizeCapture}/>
+
       <div className="setting">
         <div>
           <h3>Reward overlay placement</h3>
@@ -882,6 +975,33 @@ function SettingsPage({ view, priceFloor, onPriceFloor }: { view: AppView; price
       <ReportBlock health={view.health} alwaysVisible/>
     </section>
   </section>
+}
+
+function DesktopCaptureSetting({ actionAvailable, busy, note, onNote, onAuthorize }: { actionAvailable: boolean; busy: boolean; note: string | null; onNote: (note: string | null) => void; onAuthorize: () => Promise<void> }) {
+  useEffect(() => {
+    if (actionAvailable && note === 'Desktop capture allowed.') {
+      onNote('Desktop capture needs permission again.')
+    }
+  }, [actionAvailable, note, onNote])
+  async function authorize() {
+    if (busy) return
+    onNote(null)
+    try {
+      await onAuthorize()
+      onNote('Desktop capture allowed.')
+    } catch {
+      onNote('Desktop capture was denied or is unavailable. Check that desktop screen sharing works, then try again.')
+    }
+  }
+  return <div className="setting">
+    <div>
+      <h3>Screen capture</h3>
+      <p className="prose">Screen capture is automatic. Desktop sharing is only needed when Warframe is launched with PROTON_ENABLE_WAYLAND=1 and this compositor has no direct capture API.</p>
+      {actionAvailable && <p className="prose">The desktop opens its own screen chooser. Select every display where Warframe may run. KDE/GNOME may show an active screen-sharing indicator. TennoScope releases the session when the game exits.</p>}
+    </div>
+    {actionAvailable && <button type="button" className="stamp" onClick={authorize} disabled={busy} aria-busy={busy}>{busy ? 'Allowing desktop capture…' : 'Allow desktop capture'}</button>}
+    <p className="band-note capture-status" role="status" aria-live="polite" aria-atomic="true">{note}</p>
+  </div>
 }
 
 /** What the office says about itself: what it is, and what it does to your machine to say it. */

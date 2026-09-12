@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "TennoScope",
   "mainBinaryName": "tennoscope",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "identifier": "io.github.deftera186.tennoscope",
   "build": {
     "frontendDist": "../dist",
@@ -18,7 +18,6 @@
         "width": 1180,
         "height": 760,
         "minWidth": 360,
-        "minHeight": 520,
         "decorations": false,
         "resizable": true,
         "fullscreen": false
@@ -80,12 +79,20 @@
     },
     "linux": {
       "deb": {
+        "desktopTemplate": "tennoscope.desktop.hbs",
+        "depends": [
+          "libpipewire-0.3-0"
+        ],
         "recommends": [
           "tesseract-ocr",
           "tesseract-ocr-eng"
         ]
       },
       "rpm": {
+        "desktopTemplate": "tennoscope.desktop.hbs",
+        "depends": [
+          "pipewire-libs"
+        ],
         "recommends": [
           "/usr/bin/tesseract"
         ]

@@ -22,7 +22,9 @@ struct SpawnLog {
 }
 
 impl SpawnLog {
-    fn hook(&self) -> impl Fn(&Arc<AtomicBool>, &Arc<AtomicBool>) + '_ {
+    fn hook(
+        &self,
+    ) -> impl Fn(&Arc<AtomicBool>, &Arc<AtomicBool>) -> std::thread::JoinHandle<()> + '_ {
         move |reanchor, gone| {
             if let Ok(mut calls) = self.calls.lock() {
                 *calls += 1;
@@ -33,6 +35,7 @@ impl SpawnLog {
             if let Ok(mut slot) = self.gone.lock() {
                 slot.push(Arc::clone(gone));
             }
+            std::thread::spawn(|| ())
         }
     }
 
@@ -430,4 +433,35 @@ fn process_death_closes_the_session() {
     assert_eq!(tally_of(&hides), 1);
     session.observe(MODE_LINE.as_bytes(), &noop, &spawns.hook());
     assert_eq!(spawns.spawns(), 2);
+}
+
+/// Portal capture is shared by reward and kiosk readers. Process teardown may close it only
+/// after the kiosk reader has observed its stop flag and returned from any in-flight capture.
+#[test]
+fn process_death_joins_the_kiosk_poller_before_portal_teardown() {
+    let session = &mut KioskSession::new();
+    let kiosk = KioskState::new();
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let spawn = {
+        let order = Arc::clone(&order);
+        move |_reanchor: &Arc<AtomicBool>, gone: &Arc<AtomicBool>| {
+            let gone = Arc::clone(gone);
+            let order = Arc::clone(&order);
+            std::thread::spawn(move || {
+                while !gone.load(Ordering::Acquire) {
+                    std::thread::yield_now();
+                }
+                order.lock().unwrap().push("poller stopped");
+            })
+        }
+    };
+
+    session.observe(MODE_LINE.as_bytes(), &|| (), &spawn);
+    session.close(&kiosk, &|| ());
+    order.lock().unwrap().push("portal closed");
+
+    assert_eq!(
+        order.lock().unwrap().as_slice(),
+        ["poller stopped", "portal closed"]
+    );
 }

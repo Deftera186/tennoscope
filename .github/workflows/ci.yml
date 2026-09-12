@@ -33,6 +33,11 @@ jobs:
       # Cheap and first: four files declare the release version and nothing else makes them agree.
       - run: ./scripts/check-versions.sh
 
+      # Exercises the bundle post-processing against fixtures. In particular, the AppImage must
+      # launch its bundled binary rather than an installed /usr/bin/tennoscope that can mask a
+      # broken artifact on a maintainer workstation.
+      - run: ./scripts/test-build-linux-bundles.sh
+
       # Tauri's Linux system libraries plus tesseract. Screen capture and the crop pipeline are
       # Rust now, so tesseract is the only thing the reward tests still shell out to.
       #
@@ -82,6 +87,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
+
+      - name: Test transient download recovery
+        run: ./scripts/test-download-with-retry.ps1
+        shell: pwsh
 
       # The reward tests shell out to tesseract on every platform. Windows gets the same portable
       # UB-Mannheim build the installer bundles -- scripts/vendor-windows-tesseract.ps1 -- rather

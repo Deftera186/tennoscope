@@ -43,7 +43,7 @@ export interface AppView {
     acquisition_stages: AcquisitionStageHealth[]
   }
 }
-export interface SetupStatus { risk_accepted: boolean }
+export interface SetupStatus { risk_accepted: boolean; desktop_capture_action_available: boolean }
 
 /** One grid tile's corner chip; a chip existing already says its platinum resolved. */
 export interface CellChip { col: number; row: number; name: string; platinum: number | null }
@@ -74,8 +74,8 @@ export const collectReportText = () => invoke<string>('collect_report_text')
  * before the runtime is managed -- and the first thing setup does is open SQLite, which on a cold
  * first run is slow enough to lose that race. One failure here is not "the backend is
  * unavailable", it is "the backend is still starting"; only a persistent one is worth telling the
- * player about. This is the first call the app makes, so the retry belongs here rather than at
- * the one call site.
+ * player about. The retry belongs to the startup call site, which is the only call that races
+ * Tauri's setup hook; periodic status polls pass one attempt.
  */
 export async function getSetupStatus(attempts = 12, delayMs = 250): Promise<SetupStatus> {
   for (let attempt = 1; ; attempt++) {
@@ -88,6 +88,7 @@ export async function getSetupStatus(attempts = 12, delayMs = 250): Promise<Setu
   }
 }
 export const acceptRiskDisclosure = () => invoke<SetupStatus>('accept_risk_disclosure')
+export const authorizeScreenCapture = () => invoke<SetupStatus>('authorize_screen_capture')
 
 export const marketStatus = () => invoke<AppView>('market_status')
 export const marketSignIn = (email: string, password: string) => invoke<AppView>('market_sign_in', { email, password })

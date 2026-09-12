@@ -129,7 +129,7 @@ describe('kiosk overlay route', () => {
     // moment (no reopen, no populate: the epoch is unchanged), but the read is still a
     // measurement -- leaving it unadopted lets every estimate's error compound forever.
     backend.getKioskView.mockResolvedValue({ ...sampleView, scroll_dy: -8 })
-    events.listeners['kiosk-updated']?.()
+    events.listeners['kiosk-updated']?.({ payload: undefined })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(-8 * var(--h)))' }))
   })
 
@@ -142,7 +142,7 @@ describe('kiosk overlay route', () => {
     backend.getKioskView.mockImplementation(
       () => new Promise<KioskView | null>(resolve => { release = resolve }),
     )
-    events.listeners['kiosk-updated']?.()
+    events.listeners['kiosk-updated']?.({ payload: undefined })
     // The read is in flight when the grid moves: its answer will predate this delta, so
     // adopting it would snap the chips back to where the grid used to be.
     events.listeners['kiosk-scroll']?.({ payload: 7 })
@@ -168,7 +168,7 @@ describe('kiosk overlay route', () => {
     // The settled read ran with bands shifted by the scroll, so the view says where the grid
     // now sits: the offset re-anchors to it instead of snapping back to zero.
     backend.getKioskView.mockResolvedValue({ ...sampleView, epoch: 4, scroll_dy: -142 })
-    events.listeners['kiosk-updated']?.()
+    events.listeners['kiosk-updated']?.({ payload: undefined })
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
     expect(grid).toHaveStyle({ transform: 'translateY(calc(-142 * var(--h)))' })
     expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
