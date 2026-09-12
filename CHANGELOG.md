@@ -11,6 +11,13 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Added
+
+- **The Ducat Kiosk now shows each Prime part's live platinum value before you sell it.** A
+  click-through overlay follows the kiosk grid while it scrolls, mirrors checked items and stack
+  quantities in a basket, and keeps a running platinum total. Recognition stays local and
+  fail-closed: unreadable frames fade the prices instead of attaching them to the wrong items.
+
 ## [0.8.0] - 2026-09-10
 
 ### Added

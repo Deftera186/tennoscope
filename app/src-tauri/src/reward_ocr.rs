@@ -31,6 +31,16 @@ pub(crate) fn latest_matched_rect() -> Option<WindowRect> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn set_matched_rect(snapshot: &std::sync::Mutex<Option<WindowRect>>, rect: WindowRect) {
+    *snapshot
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(rect);
+}
+
+pub(crate) fn publish_latest_matched_rect(rect: WindowRect) {
+    set_matched_rect(&LATEST_MATCHED_RECT, rect);
+}
+
 fn clear_matched_rect(snapshot: &std::sync::Mutex<Option<WindowRect>>) {
     *snapshot
         .lock()
@@ -165,9 +175,7 @@ fn read_capture_candidates<T>(
     for candidate in candidates {
         match read(&candidate.image) {
             Ok(value) => {
-                *matched_rect
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(candidate.rect);
+                set_matched_rect(matched_rect, candidate.rect);
                 return Ok(value);
             }
             Err(reason) => last_reason = reason,
@@ -621,11 +629,27 @@ pub fn use_bundled_tesseract(resource_dir: &Path) {
 /// does not need. What it costs is a little leading punctuation, which `normalise` drops before the
 /// match ever sees it.
 pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
+    run_tesseract(image, "11", None)
+}
+
+/// OCR one already-isolated text line, restricted to the supplied glyph set.
+pub(crate) fn ocr_crop_line(image: &Path, whitelist: &str) -> Result<String, &'static str> {
+    run_tesseract(image, "7", Some(whitelist))
+}
+
+fn run_tesseract(
+    image: &Path,
+    page_segmentation_mode: &str,
+    whitelist: Option<&str>,
+) -> Result<String, &'static str> {
     let program = TESSERACT
         .get()
         .cloned()
         .unwrap_or_else(|| "tesseract".into());
     let mut command = Command::new(&program);
+    // One recognition thread per spawn: tesseract's own OpenMP pooling oversubscribes the
+    // machine when several crops are read side by side, and the kiosk poller does exactly that.
+    command.env("OMP_THREAD_LIMIT", "1");
     // The bundled engine's `eng.traineddata` sits beside it, not in the install prefix it was
     // compiled with, so it has to be told where to look. `--tessdata-dir` rather than the
     // `TESSDATA_PREFIX` environment variable because setting one of those is `unsafe` since the
@@ -636,11 +660,13 @@ pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
             directory.as_os_str(),
         ]);
     }
-    let text = command
+    command
         .arg(image)
-        .args(["-", "--psm", "11"])
-        .output()
-        .map_err(|_| "tesseract is not available")?;
+        .args(["-", "--psm", page_segmentation_mode]);
+    if let Some(whitelist) = whitelist {
+        command.args(["-c", &format!("tessedit_char_whitelist={whitelist}")]);
+    }
+    let text = command.output().map_err(|_| "tesseract is not available")?;
     Ok(String::from_utf8_lossy(&text.stdout).into_owned())
 }
 

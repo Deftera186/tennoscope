@@ -1,5 +1,7 @@
-export type AppRouteName = 'main' | 'overlay'
+export type AppRouteName = 'main' | 'overlay' | 'kiosk'
 
 export function routeForPath(pathname: string): AppRouteName {
-  return pathname === '/overlay' ? 'overlay' : 'main'
+  if (pathname === '/overlay') return 'overlay'
+  if (pathname === '/kiosk') return 'kiosk'
+  return 'main'
 }

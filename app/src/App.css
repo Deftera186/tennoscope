@@ -1195,3 +1195,52 @@
 .presence .stamp.struck { background: var(--platinum); border-color: var(--platinum); color: var(--touchstone); }
 .presence .stamp.struck:hover:not(:disabled) { background: var(--gold); border-color: var(--gold); }
 .presence-choices[data-auto] .stamp.struck:disabled { background: var(--gold); border-color: var(--gold); color: var(--touchstone); }
+
+/* ------------------------------------------------------------------ kiosk
+   Chips over the in-game ducat kiosk. Every position is a design pixel of the
+   1920x1080 calibration (mirrored from kiosk_geometry.rs) times `--h`, one
+   design pixel's actual size; horizontal offsets hang off the window centre,
+   exactly like the game's own HUD. The strip translates during scrolls and
+   re-anchors on each published epoch. */
+
+.kiosk-shell { position: fixed; inset: 0; overflow: hidden; background: transparent; pointer-events: none; }
+.kiosk-shell { --h: calc(100vh / 1080); }
+
+.kiosk-strip {
+  position: absolute; inset: 0;
+  transition: opacity 120ms ease-out;
+}
+.kiosk-strip.kiosk-faded { opacity: 0; }
+
+/* The scroll-follow transform rides this layer only: grid chips track the grid, while the
+   basket pane's chips stay fixed exactly like the game's own. */
+.kiosk-grid { position: absolute; inset: 0; }
+
+.kiosk-chip {
+  position: absolute; display: inline-flex; align-items: center; gap: calc(3 * var(--h));
+  padding: calc(2 * var(--h)) calc(5 * var(--h));
+  border-radius: calc(4 * var(--h));
+  background: rgb(8 16 26 / 84%);
+  box-shadow: inset 0 0 0 1px rgb(120 180 220 / 35%);
+  color: #deecfc;
+  font-family: var(--face-figure, var(--face-register));
+  font-size: calc(17 * var(--h));
+  line-height: 1;
+  white-space: nowrap;
+  text-shadow: 0 calc(1 * var(--h)) 1px rgb(0 0 0 / 60%);
+}
+
+.kiosk-pair {
+  position: absolute; display: inline-flex; align-items: baseline; gap: calc(3 * var(--h));
+  color: rgb(222 238 252);
+  font-family: var(--face-figure, var(--face-register));
+  font-size: calc(15 * var(--h));
+  line-height: 1;
+  white-space: nowrap;
+  text-shadow: 0 calc(1 * var(--h)) 1px rgb(0 0 0 / 55%);
+}
+/* The icon rides above the digits' baseline, like the game's own glyph pairing. */
+.kiosk-mark { height: calc(12 * var(--h)); width: auto; }
+.kiosk-chip .kiosk-mark { height: calc(12 * var(--h)); }
+.kiosk-pair .kiosk-mark { height: calc(18 * var(--h)); align-self: flex-end; }
+.kiosk-total .kiosk-mark { height: calc(19 * var(--h)); }

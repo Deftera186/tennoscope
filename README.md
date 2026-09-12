@@ -19,13 +19,24 @@ No Overwolf, no account, no telemetry.**
 
 </div>
 
-Platinum and ducats under every reward card, live. Cards are marked as owned, not owned,
-or needed for mastery. The squad's entire relic pool is priced while the mission is still
-running, so the numbers are up the moment the screen appears, and only sellers who are
-actually online are counted. The overlay is click-through and never takes focus from the
-game.
+See platinum and ducats under each reward the moment it appears. TennoScope also marks
+what you own, what you are missing and what you still need for mastery. It prices the
+whole squad's relic pool using sellers who are online now, without stealing focus from
+the game.
 
 ![The reward overlay](docs/screenshots/reward-overlay.png)
+
+<div align="center">
+
+## Ducat Kiosk overlay
+
+</div>
+
+Before you trade a Prime part for ducats, check what it is worth in platinum. TennoScope
+prices the kiosk grid, follows items into your sell list and keeps a running total. Clear
+out the duplicates without giving Baro something valuable by mistake.
+
+![The Ducat Kiosk overlay](docs/screenshots/ducat-kiosk.png)
 
 <div align="center">
 
@@ -33,23 +44,19 @@ game.
 
 </div>
 
-Everything the game says you own: frames, weapons, companions, prime parts, relics,
-resources, blueprints, vehicles, mods and arcanes. Artwork, mastery state, search and
-filters, stored locally. It keeps itself current: TennoScope notices the game start,
-waits for the inventory sync, and re-reads. No exports, no manual scans.
+Open one screen for gear, Prime parts, relics, resources, blueprints, mods, arcanes and
+more. Looking for one item? Search by name, or filter the collection down to owned,
+mastered or missing gear. TennoScope syncs when the game starts - nothing to export and
+nothing to scan by hand.
 
 ![The collection browser](docs/screenshots/collection.png)
 
-Values come from warframe.market's daily trade dump: one download a day, no request per
-item. Mods and arcanes are priced by rank, since that is how they sell. Next to the
-market-rate total sits a second figure: what the market would actually take, based on
-how much of each item really trades rather than asking prices summed up.
+See platinum and ducat values side by side, per item and across your collection. Market
+prices come from warframe.market's daily trade data, with mods and arcanes priced at
+their actual rank.
 
-Prime parts also carry their ducat value beside platinum — Baro Ki'Teer's posted price
-for the part, totaled across the stack and across the whole collection, and kept on
-missing parts too, since it is what tells you which relic reward to take. A switch in
-the toolbar hides them if you would rather read platinum alone, and the two value
-sorts — platinum and ducats — are named and marked by their own metal.
+Prime parts use Baro Ki'Teer's posted ducat values. Sort by either currency or hide the
+ducat figures when you only care about platinum.
 
 <div align="center">
 
@@ -57,10 +64,9 @@ sorts — platinum and ducats — are named and marked by their own metal.
 
 </div>
 
-Off by default. Link your account, by signing in or by pasting a token from a signed-in
-browser, and your orders sit next to your collection: what is listed, how fresh the
-prices are, and which orders no longer match what you own. Listing, delisting and
-changing your online status all happen in the app.
+Connect warframe.market only if you want to. Once linked, TennoScope puts your orders
+beside the inventory they came from. You can spot stale prices or listings for items you
+no longer own, then list, delist and change your online status without leaving the app.
 
 ![The market orders page](docs/screenshots/market-orders.png)
 
@@ -78,23 +84,21 @@ changing your online status all happen in the app.
 | Gentoo | `games-util/tennoscope-bin` from the [`deftera`](https://github.com/Deftera186/deftera-overlay) overlay |
 | Any other Linux | [AppImage](https://github.com/Deftera186/tennoscope/releases/latest) from the latest release |
 
-- On Windows, set Warframe's display mode to **Borderless**. In exclusive fullscreen
-  nothing can draw over the game, so the overlay will not appear.
-- SmartScreen will warn about the unsigned Windows installer. "More info", then
-  "Run anyway".
-- On Linux, the overlay needs `tesseract` with English data. The collection works
+- **Windows:** use Borderless display mode in Warframe. Exclusive fullscreen prevents
+  the overlay from appearing. SmartScreen will warn about the unsigned installer; choose
+  "More info", then "Run anyway".
+- **Linux:** overlays need `tesseract` with English language data. The collection works
   without it.
 
-The [full install guide](docs/install.md) covers per-distribution details, building from
-source, process permissions and known limits.
+Need help with a particular distribution, building from source or process permissions?
+See the [full install guide](docs/install.md).
 
 > [!IMPORTANT]
-> **Read this before you run it.** TennoScope reads the Warframe process's memory to
-> obtain a session token, then asks Warframe's own inventory endpoint for your
-> collection. It never writes to the game and never automates or influences gameplay.
-> Digital Extremes has not endorsed this, and any tool that inspects a game process
-> carries some account-policy risk. The app shows this disclosure on first run and does
-> nothing until you accept it.
+> **Read this before you run it.** To fetch your collection, TennoScope reads a session
+> token from the Warframe process and sends it to Warframe's own inventory endpoint. It
+> never writes to the game, automates an action or affects gameplay. Digital Extremes has
+> not endorsed this. Any tool that inspects a game process may carry account-policy risk,
+> so the app shows this disclosure on first run and waits for you to accept it.
 
 <div align="center">
 
@@ -102,8 +106,8 @@ source, process permissions and known limits.
 
 </div>
 
-[GPL-3.0-only](LICENSE). TennoScope is unofficial and not affiliated with or endorsed by
-Digital Extremes. Warframe and its artwork remain the property of Digital Extremes; see
+[GPL-3.0-only](LICENSE). TennoScope is an unofficial project and is not endorsed by
+Digital Extremes. Warframe and its artwork belong to Digital Extremes; see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 <p align="center">
