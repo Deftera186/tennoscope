@@ -22,7 +22,7 @@ const fcx = (px: number) => (px - 960) / CAL
  * source. Chips sit flush with their card's top-right corner.
  */
 const COL_RIGHTS = [264, 471.5, 679.5, 887, 1094.5, 1302.5].map(fcx)
-const ROW_TOPS = [199, 421, 643].map(fx)
+const ROW_TOPS = [199, 421, 643, 865].map(fx)
 
 /// Digits' baseline sits ~3 design px above a line-height-1 box's bottom edge.
 const PAIR_DESCENT = fx(3)
@@ -68,9 +68,13 @@ export default function KioskOverlay() {
   const [faded, setFaded] = useState(false)
   const [offset, setOffset] = useState(0)
   const epochSeen = useRef(-1)
+  const sessionSeen = useRef(-1)
   // How many scroll deltas have landed. A settled read that started before the last one is
   // a measurement of a grid that no longer exists, and its absolute must be dropped.
   const scrollSeq = useRef(0)
+  // `kiosk-updated` events can overlap IPC reads. Only the newest-started read may publish;
+  // otherwise a slow older response can roll the epoch, prices, and absolute offset back.
+  const refreshSeq = useRef(0)
 
   useEffect(() => {
     document.documentElement.classList.add('overlay-mode')
@@ -78,14 +82,30 @@ export default function KioskOverlay() {
     let unlistenUpdated: UnlistenFn | undefined
     let unlistenScroll: UnlistenFn | undefined
 
+    const adoptSession = (session: number | null) => {
+      const nextSession = session ?? -1
+      if (nextSession === sessionSeen.current) return
+      sessionSeen.current = nextSession
+      epochSeen.current = -1
+      scrollSeq.current = 0
+      setOffset(0)
+      setFaded(false)
+      setView(null)
+    }
     // A published epoch is fetched once; the payload-in-event would race the window still
     // loading, so the event is only a nudge and `get_kiosk_view` is the source of truth.
     const refresh = async () => {
+      const refreshId = ++refreshSeq.current
       try {
         const seqAtRead = scrollSeq.current
         const next = await getKioskView()
-        if (!active) return
-        if (!next) { setView(null); return }
+        if (!active || refreshId !== refreshSeq.current) return
+        if (!next) {
+          adoptSession(null)
+          return
+        }
+        const sessionChanged = next.session !== sessionSeen.current
+        if (sessionChanged) adoptSession(next.session)
         if (next.epoch !== epochSeen.current) {
           setFaded(false)
         }
@@ -95,7 +115,7 @@ export default function KioskOverlay() {
         // compound unrestrained, until the chips drifted clean off their cards mid-session
         // (the misalignment of 2026-08-23: an unscrolled grid reported 8px off, and stayed
         // 8px wrong all visit because nothing ever re-anchored).
-        if (seqAtRead === scrollSeq.current) {
+        if (sessionChanged || seqAtRead === scrollSeq.current) {
           setOffset(next.scroll_dy)
         }
         epochSeen.current = next.epoch
@@ -106,15 +126,18 @@ export default function KioskOverlay() {
     // While the grid moves the backend streams how far it moved since the last look -- the
     // chips ride the scroll by accumulating those deltas. An unreadable look (null) fades
     // them until the next settled read publishes where the grid actually is.
-    void listen<number | null>('kiosk-scroll', (event) => {
-      if (!active) return
-      if (event.payload === null) { setFaded(true); return }
-      const delta = event.payload
+    void listen<{ session: number, dy: number | null }>('kiosk-scroll', (event) => {
+      if (!active || event.payload.session !== sessionSeen.current) return
+      if (event.payload.dy === null) { setFaded(true); return }
+      const delta = event.payload.dy
       scrollSeq.current += 1
       setOffset(previous => previous + delta)
     }).then(stop => { if (active) unlistenScroll = stop; else stop() })
 
-    void listen('kiosk-updated', () => { void refresh() }).then(stop => {
+    void listen<number | null>('kiosk-updated', (event) => {
+      adoptSession(event.payload)
+      void refresh()
+    }).then(stop => {
       if (active) unlistenUpdated = stop
       else stop()
     })

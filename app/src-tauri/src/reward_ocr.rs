@@ -352,61 +352,6 @@ pub(crate) fn window_frame_from_monitor_for(
     window_frame_from_monitor(whole, monitor_width, monitor_height, rect, visible)
 }
 
-/// Capture the visible part of the game window with `grim`, the wlroots screenshot tool.
-///
-/// `visible_region` yields monitor-relative offsets -- the right thing to crop a monitor-sized
-/// xcap frame with -- while grim's `-g` wants absolute compositor-layout coordinates, so the
-/// monitor's own origin goes back on here. Getting this wrong does not fail: grim happily
-/// photographs whatever sits at the relative offset on the wrong output, and the read dies
-/// seconds later with "0 cells" -- the 2026-08-23 no-overlay report.
-#[cfg(target_os = "linux")]
-fn capture_visible_grim(
-    origin_x: i32,
-    origin_y: i32,
-    visible: &VisibleRegion,
-) -> Option<image::DynamicImage> {
-    let geometry = grim_geometry(origin_x, origin_y, visible);
-    let output = std::process::Command::new("grim")
-        .args(["-t", "ppm", "-g", &geometry, "-"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        log::debug!(
-            "[DEBUG-capture] grim {geometry} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        return None;
-    }
-    decode_grim_ppm(&output.stdout, visible.width, visible.height)
-}
-
-/// The `-g` argument for a region: absolute compositor coordinates plus ` WxH`.
-#[cfg(target_os = "linux")]
-fn grim_geometry(origin_x: i32, origin_y: i32, visible: &VisibleRegion) -> String {
-    format!(
-        "{},{} {}x{}",
-        origin_x + visible.x as i32,
-        origin_y + visible.y as i32,
-        visible.width,
-        visible.height
-    )
-}
-
-/// Decode grim's binary PPM (`-t ppm`) output into a frame of the requested region size.
-///
-/// A scaled output hands back physical pixels for a logical region; resampling down to what was
-/// asked is the same rule the xcap path applies to a scaled monitor capture, and it is what keeps
-/// the fraction-based crops meaning the same thing on both.
-#[cfg(target_os = "linux")]
-fn decode_grim_ppm(bytes: &[u8], width: u32, height: u32) -> Option<image::DynamicImage> {
-    let decoded = image::load_from_memory(bytes).ok()?;
-    if decoded.dimensions() == (width, height) {
-        Some(decoded)
-    } else {
-        Some(decoded.resize_exact(width, height, image::imageops::FilterType::Lanczos3))
-    }
-}
-
 /// Cut the game window out of a whole-monitor capture and lay it into a window-sized frame.
 ///
 /// Split from live capture because everything above it talks to the compositor and everything here
@@ -684,6 +629,19 @@ pub fn use_bundled_tesseract(resource_dir: &Path) {
 /// does not need. What it costs is a little leading punctuation, which `normalise` drops before the
 /// match ever sees it.
 pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
+    run_tesseract(image, "11", None)
+}
+
+/// OCR one already-isolated text line, restricted to the supplied glyph set.
+pub(crate) fn ocr_crop_line(image: &Path, whitelist: &str) -> Result<String, &'static str> {
+    run_tesseract(image, "7", Some(whitelist))
+}
+
+fn run_tesseract(
+    image: &Path,
+    page_segmentation_mode: &str,
+    whitelist: Option<&str>,
+) -> Result<String, &'static str> {
     let program = TESSERACT
         .get()
         .cloned()
@@ -702,11 +660,13 @@ pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
             directory.as_os_str(),
         ]);
     }
-    let text = command
+    command
         .arg(image)
-        .args(["-", "--psm", "11"])
-        .output()
-        .map_err(|_| "tesseract is not available")?;
+        .args(["-", "--psm", page_segmentation_mode]);
+    if let Some(whitelist) = whitelist {
+        command.args(["-c", &format!("tessedit_char_whitelist={whitelist}")]);
+    }
+    let text = command.output().map_err(|_| "tesseract is not available")?;
     Ok(String::from_utf8_lossy(&text.stdout).into_owned())
 }
 
@@ -854,8 +814,6 @@ mod tests {
         VisibleRegion, WindowRect, clear_matched_rect, read_capture_candidates, visible_region,
         window_frame_from_monitor,
     };
-    #[cfg(target_os = "linux")]
-    use super::{decode_grim_ppm, grim_geometry};
 
     /// A flat monitor capture, tagged so a frame can be traced back to the screen it came from.
     fn monitor(width: u32, height: u32, tag: u8) -> image::RgbaImage {
@@ -1120,67 +1078,6 @@ mod tests {
         assert_eq!(visible_region(elsewhere, 0, 0, 1920, 1080), None);
     }
 
-    /// grim hands back a binary P6 when asked for `-t ppm`. The decoder has to read that exact
-    /// shape -- header, maxval, raw RGB -- because the whole fast path rests on it.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_grim_ppm_frame_decodes_to_its_stated_size() {
-        let ppm = b"P6\n4 3\n255\n\0\0\x01\0\0\x02\0\0\x03\0\0\x04\0\0\x05\0\0\x06\0\0\x07\0\0\x08\0\0\x09\0\0\x0a\0\0\x0b\0\0\x0c";
-        let frame = decode_grim_ppm(ppm, 4, 3).expect("decodes");
-        assert_eq!(frame.dimensions(), (4, 3));
-        assert_eq!(frame.get_pixel(0, 0).0[..3], [0, 0, 1]);
-        assert_eq!(frame.get_pixel(3, 2).0[..3], [0, 0, 12]);
-    }
-
-    /// A scaled output hands back more pixels than the logical region asked for; the frame is
-    /// resampled down to what the caller requested, exactly like the xcap path resamples a
-    /// scaled monitor capture, so the fraction-based crops keep meaning the same thing.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_scaled_grim_frame_is_resampled_to_the_requested_region() {
-        let ppm = b"P6\n2 2\n255\n\x10\0\0\0\x10\0\0\0\x10\0\0\x10";
-        let frame = decode_grim_ppm(ppm, 4, 4).expect("decodes");
-        assert_eq!(frame.dimensions(), (4, 4));
-    }
-
-    /// grim's `-g` takes absolute compositor-layout coordinates, but `visible_region` produces
-    /// monitor-relative ones. The game lives on the second monitor on this desktop, so passing
-    /// the relative region through verbatim is precisely how grim photographs the wrong screen
-    /// while every log line looks healthy.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn grim_geometry_is_absolute_compositor_coordinates() {
-        let fullscreen = VisibleRegion {
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1080,
-            paste_x: 0,
-            paste_y: 0,
-        };
-        assert_eq!(grim_geometry(1920, 0, &fullscreen), "1920,0 1920x1080");
-        // A windowed game part-way onto its monitor keeps its absolute placement, and a
-        // negative monitor origin carries through.
-        let clipped = VisibleRegion {
-            x: 100,
-            y: 50,
-            width: 800,
-            height: 600,
-            paste_x: 0,
-            paste_y: 0,
-        };
-        assert_eq!(grim_geometry(-1920, 0, &clipped), "-1820,50 800x600");
-    }
-
-    /// Anything that is not a complete P6 -- a truncated capture, an error page, an empty
-    /// stdout from a failed spawn -- is an absence, not a panic.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn garbage_is_not_a_frame() {
-        assert!(decode_grim_ppm(b"", 4, 3).is_none());
-        assert!(decode_grim_ppm(b"P6\n4 3\n255\n\0\0", 4, 3).is_none());
-        assert!(decode_grim_ppm(b"P5\n4 3\n255\n", 4, 3).is_none());
-    }
     fn pool_entry(name: &str) -> super::RewardCatalogEntry {
         super::RewardCatalogEntry {
             name: name.to_owned(),

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const backend = vi.hoisted(() => ({ getKioskView: vi.fn() }))
@@ -19,7 +19,16 @@ import { AppRoute } from './Root'
 import { routeForPath } from './routing'
 import type { KioskView } from './backend'
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 const sampleView: KioskView = {
+  session: 7,
   epoch: 3,
   cells: [
     { col: 0, row: 0, name: 'Titania Prime Systems Blueprint', platinum: 30 },
@@ -99,18 +108,75 @@ describe('kiosk overlay route', () => {
     expect(screen.queryByTestId('kiosk-grid-chip')).not.toBeInTheDocument()
   })
 
+  it('resets hidden scroll state before a same-epoch reopen', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const grid = await screen.findByTestId('kiosk-grid')
+    const strip = await screen.findByTestId('kiosk-strip')
+
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 12 } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
+
+    backend.getKioskView.mockResolvedValueOnce(null)
+    events.listeners['kiosk-updated']?.({ payload: null })
+    await waitFor(() => {
+      expect(grid).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' })
+      expect(strip).not.toHaveClass('kiosk-faded')
+    })
+
+    backend.getKioskView.mockResolvedValueOnce({ ...sampleView, scroll_dy: 0 })
+    events.listeners['kiosk-updated']?.({ payload: 7 })
+    expect(grid).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' })
+    expect(strip).not.toHaveClass('kiosk-faded')
+  })
+
+  it('ignores a queued scroll event from the previous kiosk visit', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const grid = await screen.findByTestId('kiosk-grid')
+
+    events.listeners['kiosk-scroll']?.({ payload: { session: 6, dy: 37 } })
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' }))
+
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 5 } })
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' }))
+  })
+
+  it('retires the previous visit before a same-batch reopen read settles', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const grid = await screen.findByTestId('kiosk-grid')
+    const next = deferred<KioskView | null>()
+    backend.getKioskView.mockReturnValueOnce(next.promise)
+
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 12 } })
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(12 * var(--h)))' }))
+
+    events.listeners['kiosk-updated']?.({ payload: 8 })
+    await waitFor(() => {
+      expect(screen.queryByTestId('kiosk-grid-chip')).not.toBeInTheDocument()
+      expect(grid).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' })
+    })
+
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 40 } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 8, dy: 5 } })
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' }))
+
+    next.resolve({ ...sampleView, session: 8, epoch: 1, scroll_dy: 0 })
+    await screen.findByTitle('Titania Prime Systems Blueprint')
+    expect(grid).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' })
+  })
+
   it('follows streamed scroll offsets on the grid layer, basket pinned', async () => {
     render(<AppRoute pathname="/kiosk" />)
     const grid = await screen.findByTestId('kiosk-grid')
     const basket = (await screen.findAllByTestId('kiosk-basket-chip'))[0]
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' }))
 
-    events.listeners['kiosk-scroll']?.({ payload: 5 })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 5 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' }))
     // The backend streams movement, not position: each verdict is how far the grid went since
     // the last look, so the chips ride a scroll of any length by adding them up. (Assigning
     // them absolutely left the chips 17px from home on a 300px scroll.)
-    events.listeners['kiosk-scroll']?.({ payload: 9 })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 9 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(14 * var(--h)))' }))
     expect(basket).not.toHaveStyle({ transform: 'translateY(calc(14 * var(--h)))' })
     expect(grid).not.toHaveClass('kiosk-faded')
@@ -122,14 +188,14 @@ describe('kiosk overlay route', () => {
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(0 * var(--h)))' }))
 
     // The stream rides the grid while it moves...
-    events.listeners['kiosk-scroll']?.({ payload: 40 })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 40 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(40 * var(--h)))' }))
 
     // ...and the next settled read reports where the grid truly is. Nothing marked the
     // moment (no reopen, no populate: the epoch is unchanged), but the read is still a
     // measurement -- leaving it unadopted lets every estimate's error compound forever.
     backend.getKioskView.mockResolvedValue({ ...sampleView, scroll_dy: -8 })
-    events.listeners['kiosk-updated']?.({ payload: undefined })
+    events.listeners['kiosk-updated']?.({ payload: 7 })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(-8 * var(--h)))' }))
   })
 
@@ -142,10 +208,10 @@ describe('kiosk overlay route', () => {
     backend.getKioskView.mockImplementation(
       () => new Promise<KioskView | null>(resolve => { release = resolve }),
     )
-    events.listeners['kiosk-updated']?.({ payload: undefined })
+    events.listeners['kiosk-updated']?.({ payload: 7 })
     // The read is in flight when the grid moves: its answer will predate this delta, so
     // adopting it would snap the chips back to where the grid used to be.
-    events.listeners['kiosk-scroll']?.({ payload: 7 })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 7 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(7 * var(--h)))' }))
 
     release({ ...sampleView, epoch: 4, total_plat: 99, scroll_dy: -50 })
@@ -154,21 +220,44 @@ describe('kiosk overlay route', () => {
     expect(grid).toHaveStyle({ transform: 'translateY(calc(7 * var(--h)))' })
   })
 
+  it('keeps the newest view when an older refresh settles last', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const grid = await screen.findByTestId('kiosk-grid')
+    await screen.findByTitle('Titania Prime Systems Blueprint')
+
+    const older = deferred<KioskView | null>()
+    const newer = deferred<KioskView | null>()
+    backend.getKioskView
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise)
+    events.listeners['kiosk-updated']?.({ payload: 7 })
+    events.listeners['kiosk-updated']?.({ payload: 7 })
+    newer.resolve({ ...sampleView, epoch: 5, total_plat: 55, scroll_dy: -20 })
+    await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(-20 * var(--h)))' }))
+
+    await act(async () => {
+      older.resolve({ ...sampleView, epoch: 4, total_plat: 44, scroll_dy: 40 })
+      await older.promise
+    })
+    expect(screen.queryByText('44p')).not.toBeInTheDocument()
+    expect(grid).toHaveStyle({ transform: 'translateY(calc(-20 * var(--h)))' })
+  })
+
   it('fades on an unreadable verdict and re-anchors with the view scroll offset', async () => {
     render(<AppRoute pathname="/kiosk" />)
     const grid = await screen.findByTestId('kiosk-grid')
     const strip = await screen.findByTestId('kiosk-strip')
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
 
-    events.listeners['kiosk-scroll']?.({ payload: 12 })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 12 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(12 * var(--h)))' }))
-    events.listeners['kiosk-scroll']?.({ payload: null })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
 
     // The settled read ran with bands shifted by the scroll, so the view says where the grid
     // now sits: the offset re-anchors to it instead of snapping back to zero.
     backend.getKioskView.mockResolvedValue({ ...sampleView, epoch: 4, scroll_dy: -142 })
-    events.listeners['kiosk-updated']?.({ payload: undefined })
+    events.listeners['kiosk-updated']?.({ payload: 7 })
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
     expect(grid).toHaveStyle({ transform: 'translateY(calc(-142 * var(--h)))' })
     expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()

@@ -34,6 +34,9 @@ pub struct BasketChip {
 /// One poller epoch's whole overlay payload.
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct KioskView {
+    /// Monotonic kiosk-visit identity. Frontend event handlers reject queued scroll verdicts from
+    /// an earlier visit after a close/reopen.
+    pub session: u64,
     pub epoch: u64,
     pub cells: Vec<CellChip>,
     pub basket: Vec<BasketChip>,
@@ -44,36 +47,101 @@ pub struct KioskView {
     pub scroll_dy: i32,
 }
 
-/// The poller's latest published epoch, shared with the `/kiosk` window's `get_kiosk_view`
-/// command.
-///
-/// A lock-poisoned cell can only mean a panic while publishing; the degradation that matters is
-/// that the overlay hides (reads come back empty) rather than that the app dies, so every method
-/// degrades instead of propagating.
+/// The active kiosk visit and its latest published view. Session ids make every worker output
+/// conditional on still owning the current visit; the mutex is the single ordering point shared
+/// by open, close, publication and event emission.
 #[derive(Default)]
-pub struct KioskState(std::sync::Mutex<Option<KioskView>>);
+struct KioskSlot {
+    next_session: u64,
+    active_session: Option<u64>,
+    view: Option<KioskView>,
+}
+
+#[derive(Default)]
+pub struct KioskState(std::sync::Mutex<KioskSlot>);
 
 impl KioskState {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Publish a fresh epoch's view; readers hold a copy until the next publish or a clear.
+    /// Start a new visit, invalidating all outputs from previous workers and clearing their view.
+    pub fn begin_session(&self) -> u64 {
+        let Ok(mut slot) = self.0.lock() else {
+            return 0;
+        };
+        slot.next_session = slot.next_session.wrapping_add(1).max(1);
+        slot.active_session = Some(slot.next_session);
+        slot.view = None;
+        slot.next_session
+    }
+
+    /// End this visit if it is still current. A delayed close from an older visit is harmless.
+    pub fn end_session(&self, session: u64) {
+        if let Ok(mut slot) = self.0.lock()
+            && slot.active_session == Some(session)
+        {
+            slot.active_session = None;
+            slot.view = None;
+        }
+    }
+
+    /// Exposed for lifecycle tests and for attaching a worker to the visit just opened.
+    pub fn active_session(&self) -> Option<u64> {
+        self.0.lock().ok().and_then(|slot| slot.active_session)
+    }
+
+    /// Publish a fresh epoch's view; retained for state-cell callers that do not own a session.
     pub fn set(&self, view: KioskView) {
         if let Ok(mut slot) = self.0.lock() {
-            *slot = Some(view);
+            slot.view = Some(view);
         }
+    }
+
+    /// Publish and announce a fresh epoch only while the worker still owns the active kiosk
+    /// visit. Both operations share the lifecycle mutex: close/reopen cannot begin after the
+    /// state write but before its session-bearing frontend event. The state stamps the accepted
+    /// session into the payload so queued frontend events obey the same boundary.
+    pub fn set_if_current(
+        &self,
+        session: u64,
+        mut view: KioskView,
+        announce: impl FnOnce(),
+    ) -> bool {
+        let Ok(mut slot) = self.0.lock() else {
+            return false;
+        };
+        if slot.active_session != Some(session) {
+            return false;
+        }
+        view.session = session;
+        slot.view = Some(view);
+        announce();
+        true
+    }
+
+    /// Run a non-view side effect only while its worker still owns the active visit.
+    pub fn run_if_current(&self, session: u64, action: impl FnOnce()) -> bool {
+        let Ok(slot) = self.0.lock() else {
+            return false;
+        };
+        if slot.active_session != Some(session) {
+            return false;
+        }
+        action();
+        true
     }
 
     /// The latest view, or `None` when nothing has been published (or the kiosk has closed).
     pub fn get(&self) -> Option<KioskView> {
-        self.0.lock().ok().and_then(|slot| slot.clone())
+        self.0.lock().ok().and_then(|slot| slot.view.clone())
     }
 
-    /// Close semantics: nothing is drawn over whatever the game shows next.
+    /// Unconditional reset used by process teardown and state-cell tests.
     pub fn clear(&self) {
         if let Ok(mut slot) = self.0.lock() {
-            *slot = None;
+            slot.active_session = None;
+            slot.view = None;
         }
     }
 }
@@ -107,7 +175,7 @@ pub fn build_view(
         .map(|row| BasketChip {
             index: row.index as u32,
             name: row.name.clone(),
-            platinum: price(&row.name),
+            platinum: price(&row.name).and_then(|unit_price| unit_price.checked_mul(row.quantity)),
         })
         .collect();
 
@@ -118,6 +186,7 @@ pub fn build_view(
         .sum();
 
     KioskView {
+        session: 0,
         epoch,
         scroll_dy: 0,
         cells,
@@ -154,6 +223,7 @@ mod tests {
             index,
             name: name.to_owned(),
             score: 0.9,
+            quantity: 1,
         }
     }
 
@@ -185,6 +255,31 @@ mod tests {
         assert_eq!(view.basket[0].platinum, Some(6));
         assert_eq!(view.basket[1].platinum, Some(20));
         assert_eq!(view.total_plat, 26);
+    }
+
+    #[test]
+    fn basket_rows_price_every_selected_copy() {
+        let basket = [BasketRow {
+            quantity: 2,
+            ..basket_row(0, "Kompressa Prime Barrel")
+        }];
+        let view = build_view(1, &[], &basket, &catalog(), |name| {
+            (name == "Kompressa Prime Barrel").then_some(7)
+        });
+
+        assert_eq!(view.basket[0].platinum, Some(14));
+        assert_eq!(view.total_plat, 14);
+    }
+
+    #[test]
+    fn a_single_basket_row_keeps_unit_price() {
+        let basket = [basket_row(0, "Kompressa Prime Barrel")];
+        let view = build_view(1, &[], &basket, &catalog(), |name| {
+            (name == "Kompressa Prime Barrel").then_some(7)
+        });
+
+        assert_eq!(view.basket[0].platinum, Some(7));
+        assert_eq!(view.total_plat, 7);
     }
 
     #[test]

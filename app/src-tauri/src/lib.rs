@@ -1396,6 +1396,13 @@ pub fn inventory_log_path_at(proc_root: &Path, pid: u32) -> Option<PathBuf> {
 /// owns the lifecycle around them so the wiring can be tested with stub hooks instead of a
 /// game, a window and a thread.
 ///
+type SpawnKioskPoller<'a> = dyn Fn(
+        u64,
+        &Arc<std::sync::atomic::AtomicBool>,
+        &Arc<std::sync::atomic::AtomicBool>,
+    ) -> std::thread::JoinHandle<()>
+    + 'a;
+
 /// The log machine is a member and not a `monitor_game` local because closing must reset it: the
 /// machine never un-opens, so without a reset the *next* kiosk visit's markers would be swallowed
 /// by the previous session's `open` state.
@@ -1411,6 +1418,7 @@ pub struct KioskSession {
     /// the monitor's next tick -- and a reopen in between cancels the teardown entirely.
     overlay_up: bool,
     reanchor: Arc<std::sync::atomic::AtomicBool>,
+    active_session: Option<u64>,
     gone: Arc<std::sync::atomic::AtomicBool>,
     poller: Option<std::thread::JoinHandle<()>>,
     retired_pollers: Vec<std::thread::JoinHandle<()>>,
@@ -1421,19 +1429,18 @@ impl KioskSession {
         Self::default()
     }
 
-    /// Feed the same incremental EE.log bytes the reward machine sees. `spawn_poller` receives
-    /// the session's shared flags: `reanchor` is the poller's re-read request (already set for
-    /// the first read) and `gone` is the stop signal -- set here when the log says the screen
-    /// went away, and read by the poller thread at the top of every tick.
+    /// Feed incremental EE.log bytes into the kiosk lifecycle. `spawn_poller` receives the
+    /// session identity and shared flags: `reanchor` requests a read and `gone` permanently stops
+    /// the worker. State is retired on the close event itself, before a later open in the same
+    /// byte batch can re-arm.
     pub fn observe(
         &mut self,
         bytes: &[u8],
+        kiosk_view: &KioskState,
         show: &dyn Fn(),
-        spawn_poller: &dyn Fn(
-            &Arc<std::sync::atomic::AtomicBool>,
-            &Arc<std::sync::atomic::AtomicBool>,
-        ) -> std::thread::JoinHandle<()>,
-    ) {
+        spawn_poller: &SpawnKioskPoller<'_>,
+    ) -> bool {
+        let mut state_retired = false;
         for event in self.machine.observe_bytes(bytes) {
             log::debug!("[DEBUG-kiosk] ee event {event:?}");
             match event {
@@ -1443,7 +1450,7 @@ impl KioskSession {
                         // one batch and a second poller would race the first for the same flags.
                         continue;
                     }
-                    self.arm(show, spawn_poller);
+                    self.arm(kiosk_view, show, spawn_poller);
                 }
                 kiosk_log::KioskLogEvent::GridPopulated => {
                     if self.poller_active {
@@ -1464,6 +1471,10 @@ impl KioskSession {
                     if let Some(poller) = self.poller.take() {
                         self.retired_pollers.push(poller);
                     }
+                    if let Some(session) = self.active_session.take() {
+                        kiosk_view.end_session(session);
+                        state_retired = true;
+                    }
                     // The session is over *here*, not when the monitor gets round to the
                     // window: a close and the next open arrive in one batch whenever the
                     // player reopens inside a tick, and leaving this set until `take_close`
@@ -1474,6 +1485,7 @@ impl KioskSession {
                 }
             }
         }
+        state_retired
     }
 
     /// Adopt whatever state a stretch of log *ends* in -- called once when the monitor attaches
@@ -1484,11 +1496,9 @@ impl KioskSession {
     pub fn adopt_log_tail(
         &mut self,
         bytes: &[u8],
+        kiosk_view: &KioskState,
         show: &dyn Fn(),
-        spawn_poller: &dyn Fn(
-            &Arc<std::sync::atomic::AtomicBool>,
-            &Arc<std::sync::atomic::AtomicBool>,
-        ) -> std::thread::JoinHandle<()>,
+        spawn_poller: &SpawnKioskPoller<'_>,
     ) {
         if self.poller_active || !kiosk_log::KioskLogMachine::state_after(bytes) {
             return;
@@ -1496,17 +1506,29 @@ impl KioskSession {
         // The machine has to know it is open, or the exit line for a session joined late
         // would be read as chatter and the overlay would never come down.
         self.machine.adopt_open();
-        self.arm(show, spawn_poller);
+        self.arm(kiosk_view, show, spawn_poller);
     }
 
-    /// Start a session: fresh flags, a poller on them, and the overlay up.
+    /// Join only pollers that have already exited. A poller can spend seconds in OCR, and the
+    /// monitor must never wait for it before hiding a closed kiosk.
+    fn reap_finished_pollers(&mut self) {
+        let mut pending = Vec::with_capacity(self.retired_pollers.len());
+        for poller in self.retired_pollers.drain(..) {
+            if !poller.is_finished() {
+                pending.push(poller);
+            } else if poller.join().is_err() {
+                log::warn!("[DEBUG-kiosk] poller panicked during shutdown");
+            }
+        }
+        self.retired_pollers = pending;
+    }
+
+    /// Start a session: fresh identity and flags, a poller on them, and the overlay up.
     fn arm(
         &mut self,
+        kiosk_view: &KioskState,
         show: &dyn Fn(),
-        spawn_poller: &dyn Fn(
-            &Arc<std::sync::atomic::AtomicBool>,
-            &Arc<std::sync::atomic::AtomicBool>,
-        ) -> std::thread::JoinHandle<()>,
+        spawn_poller: &SpawnKioskPoller<'_>,
     ) {
         self.poller_active = true;
         self.overlay_up = true;
@@ -1519,45 +1541,63 @@ impl KioskSession {
         // trigger by hand.
         self.reanchor = Arc::new(std::sync::atomic::AtomicBool::new(true));
         self.gone = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self.poller = Some(spawn_poller(&self.reanchor, &self.gone));
+        let session = kiosk_view.begin_session();
+        self.active_session = Some(session);
+        self.poller = Some(spawn_poller(session, &self.reanchor, &self.gone));
         show();
     }
 
-    /// Did the session end? Consumed once; the teardown is `close`'s. The verdict comes from
-    /// the log (`KioskClosed`) -- the poller only ever stops looking, it does not judge.
+    /// Did the session end? Consumed once; the teardown is `close_overlay`'s. The verdict comes
+    /// from the log (`KioskClosed`) -- the poller only ever stops looking, it does not judge.
     pub fn take_close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) -> bool {
         std::mem::take(&mut self.close_pending) && {
-            self.close(kiosk_view, hide);
+            self.close_overlay(kiosk_view, hide);
             true
         }
     }
 
-    /// Tear the session down from the monitor's side -- either consumed after the log's close
-    /// line or forced because the game process died. Clears the published view so a stale
-    /// payload cannot render over whatever the game drew next, resets the log machine so a
-    /// later open re-arms, and stops the poller: a dead game has nothing left to capture.
-    pub fn close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) {
-        self.close_pending = false;
-        self.poller_active = false;
-        self.gone.store(true, Ordering::Release);
-        if let Some(poller) = self.poller.take() {
-            self.retired_pollers.push(poller);
+    /// Tear the session down because the game process died. Unlike a normal kiosk close, process
+    /// teardown must wait for every capture worker before the shared portal session is destroyed.
+    /// A retained webview also needs the null lifecycle edge before another process can show it.
+    pub fn close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn(), retire_frontend: &dyn Fn()) {
+        let had_session = self.active_session.is_some();
+        self.close_overlay(kiosk_view, hide);
+        if had_session {
+            retire_frontend();
         }
         for poller in self.retired_pollers.drain(..) {
             if poller.join().is_err() {
                 log::warn!("[DEBUG-kiosk] poller panicked during shutdown");
             }
         }
-        self.machine = kiosk_log::KioskLogMachine::default();
-        if !std::mem::take(&mut self.overlay_up) {
-            return;
+    }
+
+    /// Clear and hide synchronously, then reap only workers that have already exited. OCR may still
+    /// be blocked in Tesseract during an ordinary kiosk close, and stale UI must not remain visible
+    /// while the monitor waits for it. A later open gets fresh flags, so a retired worker cannot
+    /// publish into that session after it observes its permanent stop flag.
+    fn close_overlay(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) {
+        self.close_pending = false;
+        self.poller_active = false;
+        self.gone.store(true, Ordering::Release);
+        if let Some(poller) = self.poller.take() {
+            self.retired_pollers.push(poller);
         }
+        self.machine = kiosk_log::KioskLogMachine::default();
+        self.active_session = None;
         kiosk_view.clear();
-        hide();
+        if std::mem::take(&mut self.overlay_up) {
+            hide();
+        }
+        self.reap_finished_pollers();
     }
 }
 fn should_close_portal(previous: Option<u32>, current: Option<u32>) -> bool {
     previous.is_some() && current.is_none()
+}
+
+fn process_was_replaced(previous: Option<u32>, current: Option<u32>) -> bool {
+    matches!((previous, current), (Some(previous), Some(current)) if previous != current)
 }
 
 fn confirmed_process_observation<T: Copy, E>(
@@ -1581,6 +1621,10 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     let kiosk_hide = {
         let app = app.clone();
         move || overlay_window::hide_kiosk_overlay(&app)
+    };
+    let kiosk_retire = {
+        let app = app.clone();
+        move || emit_kiosk_update(&app, None)
     };
     let mut announced_process = None;
     let mut tracked_resolution: Option<(u32, Option<PathBuf>)> = None;
@@ -1620,7 +1664,8 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     // The kiosk poller's join inputs, cloned per arm: the closed candidate set, the runtime's
     // price/collection state, and the live market cache that outranks the daily dump.
     let kiosk_candidates = Arc::new(reward_catalog.clone());
-    let kiosk_spawn = |reanchor: &Arc<std::sync::atomic::AtomicBool>,
+    let kiosk_spawn = |session: u64,
+                       reanchor: &Arc<std::sync::atomic::AtomicBool>,
                        gone: &Arc<std::sync::atomic::AtomicBool>| {
         let joiner = {
             let shared = Arc::clone(&shared);
@@ -1642,21 +1687,37 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         };
         let publish = {
             let app = app.clone();
+            let first_publish = Arc::new(std::sync::atomic::AtomicBool::new(true));
             move |view: KioskView| {
-                if let Some(kiosk) = app.try_state::<KioskState>() {
-                    kiosk.set(view);
-                    emit_kiosk_update(&app);
-                }
+                let Some(kiosk) = app.try_state::<KioskState>() else {
+                    return;
+                };
+                let _ = kiosk.set_if_current(session, view, || {
+                    if first_publish.swap(false, Ordering::AcqRel) {
+                        // On native Wayland the open log marker arrives before capture has located
+                        // the game monitor. The first show is deliberately deferred; retry now that
+                        // `select_kiosk_strip` has published the matched capture rectangle.
+                        overlay_window::show_kiosk_overlay(&app);
+                    }
+                    emit_kiosk_update(&app, Some(session));
+                });
             }
         };
         let emit_scroll = {
             let app = app.clone();
             move |verdict: Option<i32>| {
-                // The verdict is the offset: `Some(dy)` translates the grid layer, `None`
-                // fades it until the next anchor. (This closure spent a round emitting a
-                // hardcoded `None` -- every verdict read as "fade", and one noisy tick
-                // blanked the overlay for the rest of the session.)
-                let _ = app.emit_to("kiosk-overlay", "kiosk-scroll", verdict);
+                // Gate every side effect at the same session mutex as publication, then carry the
+                // identity across IPC so an event already queued for the webview cannot cross a
+                // close/reopen boundary.
+                if let Some(kiosk) = app.try_state::<KioskState>() {
+                    let _ = kiosk.run_if_current(session, || {
+                        let _ = app.emit_to(
+                            "kiosk-overlay",
+                            "kiosk-scroll",
+                            serde_json::json!({ "session": session, "dy": verdict }),
+                        );
+                    });
+                }
             }
         };
         let poller = spawn_kiosk_poller_with(
@@ -1699,9 +1760,16 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             .unwrap_or_default()
             .as_secs();
         let discovered = procfs.discover();
+        let confirmed_process = confirmed_process_observation(&discovered);
+        let process_replaced = confirmed_process.is_some_and(|current| {
+            process_was_replaced(
+                announced_process.map(|process: GameProcess| process.pid()),
+                current.map(|process| process.pid()),
+            )
+        });
         #[cfg(target_os = "linux")]
         let mut close_portal = false;
-        if let Some(process) = confirmed_process_observation(&discovered) {
+        if let Some(process) = confirmed_process {
             if process != announced_process {
                 #[cfg(target_os = "linux")]
                 {
@@ -1721,7 +1789,13 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         }
         // A discovery error is not evidence that Warframe exited. Keep the last confirmed process
         // for reward teardown and event handling until procfs reports an actual absence.
-        let process = confirmed_process_observation(&discovered).unwrap_or(announced_process);
+        let process = confirmed_process.unwrap_or(announced_process);
+        // A direct relaunch may replace one live PID with another without an observable absent
+        // poll. Retire the old kiosk before adopting the replacement process's log tail; otherwise
+        // its open machine and capture worker would be carried across the process boundary.
+        if process_replaced && let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
+            kiosk_session.close(kiosk_view_cell.inner(), &kiosk_hide, &kiosk_retire);
+        }
         let (input, log_bytes) = match discovered {
             Ok(None) => (
                 MonitorInput::absent(now, procfs.launcher_present()),
@@ -1746,11 +1820,14 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
                         // tail starts at EOF, so a kiosk already on screen when the app started
                         // has no open marker left for us to see. Fold the recent tail once, at
                         // attach, to adopt the session in progress.
-                        kiosk_session.adopt_log_tail(
-                            &log_tail(ee_path, KIOSK_TAIL_SCAN),
-                            &kiosk_show,
-                            &kiosk_spawn,
-                        );
+                        if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
+                            kiosk_session.adopt_log_tail(
+                                &log_tail(ee_path, KIOSK_TAIL_SCAN),
+                                kiosk_view_cell.inner(),
+                                &kiosk_show,
+                                &kiosk_spawn,
+                            );
+                        }
                     }
                 }
                 build_monitor_input(&machine, now, process.pid(), path)
@@ -1815,8 +1892,19 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         }
         // Same bytes, second machine: the kiosk's lifecycle is independent of the reward screen's
         // (the two never occur at once in practice, but neither knows about the other).
-        kiosk_session.observe(&log_bytes, &kiosk_show, &kiosk_spawn);
         if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
+            let state_retired = kiosk_session.observe(
+                &log_bytes,
+                kiosk_view_cell.inner(),
+                &kiosk_show,
+                &kiosk_spawn,
+            );
+            // A same-batch reopen deliberately leaves the window up. Publish the resulting
+            // lifecycle identity before starting an IPC read, so the webview retires the old
+            // visit synchronously and rejects its already-queued scroll events.
+            if state_retired {
+                emit_kiosk_update(&app, kiosk_view_cell.active_session());
+            }
             // The log's close line and the game process dying are the only closes there are;
             // both land here.
             kiosk_session.take_close(kiosk_view_cell.inner(), &kiosk_hide);
@@ -1867,7 +1955,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             // No game, no kiosk: the capture source is gone even if the miss streak has not
             // finished counting.
             if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
-                kiosk_session.close(kiosk_view_cell.inner(), &kiosk_hide);
+                kiosk_session.close(kiosk_view_cell.inner(), &kiosk_hide, &kiosk_retire);
             }
             reward_ocr::clear_latest_matched_rect();
             // Hand the screen cast back now the game is gone -- see `reward_screen`'s declaration
@@ -2686,21 +2774,31 @@ where
                     kiosk_scroll::FRAME_DELTA_MAX,
                     kiosk_scroll::MIN_PEAK_RATIO,
                 ),
-                _ => None,
+                // The first readable look establishes the baseline and counts as still. No
+                // previous frame exists yet, so there is no failed measurement to fade over.
+                (None, Some(_)) => Some(0),
+                (_, None) => None,
             };
-            let moving = matches!(frame_delta, Some(dy) if dy.abs() > 1);
             last_strip = reading.cloned();
-            if moving {
+            let Some(frame_delta) = frame_delta else {
+                // Blindness is not stillness. Fade stale chips and restart settling; otherwise
+                // two torn/flat looks can launch OCR against a displacement we never measured.
+                emit_scroll(None);
+                static_looks = 0;
+                std::thread::sleep(timing.motion_interval);
+                continue;
+            };
+            if frame_delta.abs() > 1 {
                 // Stream the frame's movement; the frontend accumulates the deltas. Deltas
                 // need no anchor and no range, so the chips follow a scroll of any length.
-                emit_scroll(frame_delta);
+                emit_scroll(Some(frame_delta));
                 static_looks = 0;
                 std::thread::sleep(timing.motion_interval);
                 continue;
             }
-            // Still (or unreadable this look): a couple of agreeing looks mean settled, and
-            // the settled read locates itself -- the grid's own label rows name the offset, at
-            // any scroll position, so the crops land on the text instead of the gaps.
+            // Two readable, agreeing looks mean settled. The settled read locates itself -- the
+            // grid's own label rows name the offset at any scroll position, so the crops land on
+            // the text instead of the gaps.
             static_looks += 1;
             if static_looks < KIOSK_SETTLE_LOOKS {
                 std::thread::sleep(timing.motion_interval);
@@ -3525,9 +3623,10 @@ fn get_kiosk_view(kiosk: State<'_, KioskState>) -> Option<KioskView> {
     kiosk.get()
 }
 
-/// Tell the kiosk window a new epoch is published; it fetches the view itself.
-fn emit_kiosk_update(app: &AppHandle) {
-    let _ = app.emit_to("kiosk-overlay", "kiosk-updated", ());
+/// Tell the kiosk window which visit now owns it; it retires any previous visit synchronously,
+/// then fetches the latest epoch itself.
+fn emit_kiosk_update(app: &AppHandle, session: Option<u64>) {
+    let _ = app.emit_to("kiosk-overlay", "kiosk-updated", session);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -3718,7 +3817,7 @@ mod live_bench {
         println!("bench dy: {dy}");
         let cells = kiosk_ocr::read_grid(&frame, &candidates, dy);
         println!(
-            "read_grid (18 crops): {:?} -> {} cells",
+            "read_grid (24 crops): {:?} -> {} cells",
             t1.elapsed(),
             cells.len()
         );
@@ -4153,6 +4252,14 @@ mod tests {
         assert!(!should_close_portal(None, Some(42)));
         assert!(!should_close_portal(Some(42), Some(42)));
         assert!(!should_close_portal(Some(42), Some(43)));
+    }
+
+    #[test]
+    fn a_direct_process_replacement_retires_the_previous_kiosk_session() {
+        assert!(process_was_replaced(Some(42), Some(43)));
+        assert!(!process_was_replaced(None, Some(43)));
+        assert!(!process_was_replaced(Some(42), None));
+        assert!(!process_was_replaced(Some(42), Some(42)));
     }
 
     #[test]

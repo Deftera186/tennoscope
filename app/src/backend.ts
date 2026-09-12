@@ -51,6 +51,7 @@ export interface CellChip { col: number; row: number; name: string; platinum: nu
 export interface BasketChip { index: number; name: string; platinum: number | null }
 /** One poller epoch's whole overlay payload. */
 export interface KioskView {
+  session: number
   epoch: number
   cells: CellChip[]
   basket: BasketChip[]

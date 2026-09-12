@@ -8,9 +8,9 @@
 //!
 //! Measured on the fixture (2026-08-23, structural pass): six tile cards on a 207.5px pitch
 //! whose right borders sit at x=265.95+207.55k (cards 190px wide, first left edge x=75.7),
-//! three card rows on an exact 222px pitch (tops y=199/421/643 -- confirmed by count-badge
-//! centres landing at tile_left+20, tile_top+17.5 in all six columns and three rows), the item
-//! label band below each thumbnail, a sell-basket list whose ducat digits sit on baselines
+//! three card rows visible at rest on an exact 222px pitch (tops y=199/421/643), with a fourth
+//! row entering through the pane's bottom edge during scroll (next top y=865), the item label
+//! band below each thumbnail, a sell-basket list whose ducat digits sit on baselines
 //! y=243+38 1/3*k right-aligned near x=1790, and the TOTAL row's digits (16px tall, baseline
 //! y=875) with its gold ducat glyph at x~1730..1749.
 //!
@@ -22,10 +22,14 @@
 
 /// Grid columns across the kiosk.
 pub const GRID_COLS: usize = 6;
-/// Grid rows visible without scrolling.
-pub const GRID_ROWS: usize = 3;
+/// Maximum card bands visible in the clipped pane while scrolling. Three fit at rest; a fourth
+/// enters through the bottom edge before the first leaves through the top.
+pub const GRID_ROWS: usize = 4;
 /// Basket rows the pane can show at once.
 pub const BASKET_ROWS: usize = 8;
+
+/// Left edge of the basket pane at 1920x1080. Name OCR must not cross into grid column six.
+const BASKET_NAME_LEFT_1080P: f32 = 1256.0;
 
 const CAL: f32 = 1080.0;
 
@@ -41,7 +45,7 @@ const fn fcx(px: f32) -> f32 {
 const COL_PITCH: f32 = fx(207.5);
 const TILE_W: f32 = fx(190.0);
 const GRID_LEFT: f32 = fcx(76.0);
-const ROW_TOPS: [f32; 3] = [fx(199.0), fx(421.0), fx(643.0)];
+const ROW_TOPS: [f32; GRID_ROWS] = [fx(199.0), fx(421.0), fx(643.0), fx(865.0)];
 /// The grid pane's clip edge in design pixels, measured on a live 1080p frame: card-column
 /// mean luma drops 77 to 48 between y=982 and y=985, so 983 is where the pane ends. A label
 /// band that would land at y=1009 is never rendered -- the game clips before drawing it.
@@ -94,10 +98,10 @@ fn col_left(width: u32, height: u32, col: usize) -> f32 {
     width as f32 / 2.0 + (GRID_LEFT + COL_PITCH * col as f32) * height as f32
 }
 
-/// The OCR crop over one tile's label: `(x, y, w, h)` in pixels, or `None` past the grid.
+/// The OCR crop over one visible tile label: `(x, y, w, h)`, or `None` outside the clipped pane.
 ///
-/// `dy` is the grid's tracked scroll offset in pixels: the calibration names where rows sit
-/// unscrolled, and a read taken mid-scroll has to look where the rows actually are.
+/// `dy` locates the topmost rendered band relative to the calibration. Four row positions are
+/// enumerated because a scroll phase can expose the next band through the pane's bottom edge.
 pub fn grid_label_rect(
     width: u32,
     height: u32,
@@ -114,7 +118,7 @@ pub fn grid_label_rect(
         return None;
     }
     let y = y_f.round() as u32;
-    if y_f + (LABEL_H * height as f32) > height as f32 {
+    if y_f + (LABEL_H * height as f32) > PANE_BOTTOM * height as f32 {
         return None;
     }
     Some((
@@ -213,6 +217,16 @@ mod tests {
             "label crop follows the scroll"
         );
         assert_eq!(
+            grid_label_rect(1920, 1080, 0, 3, -142),
+            Some((76, 845, 190, 68)),
+            "the fourth band entering from below is readable"
+        );
+        assert_eq!(
+            grid_label_rect(1920, 1080, 0, 3, 0),
+            None,
+            "the fourth band is clipped at rest"
+        );
+        assert_eq!(
             grid_label_rect(1920, 1080, 0, 2, 500),
             None,
             "a band pushed past the frame has nothing to read"
@@ -244,12 +258,13 @@ mod tests {
         assert_eq!(w, (190.0f32 * 720.0 / 1080.0).round() as u32);
     }
 
-    /// Past-the-grid slots have no rectangle to read.
+    /// Slots outside the four positions that can intersect the pane have no rectangle to read.
     #[test]
     fn out_of_range_slots_are_none() {
         assert_eq!(grid_label_rect(1920, 1080, 6, 0, 0), None);
-        assert_eq!(grid_label_rect(1920, 1080, 0, 3, 0), None);
+        assert_eq!(grid_label_rect(1920, 1080, 0, 4, 0), None);
         assert_eq!(tile_anchor(1920, 1080, 6, 0), None);
+        assert_eq!(tile_anchor(1920, 1080, 0, 4), None);
         assert_eq!(basket_row_pair(1920, 1080, BASKET_ROWS), None);
     }
 
@@ -289,23 +304,39 @@ mod tests {
     }
 }
 
-/// The OCR crop over one basket row's item name.
+/// The name-OCR crop over one basket row's item name.
 ///
-/// The pane starts near x=1256 and its item names end well before the ducat column: the game
-/// draws the ducat value right-aligned at x<=1792 and the digits begin around x=1758, so the
-/// crop stops at 1748 -- a trailing "100" read into the text costs every match an edit distance
-/// it does not have to spend. Vertically the band hugs the measured digit baseline.
+/// The basket begins at x=1256. Starting farther left crosses the sixth grid card's label band:
+/// an empty basket slot can then become a valid closed-set match for an adjacent grid item.
 pub fn basket_label_rect(width: u32, height: u32, row: usize) -> Option<(u32, u32, u32, u32)> {
+    basket_row_rect(width, height, row, BASKET_NAME_LEFT_1080P)
+}
+
+/// The quantity-OCR crop over one basket row's optional stack count and item name.
+///
+/// Stack prefixes are right-aligned with their item names and can extend left of the basket's
+/// name boundary. Quantity OCR uses a strict digit/separator whitelist, so this wider crop may
+/// include the adjacent grid while still stopping before the basket's ducat digits.
+pub fn basket_quantity_rect(width: u32, height: u32, row: usize) -> Option<(u32, u32, u32, u32)> {
+    basket_row_rect(width, height, row, 1080.0)
+}
+
+fn basket_row_rect(
+    width: u32,
+    height: u32,
+    row: usize,
+    left_1080: f32,
+) -> Option<(u32, u32, u32, u32)> {
     if row >= BASKET_ROWS {
         return None;
     }
     let (_, baseline) = basket_row_pair(width, height, row)?;
-    let x = (width as f32 / 2.0 + fcx(1256.0) * height as f32).round() as u32;
+    let x = (width as f32 / 2.0 + fcx(left_1080) * height as f32).round() as u32;
     let y = (baseline - fx(21.0) * height as f32).round() as u32;
     Some((
         x,
         y,
-        (fx(1748.0 - 1256.0) * height as f32).round() as u32,
+        (fx(1748.0 - left_1080) * height as f32).round() as u32,
         (fx(26.0) * height as f32).round() as u32,
     ))
 }
@@ -315,9 +346,14 @@ mod basket_label_tests {
     use super::*;
 
     #[test]
-    fn basket_label_band_hugs_the_baseline_and_stops_before_the_ducat_column() {
+    fn name_crop_stays_inside_basket_while_quantity_crop_includes_stack_prefix() {
         assert_eq!(basket_label_rect(1920, 1080, 0), Some((1256, 222, 492, 26)));
+        assert_eq!(
+            basket_quantity_rect(1920, 1080, 0),
+            Some((1080, 222, 668, 26))
+        );
         assert_eq!(basket_label_rect(1920, 1080, BASKET_ROWS), None);
+        assert_eq!(basket_quantity_rect(1920, 1080, BASKET_ROWS), None);
     }
 
     #[test]

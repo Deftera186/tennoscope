@@ -115,6 +115,21 @@ pub fn kiosk_overlay_geometry(
     }
 }
 
+fn kiosk_geometry_from_sources(
+    game_rect: Option<WindowRect>,
+    monitor_rect: Option<WindowRect>,
+    require_game_rect: bool,
+) -> Option<OverlayGeometry> {
+    game_rect
+        .map(|rect| kiosk_overlay_geometry(rect.width, rect.height, rect.x, rect.y))
+        .or_else(|| {
+            (!require_game_rect).then(|| {
+                monitor_rect
+                    .map(|rect| kiosk_overlay_geometry(rect.width, rect.height, rect.x, rect.y))
+            })?
+        })
+}
+
 fn kiosk_geometry(window: &WebviewWindow) -> tauri::Result<Option<OverlayGeometry>> {
     let game_rect = warframe_window_rect_with_origin().map(|(rect, _)| rect);
     let monitor = if game_rect.is_none() {
@@ -122,18 +137,24 @@ fn kiosk_geometry(window: &WebviewWindow) -> tauri::Result<Option<OverlayGeometr
             .primary_monitor()?
             .or(window.current_monitor()?)
             .or_else(|| window.available_monitors().ok()?.into_iter().next())
+            .map(|monitor| {
+                let size = monitor.size();
+                let position = monitor.position();
+                WindowRect {
+                    x: position.x,
+                    y: position.y,
+                    width: size.width,
+                    height: size.height,
+                }
+            })
     } else {
         None
     };
-    Ok(game_rect
-        .map(|rect| kiosk_overlay_geometry(rect.width, rect.height, rect.x, rect.y))
-        .or_else(|| {
-            monitor.map(|monitor| {
-                let size = monitor.size();
-                let position = monitor.position();
-                kiosk_overlay_geometry(size.width, size.height, position.x, position.y)
-            })
-        }))
+    Ok(kiosk_geometry_from_sources(
+        game_rect,
+        monitor,
+        cfg!(target_os = "linux"),
+    ))
 }
 
 /// What to tell the player when the game window could not be located.
@@ -369,26 +390,52 @@ pub fn show_kiosk_overlay(app: &tauri::AppHandle) {
                     return;
                 }
             }
+            #[cfg(target_os = "linux")]
+            if kiosk_geometry(&window).ok().flatten().is_none() {
+                trace_overlay("kiosk show deferred until capture locates the game");
+                return;
+            }
             let _ = configure_kiosk_overlay(&window);
             let _ = window.show();
-            let _ = window.set_always_on_top(true);
-            trace_overlay("kiosk shown via plain window");
         });
+    }
+}
+
+fn dispatch_on_main_thread_and_wait<E>(
+    dispatch: impl FnOnce(Box<dyn FnOnce() + Send>) -> Result<(), E>,
+    action: impl FnOnce() + Send + 'static,
+) {
+    let (done, wait) = std::sync::mpsc::sync_channel(0);
+    if dispatch(Box::new(move || {
+        action();
+        let _ = done.send(());
+    }))
+    .is_ok()
+    {
+        let _ = wait.recv();
     }
 }
 
 pub fn hide_kiosk_overlay(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("kiosk-overlay") {
-        let _ = app.run_on_main_thread(move || {
-            trace_overlay("hide kiosk");
-            let _ = window.hide();
-        });
+        let main_thread = app.clone();
+        dispatch_on_main_thread_and_wait(
+            move |action| main_thread.run_on_main_thread(action),
+            move || {
+                trace_overlay("hide kiosk");
+                let _ = window.hide();
+            },
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{GameRectOrigin, WindowRect, placement_notice, preferred_game_rect};
+    use super::{
+        GameRectOrigin, WindowRect, kiosk_geometry_from_sources, placement_notice,
+        preferred_game_rect,
+    };
+    use crate::overlay_window::kiosk_overlay_geometry;
     use crate::reward_capture::SessionKind;
 
     /// Current X11 geometry is fresher than the last OCR-matched rectangle after the game moves.
@@ -418,6 +465,22 @@ mod tests {
         assert_eq!(preferred_game_rect(None, None), None);
     }
 
+    #[test]
+    fn linux_kiosk_geometry_waits_for_a_located_game_capture() {
+        let monitor = WindowRect {
+            x: 1920,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+
+        assert_eq!(kiosk_geometry_from_sources(None, Some(monitor), true), None);
+        assert_eq!(
+            kiosk_geometry_from_sources(Some(monitor), None, true),
+            Some(kiosk_overlay_geometry(1920, 1080, 1920, 0))
+        );
+    }
+
     /// Exact X11 geometry needs no advice, including for XWayland under a Wayland session.
     #[test]
     fn an_exact_window_match_says_nothing() {
@@ -439,5 +502,31 @@ mod tests {
     #[test]
     fn a_missing_window_on_an_x11_session_also_explains_itself() {
         assert!(placement_notice(false, SessionKind::X11).is_some());
+    }
+
+    #[test]
+    fn main_thread_dispatch_waits_until_the_ui_action_finishes() {
+        let (queued_tx, queued_rx) = std::sync::mpsc::channel();
+        let (acted_tx, acted_rx) = std::sync::mpsc::channel();
+
+        let waiter = std::thread::spawn(move || {
+            super::dispatch_on_main_thread_and_wait(
+                |action| queued_tx.send(action).map_err(|_| ()),
+                move || acted_tx.send(()).expect("record action"),
+            );
+        });
+
+        let action = queued_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("UI action queued");
+        assert!(
+            !waiter.is_finished(),
+            "dispatch returned before the UI action ran"
+        );
+        action();
+        acted_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("UI action finished");
+        waiter.join().expect("dispatch waiter");
     }
 }

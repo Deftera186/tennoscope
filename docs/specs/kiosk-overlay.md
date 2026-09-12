@@ -7,7 +7,7 @@ Show platinum values over Warframe's in-game Ducat Kiosk screen (InventoryTest.s
 2. A platinum icon + value beside each basket row's ducat number.
 3. A platinum icon + total value left of the TOTAL row's ducat number.
 
-Visual style is locked to the approved v8 mockup (`~/.cache/tmp/opencode/mock_recommended.png`):
+Visual style follows the approved kiosk screenshot (`../screenshots/ducat-kiosk.png`):
 overlay digits match the game's own numeral size (16px total row / 15px basket rows at
 1920×1080), compressed width ratio (~12.3px/digit advance), baselines aligned to the game's,
 ice-blue fill `rgb(222,238,252)` with a subtle 1px shadow; grid chips are dark rounded chips
@@ -15,40 +15,47 @@ ice-blue fill `rgb(222,238,252)` with a subtle 1px shadow; grid chips are dark r
 
 ## Architecture
 
-Mirrors the existing reward-overlay pipeline:
+The kiosk uses the same capture and closed-set OCR foundations as the reward overlay, but its
+session lifecycle comes from `EE.log` rather than image readability:
 
 ```
-EE.log tail ──> MonitorMachine (existing, lib.rs:1355)
-                   └──> KioskLogMachine (new, observe_bytes -> events)
-                           KioskOpened ──> spawn kiosk poller thread + show overlay
-                           GridPopulated ──> force re-anchor
-                           (no close marker) ──> poller miss-streak closes
-kiosk poller ──> capture_game_window() (reuse) ──> OCR grid/basket labels
-             ──> closed-set match (reuse best_match) ──> data join ──> shared KioskState
-             ──> emit_to("kiosk-overlay","kiosk-updated")
+EE.log tail ──> KioskLogMachine
+                  ├── KioskOpened / GridPopulated ──> show + re-anchor
+                  └── KioskClosed ──> hide, clear state, stop poller
+kiosk poller ──> capture full grid strip ──> frame-to-frame scroll delta
+             ├── moving ──> emit_to("kiosk-overlay", "kiosk-scroll")
+             └── settled ──> locate label rows ──> OCR grid/basket
+                         ──> closed-set match + data join ──> KioskState
+                         ──> emit_to("kiosk-overlay", "kiosk-updated")
 frontend /kiosk route ──> KioskOverlay.tsx renders fraction-positioned chips
-scroll tracker ──> phase correlation dy ──> CSS transform; settle -> re-anchor
 ```
 
-### Detection (EE.log)
+### Detection (`EE.log`)
 
-Open markers (from 2026-08-23 investigation):
+Open markers observed from `InventoryTest.swf` are:
+
 - `InventoryTest.lua: InventoryTest - CurrMode: Selling Prime Parts`
+- `InventoryTest.lua: DBG: HudVis 1`
 - `Created /Lotus/Interface/InventoryTest.swf`
-- `PopulateGrid()` (fires on every repopulation: open, filter change, basket edit)
+- `Subscribing for /Lotus/Interface/InventoryTest.swf`
+- `PopulateGrid()`
 
-There is **no close marker**. Close = poller OCR miss-streak (same pattern as
-`spawn_reward_screen_poller_with`, `POLLER_GONE_STREAK = 2`).
+`HudVis 0` closes the session. An input subscription for another interface is an independent
+close witness; whichever arrives first closes once, and a later kiosk subscription opens a new
+session. OCR and capture failures never decide presence: they retain the last published view and
+the next poll retries. This prevents transient unreadable frames from tearing down the overlay.
 
 ### Recognition
 
-OCR text only — **no digit OCR**. Ducat totals come from static data joined on recognized
-names, so the game's numbers never need reading:
-- Grid cells: crop each tile's label band (below thumbnail), preprocess exactly like
-  `reward_ocr::prepare_crop`, tesseract psm 11, closed-set `best_match` against prime-part
-  names (`CatalogIndex::reward_entries`). Score floor 0.6 (reuse `MATCH_FLOOR`).
-- Basket rows: same pipeline on right-pane row crops.
-- Total row: never read. Total plat = sum over basket rows.
+- Grid cells: crop each tile's label band, preprocess it with the reward OCR pipeline, run
+  Tesseract in sparse-text mode, and closed-set match against prime-part names from
+  `CatalogIndex::reward_entries`. Slots below the match floor render nothing.
+- Basket rows: recognize item names inside the basket pane with the same closed-set matcher.
+- Stack quantities: independently OCR the optional bounded `N X` prefix with a digit/separator
+  whitelist. Missing or malformed prefixes mean quantity one; the observed `K`/`k` Tesseract
+  confusion is accepted as the separator.
+- Total row: never OCR'd. Total platinum is the checked sum of each matched basket item's unit
+  price multiplied by its recognized quantity.
 
 ### Data joins
 
@@ -65,17 +72,17 @@ All positions are fractions of **window height**, horizontal offsets as signed f
 height from the window's horizontal centre — the same convention as `reward_ocr.rs:33-39`,
 because Warframe scales its HUD with height and centres horizontally.
 
-Calibration constants @1920×1080 (measured from `/tmp/kiosk-after.png`; the calibration task
-re-measures from the committed fixture and asserts these):
+Calibration constants @1920×1080 were measured from the committed kiosk fixtures and are
+asserted by the calibration tests:
 
 | Element | Value |
 |---|---|
-| Grid columns | 6, column pitch 206px, first column left x≈68, tile width ≈198 |
-| Grid rows | 3, thumbnail tops ≈ y197/423/640 (pitch ≈220) |
-| Label band | below thumbnail, ≈43px tall, ≈2 lines of ~17px |
-| Basket rows | baseline y ≈ 224 + 38.7·i + 19, ducat right edge x≈1790–1792 |
-| Total row | digits h16 baseline y877, right edge x1792, gold glyph x1729–1749 h19 |
-| Pane safe right edge | ≈1855 |
+| Grid columns | 6, 207.5px pitch, first left edge x=76, tile width 190px |
+| Grid rows | 3, card tops y=199/421/643 (222px pitch) |
+| Label OCR crop | card top +122px, 68px tall; locator band starts at y=343 and is 46px tall |
+| Basket rows | first digit baseline y=243, 38⅓px pitch, overlay pair right edge x=1750 |
+| Total row | digit baseline y=875, overlay pair right edge x=1717 |
+| Grid pane | clip edge y=983; tracked strip x=70..1310, y=193..983 |
 
 ### Rendering
 
@@ -85,22 +92,22 @@ re-measures from the committed fixture and asserts these):
 - One window spans the whole game window rect (unlike reward-overlay's card-sized window):
   chips are absolutely positioned DOM nodes at fraction coordinates over the full screen.
 
-### Scroll sync (as built)
+### Scroll sync
 
-The spec's original design streamed per-tick displacements into a CSS transform. That assumed
-~33ms sampling; the Wayland capture path costs ~750ms a frame, so mid-scroll looks read as
-"settled" and chips would sit still over rows that moved. The shipped behaviour is honest
-instead of fast:
+The poller separates motion tracking from the expensive OCR pass:
 
-1. Each tick captures once and correlates the grid strip's row-luma profile against the anchor
-   frame's (`estimate_dy`, normalized cross-correlation).
-2. Confidently unmoved → run the full OCR pass on the same capture and publish.
-3. Moved or unreadable → emit `kiosk-scroll` (fade) and defer recognition. No deltas are
-   streamed; the frontend only knows "fade".
-4. When the strip matches the anchor again, one full pass re-anchors under a fresh epoch and
-   the fade lifts.
-5. Drift that never rests (the kiosk was closed entirely) is capped: after `KIOSK_DRIFT_READ_LIMIT`
-   ticks a full read is forced, whose empty verdict starts the miss streak that ends the session.
+1. Capture the whole grid pane and compare its row-luma profile with the previous frame using
+   bounded normalized cross-correlation.
+2. A confident displacement greater than one pixel emits its numeric delta. The frontend
+   accumulates those deltas, translating grid chips with the game while the basket stays fixed.
+3. An unreadable displacement emits a fade verdict instead of inventing motion.
+4. After two still looks, fold the current profile over the 222px row pitch to locate the topmost
+   readable label band at any scroll position.
+5. OCR at that absolute offset and publish a fresh epoch. The fresh `scroll_dy` replaces any
+   accumulated frontend transform and removes the fade.
+
+Reader failures do not close the session or erase the last good state. Only the log-owned close
+flag stops the poller; a close arriving during OCR discards that in-flight result.
 
 ### Speed notes (measured, live machine)
 
@@ -116,31 +123,32 @@ instead of fast:
 
 - **Partial last grid row / filtered inventory**: render only cells whose match clears the
   floor; unmatched slots render nothing.
-- **Hover card covering tiles**: covered cells fail their read → dropped individually;
-  if the majority fails, treat as occluded frame → fade, keep previous anchors until a clean
-  re-anchor.
-- **Empty basket**: no basket chips, total chip hidden.
-- **Basket overflow ("≥ X" display)**: game may show a capped total; we still sum actual
-  basket rows and label the total chip with the plain sum.
-- **Scroll**: handled above; partial rows at strip edges are fine for correlation.
-- **Window moved/resized/alt-tab**: capture failure keeps last state for ≤1s then hides;
-  window rect changes re-run `configure` geometry.
-- **Non-16:9 / scaled displays**: inherited free from the height-fraction convention and the
-  existing resampling capture path.
-- **Kiosk opened while a reward overlay is active**: independent windows/machines; both may
-  coexist (they never occur simultaneously in practice).
+- **Hover card covering tiles**: covered cells fail independently and do not take other chips
+  down. If no label band can be located, keep the last view and retry.
+- **Empty basket**: publish the grid without basket chips or a total chip.
+- **Stacked basket row**: multiply its unit platinum price by the recognized quantity in both
+  the row and total; malformed quantity text safely falls back to one.
+- **Scroll**: stream measurable deltas, fade on an unreadable frame, then replace accumulated
+  motion with the settled frame's absolute offset.
+- **Window moved/resized/alt-tab**: capture failures keep the last good state; the log closes the
+  session, and a newly matched window rect reconfigures overlay geometry.
+- **Non-16:9 / scaled displays**: height fractions and centred horizontal offsets preserve the
+  game's own HUD scaling convention.
+- **Kiosk opened while a reward overlay is active**: independent windows and state machines can
+  coexist, although the game does not normally present both screens together.
 
 ## Non-goals
 
-- Reading the game's ducat numerals via OCR.
-- Memory-based reading of SWF pools (rejected: recycled slots, stale strings).
-- Windows-only concerns beyond what xcap already abstracts.
+- Reading the game's ducat or platinum numerals.
+- Memory-based reading of SWF pools (rejected: recycled slots and stale strings).
+- Platform-specific capture work beyond the existing reward-capture backends.
 
 ## Testing
 
-- Rust unit/integration tests headless (`cargo test --workspace`, CI parity):
-  log machine, geometry (fixture-exact at 1920×1080 + scaled variants), matcher joins,
-  phase correlation on synthetic shifted images, poller miss-streak logic.
-- OCR recognition tests run against the committed fixture PNGs and shell out to tesseract
-  (CI installs it).
-- Manual verification against the live game (running under umu/Proton).
+- Rust unit and integration tests cover log-owned open/close transitions, exact and scaled
+  geometry, closed-set OCR, quantity parsing, checked quantity pricing, scroll delta streaming,
+  settled absolute offsets, capture selection, and external-close cancellation.
+- OCR regression tests use committed fixture PNGs and shell out to Tesseract; CI installs its
+  English language data.
+- Frontend tests cover epoch replacement, numeric scroll accumulation, fades, and basket totals.
+- Manual verification uses the live game under umu/Proton on Sway.

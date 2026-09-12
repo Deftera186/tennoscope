@@ -72,6 +72,7 @@ fn read(cells: usize, basket: usize) -> Result<KioskRead, &'static str> {
                 index,
                 name: format!("Item {index}"),
                 score: 0.9,
+                quantity: 1,
             })
             .collect(),
     })
@@ -261,6 +262,11 @@ fn an_unreadable_pane_is_a_skipped_look_not_a_close() {
         outcome.totals.is_empty(),
         "nothing was published over nothing"
     );
+    assert!(
+        !outcome.scrolls.is_empty() && outcome.scrolls.iter().all(Option::is_none),
+        "blind displacement fades stale chips instead of reporting stillness: {:?}",
+        outcome.scrolls
+    );
 }
 
 /// An empty basket is a normal state (the player has not picked anything yet) and must publish:
@@ -419,6 +425,8 @@ fn the_external_close_verdict_stops_the_poller() {
     let totals = Arc::new(Mutex::new(Vec::new()));
     let totals_sink = Arc::clone(&totals);
     let gone_arg = Arc::clone(&gone);
+    let (published_tx, published_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
     let handle = spawn_kiosk_poller_with(
         &reanchor,
         &gone_arg,
@@ -429,6 +437,8 @@ fn the_external_close_verdict_stops_the_poller() {
             if let Ok(mut slot) = totals_sink.lock() {
                 slot.push(view.total_plat);
             }
+            published_tx.send(()).expect("test receives the publish");
+            release_rx.recv().expect("test releases the publisher");
         },
         |_| (),
         move || {
@@ -438,9 +448,13 @@ fn the_external_close_verdict_stops_the_poller() {
             source
         },
     );
-    // The anchor publishes; then the external verdict lands.
-    std::thread::sleep(std::time::Duration::from_millis(30));
+    // Hold the publisher at the first anchor until the external verdict lands. A sleep here
+    // races the scheduler: a loaded CI worker is not required to publish within any fixed delay.
+    published_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("anchor published");
     gone_arg.store(true, Ordering::Release);
+    release_tx.send(()).expect("publisher resumes");
     handle.join().expect("poller thread panicked");
     assert_eq!(
         totals.lock().unwrap().len(),
