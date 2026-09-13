@@ -11,6 +11,8 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-13
+
 ### Added
 
 - **The Ducat Kiosk now shows each Prime part's live platinum value before you sell it.** A
@@ -533,7 +535,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/Deftera186/tennoscope/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/Deftera186/tennoscope/compare/v0.6.0...v0.6.1
