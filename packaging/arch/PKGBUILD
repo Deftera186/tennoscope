@@ -63,8 +63,9 @@ check() {
   # so 0.875 is a different-traineddata result, not misplaced geometry -- and 0.875 is still far
   # above MATCH_FLOOR, so the reader publishes this card normally on Arch. Skipped rather than
   # loosened because the floor is doing real work for every other packaging of this test.
-  cargo test --workspace --locked -- \
-    --skip a_16_10_screen_is_read_where_a_16_10_screen_actually_sits
+  RUSTFLAGS="${RUSTFLAGS:-} -C debug-assertions=on" \
+    cargo test --workspace --locked -- \
+      --skip a_16_10_screen_is_read_where_a_16_10_screen_actually_sits
   pnpm --dir app check
 }
 

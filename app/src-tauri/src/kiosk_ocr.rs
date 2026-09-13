@@ -268,28 +268,31 @@ fn read_slot(
 }
 
 /// Split Warframe's optional basket stack prefix from the item text used for catalog matching.
-/// Besides `X`, accept Tesseract's observed `K` confusion; no other separator names a stack.
+/// Besides `X`, accept Tesseract's observed `K` confusion and the exact leading `kxk` noise
+/// produced by Arch's English model; no later marker can turn an unstacked row into a stack.
 fn basket_quantity(text: &str) -> u32 {
     let mut words = text.split_whitespace();
-    let Some(first) = words.next() else {
-        return 1;
-    };
-    let digits = first.bytes().take_while(u8::is_ascii_digit).count();
-    if digits > 0
-        && first
-            .as_bytes()
-            .get(digits)
-            .is_some_and(|separator| matches!(separator, b'X' | b'x' | b'K' | b'k'))
-        && let Ok(count) = first[..digits].parse::<u32>()
-    {
-        return count;
+    let mut first = words.next();
+    if first.is_some_and(|word| word.eq_ignore_ascii_case("kxk")) {
+        first = words.next();
     }
-    let Some(count) = first.parse::<u32>().ok() else {
+    let Some(first) = first else {
         return 1;
     };
-    if words.next().is_some_and(|separator| {
-        separator.eq_ignore_ascii_case("x") || separator.eq_ignore_ascii_case("k")
-    }) {
+
+    let digits = first.bytes().take_while(u8::is_ascii_digit).count();
+    let Ok(count) = first[..digits].parse::<u32>() else {
+        return 1;
+    };
+    let attached_separator = first
+        .as_bytes()
+        .get(digits)
+        .is_some_and(|separator| matches!(separator, b'X' | b'x' | b'K' | b'k'));
+    let separate_separator = words
+        .next()
+        .is_some_and(|word| word.eq_ignore_ascii_case("x") || word.eq_ignore_ascii_case("k"));
+
+    if attached_separator || separate_separator {
         count
     } else {
         1
@@ -402,6 +405,11 @@ mod tests {
         assert_eq!(basket_quantity("2k Kompressa Prime Barrel"), 2);
         assert_eq!(basket_quantity("2XK"), 2);
         assert_eq!(basket_quantity("2 k Kompressa Prime Barrel"), 2);
+        // Arch's combined legacy+LSTM traineddata sees item-name strokes before the real marker;
+        // quantity OCR is whitelist-only, so the valid marker may follow that harmless noise.
+        assert_eq!(basket_quantity("kxk 2XK"), 2);
+        assert_eq!(basket_quantity("xkx 2XK"), 1);
+        assert_eq!(basket_quantity("kxk xkx 2XK"), 1);
         assert_eq!(basket_quantity("Kompressa Prime Barrel"), 1);
         assert_eq!(basket_quantity("2 Kompressa Prime Barrel"), 1);
         assert_eq!(basket_quantity("2 Z Kompressa Prime Barrel"), 1);

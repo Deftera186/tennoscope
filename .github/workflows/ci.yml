@@ -38,6 +38,11 @@ jobs:
       # broken artifact on a maintainer workstation.
       - run: ./scripts/test-build-linux-bundles.sh
 
+      # Guard the local cross-target preflight and the Arch check() contract themselves. Both are
+      # cheap shell harnesses: Cargo/pnpm are replaced with recorders, so no second build occurs.
+      - run: ./scripts/test-check-windows.sh
+      - run: ./scripts/test-arch-pkgbuild.sh
+
       # Tauri's Linux system libraries plus tesseract. Screen capture and the crop pipeline are
       # Rust now, so tesseract is the only thing the reward tests still shell out to.
       #
@@ -65,6 +70,19 @@ jobs:
             tesseract-ocr \
             tesseract-ocr-eng
 
+      # Ubuntu's compact tessdata_fast model misses a distro-specific production path. Pin Arch's
+      # combined legacy+LSTM model so CI exercises the exact package input from issue #9 rather
+      # than depending on whichever English data the runner image happens to ship.
+      - name: Install Arch English OCR data
+        run: |
+          curl --fail --location --retry 3 --output /tmp/tesseract-data-eng.pkg.tar.zst \
+            https://archive.archlinux.org/packages/t/tesseract-data-eng/tesseract-data-eng-2%3A4.1.0-5-any.pkg.tar.zst
+          echo "f6dfc8fd7f70295ce74901b1d1e1a80aaead6430680901ad212074c5bbb68323  /tmp/tesseract-data-eng.pkg.tar.zst" | sha256sum --check
+          mkdir -p /tmp/tennoscope-arch-tessdata
+          tar --extract --file /tmp/tesseract-data-eng.pkg.tar.zst \
+            --directory /tmp/tennoscope-arch-tessdata \
+            usr/share/tessdata/eng.traineddata
+
       # No toolchain action: rust-toolchain.toml pins the channel and components, and rustup on
       # the runner installs it on the first cargo call. One source of truth for the version.
       - uses: Swatinem/rust-cache@v2
@@ -75,8 +93,18 @@ jobs:
           # why this side is the one that writes.
           shared-key: linux
 
+      - name: Test Arch OCR quantity model
+        env:
+          TESSDATA_PREFIX: /tmp/tennoscope-arch-tessdata/usr/share/tessdata
+        run: >-
+          cargo test -p tennoscope --lib
+          kiosk_ocr::tests::reads_stacked_quantity_through_production_basket_geometry
+          --locked -- --exact
+
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The full suite intentionally uses Ubuntu's installed English data; the targeted Arch model
+      # check above owns the distro-specific assertion without changing every OCR test's baseline.
       - run: cargo test --workspace
 
   # The Windows half of the port is invisible to the job above: `cfg(windows)` code is not compiled

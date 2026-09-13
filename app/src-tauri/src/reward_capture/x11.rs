@@ -373,22 +373,18 @@ fn parse_window_line(line: &str) -> Option<(String, WindowRect)> {
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
-    #[cfg(target_os = "linux")]
     use std::io::ErrorKind;
 
     use super::{XWININFO_RETRY_INTERVAL, x11_image_to_rgba, xwininfo_error_reason};
     use super::{largest_warframe_window_with_id, warframe_window_from_xwininfo_tree};
     use crate::overlay_window::WindowRect;
-    #[cfg(target_os = "linux")]
     use crate::reward_capture::availability::RetryCooldown;
-    #[cfg(target_os = "linux")]
     use xcb::x::ImageOrder;
 
     /// Mutation caught: collapsing `NotFound` into the generic tree-walk failure would make a
     /// missing system dependency indistinguishable from every other launch failure.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_missing_xwininfo_executable_has_a_specific_static_reason() {
         assert_eq!(
@@ -399,7 +395,6 @@ mod tests {
 
     /// Mutation caught: mapping every launch failure to the missing-package diagnostic would send
     /// users to install software that is already present when execution failed for another reason.
-    #[cfg(target_os = "linux")]
     #[test]
     fn other_xwininfo_launch_failures_keep_the_generic_static_reason() {
         assert_eq!(
@@ -408,7 +403,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn independent_callers_share_the_failed_tree_walk_cooldown() {
         let start = std::time::Instant::now();
@@ -452,7 +446,6 @@ mod tests {
         assert_eq!(selected.1.x, 1920);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn x11_pixels_honor_byte_order_and_scanline_padding() {
         let rgb888 = (0x00ff_0000, 0x0000_ff00, 0x0000_00ff);

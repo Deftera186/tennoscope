@@ -27,8 +27,11 @@ You will also need the Tauri 2 Linux system libraries, and — for the reward re
 [`packaging/README.md`](packaging/README.md).
 
 The Windows half of the port cannot be verified by a Linux `cargo test`, because `cfg(windows)`
-code is not compiled by it. CI has a windows-latest leg for exactly this; locally, `cargo xwin`
-with `CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUNNER=wine` builds and runs the same tests in seconds.
+code is not compiled by it. CI's `windows-latest` leg remains authoritative for linking and
+execution; on Linux, `./scripts/check-windows.sh` cross-compiles every target first and catches
+platform-gating failures before they reach CI. It needs Rust's `x86_64-pc-windows-gnu` target and a
+MinGW-w64 toolchain. Heavy cross-target artifacts default to `/var/tmp/tennoscope-$UID`; set
+`TENNOSCOPE_BUILD_ROOT` to use a different filesystem.
 
 ```bash
 cd app && pnpm tauri dev
@@ -41,6 +44,7 @@ CI runs exactly this. Run it before you open a PR:
 ```bash
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
+./scripts/check-windows.sh
 cargo test --workspace
 cd app && pnpm check
 ```
