@@ -1,9 +1,10 @@
 use std::fs;
 
-use app_lib::{
-    MonitorInput, MonitorMachine, RewardLogEvent, RewardLogMachine, build_monitor_input,
-    ee_log_rotation_keep_from, ee_log_session_start_utc, ee_log_stale_prefix_end,
+use app_lib::monitor::{
+    MonitorInput, MonitorMachine, build_monitor_input, ee_log_rotation_keep_from,
+    ee_log_session_start_utc, ee_log_stale_prefix_end,
 };
+use app_lib::{RewardLogEvent, RewardLogMachine};
 use tempfile::TempDir;
 
 /// The moment the monitor attached, in the 2026-08-22 incident's terms: 02:01:50 UTC.

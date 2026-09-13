@@ -3,7 +3,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use app_lib::{KioskSession, KioskState, KioskView};
+use app_lib::monitor::KioskSession;
+use app_lib::{KioskState, KioskView};
 
 const MODE_LINE: &str =
     "2026/08/23_12.00 InventoryTest.lua: InventoryTest - CurrMode: Selling Prime Parts\n";

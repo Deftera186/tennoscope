@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use app_lib::{
+use app_lib::monitor::{
     LogMonitorDiagnostic, LogObservation, MonitorInput, MonitorMachine, spawn_monitor_refresh_task,
 };
 use warframe_acquisition::AcquisitionError;

@@ -6,7 +6,7 @@
 
 use std::sync::{Mutex, Once};
 
-use app_lib::{LogObservation, MonitorInput, MonitorMachine};
+use app_lib::monitor::{LogObservation, MonitorInput, MonitorMachine};
 
 struct Capture;
 

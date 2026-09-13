@@ -16,7 +16,8 @@ use std::{
     time::Duration,
 };
 
-use app_lib::{PollerTiming, ScreenWatch, VisualRewardSource, spawn_reward_screen_poller_with};
+use app_lib::VisualRewardSource;
+use app_lib::monitor::{PollerTiming, ScreenWatch, spawn_reward_screen_poller_with};
 use warframe_acquisition::RewardCatalogEntry;
 
 mod common;

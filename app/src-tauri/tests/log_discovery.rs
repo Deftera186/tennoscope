@@ -1,6 +1,6 @@
 #[cfg(unix)]
-use app_lib::inventory_log_path_at;
-use app_lib::log_identity;
+use app_lib::monitor::inventory_log_path_at;
+use app_lib::monitor::log_identity;
 use std::fs;
 use tempfile::tempdir;
 
@@ -91,14 +91,17 @@ fn the_windows_log_sits_directly_under_local_appdata() {
     let dir = tempdir().unwrap();
     let local_appdata = dir.path().join("AppData/Local");
     assert!(
-        app_lib::inventory_log_under(&local_appdata).is_none(),
+        app_lib::monitor::inventory_log_under(&local_appdata).is_none(),
         "a machine that has never run Warframe has no log to find"
     );
 
     let log = local_appdata.join("Warframe/EE.log");
     fs::create_dir_all(log.parent().unwrap()).unwrap();
     fs::write(&log, b"").unwrap();
-    assert_eq!(app_lib::inventory_log_under(&local_appdata), Some(log));
+    assert_eq!(
+        app_lib::monitor::inventory_log_under(&local_appdata),
+        Some(log)
+    );
 }
 
 /// A directory where the log should be is not a log. Warframe has been seen to leave the folder
@@ -110,5 +113,5 @@ fn a_directory_named_like_the_log_is_not_the_log() {
     let dir = tempdir().unwrap();
     let local_appdata = dir.path().join("AppData/Local");
     fs::create_dir_all(local_appdata.join("Warframe/EE.log")).unwrap();
-    assert!(app_lib::inventory_log_under(&local_appdata).is_none());
+    assert!(app_lib::monitor::inventory_log_under(&local_appdata).is_none());
 }

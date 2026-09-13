@@ -10,7 +10,7 @@
 //! That is the 2026-08-20 report. Every card was wrong, every card was confidently wrong, and
 //! nothing in the log said so.
 
-use app_lib::RelicPool;
+use app_lib::monitor::RelicPool;
 use warframe_acquisition::RewardCatalogEntry;
 
 use std::sync::{Mutex, Once};

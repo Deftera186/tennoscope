@@ -7,10 +7,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use app_lib::{
-    BasketRow, GridCell, KioskFrameSource, KioskPollerTiming, KioskRead, KioskView,
-    spawn_kiosk_poller_with,
-};
+use app_lib::monitor::{KioskFrameSource, KioskPollerTiming, KioskRead, spawn_kiosk_poller_with};
+use app_lib::{BasketRow, GridCell, KioskView};
 use warframe_acquisition::RewardCatalogEntry;
 
 /// A scripted source: strips are popped one per look, frames one per read; exhaustion reads as

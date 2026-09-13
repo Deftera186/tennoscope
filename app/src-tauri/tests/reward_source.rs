@@ -5,10 +5,13 @@ use std::{
     time::Duration,
 };
 
+use app_lib::monitor::{
+    assemble_player_record_choices, release_player_record_scan, reward_path_matches,
+    rotate_choices_to_local, scan_player_record_until_ready, store_player_record_if_current,
+};
 use app_lib::{
     LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSource, RewardSourceCoordinator,
-    RewardSourceDiagnostic, VisualRewardSource, reward_path_matches, rotate_choices_to_local,
-    scan_player_record_until_ready, store_player_record_if_current,
+    RewardSourceDiagnostic, VisualRewardSource,
 };
 
 mod common;
@@ -423,7 +426,7 @@ fn accumulated_player_records_are_assembled_with_local_reward_first() {
     ]);
 
     assert_eq!(
-        app_lib::assemble_player_record_choices(
+        assemble_player_record_choices(
             &["local", "remote-a", "remote-b", "remote-c"],
             Some("local"),
             Some("Cedo Prime Stock"),
@@ -444,7 +447,7 @@ fn a_finished_early_scan_releases_the_identity_for_the_real_response() {
         "remote-player".to_owned()
     ]));
 
-    app_lib::release_player_record_scan("remote-player", &active);
+    release_player_record_scan("remote-player", &active);
 
     assert!(active.lock().unwrap().insert("remote-player".to_owned()));
 }
