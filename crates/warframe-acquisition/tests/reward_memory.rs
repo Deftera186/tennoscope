@@ -4,8 +4,9 @@ use std::{collections::BTreeMap, sync::Mutex, time::Duration};
 
 use warframe_acquisition::{
     AcquisitionError, GameProcess, MemoryReader, MemorySnapshotRegion, ReadableRegion,
-    RegionScanPriority, RewardMemoryScanner, RewardNeedle, RewardRepresentation, RewardResolution,
-    resolve_current_reward_choices, resolve_reward_choices,
+    RegionScanPriority, RewardHeapAddressOrder, RewardMemoryScanner, RewardNeedle,
+    RewardRecordEvidence, RewardRecordPolicy, RewardRecordQuery, RewardRepresentation,
+    RewardResolution, resolve_reward_choices,
 };
 
 struct FixtureMemory {
@@ -229,13 +230,19 @@ fn player_record_scan_reaches_a_high_response_heap_before_a_large_ui_heap() {
 
     assert_eq!(
         RewardMemoryScanner::new(256, 512, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -282,13 +289,19 @@ fn player_record_scan_samples_each_response_heap_before_exhausting_one_heap() {
 
     assert_eq!(
         RewardMemoryScanner::new(128, 6 * 1024, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -329,13 +342,19 @@ fn player_record_scan_uses_recently_written_pages_when_available() {
 
     assert_eq!(
         RewardMemoryScanner::new(128, 512, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -380,13 +399,19 @@ fn snapshot_player_hit_can_resolve_a_reward_from_the_adjacent_live_page() {
 
     assert_eq!(
         RewardMemoryScanner::new(4096, 64 * 1024, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -433,7 +458,17 @@ fn live_player_record_scan_does_not_wait_for_a_stale_bulk_snapshot() {
 
     assert_eq!(
         RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
-            .resolve_live_player_record(&memory, &GameProcess::new(9), &[candidate], identity,)
+            .resolve_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::LiveStructured,
+            )
             .unwrap(),
         RewardResolution::Confirmed {
             choices: vec!["Braton Prime Stock".into()],
@@ -471,7 +506,17 @@ fn live_player_record_scan_rejects_an_unstructured_nearby_reward() {
 
     assert_eq!(
         RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
-            .resolve_live_player_record(&memory, &GameProcess::new(9), &[candidate], identity,)
+            .resolve_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::LiveStructured,
+            )
             .unwrap(),
         RewardResolution::Incomplete
     );
@@ -501,13 +546,19 @@ fn strict_squad_scan_rejects_proximity_only_player_rewards() {
 
     assert_eq!(
         RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
-            .resolve_strict_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &responders,
-                Some(responders[0]),
-                Some("Braton Prime Blueprint"),
+                RewardRecordQuery {
+                    responders: &responders,
+                    local_identity: Some(responders[0]),
+                    local_choice: Some("Braton Prime Blueprint")
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOnly
+                },
             )
             .unwrap(),
         RewardResolution::Incomplete
@@ -546,7 +597,17 @@ fn live_player_record_scan_prioritizes_captured_proton_response_band() {
 
     assert!(matches!(
         RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
-            .resolve_live_player_record(&memory, &GameProcess::new(9), &[candidate], identity)
+            .resolve_records(
+                &memory,
+                &GameProcess::new(9),
+                &[candidate],
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::LiveStructured,
+            )
             .unwrap(),
         RewardResolution::Confirmed { .. }
     ));
@@ -586,13 +647,19 @@ fn low_heap_player_record_scan_reaches_captured_response_heaps_before_high_mappi
 
     assert!(matches!(
         RewardMemoryScanner::new(256, 512, Duration::from_secs(1))
-            .resolve_player_records_from_low_heaps(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Ascending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed { .. }
@@ -656,7 +723,7 @@ fn current_resolution_selects_a_tight_choice_cluster_among_stale_region_strings(
     );
 
     assert_eq!(
-        resolve_current_reward_choices(&current, 4, 256),
+        resolve_reward_choices(None, &current, 4, 256),
         RewardResolution::Confirmed {
             choices: vec![
                 "Burston".into(),
@@ -687,7 +754,7 @@ fn current_resolution_rejects_near_equal_four_of_five_interpretations() {
     );
 
     assert_eq!(
-        resolve_current_reward_choices(&current, 4, 256),
+        resolve_reward_choices(None, &current, 4, 256),
         RewardResolution::Ambiguous
     );
 }
@@ -733,7 +800,7 @@ fn temporal_resolution_ignores_catalog_strings_and_orders_the_new_cluster() {
     let current = fingerprint(current_bytes, regions);
 
     assert_eq!(
-        resolve_reward_choices(&baseline, &current, 4, 256),
+        resolve_reward_choices(Some(&baseline), &current, 4, 256),
         RewardResolution::Confirmed {
             choices: vec![
                 "Burston".into(),
@@ -761,7 +828,7 @@ fn temporal_resolution_confirms_the_rendered_three_choice_count() {
 
     assert_eq!(
         resolve_reward_choices(
-            &fingerprint(baseline_bytes, regions.clone()),
+            Some(&fingerprint(baseline_bytes, regions.clone())),
             &fingerprint(current_bytes, regions),
             3,
             256,
@@ -798,7 +865,7 @@ fn temporal_resolution_rejects_equally_complete_competing_clusters() {
     );
 
     assert_eq!(
-        resolve_reward_choices(&baseline, &current, 4, 256),
+        resolve_reward_choices(Some(&baseline), &current, 4, 256),
         RewardResolution::Ambiguous
     );
 }
@@ -829,7 +896,7 @@ fn temporal_resolution_rejects_an_exact_choice_count_scattered_across_regions() 
     );
 
     assert_eq!(
-        resolve_reward_choices(&baseline, &current, 4, 128),
+        resolve_reward_choices(Some(&baseline), &current, 4, 128),
         RewardResolution::Incomplete
     );
 }
@@ -851,7 +918,7 @@ fn current_cluster_can_recover_when_the_baseline_was_contaminated() {
     );
 
     assert_eq!(
-        resolve_current_reward_choices(&current, 4, 256),
+        resolve_reward_choices(None, &current, 4, 256),
         RewardResolution::Confirmed {
             choices: vec![
                 "Burston".into(),
@@ -861,57 +928,6 @@ fn current_cluster_can_recover_when_the_baseline_was_contaminated() {
             ],
             region_start: 0x1000,
         }
-    );
-}
-
-#[test]
-fn confirmation_rereads_only_the_selected_region_and_preserves_order() {
-    let mut selected = vec![b'.'; 512];
-    selected[100..108].copy_from_slice(b"Perigale");
-    selected[140..147].copy_from_slice(b"Burston");
-    selected[180..186].copy_from_slice(b"Trumna");
-    selected[220..225].copy_from_slice(b"Forma");
-    let memory = FixtureMemory {
-        regions: vec![
-            ReadableRegion::classified(0x1000, 512, RegionScanPriority::WritableAnonymous),
-            ReadableRegion::classified(0x3000, 512, RegionScanPriority::WritableAnonymous),
-        ],
-        bytes: BTreeMap::from([(0x1000, vec![b'x'; 512]), (0x3000, selected)]),
-        reads: Mutex::new(Vec::new()),
-    };
-    let scanner = RewardMemoryScanner::new(128, 4096, Duration::from_secs(1));
-
-    let resolution = scanner
-        .confirm_region(
-            &memory,
-            &GameProcess::new(9),
-            &online_candidates(),
-            0x3000,
-            512,
-            4,
-            256,
-        )
-        .unwrap();
-
-    assert_eq!(
-        resolution,
-        RewardResolution::Confirmed {
-            choices: vec![
-                "Perigale".into(),
-                "Burston".into(),
-                "Trumna".into(),
-                "Forma".into()
-            ],
-            region_start: 0x3000,
-        }
-    );
-    assert!(
-        memory
-            .reads
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|address| *address >= 0x3000)
     );
 }
 
@@ -968,13 +984,19 @@ fn player_records_ignore_a_tighter_stale_reward_cluster_and_preserve_screen_orde
     };
 
     let resolution = RewardMemoryScanner::new(256, 16 * 1024, Duration::from_secs(1))
-        .resolve_player_records(
+        .resolve_records(
             &memory,
             &GameProcess::new(9),
             &candidates,
-            &responders,
-            Some(responders[3]),
-            Some("Daikyu Prime Upper Limb"),
+            RewardRecordQuery {
+                responders: &responders,
+                local_identity: Some(responders[3]),
+                local_choice: Some("Daikyu Prime Upper Limb"),
+            },
+            RewardRecordPolicy::Snapshot {
+                heap_order: RewardHeapAddressOrder::Descending,
+                evidence: RewardRecordEvidence::StructuredOrProximity,
+            },
         )
         .unwrap();
 
@@ -1044,13 +1066,19 @@ fn archived_player_record_layouts_resolve_as_each_response_arrives() {
 
         assert_eq!(
             RewardMemoryScanner::new(128, 4096, Duration::from_secs(1))
-                .resolve_player_records(
+                .resolve_records(
                     &memory,
                     &GameProcess::new(9),
                     &[candidate],
-                    &[identity],
-                    None,
-                    None,
+                    RewardRecordQuery {
+                        responders: &[identity],
+                        local_identity: None,
+                        local_choice: None
+                    },
+                    RewardRecordPolicy::Snapshot {
+                        heap_order: RewardHeapAddressOrder::Descending,
+                        evidence: RewardRecordEvidence::StructuredOrProximity
+                    },
                 )
                 .unwrap(),
             RewardResolution::Confirmed {
@@ -1086,13 +1114,19 @@ fn retained_remote_record_resolves_a_reward_before_the_player_identity() {
 
     assert_eq!(
         RewardMemoryScanner::new(4096, 128 * 1024, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -1135,13 +1169,19 @@ fn retained_remote_record_rejects_ambiguous_nearby_rewards() {
 
     assert_eq!(
         RewardMemoryScanner::new(4096, 128 * 1024, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &candidates,
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Incomplete
@@ -1206,13 +1246,19 @@ fn structured_response_record_wins_over_stale_nearby_reward_strings() {
 
     assert_eq!(
         RewardMemoryScanner::new(256, 8192, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &candidates,
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -1274,13 +1320,19 @@ fn structured_response_matches_the_visible_blueprint_when_catalog_uses_component
 
     assert_eq!(
         RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -1320,13 +1372,19 @@ fn player_record_scan_prioritizes_low_proton_heaps_over_high_unrelated_mappings(
 
     assert!(matches!(
         RewardMemoryScanner::new(256, 4096, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed { .. }
@@ -1374,13 +1432,19 @@ fn structured_single_response_stops_before_scanning_unrelated_lower_heaps() {
 
     assert!(matches!(
         RewardMemoryScanner::new(256, 8192, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &[candidate],
-                &[identity],
-                None,
-                None,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed { .. }
@@ -1476,13 +1540,19 @@ fn structured_squad_records_preserve_the_supplied_screen_order() {
 
     assert_eq!(
         RewardMemoryScanner::new(256, 32 * 1024, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &candidates,
-                &responders,
-                Some(responders[0]),
-                Some(rewards[0].0),
+                RewardRecordQuery {
+                    responders: &responders,
+                    local_identity: Some(responders[0]),
+                    local_choice: Some(rewards[0].0)
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -1563,13 +1633,19 @@ fn captured_caliban_athodai_vadarya_sevagoth_screen_replays_in_ltr_order() {
 
     assert_eq!(
         RewardMemoryScanner::new(256, 32 * 1024, Duration::from_secs(1))
-            .resolve_player_records(
+            .resolve_records(
                 &memory,
                 &GameProcess::new(9),
                 &candidates,
-                &responders,
-                Some(responders[0]),
-                Some("Caliban Prime Chassis Blueprint"),
+                RewardRecordQuery {
+                    responders: &responders,
+                    local_identity: Some(responders[0]),
+                    local_choice: Some("Caliban Prime Chassis Blueprint")
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOrProximity
+                },
             )
             .unwrap(),
         RewardResolution::Confirmed {
@@ -1625,7 +1701,17 @@ fn structured_response_reads_a_record_captured_from_the_live_game() {
 
     assert_eq!(
         RewardMemoryScanner::new(4096, 65536, Duration::from_secs(1))
-            .resolve_live_player_record(&memory, &GameProcess::new(9), &candidates, identity)
+            .resolve_records(
+                &memory,
+                &GameProcess::new(9),
+                &candidates,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::LiveStructured,
+            )
             .unwrap(),
         RewardResolution::Confirmed {
             choices: vec!["Forma Blueprint".into()],
@@ -1681,7 +1767,17 @@ fn structured_response_reads_a_host_record_whose_reward_precedes_the_identity() 
 
     assert_eq!(
         RewardMemoryScanner::new(4096, 65536, Duration::from_secs(1))
-            .resolve_live_player_record(&memory, &GameProcess::new(9), &candidates, identity)
+            .resolve_records(
+                &memory,
+                &GameProcess::new(9),
+                &candidates,
+                RewardRecordQuery {
+                    responders: &[identity],
+                    local_identity: None,
+                    local_choice: None
+                },
+                RewardRecordPolicy::LiveStructured,
+            )
             .unwrap(),
         RewardResolution::Confirmed {
             choices: vec!["Burston Prime Receiver".into()],

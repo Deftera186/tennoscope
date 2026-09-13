@@ -33,9 +33,9 @@ import { MetalMark } from './MetalMark'
 import { OrdersView } from './OrdersView'
 import { isListable, listedLabel, listedOrderFor } from './orders'
 import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
-import { atMaxRank, clampPage, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
+import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, readShowDucats, writePriceFloor, writeShowDucats } from './settings'
-import { snapshotFreshness } from './freshness'
+import { snapshotFreshness, stampReading } from './freshness'
 import { reportBlockVisible } from './reportable'
 
 type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
@@ -521,24 +521,15 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, on
   const [ownership, setOwnership] = useState<Ownership>('all')
   const [sort, setSort] = useState<Sort>('name-asc')
   const [page, setPage] = useState(1)
-  const masteryEligible = view.collection.items.filter(item => ['frame', 'weapon', 'companion', 'vehicle'].includes(item.category))
-  const mastered = masteryEligible.filter(item => item.mastered).length
-  const owned = view.collection.items.filter(item => item.quantity > 0).length
-  const missing = view.collection.items.filter(item => item.quantity === 0).length
-  const priced = view.collection.items.filter(item => item.platinum !== undefined)
-  const worth = priced.reduce((total, item) => total + (stackValue(item) ?? 0), 0)
-  // The second, smaller figure. A unit price is only half of what a stack is worth: this collection's
-  // largest single holding is 182 Quickdraw at a true 2p, and the whole game trades two Quickdraw a
-  // month. Market rate leads because it is the plain reading of what is owned; what the market would
-  // actually take sits under it, at the size of a qualification, which is what it is.
-  const sellable = priced.reduce((total, item) => total + (sellableValue(item, priceFloor) ?? 0), 0)
-  // What the whole ducat holding would bank at Baro's. Unlike platinum this is not a market
-  // opinion but a posted price, so the only qualification worth a note is that it counts prime
-  // parts actually held -- a missing part's reading is on its card, not in this figure.
-  const ducatsAtStake = view.collection.items.reduce(
-    (total, item) => item.quantity > 0 && item.ducats !== undefined ? total + item.ducats * item.quantity : total,
-    0,
-  )
+  const {
+    masteryEligible,
+    mastered,
+    owned,
+    missing,
+    worth,
+    sellable,
+    ducatsAtStake,
+  } = collectionTotals(view.collection.items, priceFloor)
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase()
     return view.collection.items
@@ -594,7 +585,7 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, on
 
     <div className={`assay-band${showDucats ? ' with-ducats' : ''}`}>
       <BandCell kind="items" value={view.collection.total_entries} label="Items tracked" note={`${owned} currently owned`}/>
-      <BandCell kind="mastered" value={mastered} label="Mastered" note={masteryEligible.length ? `${Math.round(mastered / masteryEligible.length * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
+      <BandCell kind="mastered" value={mastered} label="Mastered" note={masteryEligible ? `${Math.round(mastered / masteryEligible * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
       <BandCell kind="missing" value={missing} label="Missing" note="From known collection data"/>
       {/* Two figures and the one clause that qualifies them. The cell had five numbers in it and
           read as an argument about the collection rather than a valuation of it; the live-pass count
@@ -819,9 +810,10 @@ function AssayRow({ label, health }: { label: string; health: BackendHealth | { 
     <div>
       <h3>{label}</h3>
       <p>{health.message}</p>
-      {/* Rows record their success time in whatever form their own source keeps: the market
-          account writes Unix seconds, the price table an ISO date. Printed raw, one row reads
-          "Last success: 1785492000". `snapshotFreshness` already resolves both. */}
+      {/* Rows record their success time in whatever form their own source keeps: most write Unix
+          seconds, the price table an ISO date. Printed raw, one row reads
+          "Last success: 1785492000". The relative reading is the useful one here; the exact stamp
+          rides along for anyone comparing a row against a log. */}
       {health.last_success && <small>Last success: {healthSuccessLabel(health.last_success)}</small>}
     </div>
     <span className="assay-verdict">{health.state}</span>
@@ -829,10 +821,8 @@ function AssayRow({ label, health }: { label: string; health: BackendHealth | { 
 }
 
 function healthSuccessLabel(value: string) {
-  const { label, detail } = snapshotFreshness({ observed_at: value, game_build: '', source: '' })
-  // The relative reading is the useful one on a health row; the exact stamp leads the detail, and
-  // is worth keeping for anyone comparing rows against a log.
-  return label === 'Sync time unavailable' ? value : `${label.replace(/^Synced /, '')} · ${detail.split(' · ')[0]}`
+  const reading = stampReading(value)
+  return reading ? `${reading.relative} · ${reading.exact}` : value
 }
 
 type ReportStatus =
@@ -917,10 +907,7 @@ function DiagnosticsPage({ view }: { view: AppView }) {
 }
 
 function SettingsPage({ view, priceFloor, desktopCaptureActionAvailable, captureAuthorizationBusy, captureNote, onCaptureNote, onAuthorizeCapture, onPriceFloor }: { view: AppView; priceFloor: number; desktopCaptureActionAvailable: boolean; captureAuthorizationBusy: boolean; captureNote: string | null; onCaptureNote: (note: string | null) => void; onAuthorizeCapture: () => Promise<void>; onPriceFloor: (floor: number) => void }) {
-  // The slider's own readout. A floor that only moves a figure on another page is a knob with no
-  // dial: this says, at the moment it is dragged, exactly which holding it just wrote off.
-  const counted = view.collection.items.filter(item => (sellableValue(item, priceFloor) ?? 0) > 0)
-  const total = counted.reduce((sum, item) => sum + (sellableValue(item, priceFloor) ?? 0), 0)
+  const { sellable: total, sellableCount: counted } = collectionTotals(view.collection.items, priceFloor)
   return <section className="page" aria-labelledby="settings-title">
     <div className="mark-head">
       <h1 id="settings-title" className="mark">Settings</h1>
@@ -954,7 +941,7 @@ function SettingsPage({ view, priceFloor, desktopCaptureActionAvailable, capture
             {priceFloor ? <>{priceFloor}<MetalMark metal="plat" alt=" platinum"/><span> and over</span></> : <span>Every price</span>}
           </output>
         </div>
-        <p className="band-note">{figure(counted.length)} stacks counted · {figure(total)} platinum sellable</p>
+        <p className="band-note">{figure(counted)} stacks counted · {figure(total)} platinum sellable</p>
       </div>
 
       <DesktopCaptureSetting actionAvailable={desktopCaptureActionAvailable} busy={captureAuthorizationBusy} note={captureNote} onNote={onCaptureNote} onAuthorize={onAuthorizeCapture}/>

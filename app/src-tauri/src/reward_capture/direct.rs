@@ -9,6 +9,7 @@ use wayland_client::protocol::wl_registry;
 use wayland_client::{Connection, Dispatch, QueueHandle};
 
 use super::MonitorFrame;
+use super::availability::{LatchingAvailability, RetryCooldown};
 use crate::overlay_window::WindowRect;
 
 const SCREENCOPY_INTERFACE: &str = "zwlr_screencopy_manager_v1";
@@ -20,40 +21,6 @@ const CAPTURE_RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_se
 const ERR_UNAVAILABLE: &str = "direct Wayland screen capture is unavailable";
 const ERR_CAPTURE_FAILED: &str = "could not capture the game window";
 const ERR_NO_OUTPUTS: &str = "direct Wayland capture reported no outputs";
-
-#[derive(Clone, Copy)]
-struct AvailabilityState {
-    available: bool,
-    checked_at: std::time::Instant,
-    probing: bool,
-}
-
-impl AvailabilityState {
-    fn new(available: bool, checked_at: std::time::Instant) -> Self {
-        Self {
-            available,
-            checked_at,
-            probing: false,
-        }
-    }
-
-    fn claim_probe(&mut self, now: std::time::Instant) -> bool {
-        if self.available
-            || self.probing
-            || now.saturating_duration_since(self.checked_at) < AVAILABILITY_RETRY_INTERVAL
-        {
-            return false;
-        }
-        self.probing = true;
-        true
-    }
-
-    fn record(&mut self, available: bool, checked_at: std::time::Instant) {
-        self.available = available;
-        self.checked_at = checked_at;
-        self.probing = false;
-    }
-}
 
 fn probe_available() -> bool {
     let Ok(connection) = Connection::connect_to_env() else {
@@ -118,38 +85,18 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for RegistryProbe {
 
 /// Whether this compositor exposes direct wlroots screen capture.
 ///
-/// A successful capability result is permanent for the process. A failed connection or registry
-/// probe is retried at a bounded interval because a compositor can still be starting or restart;
-/// the interval keeps the 400 ms capture path from opening a Wayland connection every poll.
+/// The latching and retry policy lives in [`LatchingAvailability`]; this contributes only the
+/// wlroots probe.
 pub fn available() -> bool {
-    static AVAILABLE: std::sync::LazyLock<std::sync::Mutex<AvailabilityState>> =
-        std::sync::LazyLock::new(|| {
-            let now = std::time::Instant::now();
-            std::sync::Mutex::new(AvailabilityState::new(probe_available(), now))
-        });
-    let now = std::time::Instant::now();
-    let should_probe = AVAILABLE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .claim_probe(now);
-    if should_probe {
-        let probed = probe_available();
-        AVAILABLE
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .record(probed, std::time::Instant::now());
-    }
-    AVAILABLE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .available
+    static AVAILABLE: LatchingAvailability = LatchingAvailability::new(AVAILABILITY_RETRY_INTERVAL);
+    AVAILABLE.available(probe_available)
 }
 
 /// A persistent direct connection. Output discovery and protocol setup happen once per reader,
 /// rather than once per 400 ms capture poll.
 pub struct DirectCapture {
     connection: Option<WayshotConnection>,
-    retry_after: Option<std::time::Instant>,
+    retry: RetryCooldown,
 }
 
 impl Default for DirectCapture {
@@ -162,7 +109,7 @@ impl DirectCapture {
     pub const fn new() -> Self {
         Self {
             connection: None,
-            retry_after: None,
+            retry: RetryCooldown::new(CAPTURE_RETRY_INTERVAL),
         }
     }
 
@@ -172,7 +119,7 @@ impl DirectCapture {
     /// cannot obtain frames backs off briefly so KWin or an already-authorized portal session can
     /// take over instead of losing every poll to the same broken direct path.
     pub fn available(&self) -> bool {
-        direct_retry_ready(self.retry_after, std::time::Instant::now()) && available()
+        self.retry.retry_ready() && available()
     }
 
     fn connection(&mut self) -> Result<&mut WayshotConnection, &'static str> {
@@ -232,7 +179,7 @@ impl DirectCapture {
     pub fn capture_monitors(&mut self) -> Result<Vec<(WindowRect, MonitorFrame)>, &'static str> {
         let first = self.capture_once();
         if first.is_ok() {
-            self.retry_after = None;
+            self.retry.succeeded();
             return first;
         }
 
@@ -240,12 +187,12 @@ impl DirectCapture {
         let retry = self.capture_once();
         match retry {
             Ok(frames) => {
-                self.retry_after = None;
+                self.retry.succeeded();
                 Ok(frames)
             }
             Err(_) => {
                 self.connection = None;
-                self.retry_after = Some(std::time::Instant::now() + CAPTURE_RETRY_INTERVAL);
+                self.retry.failed();
                 // The first failure describes the established path. Rebuilding can fail for a
                 // secondary reason, which must not overwrite the cause that triggered recovery.
                 first
@@ -254,30 +201,9 @@ impl DirectCapture {
     }
 }
 
-fn direct_retry_ready(retry_after: Option<std::time::Instant>, now: std::time::Instant) -> bool {
-    retry_after.is_none_or(|deadline| now >= deadline)
-}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn availability_probe_claim_is_exclusive_and_success_stays_cached() {
-        let start = std::time::Instant::now();
-        let mut state = AvailabilityState::new(false, start);
-
-        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL / 2));
-        assert!(state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL));
-        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL * 2));
-
-        let failed_at = start + AVAILABILITY_RETRY_INTERVAL;
-        state.record(false, failed_at);
-        assert!(!state.claim_probe(failed_at + AVAILABILITY_RETRY_INTERVAL / 2));
-        assert!(state.claim_probe(failed_at + AVAILABILITY_RETRY_INTERVAL));
-
-        state.record(true, failed_at + AVAILABILITY_RETRY_INTERVAL);
-        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL * 100));
-    }
 
     #[test]
     fn zero_outputs_reports_the_compositor_state() {
@@ -288,16 +214,11 @@ mod tests {
     #[test]
     fn repeated_capture_failure_temporarily_yields_to_lower_priority_backends() {
         let now = std::time::Instant::now();
-        let retry_after = Some(now + CAPTURE_RETRY_INTERVAL);
+        let retry = RetryCooldown::new(CAPTURE_RETRY_INTERVAL);
+        retry.failed_at(now);
 
-        assert!(!direct_retry_ready(retry_after, now));
-        assert!(!direct_retry_ready(
-            retry_after,
-            now + CAPTURE_RETRY_INTERVAL / 2
-        ));
-        assert!(direct_retry_ready(
-            retry_after,
-            now + CAPTURE_RETRY_INTERVAL
-        ));
+        assert!(!retry.retry_ready_at(now));
+        assert!(!retry.retry_ready_at(now + CAPTURE_RETRY_INTERVAL / 2));
+        assert!(retry.retry_ready_at(now + CAPTURE_RETRY_INTERVAL));
     }
 }

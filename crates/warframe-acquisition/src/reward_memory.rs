@@ -191,9 +191,94 @@ pub enum RewardResolution {
     Ambiguous,
     TimedOut,
 }
+/// The address direction used after the implementation has prioritised both the known Proton
+/// response band and native heaps below `0x8000_0000`. This explicit axis keeps heap-order policy
+/// at the scanner seam rather than hiding it behind another preset method.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RewardHeapAddressOrder {
+    Ascending,
+    Descending,
+}
+
+/// Evidence accepted when associating a responder with a reward.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RewardRecordEvidence {
+    /// Require the length-prefixed response-record layout.
+    StructuredOnly,
+    /// Fall back to an unambiguous nearby reward when no structured record survives.
+    StructuredOrProximity,
+}
+
+/// Policy for the reward-record resolution module.
+///
+/// The policy exposes the three axes that materially change the implementation: live memory versus
+/// the recently-written snapshot, ascending versus descending addresses after the fixed Proton-band
+/// and native-heap priorities, and structured-only versus proximity-fallback evidence.
+/// `LiveStructured` is a distinct variant because live scanning is only valid with structured
+/// evidence and its descending address order; snapshot callers name the remaining axes. Encoding
+/// those constraints here keeps the interface small, preserves locality at this seam, and gives the
+/// module leverage without permitting combinations the implementation has never supported.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RewardRecordPolicy {
+    LiveStructured,
+    Snapshot {
+        heap_order: RewardHeapAddressOrder,
+        evidence: RewardRecordEvidence,
+    },
+}
+
+/// Player-response context supplied to [`RewardMemoryScanner::resolve_records`].
+#[derive(Clone, Copy, Debug)]
+pub struct RewardRecordQuery<'a> {
+    pub responders: &'a [&'a str],
+    pub local_identity: Option<&'a str>,
+    pub local_choice: Option<&'a str>,
+}
+
+/// The scan axes [`RewardRecordPolicy`] decodes to: the private plan the region walk reads.
+///
+/// Keeping the decode in `From` rather than at each call site means the invalid combinations the
+/// policy already forbids stay unrepresentable inside the walk too.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ScanPlan {
+    low_heaps_first: bool,
+    use_snapshot: bool,
+    allow_proximity_fallback: bool,
+}
+
+impl ScanPlan {
+    /// The same plan re-aimed at live memory, for the recursive pass that has already substituted a
+    /// snapshot reader and must not substitute another.
+    fn against_live_memory(self) -> Self {
+        Self {
+            use_snapshot: false,
+            ..self
+        }
+    }
+}
+
+impl From<RewardRecordPolicy> for ScanPlan {
+    fn from(policy: RewardRecordPolicy) -> Self {
+        match policy {
+            RewardRecordPolicy::LiveStructured => Self {
+                low_heaps_first: false,
+                use_snapshot: false,
+                allow_proximity_fallback: false,
+            },
+            RewardRecordPolicy::Snapshot {
+                heap_order,
+                evidence,
+            } => Self {
+                low_heaps_first: heap_order == RewardHeapAddressOrder::Ascending,
+                use_snapshot: true,
+                allow_proximity_fallback: evidence == RewardRecordEvidence::StructuredOrProximity,
+            },
+        }
+    }
+}
 
 pub fn resolve_reward_choices(
-    baseline: &RewardFingerprint,
+    baseline: Option<&RewardFingerprint>,
     current: &RewardFingerprint,
     expected_choices: usize,
     maximum_span: u64,
@@ -202,8 +287,8 @@ pub fn resolve_reward_choices(
         return RewardResolution::Incomplete;
     }
     let old = baseline
-        .hits
-        .iter()
+        .into_iter()
+        .flat_map(|baseline| &baseline.hits)
         .map(hit_identity)
         .collect::<BTreeSet<_>>();
     let mut regions = BTreeMap::<u64, Vec<&RewardHit>>::new();
@@ -266,23 +351,6 @@ pub fn resolve_reward_choices(
     }
 }
 
-pub fn resolve_current_reward_choices(
-    current: &RewardFingerprint,
-    expected_choices: usize,
-    maximum_span: u64,
-) -> RewardResolution {
-    resolve_reward_choices(
-        &RewardFingerprint {
-            hits: Vec::new(),
-            bytes_read: 0,
-            elapsed: Duration::ZERO,
-        },
-        current,
-        expected_choices,
-        maximum_span,
-    )
-}
-
 fn hit_identity(hit: &RewardHit) -> (&str, RewardRepresentation, RegionScanPriority, u64) {
     (
         hit.choice_name(),
@@ -310,131 +378,41 @@ impl RewardMemoryScanner {
         self.fingerprint_regions(memory, process, candidates, None)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub fn resolve_player_records(
+    pub fn resolve_records(
         &self,
         memory: &dyn MemoryReader,
         process: &GameProcess,
         candidates: &[RewardNeedle],
-        responders: &[&str],
-        local_identity: Option<&str>,
-        local_choice: Option<&str>,
+        query: RewardRecordQuery<'_>,
+        policy: RewardRecordPolicy,
     ) -> Result<RewardResolution, AcquisitionError> {
         self.resolve_player_records_ordered(
             memory,
             process,
             candidates,
-            responders,
-            local_identity,
-            local_choice,
-            false,
-            true,
-            true,
+            query,
+            ScanPlan::from(policy),
         )
     }
 
-    pub fn resolve_live_player_record(
-        &self,
-        memory: &dyn MemoryReader,
-        process: &GameProcess,
-        candidates: &[RewardNeedle],
-        responder: &str,
-    ) -> Result<RewardResolution, AcquisitionError> {
-        self.resolve_player_records_ordered(
-            memory,
-            process,
-            candidates,
-            &[responder],
-            None,
-            None,
-            false,
-            false,
-            false,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn resolve_strict_player_records(
-        &self,
-        memory: &dyn MemoryReader,
-        process: &GameProcess,
-        candidates: &[RewardNeedle],
-        responders: &[&str],
-        local_identity: Option<&str>,
-        local_choice: Option<&str>,
-    ) -> Result<RewardResolution, AcquisitionError> {
-        self.resolve_player_records_ordered(
-            memory,
-            process,
-            candidates,
-            responders,
-            local_identity,
-            local_choice,
-            false,
-            true,
-            false,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn resolve_strict_player_records_from_low_heaps(
-        &self,
-        memory: &dyn MemoryReader,
-        process: &GameProcess,
-        candidates: &[RewardNeedle],
-        responders: &[&str],
-        local_identity: Option<&str>,
-        local_choice: Option<&str>,
-    ) -> Result<RewardResolution, AcquisitionError> {
-        self.resolve_player_records_ordered(
-            memory,
-            process,
-            candidates,
-            responders,
-            local_identity,
-            local_choice,
-            true,
-            true,
-            false,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn resolve_player_records_from_low_heaps(
-        &self,
-        memory: &dyn MemoryReader,
-        process: &GameProcess,
-        candidates: &[RewardNeedle],
-        responders: &[&str],
-        local_identity: Option<&str>,
-        local_choice: Option<&str>,
-    ) -> Result<RewardResolution, AcquisitionError> {
-        self.resolve_player_records_ordered(
-            memory,
-            process,
-            candidates,
-            responders,
-            local_identity,
-            local_choice,
-            true,
-            true,
-            true,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn resolve_player_records_ordered(
         &self,
         memory: &dyn MemoryReader,
         process: &GameProcess,
         candidates: &[RewardNeedle],
-        responders: &[&str],
-        local_identity: Option<&str>,
-        local_choice: Option<&str>,
-        low_heaps_first: bool,
-        use_snapshot: bool,
-        allow_proximity_fallback: bool,
+        query: RewardRecordQuery<'_>,
+        plan: ScanPlan,
     ) -> Result<RewardResolution, AcquisitionError> {
+        let ScanPlan {
+            low_heaps_first,
+            use_snapshot,
+            allow_proximity_fallback,
+        } = plan;
+        let RewardRecordQuery {
+            responders,
+            local_identity,
+            local_choice,
+        } = query;
         if use_snapshot && let Some(snapshots) = memory.recently_written_snapshot(process)? {
             let snapshot_memory = SnapshotMemoryReader {
                 live: memory,
@@ -445,12 +423,8 @@ impl RewardMemoryScanner {
                 &snapshot_memory,
                 process,
                 candidates,
-                responders,
-                local_identity,
-                local_choice,
-                low_heaps_first,
-                false,
-                allow_proximity_fallback,
+                query,
+                plan.against_live_memory(),
             );
         }
         if responders.is_empty() || responders.iter().any(|identity| identity.len() != 24) {
@@ -825,36 +799,6 @@ impl RewardMemoryScanner {
             choices,
             region_start: 0,
         })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn confirm_region(
-        &self,
-        memory: &dyn MemoryReader,
-        process: &GameProcess,
-        candidates: &[RewardNeedle],
-        region_start: u64,
-        region_len: usize,
-        expected_choices: usize,
-        maximum_span: u64,
-    ) -> Result<RewardResolution, AcquisitionError> {
-        let current = self.fingerprint_regions(
-            memory,
-            process,
-            candidates,
-            Some((region_start, region_len)),
-        )?;
-        let baseline = RewardFingerprint {
-            hits: Vec::new(),
-            bytes_read: 0,
-            elapsed: Duration::ZERO,
-        };
-        Ok(resolve_reward_choices(
-            &baseline,
-            &current,
-            expected_choices,
-            maximum_span,
-        ))
     }
 
     fn fingerprint_regions(

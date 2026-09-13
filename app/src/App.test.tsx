@@ -75,7 +75,7 @@ const view: AppView = {
     game_reader: { state: 'degraded', message: 'Warframe is not running', last_success: null },
     log_monitor: { state: 'ready', message: 'EE.log monitor ready', last_success: null },
     capture: { state: 'degraded', message: 'Capture waiting', last_success: null },
-    catalog: { state: 'ready', message: 'Catalog ready', last_success: '1' },
+    catalog: { state: 'ready', message: 'Catalog ready', last_success: '1785492000' },
     market: { state: 'degraded', message: 'Market offline', last_success: null },
     collection_prices: { state: 'ready', message: 'Priced from the 2026-07-27 price dump (3 items)', last_success: '2026-07-27' },
     database: { state: 'ready', message: 'SQLite database available', last_success: null },
@@ -236,11 +236,11 @@ describe('MVP desktop interface', () => {
     for (const label of ['Game reader', 'EE.log', 'Reward observer', 'Catalog', 'Market data', 'Database', 'Process discovery', 'Memory read', 'Authorization scan', 'Inventory fetch', 'Schema validation']) {
       expect(within(panel).getByText(label)).toBeInTheDocument()
     }
-    // Rows keep their success time in their own source's format -- the market account writes Unix
-    // seconds -- so the row resolves it to something a reader can act on rather than printing the
-    // stamp it was handed.
+    // Rows keep their success time in their own source's format -- most write Unix seconds, the
+    // price dump a calendar date -- so the row resolves both to something a reader can act on
+    // rather than printing the stamp it was handed.
     expect(within(panel).getAllByText(/Last success: .*\d{4}/).length).toBeGreaterThan(0)
-    expect(within(panel).queryByText('Last success: 1')).not.toBeInTheDocument()
+    expect(within(panel).queryByText('Last success: 1785492000')).not.toBeInTheDocument()
     expect(panel).not.toHaveTextContent(/accountId|nonce|authorization token/i)
     // Diagnostics reports live health; the overlay preview is a setup affordance and lives in Settings.
     expect(within(panel).queryByRole('button', { name: /reward overlay/i })).not.toBeInTheDocument()
@@ -613,7 +613,7 @@ describe('MVP desktop interface', () => {
       ...view,
       collection: {
         total_entries: 60,
-        snapshot: { observed_at: '2026-07-25T11:56:00Z', game_build: 'build-42', source: 'warframe-memory' },
+        snapshot: { observed_at: 1_784_980_560, game_build: 'build-42', source: 'warframe-memory' },
         items: Array.from({ length: 60 }, (_, index) => ({
           id: `item-${index.toString().padStart(2, '0')}`,
           name: `Item ${index.toString().padStart(2, '0')}`,

@@ -32,6 +32,9 @@ pub const BASKET_ROWS: usize = 8;
 const BASKET_NAME_LEFT_1080P: f32 = 1256.0;
 
 const CAL: f32 = 1080.0;
+/// The calibration's width. Only the vertical anchors are read off it, but [`grid_strip`] takes
+/// a whole frame size.
+const CAL_W: u32 = 1920;
 
 /// Horizontal positions are `(pixel_at_1920 - 960) / 1080`; vertical are `pixel / 1080`.
 const fn fx(px: f32) -> f32 {
@@ -189,6 +192,40 @@ pub fn grid_strip(width: u32, height: u32) -> (u32, u32, u32, u32) {
     )
 }
 
+/// Where the scroll locator's label bands fall inside a row profile of `rows` samples, in that
+/// profile's own pixels.
+///
+/// The locator reads a profile of the [`grid_strip`] pane, and every profile it can be handed --
+/// a 1440p capture's strip, a downscaled one, the 1080p calibration itself -- is the same pane
+/// at a different length. That ratio is the only thing separating the calibrated anchors from
+/// the ones the locator needs, so it is applied here rather than at each call site: two callers
+/// re-deriving `profile.len() / strip_h` had already drifted apart on which of the three numbers
+/// they remembered to scale.
+pub fn label_anchors(rows: usize) -> LabelAnchors {
+    let (_x, cal_top, _w, cal_h) = grid_strip(CAL_W, CAL as u32);
+    let scale = rows as f32 / cal_h as f32;
+    let at = |px: i32| (px as f32 * scale).round() as i32;
+    LabelAnchors {
+        strip_top: at(cal_top as i32),
+        first_top: at(LABEL_BAND_TOP_1080),
+        pitch: at(ROW_PITCH_1080),
+        band: at(LABEL_BAND_H_1080),
+    }
+}
+
+/// The label geometry [`label_anchors`] measures, in one profile's pixel space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LabelAnchors {
+    /// The profile's first row, as a screen offset: the locator folds absolute rows.
+    pub strip_top: i32,
+    /// The topmost calibrated label band.
+    pub first_top: i32,
+    /// One row's vertical period.
+    pub pitch: i32,
+    /// A label band's height.
+    pub band: i32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -301,6 +338,28 @@ mod tests {
             y + h >= (LABEL_BAND_TOP_1080 + LABEL_BAND_H_1080) as u32,
             "and ends at or below its bottom"
         );
+    }
+
+    /// At the calibration size the anchors are the 1080p constants themselves.
+    #[test]
+    fn label_anchors_are_the_calibration_constants_at_calibration_size() {
+        let (_x, cal_top, _w, cal_h) = grid_strip(CAL_W, CAL as u32);
+        let at = label_anchors(cal_h as usize);
+        assert_eq!(at.strip_top, cal_top as i32);
+        assert_eq!(at.first_top, LABEL_BAND_TOP_1080);
+        assert_eq!(at.pitch, ROW_PITCH_1080);
+        assert_eq!(at.band, LABEL_BAND_H_1080);
+    }
+
+    /// A profile twice as long describes a frame twice as tall, so every anchor doubles. The
+    /// callers used to do this arithmetic themselves, each from a different measure of "tall".
+    #[test]
+    fn label_anchors_scale_with_the_profile_length() {
+        let (_x, _y, _w, cal_h) = grid_strip(CAL_W, CAL as u32);
+        let at = label_anchors(cal_h as usize * 2);
+        assert_eq!(at.first_top, LABEL_BAND_TOP_1080 * 2);
+        assert_eq!(at.pitch, ROW_PITCH_1080 * 2);
+        assert_eq!(at.band, LABEL_BAND_H_1080 * 2);
     }
 }
 

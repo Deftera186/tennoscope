@@ -3,6 +3,7 @@
 //! Both writes shrink something the player already published -- taking a listing down, or lowering
 //! it to what they hold. Publishing something new is a separate action and is not in this phase.
 
+use local_store::SnapshotInstant;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -70,12 +71,14 @@ pub struct MarketOrder {
     pub visible: bool,
     /// When warframe.market last saw this order change. Compared against the inventory snapshot's
     /// own timestamp: an order edited after the last snapshot cannot be judged against it.
-    pub updated_at: Option<String>,
+    pub updated_at: Option<SnapshotInstant>,
 }
 
-impl From<OrderRecord> for MarketOrder {
-    fn from(record: OrderRecord) -> Self {
-        Self {
+impl TryFrom<OrderRecord> for MarketOrder {
+    type Error = MarketError;
+
+    fn try_from(record: OrderRecord) -> Result<Self, Self::Error> {
+        Ok(Self {
             id: record.id,
             item_id: record.item_id,
             kind: record.kind,
@@ -85,8 +88,12 @@ impl From<OrderRecord> for MarketOrder {
             rank: record.rank,
             subtype: record.subtype,
             visible: record.visible,
-            updated_at: record.updated_at,
-        }
+            updated_at: record
+                .updated_at
+                .map(|value| SnapshotInstant::parse_rfc_3339(&value))
+                .transpose()
+                .map_err(|_| MarketError::Malformed)?,
+        })
     }
 }
 
@@ -109,10 +116,12 @@ pub fn list_mine(
         200..=299 if response.body.len() <= MAX_ORDERS_BYTES => {
             let parsed = serde_json::from_slice::<OrdersResponse>(&response.body)
                 .map_err(|_| MarketError::Malformed)?;
-            Ok((
-                parsed.data.into_iter().map(MarketOrder::from).collect(),
-                renewed,
-            ))
+            let orders = parsed
+                .data
+                .into_iter()
+                .map(MarketOrder::try_from)
+                .collect::<Result<_, _>>()?;
+            Ok((orders, renewed))
         }
         200..=299 => Err(MarketError::Malformed),
         401 | 403 => Err(MarketError::Unauthorized),

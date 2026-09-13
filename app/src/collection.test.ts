@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { atMaxRank, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
+import { atMaxRank, collectionTotals, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 
 describe('collection pagination', () => {
   it('renders at most 48 items and returns the expected range', () => {
@@ -49,6 +49,64 @@ describe('sellableValue', () => {
     expect(sellableValue({ quantity: 1, platinum: 19, monthly_trades: 4 }, 5)).toBe(19)
     expect(sellableValue({ quantity: 1, platinum: 5, monthly_trades: 4 }, 5), 'the floor counts itself').toBe(5)
     expect(sellableValue({ quantity: 3 }, 5), 'an unpriced item has no answer, floor or no floor').toBeNull()
+  })
+})
+
+describe('collectionTotals', () => {
+  it('partitions only mastery-eligible holdings by mastery and ownership', () => {
+    const items = [
+      { category: 'frame', quantity: 1, mastered: true },
+      { category: 'weapon', quantity: 1, mastered: false, rank: 7, max_rank: 10 },
+      { category: 'companion', quantity: 0, mastered: false },
+      { category: 'mod', quantity: 3, mastered: true },
+    ]
+
+    expect(collectionTotals(items, 0)).toMatchObject({
+      masteryEligible: 3,
+      mastered: 1,
+      owned: 3,
+      missing: 1,
+    })
+  })
+
+  it('totals only priced value and applies the per-copy sellable floor inclusively', () => {
+    const items = [
+      { category: 'prime_part', quantity: 2, mastered: false, platinum: 4, monthly_trades: 2 },
+      { category: 'prime_part', quantity: 3, mastered: false, platinum: 5, monthly_trades: 2 },
+      { category: 'prime_part', quantity: 1, mastered: false, platinum: 7, monthly_trades: 0 },
+      { category: 'prime_part', quantity: 4, mastered: false },
+    ]
+
+    expect(collectionTotals(items, 5)).toMatchObject({
+      priced: 3,
+      worth: 30,
+      sellable: 10,
+      sellableCount: 1,
+    })
+  })
+
+  it('counts ducats only for copies actually held', () => {
+    const items = [
+      { category: 'prime_part', quantity: 2, mastered: false, ducats: 45 },
+      { category: 'prime_part', quantity: 0, mastered: false, ducats: 100 },
+      { category: 'prime_part', quantity: 3, mastered: false },
+    ]
+
+    expect(collectionTotals(items, 0).ducatsAtStake).toBe(90)
+  })
+
+  it('returns zeroes for an empty collection', () => {
+    expect(collectionTotals([], 5)).toEqual({
+      masteryEligible: 0,
+      mastered: 0,
+      owned: 0,
+      missing: 0,
+      priced: 0,
+      worth: 0,
+      sellable: 0,
+      sellableCount: 0,
+      ducatsAtStake: 0,
+    })
   })
 })
 

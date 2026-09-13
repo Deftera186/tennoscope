@@ -15,6 +15,15 @@ use warframe_market::{
     MarketTransport, OrderKind, list_mine,
 };
 
+/// Identifies which credential a read belongs to.
+///
+/// A read of the account goes unlocked for the network, so a sign-out can land while one is in
+/// flight. Comparing the generation a read started under against the session's current one is what
+/// tells a late reply it has been superseded, and only `forget` advances it: a renewed token is
+/// still the same account, and invalidating peer reads on every refresh would be wrong.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Generation(u64);
+
 pub struct MarketSession {
     store: Box<dyn CredentialStore + Send + Sync>,
     /// warframe.market's item table. 1.61 MB and one request, so it is fetched once per launch
@@ -23,11 +32,28 @@ pub struct MarketSession {
     /// handle and let go of `&mut MarketSession` before doing anything slow with it, rather than
     /// cloning the whole table out on every refresh.
     items: Option<Arc<MarketItems>>,
+    generation: Generation,
 }
 
 impl MarketSession {
     pub fn new(store: Box<dyn CredentialStore + Send + Sync>) -> Self {
-        Self { store, items: None }
+        Self {
+            store,
+            items: None,
+            generation: Generation(0),
+        }
+    }
+
+    /// The generation a read starting now belongs to. Pass it back to [`Self::is_stale`] before
+    /// publishing what the read returned.
+    pub fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    /// Whether the credential was discarded since `began_at` was taken, making a read from then
+    /// no longer safe to publish.
+    pub fn is_stale(&self, began_at: Generation) -> bool {
+        self.generation != began_at
     }
 
     pub fn backing(&self) -> CredentialBacking {
@@ -46,12 +72,25 @@ impl MarketSession {
             .inspect_err(|error| log::warn!("market: sign in failed: {error}"))
     }
 
+    /// Record that a write changed the orders on the account, so a read already in flight is
+    /// describing a list that is about to be superseded.
+    pub fn supersede_reads(&mut self) {
+        self.advance();
+    }
+
     pub fn forget(&mut self) -> Result<(), MarketError> {
         self.items = None;
+        // Advanced whether or not the store cooperates: the item table is gone either way, so a
+        // read from before this point no longer describes the session as it now stands.
+        self.advance();
         self.store
             .clear()
             .inspect(|_| log::info!("market: sign out ok"))
             .inspect_err(|error| log::warn!("market: sign out failed: {error}"))
+    }
+
+    fn advance(&mut self) {
+        self.generation = Generation(self.generation.0.wrapping_add(1));
     }
 
     /// The item table already held, if a fetch has happened since launch.

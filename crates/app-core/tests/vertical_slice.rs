@@ -1,5 +1,5 @@
 use app_core::{AppCore, HealthState};
-use local_store::SnapshotMeta;
+use local_store::{SnapshotInstant, SnapshotMeta};
 use serde_json::json;
 use tempfile::tempdir;
 use warframe_acquisition::CatalogIndex;
@@ -56,7 +56,7 @@ fn canonical_artwork_reaches_the_serialized_collection_view() {
 fn cached_snapshot_can_be_enriched_without_becoming_fresh() {
     let mut core = AppCore::in_memory().unwrap();
     let meta = SnapshotMeta::new(
-        "2026-07-25T08:09:10Z".into(),
+        SnapshotInstant::parse_rfc_3339("2026-07-25T08:09:10Z").unwrap(),
         "build-42".into(),
         "warframe-memory".into(),
     )
@@ -85,7 +85,7 @@ fn cached_snapshot_can_be_enriched_without_becoming_fresh() {
     assert!(item.image_url().unwrap().ends_with("/Alertium.png"));
     assert_eq!(
         view.collection().snapshot().unwrap().observed_at(),
-        "2026-07-25T08:09:10Z"
+        SnapshotInstant::from_unix_seconds(1_784_966_950).unwrap()
     );
 }
 
@@ -93,7 +93,7 @@ fn cached_snapshot_can_be_enriched_without_becoming_fresh() {
 fn snapshot_freshness_reaches_the_serialized_collection_view() {
     let mut core = AppCore::in_memory().unwrap();
     let meta = SnapshotMeta::new(
-        "2026-07-25T08:09:10Z".into(),
+        SnapshotInstant::parse_rfc_3339("2026-07-25T08:09:10Z").unwrap(),
         "build-42".into(),
         "warframe-memory".into(),
     )
@@ -105,7 +105,7 @@ fn snapshot_freshness_reaches_the_serialized_collection_view() {
     assert_eq!(
         serde_json::to_value(&view).unwrap()["collection"]["snapshot"],
         json!({
-            "observed_at": "2026-07-25T08:09:10Z",
+            "observed_at": 1_784_966_950,
             "game_build": "build-42",
             "source": "warframe-memory"
         })
@@ -209,7 +209,7 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
     );
     assert_eq!(
         fake.health().game_reader().last_success(),
-        Some("2000-01-01T00:00:00Z")
+        Some("946684800")
     );
     assert_eq!(fake.health().capture().state(), HealthState::Degraded);
     assert_eq!(
@@ -238,7 +238,7 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
     let snapshot =
         InventorySnapshot::coherent(vec![entry("braton", "Braton", Category::Weapon, 1)]).unwrap();
     let meta = SnapshotMeta::new(
-        "2026-07-24T09:30:00Z".to_owned(),
+        SnapshotInstant::parse_rfc_3339("2026-07-24T09:30:00Z").unwrap(),
         "live-build".to_owned(),
         "game-log".to_owned(),
     )
@@ -249,7 +249,7 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
     assert_eq!(view.health().game_reader().state(), HealthState::Ready);
     assert_eq!(
         view.health().game_reader().last_success(),
-        Some("2026-07-24T09:30:00Z")
+        Some("1784885400")
     );
     assert!(view.health().game_reader().message().contains("game-log"));
     assert!(!view.health().game_reader().message().contains("fake"));
@@ -350,7 +350,7 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
                 ],
                 "total_entries": 5,
                 "snapshot": {
-                    "observed_at": "2000-01-01T00:00:00Z",
+                    "observed_at": 946684800,
                     "game_build": "fake-build",
                     "source": "test-fixture"
                 },
@@ -368,7 +368,7 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
             },
             "health": {
                 "acquisition_stages": [],
-                "game_reader": {"state": "ready", "message": "Deterministic fake inventory loaded", "last_success": "2000-01-01T00:00:00Z"},
+                "game_reader": {"state": "ready", "message": "Deterministic fake inventory loaded", "last_success": "946684800"},
                 "log_monitor": {"state": "idle", "message": "Waiting for Warframe", "last_success": null},
                 "capture": {"state": "degraded", "message": "Fake session; capture not connected", "last_success": null},
                 "catalog": {"state": "degraded", "message": "Fake session; live catalog not connected", "last_success": null},

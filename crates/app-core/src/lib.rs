@@ -960,7 +960,7 @@ impl BackendHealth {
         } else {
             format!("Inventory synchronized from {}", meta.source())
         };
-        Self::ready(message, Some(meta.observed_at().to_owned()))
+        Self::ready(message, Some(meta.observed_at().unix_seconds().to_string()))
     }
 
     pub fn state(&self) -> HealthState {
@@ -1188,21 +1188,12 @@ fn status_for(
     if order.rank.is_some_and(|rank| rank > 0) {
         return OrderStatus::Unverifiable;
     }
-    let (Some(snapshot), Some(updated_at)) = (snapshot, order.updated_at.as_deref()) else {
+    let (Some(snapshot), Some(updated_at)) = (snapshot, order.updated_at) else {
         return OrderStatus::Unverifiable;
     };
-    // A snapshot older than the order describes a world before the order changed, and cannot
-    // contradict it. Both sides are reduced to an instant first: the two timestamps are not in the
-    // same format and comparing them as text is silently, permanently wrong -- production snapshot
-    // metadata carries Unix seconds ("1785507554") while orders carry RFC 3339
-    // ("2026-07-30T10:00:00Z"), and "1" sorts before "2", so a text comparison would mark every
-    // order unverifiable on every real installation and the feature would ship doing nothing.
-    let (Some(observed), Some(updated)) =
-        (instant_of(snapshot.observed_at()), instant_of(updated_at))
-    else {
-        return OrderStatus::Unverifiable;
-    };
-    if observed <= updated {
+    // Both ingest adapters expose one ordered instant. Keeping format knowledge at those seams
+    // makes this reconciliation module deeper and preserves locality for the money-adjacent rule.
+    if snapshot.observed_at() <= updated_at {
         return OrderStatus::Unverifiable;
     }
     let Some(path) = items.catalog_path(&order.item_id) else {
@@ -1364,117 +1355,5 @@ impl MarketAccountView {
             .map(|entry| entry.item.id.as_str().to_owned())
             .collect();
         self
-    }
-}
-
-/// Seconds since the Unix epoch for either timestamp form this application produces.
-///
-/// Two forms exist and both are load-bearing. Production snapshot metadata records
-/// `SystemTime`-derived Unix seconds; `SnapshotMeta::fake` and warframe.market both use RFC 3339.
-/// The frontend already absorbs the same split in `freshness.ts`, which is how it went unnoticed.
-///
-/// Parsed by hand rather than by taking a date dependency for one inequality. Only the ordering
-/// matters here, so this needs to be monotonic rather than calendar-exact: leap seconds and the
-/// fractional part are ignored, and an offset other than `Z` is treated as unparseable rather than
-/// guessed at.
-fn instant_of(value: &str) -> Option<i64> {
-    /// Seconds the epoch form is allowed to name: 2001 to 2603. Wide enough that no real clock
-    /// leaves it, narrow enough that a millisecond value cannot pass as a second one.
-    const PLAUSIBLE: std::ops::RangeInclusive<i64> = 1_000_000_000..=20_000_000_000;
-
-    let value = value.trim();
-    if value.bytes().all(|byte| byte.is_ascii_digit()) {
-        // Bounded rather than parsed bare. A writer emitting milliseconds would otherwise read as
-        // an instant tens of thousands of years out, which is newer than every order there will
-        // ever be -- so a stale snapshot would judge, confidently and always.
-        return value
-            .parse()
-            .ok()
-            .filter(|seconds| PLAUSIBLE.contains(seconds));
-    }
-    let (date, rest) = value.split_once('T')?;
-    // Anything not stated in UTC is left unparsed. A wrong guess about an offset moves an order
-    // across the snapshot boundary, which turns "we cannot say" into a confident accusation.
-    if !rest.ends_with('Z') {
-        return None;
-    }
-    let time = rest.trim_end_matches('Z');
-    let mut date_parts = date.split('-');
-    let year: i64 = date_parts.next()?.parse().ok()?;
-    let month: i64 = date_parts.next()?.parse().ok()?;
-    let day: i64 = date_parts.next()?.parse().ok()?;
-    let mut time_parts = time.split(':');
-    let hour: i64 = time_parts.next()?.parse().ok()?;
-    let minute: i64 = time_parts.next()?.parse().ok()?;
-    let second: i64 = time_parts
-        .next()
-        .unwrap_or("0")
-        .split('.')
-        .next()?
-        .parse()
-        .ok()?;
-    // Hinnant's days-from-civil, the standard algorithm, exact for every date this will see.
-    let year = year - i64::from(month <= 2);
-    let era = year.div_euclid(400);
-    let yoe = year - era * 400;
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    Some(days * 86_400 + hour * 3_600 + minute * 60 + second)
-}
-
-#[cfg(test)]
-mod instant_tests {
-    use super::instant_of;
-
-    #[test]
-    fn epoch_seconds_are_taken_as_written() {
-        assert_eq!(instant_of("1785492000"), Some(1_785_492_000));
-    }
-
-    #[test]
-    fn rfc_3339_utc_is_the_same_instant_as_its_epoch_seconds() {
-        assert_eq!(instant_of("2026-07-31T10:00:00Z"), Some(1_785_492_000));
-    }
-
-    #[test]
-    fn a_fractional_second_is_dropped_rather_than_rejected() {
-        assert_eq!(instant_of("2026-07-31T10:00:00.482Z"), Some(1_785_492_000));
-    }
-
-    /// The branch that must never start guessing. An assumed offset moves an order across the
-    /// snapshot boundary, turning "we cannot say" into a confident accusation with a delete
-    /// button beside it.
-    #[test]
-    fn an_offset_other_than_utc_is_not_guessed_at() {
-        assert_eq!(instant_of("2026-07-31T10:00:00+02:00"), None);
-        assert_eq!(instant_of("2026-07-31T10:00:00-05:00"), None);
-    }
-
-    #[test]
-    fn a_missing_seconds_field_reads_as_the_minute() {
-        assert_eq!(instant_of("2026-07-31T10:00Z"), Some(1_785_492_000));
-    }
-
-    /// Milliseconds would otherwise parse as an instant tens of thousands of years out, which is
-    /// newer than every order there will ever be -- so a stale snapshot would judge, always.
-    #[test]
-    fn a_millisecond_value_is_refused_rather_than_read_as_seconds() {
-        assert_eq!(instant_of("1785492000123"), None);
-    }
-
-    #[test]
-    fn implausibly_small_digit_strings_are_refused() {
-        assert_eq!(instant_of("0"), None);
-        assert_eq!(instant_of("42"), None);
-    }
-
-    #[test]
-    fn malformed_input_yields_no_instant() {
-        assert_eq!(instant_of(""), None);
-        assert_eq!(instant_of("   "), None);
-        assert_eq!(instant_of("yesterday"), None);
-        assert_eq!(instant_of("2026-07-31"), None);
-        assert_eq!(instant_of("2026-07-31Tten o'clockZ"), None);
     }
 }

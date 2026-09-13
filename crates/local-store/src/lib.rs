@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, params, types::Value};
 use serde::Serialize;
@@ -12,6 +13,140 @@ use warframe_domain::{
 const SCHEMA_VERSION: i64 = 4;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
+/// One moment shared by persistence, market ingest, reconciliation, and the frontend adapter.
+///
+/// Keeping the module interface to ordered Unix seconds gives downstream code leverage without
+/// exposing the two textual implementations accepted at ingest seams.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(transparent)]
+pub struct SnapshotInstant(i64);
+
+impl SnapshotInstant {
+    /// Unix seconds remain compact and naturally ordered. The accepted window starts before the
+    /// oldest instant any fixture names and ends far past any real clock, which rejects a
+    /// millisecond value accidentally presented as seconds instead of silently storing a
+    /// year-55000 instant. Every accepted second is exactly representable by JavaScript's `Date`,
+    /// so the frontend wire needs no widening conversion.
+    const PLAUSIBLE: std::ops::RangeInclusive<i64> = 946_684_800..=20_000_000_000;
+
+    pub fn from_unix_seconds(seconds: i64) -> Result<Self, StoreError> {
+        Self::PLAUSIBLE
+            .contains(&seconds)
+            .then_some(Self(seconds))
+            .ok_or_else(|| StoreError::InvalidSnapshotTime(seconds.to_string()))
+    }
+
+    /// Read a host clock. Callers hold a `SystemTime` and no opinion about whether the clock is
+    /// trustworthy: a host stuck at the epoch, or one whose clock predates it, is rejected here
+    /// like any other implausible instant so the caller can report a failure instead of asserting
+    /// its way into a panic.
+    pub fn from_system_time(time: SystemTime) -> Result<Self, StoreError> {
+        let seconds = time
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| StoreError::InvalidSnapshotTime("before the Unix epoch".to_owned()))?
+            .as_secs();
+        Self::from_unix_seconds(
+            i64::try_from(seconds)
+                .map_err(|_| StoreError::InvalidSnapshotTime(seconds.to_string()))?,
+        )
+    }
+
+    /// Normalize the UTC RFC 3339 form published by warframe.market. Local persistence calls the
+    /// same implementation after distinguishing its legacy numeric representation, so there is
+    /// exactly one calendar parser in the instant module.
+    pub fn parse_rfc_3339(value: &str) -> Result<Self, StoreError> {
+        let value = value.trim();
+        let (date, rest) = value
+            .split_once('T')
+            .ok_or_else(|| StoreError::InvalidSnapshotTime(value.to_owned()))?;
+        let time = rest
+            .strip_suffix('Z')
+            .ok_or_else(|| StoreError::InvalidSnapshotTime(value.to_owned()))?;
+        let mut date_parts = date.split('-');
+        let year: i64 = parse_time_part(date_parts.next(), value)?;
+        let month: i64 = parse_time_part(date_parts.next(), value)?;
+        let day: i64 = parse_time_part(date_parts.next(), value)?;
+        if date_parts.next().is_some()
+            || !(1..=12).contains(&month)
+            || !(1..=days_in_month(year, month)).contains(&day)
+        {
+            return Err(StoreError::InvalidSnapshotTime(value.to_owned()));
+        }
+
+        let mut time_parts = time.split(':');
+        let hour: i64 = parse_time_part(time_parts.next(), value)?;
+        let minute: i64 = parse_time_part(time_parts.next(), value)?;
+        let second = time_parts
+            .next()
+            .ok_or_else(|| StoreError::InvalidSnapshotTime(value.to_owned()))?;
+        if time_parts.next().is_some() || second.is_empty() {
+            return Err(StoreError::InvalidSnapshotTime(value.to_owned()));
+        }
+        let (second, fraction) = second
+            .split_once('.')
+            .map_or((second, None), |parts| (parts.0, Some(parts.1)));
+        let second: i64 = second
+            .parse()
+            .map_err(|_| StoreError::InvalidSnapshotTime(value.to_owned()))?;
+        if fraction.is_some_and(|digits| {
+            digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit())
+        }) || hour > 23
+            || minute > 59
+            || second > 59
+        {
+            return Err(StoreError::InvalidSnapshotTime(value.to_owned()));
+        }
+
+        // Hinnant's days-from-civil algorithm keeps the single RFC 3339 implementation exact
+        // without adding a date dependency merely to compare two instants.
+        let year = year - i64::from(month <= 2);
+        let era = year.div_euclid(400);
+        let yoe = year - era * 400;
+        let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        let days = era * 146_097 + doe - 719_468;
+        Self::from_unix_seconds(days * 86_400 + hour * 3_600 + minute * 60 + second)
+    }
+
+    /// Legacy rows persisted bare Unix seconds; newer ingest paths hand over RFC 3339. Sniffing
+    /// digits is enough to tell them apart, and a negative or out-of-window value fails the same
+    /// way through either branch, so there is no sign handling here.
+    fn parse_persisted(value: &str) -> Result<Self, StoreError> {
+        let value = value.trim();
+        if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+            Self::from_unix_seconds(
+                value
+                    .parse()
+                    .map_err(|_| StoreError::InvalidSnapshotTime(value.to_owned()))?,
+            )
+        } else {
+            Self::parse_rfc_3339(value)
+        }
+    }
+
+    pub fn unix_seconds(self) -> i64 {
+        self.0
+    }
+}
+
+fn parse_time_part<T: std::str::FromStr>(part: Option<&str>, whole: &str) -> Result<T, StoreError> {
+    part.ok_or_else(|| StoreError::InvalidSnapshotTime(whole.to_owned()))?
+        .parse()
+        .map_err(|_| StoreError::InvalidSnapshotTime(whole.to_owned()))
+}
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if year.rem_euclid(4) == 0
+            && (year.rem_euclid(100) != 0 || year.rem_euclid(400) == 0) =>
+        {
+            29
+        }
+        2 => 28,
+        _ => 31,
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("database error: {0}")]
@@ -22,6 +157,9 @@ pub enum StoreError {
     Category(#[from] serde_json::Error),
     #[error("snapshot metadata fields must not be blank")]
     InvalidMetadata,
+    #[error("invalid snapshot time: {0}")]
+    InvalidSnapshotTime(String),
+
     #[error("database schema version {0} is not supported")]
     UnsupportedSchemaVersion(i64),
     #[error("invalid database schema: {0}")]
@@ -38,18 +176,18 @@ pub enum StoreError {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SnapshotMeta {
-    observed_at: String,
+    observed_at: SnapshotInstant,
     game_build: String,
     source: String,
 }
 
 impl SnapshotMeta {
     pub fn new(
-        observed_at: String,
+        observed_at: SnapshotInstant,
         game_build: String,
         source: String,
     ) -> Result<Self, StoreError> {
-        if [&observed_at, &game_build, &source]
+        if [&game_build, &source]
             .into_iter()
             .any(|field| field.trim().is_empty())
         {
@@ -64,14 +202,14 @@ impl SnapshotMeta {
 
     pub fn fake(build: impl Into<String>) -> Result<Self, StoreError> {
         Self::new(
-            "2000-01-01T00:00:00Z".to_owned(),
+            SnapshotInstant::parse_rfc_3339("2000-01-01T00:00:00Z")?,
             build.into(),
             "test-fixture".to_owned(),
         )
     }
 
-    pub fn observed_at(&self) -> &str {
-        &self.observed_at
+    pub fn observed_at(&self) -> SnapshotInstant {
+        self.observed_at
     }
 
     pub fn source(&self) -> &str {
@@ -166,7 +304,12 @@ impl SqliteStore {
         transaction.execute(
             "INSERT INTO snapshot_audit (observed_at, game_build, source, item_count) \
              VALUES (?1, ?2, ?3, ?4)",
-            params![meta.observed_at, meta.game_build, meta.source, item_count],
+            params![
+                meta.observed_at.unix_seconds().to_string(),
+                meta.game_build,
+                meta.source,
+                item_count
+            ],
         )?;
         transaction.commit()?;
         Ok(())
@@ -277,8 +420,9 @@ impl SqliteStore {
         let Some(row) = rows.next()? else {
             return Ok(None);
         };
+        let persisted_observed_at: String = row.get(0)?;
         Ok(Some(SnapshotMeta::new(
-            row.get(0)?,
+            SnapshotInstant::parse_persisted(&persisted_observed_at)?,
             row.get(1)?,
             row.get(2)?,
         )?))
@@ -733,6 +877,51 @@ mod tests {
     fn snapshot(quantity: u32) -> InventorySnapshot {
         let item = CatalogItem::new(ItemId::new("lex").unwrap(), "Lex", Category::Weapon).unwrap();
         InventorySnapshot::coherent(vec![InventoryEntry::new(item, quantity)]).unwrap()
+    }
+
+    /// Both historical wire forms collapse at the Local Store seam. Callers get one ordered
+    /// instant and never need to know which representation an installation persisted.
+    #[test]
+    fn persisted_epoch_and_rfc_3339_rows_load_as_the_same_instant() {
+        let expected = SnapshotInstant::from_unix_seconds(1_785_492_000).unwrap();
+
+        for observed_at in ["1785492000", "2026-07-31T10:00:00Z"] {
+            let store = SqliteStore::in_memory().unwrap();
+            store
+                .connection
+                .execute(
+                    "INSERT INTO snapshot_audit (observed_at, game_build, source, item_count) \
+                     VALUES (?1, 'build', 'fixture', 0)",
+                    [observed_at],
+                )
+                .unwrap();
+
+            assert_eq!(
+                store.latest_snapshot_meta().unwrap().unwrap().observed_at(),
+                expected
+            );
+        }
+    }
+    #[test]
+    fn rfc_3339_parser_rejects_impossible_calendar_values() {
+        for value in [
+            "2026-02-29T10:00:00Z",
+            "2026-04-31T10:00:00Z",
+            "2026-07-31T10:00Z",
+            "2026-07-31T10:00:00.Z",
+            "2026-07-31T10:00:60Z",
+        ] {
+            assert!(matches!(
+                SnapshotInstant::parse_rfc_3339(value),
+                Err(StoreError::InvalidSnapshotTime(_))
+            ));
+        }
+        assert_eq!(
+            SnapshotInstant::parse_rfc_3339("2024-02-29T10:00:00.482Z")
+                .unwrap()
+                .unix_seconds(),
+            1_709_200_800
+        );
     }
 
     #[test]

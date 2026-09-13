@@ -7,13 +7,15 @@
 #[cfg(target_os = "linux")]
 use std::process::Command;
 #[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
+use std::time::Duration;
 #[cfg(target_os = "linux")]
 use xcb::{
     Connection, XidNew,
     x::{Drawable, GetImage, GetWindowAttributes, ImageFormat, ImageOrder, Window},
 };
 
+#[cfg(target_os = "linux")]
+use super::availability::RetryCooldown;
 use super::{GameFrameSource, GameRectSource, MonitorFrame};
 use crate::overlay_window::WindowRect;
 
@@ -28,7 +30,7 @@ pub const WINDOW_TITLE: &str = "Warframe";
 const XWININFO_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[cfg(target_os = "linux")]
-static XWININFO_RETRY_AFTER: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+static XWININFO_RETRY: RetryCooldown = RetryCooldown::new(XWININFO_RETRY_INTERVAL);
 
 /// The X11-backed rect and frame source.
 pub struct X11Capture {
@@ -89,16 +91,13 @@ impl GameRectSource for X11Capture {
         // EWMH list cannot see it. The tree walk supplies both its absolute rect and child XID.
         #[cfg(target_os = "linux")]
         {
-            let now = Instant::now();
-            if shared_xwininfo_retry_ready(&XWININFO_RETRY_AFTER, now) {
+            if XWININFO_RETRY.claim_retry() {
                 match xwininfo_tree() {
                     Ok(tree) => {
                         if let Some((id, rect)) = warframe_window_from_xwininfo_tree(&tree) {
                             self.selected_window = parse_xid(&id);
                             if self.selected_window.is_some() {
-                                *XWININFO_RETRY_AFTER
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+                                XWININFO_RETRY.succeeded();
                                 return Ok(rect);
                             }
                         }
@@ -333,24 +332,6 @@ fn xwininfo_error_reason(kind: std::io::ErrorKind) -> &'static str {
         _ => "could not run xwininfo",
     }
 }
-#[cfg(target_os = "linux")]
-fn xwininfo_retry_ready(retry_after: Option<Instant>, now: Instant) -> bool {
-    retry_after.is_none_or(|deadline| now >= deadline)
-}
-#[cfg(target_os = "linux")]
-fn shared_xwininfo_retry_ready(
-    retry_after: &std::sync::Mutex<Option<Instant>>,
-    now: Instant,
-) -> bool {
-    let mut retry_after = retry_after
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if !xwininfo_retry_ready(*retry_after, now) {
-        return false;
-    }
-    *retry_after = Some(now + XWININFO_RETRY_INTERVAL);
-    true
-}
 
 /// Pick the game's window out of `xwininfo -root -tree` output.
 ///
@@ -397,13 +378,11 @@ mod tests {
     #[cfg(target_os = "linux")]
     use std::io::ErrorKind;
 
-    #[cfg(target_os = "linux")]
-    use super::{
-        XWININFO_RETRY_INTERVAL, shared_xwininfo_retry_ready, x11_image_to_rgba,
-        xwininfo_error_reason, xwininfo_retry_ready,
-    };
+    use super::{XWININFO_RETRY_INTERVAL, x11_image_to_rgba, xwininfo_error_reason};
     use super::{largest_warframe_window_with_id, warframe_window_from_xwininfo_tree};
     use crate::overlay_window::WindowRect;
+    #[cfg(target_os = "linux")]
+    use crate::reward_capture::availability::RetryCooldown;
     #[cfg(target_os = "linux")]
     use xcb::x::ImageOrder;
 
@@ -431,36 +410,13 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn failed_tree_walks_are_rate_limited() {
-        let now = std::time::Instant::now();
-        let retry_after = Some(now + XWININFO_RETRY_INTERVAL);
-
-        assert!(!xwininfo_retry_ready(retry_after, now));
-        assert!(!xwininfo_retry_ready(
-            retry_after,
-            now + XWININFO_RETRY_INTERVAL / 2
-        ));
-        assert!(xwininfo_retry_ready(
-            retry_after,
-            now + XWININFO_RETRY_INTERVAL
-        ));
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
     fn independent_callers_share_the_failed_tree_walk_cooldown() {
         let start = std::time::Instant::now();
-        let retry_after = std::sync::Mutex::new(None);
+        let retry = RetryCooldown::new(XWININFO_RETRY_INTERVAL);
 
-        assert!(shared_xwininfo_retry_ready(&retry_after, start));
-        assert!(!shared_xwininfo_retry_ready(
-            &retry_after,
-            start + XWININFO_RETRY_INTERVAL / 2,
-        ));
-        assert!(shared_xwininfo_retry_ready(
-            &retry_after,
-            start + XWININFO_RETRY_INTERVAL,
-        ));
+        assert!(retry.claim_retry_at(start));
+        assert!(!retry.claim_retry_at(start + XWININFO_RETRY_INTERVAL / 2));
+        assert!(retry.claim_retry_at(start + XWININFO_RETRY_INTERVAL));
     }
 
     #[test]

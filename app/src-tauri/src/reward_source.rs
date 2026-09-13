@@ -9,7 +9,8 @@ const VISUAL_RETRY_INTERVAL: Duration = Duration::from_millis(200);
 
 use warframe_acquisition::{
     GameProcess, MemoryReader, PersistentRewardResolver, RewardCatalogEntry, RewardFingerprint,
-    RewardMemoryScanner, RewardNeedle, RewardResolution,
+    RewardHeapAddressOrder, RewardMemoryScanner, RewardNeedle, RewardRecordEvidence,
+    RewardRecordPolicy, RewardRecordQuery, RewardResolution,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,13 +141,19 @@ impl MemoryRewardSource for BoundMemoryRewardSource<'_> {
         let resolution = self
             .state
             .scanner
-            .resolve_strict_player_records(
+            .resolve_records(
                 self.memory,
                 &self.process,
                 &self.state.candidates,
-                responders,
-                local_identity,
-                local_choice,
+                RewardRecordQuery {
+                    responders,
+                    local_identity,
+                    local_choice,
+                },
+                RewardRecordPolicy::Snapshot {
+                    heap_order: RewardHeapAddressOrder::Descending,
+                    evidence: RewardRecordEvidence::StructuredOnly,
+                },
             )
             .unwrap_or(RewardResolution::Incomplete);
         trace_player_records(responders.len(), started.elapsed(), &resolution);

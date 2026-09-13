@@ -6,7 +6,6 @@
 //! keeps the game's own numerals out of the pipeline entirely.
 
 use serde::Serialize;
-use warframe_acquisition::RewardCatalogEntry;
 
 use crate::kiosk_ocr::{BasketRow, GridCell};
 
@@ -146,15 +145,14 @@ impl KioskState {
     }
 }
 
-/// Join recognized slots against the catalogue, the price table and the collection.
+/// Join recognized slots against the price table.
 ///
-/// `price` and `owned` are closures so tests (and later the poller, which layers the market cache
-/// under the daily dump) can supply whatever sources are live without this module knowing them.
+/// `price` is a closure so tests (and the poller, which layers the market cache under the daily
+/// dump) can supply whatever source is live without this module knowing it.
 pub fn build_view(
     epoch: u64,
     cells: &[GridCell],
     basket: &[BasketRow],
-    _catalog: &[RewardCatalogEntry],
     price: impl Fn(&str) -> Option<u32>,
 ) -> KioskView {
     let cells = cells
@@ -199,16 +197,6 @@ pub fn build_view(
 mod tests {
     use super::*;
 
-    fn catalog() -> Vec<RewardCatalogEntry> {
-        [("Tiberon Prime Barrel", 45)]
-            .into_iter()
-            .map(|(name, ducats)| RewardCatalogEntry {
-                name: name.to_owned(),
-                ducats,
-            })
-            .collect()
-    }
-
     fn cell(col: usize, row: usize, name: &str) -> GridCell {
         GridCell {
             col,
@@ -233,7 +221,7 @@ mod tests {
             cell(0, 0, "Tiberon Prime Barrel"),
             cell(1, 0, "Atlas Prime Chassis Blueprint"),
         ];
-        let view = build_view(3, &cells, &[], &catalog(), |name| {
+        let view = build_view(3, &cells, &[], |name| {
             (name == "Tiberon Prime Barrel").then_some(12)
         });
         assert_eq!(view.cells.len(), 1);
@@ -246,7 +234,7 @@ mod tests {
             basket_row(0, "Afentis Prime Blade"),
             basket_row(1, "Fulmin Prime Receiver"),
         ];
-        let view = build_view(1, &[], &basket, &catalog(), |name| match name {
+        let view = build_view(1, &[], &basket, |name| match name {
             "Afentis Prime Blade" => Some(6),
             "Fulmin Prime Receiver" => Some(20),
             _ => None,
@@ -263,7 +251,7 @@ mod tests {
             quantity: 2,
             ..basket_row(0, "Kompressa Prime Barrel")
         }];
-        let view = build_view(1, &[], &basket, &catalog(), |name| {
+        let view = build_view(1, &[], &basket, |name| {
             (name == "Kompressa Prime Barrel").then_some(7)
         });
 
@@ -274,7 +262,7 @@ mod tests {
     #[test]
     fn a_single_basket_row_keeps_unit_price() {
         let basket = [basket_row(0, "Kompressa Prime Barrel")];
-        let view = build_view(1, &[], &basket, &catalog(), |name| {
+        let view = build_view(1, &[], &basket, |name| {
             (name == "Kompressa Prime Barrel").then_some(7)
         });
 
@@ -284,7 +272,7 @@ mod tests {
 
     #[test]
     fn the_epoch_passes_through_for_the_frontend_transform_reset() {
-        let view = build_view(42, &[], &[], &catalog(), |_| None);
+        let view = build_view(42, &[], &[], |_| None);
         assert_eq!(view.epoch, 42);
         assert_eq!(view.total_plat, 0);
     }

@@ -1,4 +1,5 @@
 use app_core::{AppCore, HealthState, LinkState, MarketAccountView, OrderStatus, ReconciledOrder};
+use local_store::SnapshotInstant;
 use warframe_domain::{
     CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
 };
@@ -54,7 +55,7 @@ fn order(id: &str, platinum: u32, quantity: u32, visible: bool) -> MarketOrder {
         rank: None,
         subtype: None,
         visible,
-        updated_at: Some("2026-07-30T10:00:00Z".to_owned()),
+        updated_at: Some(SnapshotInstant::parse_rfc_3339("2026-07-30T10:00:00Z").unwrap()),
     }
 }
 

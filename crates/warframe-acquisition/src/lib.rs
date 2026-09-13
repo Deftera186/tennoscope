@@ -47,8 +47,9 @@ pub use market::{
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 pub use relic_catalog::RelicRewardIndex;
 pub use reward_memory::{
-    RewardFingerprint, RewardHit, RewardMemoryScanner, RewardNeedle, RewardRepresentation,
-    RewardResolution, resolve_current_reward_choices, resolve_reward_choices,
+    RewardFingerprint, RewardHeapAddressOrder, RewardHit, RewardMemoryScanner, RewardNeedle,
+    RewardRecordEvidence, RewardRecordPolicy, RewardRecordQuery, RewardRepresentation,
+    RewardResolution, resolve_reward_choices,
 };
 pub use reward_ui_memory::PersistentRewardResolver;
 #[cfg(windows)]

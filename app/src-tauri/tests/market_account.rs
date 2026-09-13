@@ -102,6 +102,46 @@ fn an_unlinked_session_asks_for_nothing() {
     assert!(view.orders.is_empty());
 }
 
+/// A read that began before a sign-out must not publish over it. The generation is the session's
+/// own, so forgetting the credential is what supersedes the read -- a caller cannot link the two
+/// incorrectly, and cannot forget to.
+#[test]
+fn forgetting_the_credential_supersedes_a_read_that_began_before_it() {
+    let store = MemoryStore::default();
+    store
+        .store(&MarketToken::new("fake-token".to_owned()))
+        .expect("token stores");
+    let mut session = MarketSession::new(Box::new(store));
+
+    // What `publish_account` captures before it goes unlocked for the network.
+    let began_at = session.generation();
+    assert!(
+        !session.is_stale(began_at),
+        "a read is current the moment it starts"
+    );
+
+    session.forget().expect("forget clears");
+
+    assert!(
+        session.is_stale(began_at),
+        "the sign-out's unlinked view must survive a late read from before it"
+    );
+}
+
+/// Only a discarded credential supersedes a read. A successful refresh that stores a renewed token
+/// must leave concurrent reads free to publish, or every refresh would invalidate its own peers.
+#[test]
+fn keeping_a_renewed_credential_leaves_a_read_current() {
+    let mut session = MarketSession::new(Box::new(MemoryStore::default()));
+
+    let began_at = session.generation();
+    session
+        .adopt(MarketToken::new("renewed".to_owned()))
+        .expect("token stores");
+
+    assert!(!session.is_stale(began_at));
+}
+
 #[test]
 fn a_linked_session_lists_and_reconciles() {
     let store = MemoryStore::default();

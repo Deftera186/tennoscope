@@ -34,6 +34,15 @@ fn every_order_on_the_account_is_read() {
     assert!(orders[0].visible);
 }
 
+#[test]
+fn order_timestamps_are_normalized_at_the_market_ingest_seam() {
+    let transport = FakeTransport::new(vec![ok(ORDERS)]);
+
+    let (orders, _) = list_mine(&transport, &token()).expect("orders load");
+
+    assert_eq!(orders[0].updated_at.unwrap().unix_seconds(), 1_785_405_600);
+}
+
 /// A hidden order is still an order the player holds, and still reconciles: an invisible listing
 /// for something they no longer own becomes visible the moment they toggle it.
 #[test]

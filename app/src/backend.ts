@@ -18,7 +18,7 @@ export type OrderStatus =
   | { state: 'missing' }
   | { state: 'overshoot'; owned: number }
   | { state: 'unverifiable' }
-export interface MarketOrder { id: string; item_id: string; kind: 'sell' | 'buy'; platinum: number; quantity: number; per_trade: number; rank?: number; subtype?: string; visible: boolean; updated_at?: string }
+export interface MarketOrder { id: string; item_id: string; kind: 'sell' | 'buy'; platinum: number; quantity: number; per_trade: number; rank?: number; subtype?: string; visible: boolean; updated_at?: number }
 export interface ReconciledOrder { order: MarketOrder; name?: string; row_id?: string; status: OrderStatus }
 export interface MarketAccount { link: LinkState; backing?: CredentialBacking; orders: ReconciledOrder[]; fetched_at?: string; listed_platinum: number; flagged: number; listable: string[]; presence: PresenceView }
 
@@ -26,7 +26,7 @@ export interface AppView {
   collection: {
     items: CollectionItem[]
     total_entries: number
-    snapshot?: { observed_at: string; game_build: string; source: string } | null
+    snapshot?: { observed_at: number; game_build: string; source: string } | null
     pricing?: PricingProgress | null
   }
   reward: { cards: RewardCard[]; best_value_index: number | null; best_ducat_index: number | null }

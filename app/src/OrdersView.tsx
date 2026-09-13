@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { CollectionItem, MarketAccount, Presence, ReconciledOrder } from './backend'
 import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
 import { backingLabel, fixLabel, isFlagged, isListable, listedOrderFor, orderValue, sortOrders, statusLabel, uncountedReason } from './orders'
-import { snapshotFreshness } from './freshness'
+import { stampReading } from './freshness'
 import { MetalMark } from './MetalMark'
 
 type OrdersViewProps = {
@@ -21,18 +21,15 @@ type OrdersViewProps = {
   error: string | null
 }
 
-/** Same shape `snapshotFreshness` expects, keyed to the order list's own fetch time instead of the
- * collection's. Reusing the one relative-time vocabulary rather than inventing a second. */
-function fetchFreshness(fetchedAt: string | undefined, now = new Date()) {
-  return snapshotFreshness(fetchedAt ? { observed_at: fetchedAt, game_build: '', source: 'warframe.market' } : null, now)
-}
-
 export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefresh, onRemove, onLowerTo, onSell, onUpdate, onPresence, items, busy, error }: OrdersViewProps) {
   if (account.link === 'unlinked') {
     return <UnlinkedPanel onSignIn={onSignIn} onLinkToken={onLinkToken} busy={busy} error={error} />
   }
 
-  const freshness = fetchFreshness(account.fetched_at)
+  // Only the relative reading is shown here, and an unfetched order list is not a missing inventory
+  // snapshot -- so this says what actually has not happened yet.
+  const fetched = account.fetched_at ? stampReading(account.fetched_at) : null
+  const freshness = fetched ? `Fetched ${fetched.relative}` : 'Orders have not been fetched yet'
   const needsRelink = account.link === 'needs_relink'
 
   return <section className="page" aria-labelledby="orders-title">
@@ -45,7 +42,7 @@ export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefres
       <div className="band-cell orders" data-summary="orders">
         <span className="band-figure">{account.listed_platinum}<MetalMark metal="plat" alt=" platinum"/></span>
         <span className="band-label">Listed value</span>
-        <p className="band-note">Visible sell listings only. {freshness.label}</p>
+        <p className="band-note">Visible sell listings only. {freshness}</p>
       </div>
       <div className="band-cell flagged" data-summary="flagged" data-count={account.flagged}>
         <span className="band-figure">{account.flagged}</span>

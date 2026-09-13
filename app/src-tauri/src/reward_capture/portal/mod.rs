@@ -1097,7 +1097,7 @@ mod tests {
         );
         assert_eq!(monitor.image.dimensions(), (2880, 1620));
 
-        let visible = crate::reward_ocr::visible_region_for(
+        let visible = crate::reward_capture::geometry::visible_region(
             rect,
             monitor.origin_x,
             monitor.origin_y,
@@ -1105,7 +1105,7 @@ mod tests {
             monitor.height,
         )
         .expect("the logical monitor contains its fullscreen rect");
-        let frame = crate::reward_ocr::window_frame_from_monitor_for(
+        let frame = crate::reward_capture::geometry::window_frame_from_monitor(
             &monitor.image,
             monitor.width,
             monitor.height,

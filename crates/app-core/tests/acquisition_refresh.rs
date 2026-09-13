@@ -1,5 +1,5 @@
 use app_core::{AcquisitionPort, AppCore, HealthState, InventoryRefreshOutcome};
-use local_store::SnapshotMeta;
+use local_store::{SnapshotInstant, SnapshotMeta};
 use warframe_acquisition::{
     AcquisitionError, AcquisitionFailure, AcquisitionHealth, AcquisitionResult, CatalogLoadSource,
 };
@@ -41,7 +41,7 @@ fn successful_refresh_atomically_replaces_snapshot_and_reports_catalog_freshness
         .unwrap();
     let result = AcquisitionResult::new(snapshot("new"), AcquisitionHealth::successful()).unwrap();
     let meta = SnapshotMeta::new(
-        "2026-07-24T20:00:00Z".into(),
+        SnapshotInstant::parse_rfc_3339("2026-07-24T20:00:00Z").unwrap(),
         "unknown".into(),
         "warframe-memory".into(),
     )
@@ -71,7 +71,12 @@ impl AcquisitionPort for FakePort {
 #[test]
 fn acquisition_port_is_the_single_refresh_seam_and_failure_keeps_last_success() {
     let mut core = AppCore::in_memory().unwrap();
-    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let meta = SnapshotMeta::new(
+        SnapshotInstant::from_unix_seconds(1_000_000_123).unwrap(),
+        "build".into(),
+        "warframe-memory".into(),
+    )
+    .unwrap();
     let result =
         AcquisitionResult::new(snapshot("prior"), AcquisitionHealth::successful()).unwrap();
     core.refresh_from(&FakePort(InventoryRefreshOutcome::success(
@@ -89,7 +94,10 @@ fn acquisition_port_is_the_single_refresh_seam_and_failure_keeps_last_success() 
 
     assert_eq!(view.collection().items()[0].id(), "prior");
     assert_eq!(view.health().game_reader().state(), HealthState::Idle);
-    assert_eq!(view.health().game_reader().last_success(), Some("123"));
+    assert_eq!(
+        view.health().game_reader().last_success(),
+        Some("1000000123")
+    );
 }
 
 #[test]
@@ -144,7 +152,12 @@ fn catalog_port_failure_is_published_without_replacing_collection() {
 #[test]
 fn log_monitor_failure_never_overwrites_successful_acquisition_health() {
     let mut core = AppCore::in_memory().unwrap();
-    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let meta = SnapshotMeta::new(
+        SnapshotInstant::from_unix_seconds(1_000_000_123).unwrap(),
+        "build".into(),
+        "warframe-memory".into(),
+    )
+    .unwrap();
     let result =
         AcquisitionResult::new(snapshot("owned"), AcquisitionHealth::successful()).unwrap();
     core.refresh_from(&FakePort(InventoryRefreshOutcome::success(
@@ -174,7 +187,12 @@ fn log_monitor_failure_never_overwrites_successful_acquisition_health() {
 #[test]
 fn catalog_without_a_load_keeps_the_prior_fetch_stamp() {
     let mut core = AppCore::in_memory().unwrap();
-    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let meta = SnapshotMeta::new(
+        SnapshotInstant::from_unix_seconds(1_000_000_123).unwrap(),
+        "build".into(),
+        "warframe-memory".into(),
+    )
+    .unwrap();
     let result =
         AcquisitionResult::new(snapshot("prior"), AcquisitionHealth::successful()).unwrap();
     let view = core
@@ -184,7 +202,12 @@ fn catalog_without_a_load_keeps_the_prior_fetch_stamp() {
 
     let result =
         AcquisitionResult::new(snapshot("prior"), AcquisitionHealth::successful()).unwrap();
-    let meta = SnapshotMeta::new("123".into(), "build".into(), "warframe-memory".into()).unwrap();
+    let meta = SnapshotMeta::new(
+        SnapshotInstant::from_unix_seconds(1_000_000_123).unwrap(),
+        "build".into(),
+        "warframe-memory".into(),
+    )
+    .unwrap();
     let view = core
         .finish_inventory_refresh(Ok((result, meta)), None)
         .unwrap();

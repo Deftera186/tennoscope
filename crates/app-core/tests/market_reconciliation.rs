@@ -1,5 +1,5 @@
 use app_core::{OrderStatus, reconcile_orders};
-use local_store::SnapshotMeta;
+use local_store::{SnapshotInstant, SnapshotMeta};
 use warframe_domain::{
     CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
 };
@@ -61,16 +61,16 @@ fn collection_holding(entries: Vec<(&str, u32, Option<u32>)>) -> Collection {
     collection
 }
 
-fn snapshot_at(observed_at: &str) -> SnapshotMeta {
+fn snapshot_at(seconds: i64) -> SnapshotMeta {
     SnapshotMeta::new(
-        observed_at.to_owned(),
+        SnapshotInstant::from_unix_seconds(seconds).unwrap(),
         "build-for-test".to_owned(),
         "test-fixture-source".to_owned(),
     )
     .expect("snapshot meta")
 }
 
-fn sell_order(item_id: &str, quantity: u32, updated_at: &str) -> MarketOrder {
+fn sell_order(item_id: &str, quantity: u32, updated_at: i64) -> MarketOrder {
     MarketOrder {
         id: "order-under-test".to_owned(),
         item_id: item_id.to_owned(),
@@ -81,19 +81,19 @@ fn sell_order(item_id: &str, quantity: u32, updated_at: &str) -> MarketOrder {
         rank: None,
         subtype: None,
         visible: true,
-        updated_at: Some(updated_at.to_owned()),
+        updated_at: Some(SnapshotInstant::from_unix_seconds(updated_at).unwrap()),
     }
 }
 
 #[test]
 fn an_order_backed_by_the_collection_is_ok() {
-    let orders = vec![sell_order(BRATON_ID, 2, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(BRATON_ID, 2, 1_785_405_600)];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(BRATON_PATH, 3, None)]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Ok);
@@ -102,13 +102,13 @@ fn an_order_backed_by_the_collection_is_ok() {
 /// The case the feature exists for: sold in game, never taken down.
 #[test]
 fn an_order_for_something_unowned_is_missing() {
-    let orders = vec![sell_order(BRATON_ID, 1, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(BRATON_ID, 1, 1_785_405_600)];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(MOD_PATH, 4, None)]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Missing);
@@ -118,13 +118,13 @@ fn an_order_for_something_unowned_is_missing() {
 /// against one is as wrong as an order against an item that is absent entirely.
 #[test]
 fn an_order_against_a_zero_quantity_row_is_missing() {
-    let orders = vec![sell_order(BRATON_ID, 1, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(BRATON_ID, 1, 1_785_405_600)];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(BRATON_PATH, 0, None)]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Missing);
@@ -132,13 +132,13 @@ fn an_order_against_a_zero_quantity_row_is_missing() {
 
 #[test]
 fn an_order_listing_more_than_is_owned_overshoots() {
-    let orders = vec![sell_order(BRATON_ID, 3, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(BRATON_ID, 3, 1_785_405_600)];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(BRATON_PATH, 1, None)]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Overshoot { owned: 1 });
@@ -148,29 +148,22 @@ fn an_order_listing_more_than_is_owned_overshoots() {
 /// would flag every order the player holds and offer to delete each one.
 #[test]
 fn without_a_snapshot_nothing_is_claimed() {
-    let orders = vec![sell_order(BRATON_ID, 1, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(BRATON_ID, 1, 1_785_405_600)];
 
     let reconciled = reconcile_orders(&orders, &items(), &Collection::default(), None);
 
     assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
 }
 
-/// The rule that keeps the rest trustworthy. A snapshot older than the order describes a world
-/// before the order changed, and cannot contradict it.
-///
-/// This is also the failure posture the application already holds to elsewhere: a broken game
-/// reader keeps its last coherent snapshot, so a stale snapshot looks exactly like a current one
-/// from here. Judging against it would produce a screen of confident accusations, each with a
-/// delete button beside it.
 #[test]
-fn a_snapshot_older_than_the_order_claims_nothing() {
-    let orders = vec![sell_order(BRATON_ID, 1, "2026-07-31T10:00:00Z")];
+fn an_order_newer_than_the_snapshot_is_unverifiable_without_downstream_parsing() {
+    let orders = vec![sell_order(MOD_ID, 1, 1_785_492_000)];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(MOD_PATH, 4, None)]),
-        Some(&snapshot_at("2026-07-30T10:00:00Z")),
+        Some(&snapshot_at(1_785_405_600)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
@@ -180,13 +173,13 @@ fn a_snapshot_older_than_the_order_claims_nothing() {
 /// table's 3,837 entries are like this.
 #[test]
 fn an_order_with_no_resolvable_item_is_unverifiable() {
-    let orders = vec![sell_order(RETIRED_ID, 1, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(RETIRED_ID, 1, 1_785_405_600)];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(BRATON_PATH, 1, None)]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
@@ -198,14 +191,14 @@ fn an_order_with_no_resolvable_item_is_unverifiable() {
 /// Which copies the order means is not answerable from the order alone.
 #[test]
 fn a_ranked_order_is_unverifiable() {
-    let mut order = sell_order(MOD_ID, 1, "2026-07-30T10:00:00Z");
+    let mut order = sell_order(MOD_ID, 1, 1_785_405_600);
     order.rank = Some(5);
 
     let reconciled = reconcile_orders(
         &[order],
         &items(),
         &collection_holding(vec![(MOD_PATH, 2, Some(5))]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
@@ -214,14 +207,14 @@ fn a_ranked_order_is_unverifiable() {
 /// Owning none of something is the ordinary state for something you are trying to buy.
 #[test]
 fn a_buy_order_is_never_reconciled() {
-    let mut order = sell_order(BRATON_ID, 1, "2026-07-30T10:00:00Z");
+    let mut order = sell_order(BRATON_ID, 1, 1_785_405_600);
     order.kind = OrderKind::Buy;
 
     let reconciled = reconcile_orders(
         &[order],
         &items(),
         &Collection::default(),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
@@ -230,14 +223,14 @@ fn a_buy_order_is_never_reconciled() {
 /// An order with no update time cannot be placed relative to the snapshot, so it is not judged.
 #[test]
 fn an_order_with_no_update_time_is_unverifiable() {
-    let mut order = sell_order(BRATON_ID, 1, "2026-07-30T10:00:00Z");
+    let mut order = sell_order(BRATON_ID, 1, 1_785_405_600);
     order.updated_at = None;
 
     let reconciled = reconcile_orders(
         &[order],
         &items(),
         &collection_holding(vec![(MOD_PATH, 1, None)]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
@@ -247,13 +240,13 @@ fn an_order_with_no_update_time_is_unverifiable() {
 /// at rank 5 holds three, and an order for three is not an overshoot.
 #[test]
 fn owned_quantity_sums_every_rank_of_one_card() {
-    let orders = vec![sell_order(MOD_ID, 3, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(MOD_ID, 3, 1_785_405_600)];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(MOD_PATH, 2, None), (MOD_PATH, 1, Some(5))]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Ok);
@@ -264,14 +257,14 @@ fn owned_quantity_sums_every_rank_of_one_card() {
 /// and the feature would ship doing nothing.
 #[test]
 fn an_epoch_seconds_snapshot_is_compared_against_an_rfc_3339_order() {
-    let orders = vec![sell_order(BRATON_ID, 1, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(BRATON_ID, 1, 1_785_405_600)];
 
     // 2026-07-31T10:00:00Z.
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(MOD_PATH, 4, None)]),
-        Some(&snapshot_at("1785492000")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Missing);
@@ -283,7 +276,7 @@ fn an_epoch_seconds_snapshot_is_compared_against_an_rfc_3339_order() {
 /// comparing against it answers "owned: none" for every relic anyone has ever listed.
 #[test]
 fn a_relic_order_is_unverifiable_rather_than_missing() {
-    let orders = vec![sell_order(RELIC_ID, 1, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(RELIC_ID, 1, 1_785_405_600)];
 
     let reconciled = reconcile_orders(
         &orders,
@@ -294,7 +287,7 @@ fn a_relic_order_is_unverifiable_rather_than_missing() {
             3,
             None,
         )]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(
@@ -309,13 +302,13 @@ fn a_relic_order_is_unverifiable_rather_than_missing() {
 /// set on the account -- the most common thing there is to sell -- reads as missing.
 #[test]
 fn a_set_order_is_unverifiable_rather_than_missing() {
-    let orders = vec![sell_order(SET_ID, 1, "2026-07-30T10:00:00Z")];
+    let orders = vec![sell_order(SET_ID, 1, 1_785_405_600)];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &collection_holding(vec![(BRATON_PATH, 1, None)]),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].status, OrderStatus::Unverifiable);
@@ -328,21 +321,17 @@ fn a_set_order_is_unverifiable_rather_than_missing() {
 /// holding the card should be able to speak about.
 #[test]
 fn a_reconciled_order_names_the_collection_row_it_belongs_to() {
-    let mut ranked = sell_order(MOD_ID, 1, "2026-07-30T10:00:00Z");
+    let mut ranked = sell_order(MOD_ID, 1, 1_785_405_600);
     ranked.rank = Some(5);
-    let mut refinement = sell_order(RELIC_ID, 1, "2026-07-30T10:00:00Z");
+    let mut refinement = sell_order(RELIC_ID, 1, 1_785_405_600);
     refinement.subtype = Some("intact".to_owned());
-    let orders = vec![
-        sell_order(BRATON_ID, 2, "2026-07-30T10:00:00Z"),
-        ranked,
-        refinement,
-    ];
+    let orders = vec![sell_order(BRATON_ID, 2, 1_785_405_600), ranked, refinement];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &Collection::default(),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].row_id.as_deref(), Some(BRATON_PATH));
@@ -362,15 +351,15 @@ fn a_reconciled_order_names_the_collection_row_it_belongs_to() {
 #[test]
 fn an_order_that_names_no_row_says_so() {
     let orders = vec![
-        sell_order(SET_ID, 1, "2026-07-30T10:00:00Z"),
-        sell_order(RETIRED_ID, 1, "2026-07-30T10:00:00Z"),
+        sell_order(SET_ID, 1, 1_785_405_600),
+        sell_order(RETIRED_ID, 1, 1_785_405_600),
     ];
 
     let reconciled = reconcile_orders(
         &orders,
         &items(),
         &Collection::default(),
-        Some(&snapshot_at("2026-07-31T10:00:00Z")),
+        Some(&snapshot_at(1_785_492_000)),
     );
 
     assert_eq!(reconciled[0].row_id, None);

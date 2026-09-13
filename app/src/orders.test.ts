@@ -17,7 +17,7 @@ function entry(
       quantity: 1,
       per_trade: 1,
       visible: true,
-      updated_at: '2026-07-30T10:00:00Z',
+      updated_at: 1_785_405_600,
       ...overrides,
     },
     name: 'Braton Prime Blueprint',

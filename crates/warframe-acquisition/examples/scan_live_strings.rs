@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, env, time::Duration};
 
 use warframe_acquisition::{
     ProcessDiscovery, RewardMemoryScanner, RewardNeedle, RewardRepresentation, RewardResolution,
-    resolve_current_reward_choices,
+    resolve_reward_choices,
 };
 
 #[cfg(unix)]
@@ -95,7 +95,7 @@ fn main() {
         .and_then(|value| value.parse::<usize>().ok())
     {
         let (status, choices) =
-            match resolve_current_reward_choices(&fingerprint, expected, 2 * 1024 * 1024) {
+            match resolve_reward_choices(None, &fingerprint, expected, 2 * 1024 * 1024) {
                 RewardResolution::Confirmed { choices, .. } => ("confirmed", choices),
                 RewardResolution::Incomplete => ("incomplete", Vec::new()),
                 RewardResolution::Ambiguous => ("ambiguous", Vec::new()),

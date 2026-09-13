@@ -154,10 +154,37 @@ fn file_backed_store_persists_across_reopen() {
 
 #[test]
 fn snapshot_metadata_rejects_blank_fields() {
-    assert!(SnapshotMeta::new(" ".into(), "build".into(), "test".into()).is_err());
-    assert!(SnapshotMeta::new("now".into(), "\t".into(), "test".into()).is_err());
-    assert!(SnapshotMeta::new("now".into(), "build".into(), "\n".into()).is_err());
+    let observed_at = local_store::SnapshotInstant::from_unix_seconds(1_785_492_000).unwrap();
+    assert!(SnapshotMeta::new(observed_at, "\t".into(), "test".into()).is_err());
+    assert!(SnapshotMeta::new(observed_at, "build".into(), "\n".into()).is_err());
+    assert!(local_store::SnapshotInstant::parse_rfc_3339(" ").is_err());
     assert!(SnapshotMeta::fake("  ").is_err());
+}
+
+#[test]
+fn snapshot_instant_rejects_millisecond_scale_values() {
+    // A caller that forgets to divide by 1000 must fail loudly instead of persisting a
+    // year-55000 instant that silently outranks every real snapshot.
+    assert!(local_store::SnapshotInstant::from_unix_seconds(1_785_492_000_000).is_err());
+    assert!(local_store::SnapshotInstant::from_unix_seconds(1_785_492_000).is_ok());
+    // The fake-metadata epoch is the oldest instant any fixture names and stays accepted.
+    assert!(local_store::SnapshotInstant::parse_rfc_3339("2000-01-01T00:00:00Z").is_ok());
+    assert!(local_store::SnapshotInstant::parse_rfc_3339("1999-12-31T23:59:59Z").is_err());
+}
+
+#[test]
+fn snapshot_instant_reads_a_system_clock_without_panicking() {
+    // Callers hold a `SystemTime` and no opinion about whether the host clock is sane. A dead
+    // CMOS battery hands back the epoch, and the refresh path must be able to report that as a
+    // failure rather than taking the process down mid-acquisition.
+    assert!(local_store::SnapshotInstant::from_system_time(std::time::SystemTime::now()).is_ok());
+    assert!(local_store::SnapshotInstant::from_system_time(std::time::UNIX_EPOCH).is_err());
+    assert!(
+        local_store::SnapshotInstant::from_system_time(
+            std::time::UNIX_EPOCH - std::time::Duration::from_secs(1)
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -165,7 +192,7 @@ fn latest_snapshot_metadata_round_trips_and_empty_store_has_none() {
     let mut store = SqliteStore::in_memory().unwrap();
     assert_eq!(store.latest_snapshot_meta().unwrap(), None);
     let meta = SnapshotMeta::new(
-        "2026-07-25T08:09:10Z".into(),
+        local_store::SnapshotInstant::parse_rfc_3339("2026-07-25T08:09:10Z").unwrap(),
         "build-42".into(),
         "warframe-memory".into(),
     )

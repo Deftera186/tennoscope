@@ -10,6 +10,10 @@ afterEach(() => {
   // to the next. A test asserting something was *not* called is the one that catches this, and it
   // catches it as a false failure somewhere unrelated.
   vi.clearAllMocks()
+  // A test that fails mid-body never reaches its own teardown, so a fake clock set by one test
+  // would otherwise stay installed and time out every test after it -- reporting the leak as a
+  // pile of unrelated failures instead of the one real one.
+  vi.useRealTimers()
 })
 
 function entry(id: string, status: ReconciledOrder['status'], quantity = 1, rowId?: string): ReconciledOrder {
@@ -22,7 +26,7 @@ function entry(id: string, status: ReconciledOrder['status'], quantity = 1, rowI
       quantity,
       per_trade: 1,
       visible: true,
-      updated_at: '2026-07-30T10:00:00Z',
+      updated_at: 1_785_405_600,
     },
     name: 'Braton Prime Blueprint',
     row_id: rowId,
@@ -35,7 +39,8 @@ function account(overrides: Partial<MarketAccount> = {}): MarketAccount {
     link: 'linked',
     backing: 'keyring',
     orders: [],
-    fetched_at: '2026-07-31T12:00:00Z',
+    // `fetched_at` is `now_unix_seconds()` on the Rust side, not a calendar stamp.
+    fetched_at: '1785492000',
     listed_platinum: 0,
     listable: [],
     presence: { status: null, wanted: null, auto: false },
@@ -203,6 +208,20 @@ describe('the linked screen', () => {
     )
 
     expect(screen.getByRole('button', { name: /remove listing/i })).toBeDisabled()
+  })
+
+  // `fetched_at` is Unix seconds, and read as a calendar string it is `Invalid Date`, not a 2026
+  // date. The band said "Fetched just now" over a stale list once, so this asserts the reading is
+  // real and that the raw stamp never reaches the screen.
+  it('reads the fetch time as the seconds the backend actually sent', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-31T12:00:00Z'))
+
+    render(<OrdersView account={account()} {...handlers} busy={false} error={null} />)
+
+    expect(screen.getByText(/Fetched 2 hours ago/)).toBeInTheDocument()
+    expect(screen.queryByText(/1785492000/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/have not been fetched yet/)).not.toBeInTheDocument()
   })
 })
 

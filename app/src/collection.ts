@@ -28,6 +28,70 @@ export function sellableValue(
   return item.platinum * Math.min(item.quantity, item.monthly_trades ?? 0)
 }
 
+type CollectionItem = {
+  category: string
+  quantity: number
+  mastered: boolean
+  platinum?: number
+  ducats?: number
+  monthly_trades?: number
+}
+
+type CollectionTotals = {
+  masteryEligible: number
+  mastered: number
+  owned: number
+  missing: number
+  priced: number
+  worth: number
+  sellable: number
+  sellableCount: number
+  ducatsAtStake: number
+}
+
+const MASTERY_ELIGIBLE_CATEGORIES = new Set(['frame', 'weapon', 'companion', 'vehicle'])
+
+/** The collection's ownership, mastery and exchange-value bands. */
+export function collectionTotals(items: readonly CollectionItem[], priceFloor: number): CollectionTotals {
+  const totals: CollectionTotals = {
+    masteryEligible: 0,
+    mastered: 0,
+    owned: 0,
+    missing: 0,
+    priced: 0,
+    worth: 0,
+    sellable: 0,
+    sellableCount: 0,
+    ducatsAtStake: 0,
+  }
+
+  for (const item of items) {
+    if (MASTERY_ELIGIBLE_CATEGORIES.has(item.category)) {
+      totals.masteryEligible += 1
+      if (item.mastered) totals.mastered += 1
+    }
+    if (item.quantity > 0) totals.owned += 1
+    if (item.quantity === 0) totals.missing += 1
+    if (item.platinum !== undefined) totals.priced += 1
+    totals.worth += stackValue(item) ?? 0
+    // The second, smaller figure. A unit price is only half of what a stack is worth: this
+    // collection's largest single holding is 182 Quickdraw at a true 2p, and the whole game trades
+    // two Quickdraw a month. Market rate leads because it is the plain reading of what is owned;
+    // what the market would actually take sits under it, at the size of a qualification.
+    const sellable = sellableValue(item, priceFloor) ?? 0
+    totals.sellable += sellable
+    if (sellable > 0) totals.sellableCount += 1
+    // What the whole ducat holding would bank at Baro's. Unlike platinum this is not a market
+    // opinion but a posted price, so the only qualification worth a note is that it counts prime
+    // parts actually held -- a missing part's reading is on its card, not in this figure.
+    if (item.quantity > 0 && item.ducats !== undefined) {
+      totals.ducatsAtStake += item.ducats * item.quantity
+    }
+  }
+
+  return totals
+}
+
 /**
  * Whether these copies are fully ranked, or null when the ceiling is unknown — which is not the
  * same answer as "no". A riven publishes a sentinel instead of a rank limit, and a card that might

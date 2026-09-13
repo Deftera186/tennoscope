@@ -1,7 +1,9 @@
 //! Where the game's rectangle and the game's pixels come from.
 
+pub mod availability;
 #[cfg(target_os = "linux")]
 pub mod direct;
+pub mod geometry;
 #[cfg(target_os = "linux")]
 pub mod kwin;
 #[cfg(target_os = "linux")]
@@ -145,6 +147,42 @@ const fn x11_frame_target(session: SessionKind) -> X11FrameTarget {
     }
 }
 
+/// One native-Wayland pixel source, and the rectangle source that comes with it.
+///
+/// A rung is inert data so that [`WAYLAND_LADDER`] can be the single statement of precedence:
+/// both the probing in `GameCapture::backend_availability` and the selection in
+/// [`capture_sources`] walk it in order. Before, each expressed the order in its own way -- a
+/// short-circuit chain and an `if` ladder -- and a backend added to one but not the other would
+/// be probed and never chosen, or chosen and never probed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WaylandRung {
+    rect_origin: RectOrigin,
+    frame_backend: FrameBackend,
+}
+
+/// The whole-monitor backends, ordered by what they cost the player.
+///
+/// A native Wayland client's window geometry no client may ask for, so every rung captures a
+/// whole monitor. wlroots and KWin capture silently; the portal costs a permission grant and
+/// lights a screen-sharing indicator for as long as it lives, so it is last. Gameplay capture
+/// must never open a chooser mid-mission, which is why the portal rung is offered only when a
+/// session the player already authorized is still held.
+const WAYLAND_LADDER: [WaylandRung; 3] = [
+    WaylandRung {
+        rect_origin: RectOrigin::Wayland,
+        frame_backend: FrameBackend::Wayland,
+    },
+    WaylandRung {
+        // KWin reports logical output geometry, the same coordinate space wlroots reports.
+        rect_origin: RectOrigin::Wayland,
+        frame_backend: FrameBackend::Kwin,
+    },
+    WaylandRung {
+        rect_origin: RectOrigin::Portal,
+        frame_backend: FrameBackend::Portal,
+    },
+];
+
 /// What this desktop can actually offer, decided before any capture is attempted.
 ///
 /// Passed as data rather than probed inside the decision so precedence is testable without a
@@ -166,17 +204,37 @@ impl BackendAvailability {
         kwin: false,
         portal_session: false,
     };
+
+    /// Whether one whole-monitor backend is on offer.
+    ///
+    /// `X11` is never on offer here: X11 answers with a real window rectangle and is decided
+    /// before this struct is consulted at all.
+    const fn offers(self, backend: FrameBackend) -> bool {
+        match backend {
+            FrameBackend::X11 => false,
+            FrameBackend::Wayland => self.direct_wayland,
+            FrameBackend::Kwin => self.kwin,
+            FrameBackend::Portal => self.portal_session,
+        }
+    }
+
+    /// Record that one whole-monitor backend answered a probe.
+    #[cfg(any(target_os = "linux", test))]
+    const fn offer(&mut self, backend: FrameBackend) {
+        match backend {
+            FrameBackend::X11 => {}
+            FrameBackend::Wayland => self.direct_wayland = true,
+            FrameBackend::Kwin => self.kwin = true,
+            FrameBackend::Portal => self.portal_session = true,
+        }
+    }
 }
 
 /// Decide where native-Wayland geometry and pixels come from.
 ///
 /// X11 wins whenever it finds the game: it provides the actual window rectangle, so an XWayland
 /// Warframe never needs a Wayland backend at all. Otherwise the game is a native Wayland client
-/// whose window geometry no client may ask for, so the choice is between whole-monitor backends,
-/// ordered by what they cost the player: wlroots and KWin capture silently, while the portal
-/// costs a permission grant and lights a screen-sharing indicator for as long as it lives. The
-/// portal is therefore last, and only when a session already exists -- gameplay capture must
-/// never open a chooser mid-mission.
+/// and the choice is the first rung of [`WAYLAND_LADDER`] this desktop offers.
 pub fn capture_sources(
     session: SessionKind,
     x11_found: bool,
@@ -188,17 +246,10 @@ pub fn capture_sources(
     if session == SessionKind::X11 {
         return None;
     }
-    if available.direct_wayland {
-        return Some((RectOrigin::Wayland, FrameBackend::Wayland));
-    }
-    if available.kwin {
-        // KWin reports logical output geometry, the same coordinate space wlroots reports.
-        return Some((RectOrigin::Wayland, FrameBackend::Kwin));
-    }
-    if available.portal_session {
-        return Some((RectOrigin::Portal, FrameBackend::Portal));
-    }
-    None
+    WAYLAND_LADDER
+        .into_iter()
+        .find(|rung| available.offers(rung.frame_backend))
+        .map(|rung| (rung.rect_origin, rung.frame_backend))
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -311,7 +362,7 @@ pub fn last_capture_sources() -> (Option<&'static str>, Option<&'static str>) {
 /// distinguishes "no window" from "wrong monitor" from "captured a helper window" -- the
 /// distinction the 2026-08-22 report could not make. At Debug otherwise, because the poller
 /// re-captures the same monitor every 400ms and a line per poll would evict the history.
-fn trace_capture(shape: CaptureShape, visible: &crate::reward_ocr::VisibleRegion, changed: bool) {
+fn trace_capture(shape: CaptureShape, visible: &geometry::VisibleRegion, changed: bool) {
     let mut latest = LATEST_CAPTURE_SHAPE_FOR_REPORT
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -324,10 +375,7 @@ fn trace_capture(shape: CaptureShape, visible: &crate::reward_ocr::VisibleRegion
     }
 }
 
-fn capture_geometry_line(
-    shape: CaptureShape,
-    visible: &crate::reward_ocr::VisibleRegion,
-) -> String {
+fn capture_geometry_line(shape: CaptureShape, visible: &geometry::VisibleRegion) -> String {
     format!(
         "[DEBUG-capture] rect source {} capture backend {} window={},{} {}x{} monitor={},{} {}x{} region={:?}",
         shape.origin.label(),
@@ -346,11 +394,11 @@ fn capture_geometry_line(
 
 fn prepare_captures(
     captures: Vec<(WindowRect, MonitorFrame)>,
-) -> Result<Vec<(WindowRect, MonitorFrame, crate::reward_ocr::VisibleRegion)>, &'static str> {
+) -> Result<Vec<(WindowRect, MonitorFrame, geometry::VisibleRegion)>, &'static str> {
     let prepared = captures
         .into_iter()
         .filter_map(|(rect, monitor)| {
-            let visible = crate::reward_ocr::visible_region_for(
+            let visible = geometry::visible_region(
                 rect,
                 monitor.origin_x,
                 monitor.origin_y,
@@ -409,17 +457,31 @@ impl GameCapture {
     ///
     /// An XWayland game or an X11 session never reaches a Wayland backend, so probing one would
     /// put a D-Bus round trip and a Wayland handshake in a poll that had already succeeded.
+    ///
+    /// Walks [`WAYLAND_LADDER`] and stops at the first rung that answers, so whichever backend
+    /// wins, the ones below it are never probed and a wlroots desktop never touches D-Bus. The
+    /// order lives in the ladder, not here.
     #[cfg(target_os = "linux")]
     fn backend_availability(&mut self) -> BackendAvailability {
-        let direct_wayland = self.direct.available();
-        // Asked in precedence order and short-circuited: whichever backend wins, the ones below
-        // it are never probed, so a wlroots desktop never touches D-Bus.
-        let kwin = !direct_wayland && self.kwin.available();
-        let portal_session = !direct_wayland && !kwin && portal::PortalCapture::has_live_session();
-        BackendAvailability {
-            direct_wayland,
-            kwin,
-            portal_session,
+        let mut available = BackendAvailability::NONE;
+        for rung in WAYLAND_LADDER {
+            if self.probe(rung.frame_backend) {
+                available.offer(rung.frame_backend);
+                break;
+            }
+        }
+        available
+    }
+
+    /// Ask one whole-monitor backend whether it can capture right now.
+    #[cfg(target_os = "linux")]
+    fn probe(&mut self, backend: FrameBackend) -> bool {
+        match backend {
+            // X11 is decided by window discovery, never probed as a whole-monitor backend.
+            FrameBackend::X11 => false,
+            FrameBackend::Wayland => self.direct.available(),
+            FrameBackend::Kwin => self.kwin.available(),
+            FrameBackend::Portal => portal::PortalCapture::has_live_session(),
         }
     }
 
@@ -498,7 +560,7 @@ impl GameCapture {
                 trace_capture(shape, &visible, changed);
                 CapturedFrame {
                     rect,
-                    image: crate::reward_ocr::window_frame_from_monitor_for(
+                    image: geometry::window_frame_from_monitor(
                         &monitor.image,
                         monitor.width,
                         monitor.height,
@@ -538,8 +600,9 @@ mod tests {
 
     use super::{
         BackendAvailability, CaptureShape, FrameBackend, MonitorFrame, RectOrigin, SessionKind,
-        capture_choice, capture_geometry_line, capture_shapes_changed, capture_sources,
-        capture_sources_from, prepare_captures, session_kind_from, update_capture_shapes,
+        WAYLAND_LADDER, capture_choice, capture_geometry_line, capture_shapes_changed,
+        capture_sources, capture_sources_from, geometry, prepare_captures, session_kind_from,
+        update_capture_shapes,
     };
     #[cfg(target_os = "linux")]
     use super::{X11FrameTarget, x11_frame_target};
@@ -648,7 +711,7 @@ mod tests {
     #[test]
     fn geometry_line_explicitly_names_rect_source_and_capture_backend() {
         let current = shape(RectOrigin::X11, FrameBackend::Portal, 1920);
-        let visible = crate::reward_ocr::visible_region_for(
+        let visible = geometry::visible_region(
             current.rect,
             current.monitor_x,
             current.monitor_y,
@@ -930,6 +993,39 @@ mod tests {
                 expected,
                 "availability {available:?} chose the wrong backend"
             );
+        }
+    }
+
+    /// Every rung must be reachable, and reachable only when its own flag is set.
+    ///
+    /// This is the invariant that keeps one ladder honest: `offers` is what the probe loop uses to
+    /// record an answer and what `capture_sources` uses to select, so a new backend wired into one
+    /// and not the other -- probed and never chosen, or chosen and never probed -- fails here.
+    #[test]
+    fn each_ladder_rung_is_selected_by_exactly_its_own_offer() {
+        for rung in WAYLAND_LADDER {
+            let mut available = BackendAvailability::NONE;
+            available.offer(rung.frame_backend);
+            assert!(
+                available.offers(rung.frame_backend),
+                "{:?} was offered but reads as unavailable",
+                rung.frame_backend
+            );
+            assert_eq!(
+                capture_sources(SessionKind::Wayland, false, available),
+                Some((rung.rect_origin, rung.frame_backend)),
+                "{:?} is probed but never selected",
+                rung.frame_backend
+            );
+            for other in WAYLAND_LADDER {
+                assert_eq!(
+                    other.frame_backend == rung.frame_backend,
+                    available.offers(other.frame_backend),
+                    "{:?} leaked into {:?}'s availability",
+                    other.frame_backend,
+                    rung.frame_backend
+                );
+            }
         }
     }
 

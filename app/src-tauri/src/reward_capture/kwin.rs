@@ -20,6 +20,7 @@ use wayland_protocols::xdg::xdg_output::zv1::client::{zxdg_output_manager_v1, zx
 use zbus::zvariant;
 
 use super::MonitorFrame;
+use super::availability::{LatchingAvailability, RetryCooldown};
 use crate::overlay_window::WindowRect;
 
 /// Raw ScreenShot2 replies gained the `scale` metadata field in version 4. The decoder needs that
@@ -675,40 +676,6 @@ struct KwinSession {
     outputs: Vec<KwinOutput>,
 }
 
-#[derive(Clone, Copy)]
-struct AvailabilityState {
-    available: bool,
-    checked_at: Instant,
-    probing: bool,
-}
-
-impl AvailabilityState {
-    fn new(available: bool, checked_at: Instant) -> Self {
-        Self {
-            available,
-            checked_at,
-            probing: false,
-        }
-    }
-
-    fn claim_probe(&mut self, now: Instant) -> bool {
-        if self.available
-            || self.probing
-            || now.saturating_duration_since(self.checked_at) < AVAILABILITY_RETRY_INTERVAL
-        {
-            return false;
-        }
-        self.probing = true;
-        true
-    }
-
-    fn record(&mut self, available: bool, checked_at: Instant) {
-        self.available = available;
-        self.checked_at = checked_at;
-        self.probing = false;
-    }
-}
-
 fn kwin_authorizable(appimage: Option<&OsStr>) -> bool {
     appimage.is_none()
 }
@@ -742,33 +709,14 @@ pub fn available_cached() -> bool {
     if !kwin_authorizable(std::env::var_os("APPIMAGE").as_deref()) {
         return false;
     }
-    static AVAILABLE: std::sync::LazyLock<std::sync::Mutex<AvailabilityState>> =
-        std::sync::LazyLock::new(|| {
-            let now = Instant::now();
-            std::sync::Mutex::new(AvailabilityState::new(probe_available(), now))
-        });
-    let now = Instant::now();
-    let should_probe = AVAILABLE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .claim_probe(now);
-    if should_probe {
-        let probed = probe_available();
-        AVAILABLE
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .record(probed, Instant::now());
-    }
-    AVAILABLE
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .available
+    static AVAILABLE: LatchingAvailability = LatchingAvailability::new(AVAILABILITY_RETRY_INTERVAL);
+    AVAILABLE.available(probe_available)
 }
 
 pub struct KwinCapture {
     session: Option<KwinSession>,
     authorization_available: bool,
-    retry_after: Option<Instant>,
+    retry: RetryCooldown,
 }
 
 impl KwinSession {
@@ -809,7 +757,7 @@ impl KwinCapture {
         Self {
             session: None,
             authorization_available: true,
-            retry_after: None,
+            retry: RetryCooldown::new(CAPTURE_RETRY_INTERVAL),
         }
     }
 
@@ -817,9 +765,7 @@ impl KwinCapture {
     /// bounded interval rather than being latched for the process lifetime. An authorization
     /// refusal disables this instance so its owner can select the portal on the next poll.
     pub fn available(&self) -> bool {
-        self.authorization_available
-            && kwin_retry_ready(self.retry_after, Instant::now())
-            && available_cached()
+        self.authorization_available && self.retry.retry_ready() && available_cached()
     }
 
     fn capture_once(&mut self) -> Result<Vec<(WindowRect, MonitorFrame)>, &'static str> {
@@ -845,7 +791,7 @@ impl KwinCapture {
     pub fn capture_monitors(&mut self) -> Result<Vec<(WindowRect, MonitorFrame)>, &'static str> {
         let first = self.capture_once();
         let Err(error) = first else {
-            self.retry_after = None;
+            self.retry.succeeded();
             return first;
         };
 
@@ -857,16 +803,12 @@ impl KwinCapture {
         let retry = self.capture_once();
         if retry.is_err() {
             self.session = None;
-            self.retry_after = Some(Instant::now() + CAPTURE_RETRY_INTERVAL);
+            self.retry.failed();
         } else {
-            self.retry_after = None;
+            self.retry.succeeded();
         }
         retry
     }
-}
-
-fn kwin_retry_ready(retry_after: Option<Instant>, now: Instant) -> bool {
-    retry_after.is_none_or(|deadline| now >= deadline)
 }
 
 /// Keep authorization failures above generic failures when reporting a failed generation.
@@ -959,24 +901,6 @@ mod tests {
     }
 
     #[test]
-    fn availability_probe_claim_is_exclusive_and_success_stays_cached() {
-        let start = Instant::now();
-        let mut state = AvailabilityState::new(false, start);
-
-        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL / 2));
-        assert!(state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL));
-        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL * 2));
-
-        let failed_at = start + AVAILABILITY_RETRY_INTERVAL;
-        state.record(false, failed_at);
-        assert!(!state.claim_probe(failed_at + AVAILABILITY_RETRY_INTERVAL / 2));
-        assert!(state.claim_probe(failed_at + AVAILABILITY_RETRY_INTERVAL));
-
-        state.record(true, failed_at + AVAILABILITY_RETRY_INTERVAL);
-        assert!(!state.claim_probe(start + AVAILABILITY_RETRY_INTERVAL * 100));
-    }
-
-    #[test]
     fn only_session_failures_are_retried_in_the_same_poll() {
         assert!(KwinCapture::capture_failure_is_retryable(ERR_UNAVAILABLE));
         assert!(KwinCapture::capture_failure_is_retryable(ERR_NO_OUTPUTS));
@@ -993,14 +917,12 @@ mod tests {
     #[test]
     fn failed_capture_temporarily_yields_to_portal_fallback() {
         let now = std::time::Instant::now();
-        let retry_after = Some(now + CAPTURE_RETRY_INTERVAL);
+        let retry = RetryCooldown::new(CAPTURE_RETRY_INTERVAL);
+        retry.failed_at(now);
 
-        assert!(!kwin_retry_ready(retry_after, now));
-        assert!(!kwin_retry_ready(
-            retry_after,
-            now + CAPTURE_RETRY_INTERVAL / 2
-        ));
-        assert!(kwin_retry_ready(retry_after, now + CAPTURE_RETRY_INTERVAL));
+        assert!(!retry.retry_ready_at(now));
+        assert!(!retry.retry_ready_at(now + CAPTURE_RETRY_INTERVAL / 2));
+        assert!(retry.retry_ready_at(now + CAPTURE_RETRY_INTERVAL));
     }
 
     #[test]
