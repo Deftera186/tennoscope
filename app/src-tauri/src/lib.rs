@@ -68,6 +68,8 @@ mod kiosk_log;
 mod kiosk_ocr;
 mod kiosk_scroll;
 mod kiosk_view;
+#[cfg(target_os = "linux")]
+pub mod linux_renderer;
 pub mod market_account;
 mod monitor;
 mod overlay_window;

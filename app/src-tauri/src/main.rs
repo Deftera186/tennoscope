@@ -5,5 +5,21 @@
 #![forbid(unsafe_code)]
 
 fn main() {
+    #[cfg(target_os = "linux")]
+    if app_lib::linux_renderer::current_renderer_preflight_action()
+        == app_lib::linux_renderer::RendererPreflightAction::RelaunchWithDmabufDisabled
+    {
+        use std::os::unix::process::CommandExt;
+
+        let mut arguments = std::env::args_os();
+        let Some(executable) = arguments.next() else {
+            app_lib::run();
+            return;
+        };
+        let error =
+            app_lib::linux_renderer::renderer_relaunch_command(&executable, arguments).exec();
+        eprintln!("TennoScope could not apply the NVIDIA WebKit workaround: {error}");
+    }
+
     app_lib::run();
 }

@@ -18,6 +18,13 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   quantities in a basket, and keeps a running platinum total. Recognition stays local and
   fail-closed: unreadable frames fade the prices instead of attaching them to the wrong items.
 
+### Fixed
+
+- **TennoScope now starts reliably on proprietary NVIDIA Linux drivers.** When the primary GPU
+  needs WebKitGTK's safer non-DMABUF renderer, startup applies it automatically without overriding
+  an explicit user setting. This fixes the blank window and GBM buffer allocation failure reported
+  in issue #9 while leaving AMD, Intel and Nouveau systems unchanged.
+
 ## [0.8.0] - 2026-09-10
 
 ### Added
