@@ -11,6 +11,23 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-14
+
+### Changed
+
+- **Capture and game-monitor workers now shut down as owned runtime trees.** Application exit and
+  game process transitions cancel and join their background work deterministically instead of
+  leaving detached tasks behind; visible capture behaviour is unchanged.
+
+### Fixed
+
+- **Local Tauri builds now discover `libclang` in versioned LLVM installations.** This covers
+  distributions such as Gentoo where `libclang.so` lives outside the dynamic loader's default
+  search path.
+- **Release preflight checks now stay portable across packaging hosts.** Platform-specific tools
+  run only on their target OS, and unavailable optional package inspectors are reported without
+  aborting artifact builds.
+
 ## [0.9.0] - 2026-09-13
 
 ### Added
@@ -535,7 +552,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/Deftera186/tennoscope/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Deftera186/tennoscope/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/Deftera186/tennoscope/compare/v0.6.1...v0.7.0
