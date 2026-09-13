@@ -1,23 +1,24 @@
 #!/usr/bin/env node
-// Wrapper around the Tauri CLI that exists for exactly one reason: linuxdeploy's
-// bundled `strip` predates RELR relocations, so on distributions whose toolchain
-// emits `.relr.dyn` (Arch, CachyOS, Gentoo, Fedora Rawhide) it fails on every
-// bundled system library and takes the whole AppImage build down with an
-// unhelpful `failed to run linuxdeploy`.
+// Normalize the Linux toolchain environment before handing control to Tauri.
 //
-// Stripping is an optional size optimization, so `NO_STRIP` skips it without
-// changing the produced binary. Setting it here means the documented
-// `pnpm tauri build` works on those distributions instead of failing.
+// `NO_STRIP` avoids linuxdeploy's bundled `strip`, which predates RELR
+// relocations and fails on system libraries from current Arch, CachyOS,
+// Gentoo, and Fedora Rawhide toolchains. Stripping is only a size optimization.
 //
-// Linux only: `NO_STRIP` is meaningless to the NSIS bundler, and the Windows
-// release job runs this same script. An explicit value from the caller always
-// wins, which is how scripts/build-linux-bundles.sh keeps control.
+// Native screen capture builds PipeWire bindings through bindgen. Some Linux
+// distributions keep libclang in a versioned LLVM slot outside the dynamic
+// loader's search path, so the helper resolves that slot through llvm-config.
+//
+// Both defaults are Linux-only. Explicit caller values always win; release
+// scripts and configured development shells therefore retain control.
 
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { constants } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+
+import { configureTauriEnvironment } from './tauri-env.mjs'
 
 // The dependency lives in app/node_modules, not next to this script and not at
 // the repository root, so resolve from app/ explicitly rather than from
@@ -35,10 +36,7 @@ try {
   process.exit(127)
 }
 
-const env = { ...process.env }
-if (process.platform === 'linux' && env.NO_STRIP === undefined) {
-  env.NO_STRIP = 'true'
-}
+const env = configureTauriEnvironment(process.env)
 
 const child = spawn(process.execPath, [cli, ...process.argv.slice(2)], {
   stdio: 'inherit',
