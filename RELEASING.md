@@ -17,6 +17,7 @@ setup state — may change in any minor release:
 | First release the project is willing to keep compatible | `1.0.0` |
 
 Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
+GitHub release titles are `TennoScope v0.1.0`: the product name followed by the exact tag.
 
 ## Cutting a release
 

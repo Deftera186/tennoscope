@@ -246,6 +246,9 @@ jobs:
       # release goes out when the maintainer says so.
       - uses: softprops/action-gh-release@v2
         with:
+          # Keep the user-facing title identifiable outside GitHub while spelling the version
+          # exactly like the tag documented in RELEASING.md.
+          name: TennoScope ${{ github.ref_name }}
           draft: true
           # Marked pre-release from the tag itself, so an `-rc`/`-beta` build cannot be presented
           # as stable by accident -- and those are exactly the builds with assertions left on.
