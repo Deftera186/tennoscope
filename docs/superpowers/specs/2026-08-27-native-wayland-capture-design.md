@@ -145,8 +145,9 @@ therefore continue through the fd while honoring chunk offset, size, and row str
 
 ## Setup and Settings UX
 
-Screen capture is removed from first-run setup. Accepting the local read-only risk disclosure always
-starts normal monitoring. Capture availability cannot block collection, log, or market features.
+Screen capture stays separate from mode confirmation. Confirming Overlay or Full starts only the
+observation that mode authorizes; Companion starts none. Capture availability cannot block the
+catalog, saved collection, price, or market features available in Companion.
 
 Settings describes the default rather than exposing implementation jargon:
 

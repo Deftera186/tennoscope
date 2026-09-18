@@ -43,7 +43,12 @@ export interface AppView {
     acquisition_stages: AcquisitionStageHealth[]
   }
 }
-export interface SetupStatus { risk_accepted: boolean; desktop_capture_action_available: boolean }
+export type AccessMode = 'companion' | 'overlay' | 'full'
+export interface SetupStatus {
+  setup_complete: boolean
+  access_mode: AccessMode | null
+  desktop_capture_action_available: boolean
+}
 
 /** One grid tile's corner chip; a chip existing already says its platinum resolved. */
 export interface CellChip { col: number; row: number; name: string; platinum: number | null }
@@ -88,7 +93,7 @@ export async function getSetupStatus(attempts = 12, delayMs = 250): Promise<Setu
     }
   }
 }
-export const acceptRiskDisclosure = () => invoke<SetupStatus>('accept_risk_disclosure')
+export const setAccessMode = (accessMode: AccessMode) => invoke<SetupStatus>('set_access_mode', { accessMode })
 export const authorizeScreenCapture = () => invoke<SetupStatus>('authorize_screen_capture')
 
 export const marketStatus = () => invoke<AppView>('market_status')

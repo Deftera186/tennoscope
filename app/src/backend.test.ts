@@ -4,7 +4,6 @@ const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke }))
 
 import {
-  acceptRiskDisclosure,
   authorizeScreenCapture,
   getSetupStatus,
   marketLinkToken,
@@ -14,6 +13,7 @@ import {
   refreshInventory,
   refreshOrders,
   removeOrder,
+  setAccessMode,
   setOrderQuantity,
   updateOrder,
 } from './backend'
@@ -21,17 +21,19 @@ import {
 describe('typed Tauri command bridge', () => {
   beforeEach(() => invoke.mockReset())
 
-  it('uses stable setup and refresh command names', async () => {
-    invoke.mockResolvedValueOnce({ risk_accepted: false, desktop_capture_action_available: true })
-    await expect(getSetupStatus()).resolves.toEqual({ risk_accepted: false, desktop_capture_action_available: true })
+  it('uses the access-mode setup contract and stable refresh commands', async () => {
+    const firstRun = { setup_complete: false, access_mode: null, desktop_capture_action_available: false }
+    invoke.mockResolvedValueOnce(firstRun)
+    await expect(getSetupStatus()).resolves.toEqual(firstRun)
     expect(invoke).toHaveBeenCalledWith('get_setup_status')
 
-    invoke.mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: true })
-    await expect(acceptRiskDisclosure()).resolves.toEqual({ risk_accepted: true, desktop_capture_action_available: true })
-    expect(invoke).toHaveBeenCalledWith('accept_risk_disclosure')
+    const configured = { setup_complete: true, access_mode: 'overlay' as const, desktop_capture_action_available: true }
+    invoke.mockResolvedValueOnce(configured)
+    await expect(setAccessMode('overlay')).resolves.toEqual(configured)
+    expect(invoke).toHaveBeenCalledWith('set_access_mode', { accessMode: 'overlay' })
 
-    invoke.mockResolvedValueOnce({ risk_accepted: true, desktop_capture_action_available: false })
-    await expect(authorizeScreenCapture()).resolves.toEqual({ risk_accepted: true, desktop_capture_action_available: false })
+    invoke.mockResolvedValueOnce({ ...configured, desktop_capture_action_available: false })
+    await expect(authorizeScreenCapture()).resolves.toEqual({ ...configured, desktop_capture_action_available: false })
     expect(invoke).toHaveBeenCalledWith('authorize_screen_capture')
 
     invoke.mockResolvedValueOnce({ collection: { items: [], total_entries: 0 } })
@@ -44,9 +46,9 @@ describe('typed Tauri command bridge', () => {
     invoke
       .mockRejectedValueOnce(new Error('command get_setup_status not found'))
       .mockRejectedValueOnce(new Error('command get_setup_status not found'))
-      .mockResolvedValueOnce({ risk_accepted: true })
+      .mockResolvedValueOnce({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
 
-    await expect(getSetupStatus(5, 0)).resolves.toEqual({ risk_accepted: true })
+    await expect(getSetupStatus(5, 0)).resolves.toEqual({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
     expect(invoke).toHaveBeenCalledTimes(3)
   })
 

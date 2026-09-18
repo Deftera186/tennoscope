@@ -14,13 +14,15 @@ export function isFlagged(status: OrderStatus): boolean {
   return status.state === 'missing' || status.state === 'overshoot'
 }
 
-/** What the row says is wrong, or null when nothing is claimed. */
+/** What the row says about backend reconciliation, or null when the holding is verified. */
 export function statusLabel(entry: ReconciledOrder): string | null {
   switch (entry.status.state) {
     case 'missing':
       return 'You no longer own this'
     case 'overshoot':
       return `You own ${entry.status.owned} of ${entry.order.quantity} listed`
+    case 'unverifiable':
+      return 'Unverifiable'
     default:
       return null
   }

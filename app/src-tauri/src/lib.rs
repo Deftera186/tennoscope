@@ -2,19 +2,24 @@
 
 use std::{
     fs,
+    io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    thread::JoinHandle,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use app_core::{AcquisitionPort, AppCore, AppView, InventoryRefreshOutcome, PricingProgress};
+use atomicwrites::{AtomicFile, OverwriteBehavior};
 use local_store::{SnapshotInstant, SnapshotMeta, StoreError};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 use warframe_acquisition::{
     CatalogCache, CollectionPriceCache, InventoryAcquirer, InventoryHttpTransport,
-    MarketPriceCache, ProcessDiscovery, RelicsRunHttp, WarmOutcome, WfcdCatalogHttp,
-    dump_is_current, latest_dump,
+    MarketPriceCache, RelicsRunHttp, WarmOutcome, WfcdCatalogHttp, dump_is_current, latest_dump,
 };
 
 /// The platform's process-memory backend. Both sides implement `MemoryReader` and
@@ -25,6 +30,7 @@ use warframe_acquisition::LinuxProc as GameMemory;
 #[cfg(windows)]
 use warframe_acquisition::WindowsProc as GameMemory;
 
+mod access;
 mod kiosk_geometry;
 mod kiosk_log;
 mod kiosk_ocr;
@@ -41,7 +47,7 @@ mod reward_log;
 mod reward_observer;
 mod reward_ocr;
 mod reward_source;
-pub use kiosk_log::KioskLogEvent;
+pub use access::{AccessMode, AccessPolicy};
 pub use kiosk_ocr::{BasketRow, GridCell};
 pub use kiosk_view::{KioskState, KioskView};
 pub use overlay_window::{
@@ -65,13 +71,153 @@ pub use reward_source::{
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SetupStatus {
-    pub risk_accepted: bool,
+    pub setup_complete: bool,
+    pub access_mode: Option<AccessMode>,
     pub desktop_capture_action_available: bool,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct PersistedSetupStatus {
-    risk_accepted: bool,
+    #[serde(default)]
+    access_mode: Option<AccessMode>,
+    #[serde(default)]
+    risk_accepted: Option<bool>,
+}
+struct ActiveMonitor {
+    policy: AccessPolicy,
+    generation: monitor::MonitorGeneration,
+    handle: JoinHandle<()>,
+}
+
+struct MonitorLifecycle {
+    current_generation: Arc<AtomicU64>,
+    next_generation: u64,
+    active: Option<ActiveMonitor>,
+}
+
+impl Default for MonitorLifecycle {
+    fn default() -> Self {
+        Self {
+            current_generation: Arc::new(AtomicU64::new(0)),
+            next_generation: 1,
+            active: None,
+        }
+    }
+}
+
+impl MonitorLifecycle {
+    fn policy(&self) -> Option<AccessPolicy> {
+        self.active.as_ref().map(|active| active.policy)
+    }
+
+    fn stop(&mut self) -> Result<(), String> {
+        let Some(active) = self.active.take() else {
+            return Ok(());
+        };
+        self.current_generation.fetch_add(1, Ordering::AcqRel);
+        active.generation.request_stop();
+        active.handle.thread().unpark();
+        active
+            .handle
+            .join()
+            .map_err(|_| "game monitor failed during shutdown".to_owned())
+    }
+
+    fn start(
+        &mut self,
+        shared: SharedRuntime,
+        app: AppHandle,
+        policy: AccessPolicy,
+    ) -> Result<(), String> {
+        if self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.policy == policy)
+        {
+            return Ok(());
+        }
+        let id = self.next_generation;
+        self.next_generation = self.next_generation.saturating_add(1);
+        let generation = monitor::MonitorGeneration::new(id, Arc::clone(&self.current_generation));
+        let worker_generation = generation.clone();
+        let handle = std::thread::Builder::new()
+            .name(format!("game-monitor-{id}"))
+            .spawn(move || monitor::run(shared, app, policy, worker_generation))
+            .map_err(|_| "game monitor could not be started".to_owned())?;
+        self.active = Some(ActiveMonitor {
+            policy,
+            generation,
+            handle,
+        });
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct TransitionGate(Arc<AtomicBool>);
+
+impl TransitionGate {
+    fn begin(&self) -> Result<MonitorTransitionGuard, String> {
+        self.0
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "access mode is already changing".to_owned())?;
+        Ok(MonitorTransitionGuard {
+            transition_in_progress: Arc::clone(&self.0),
+        })
+    }
+
+    fn is_active(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+struct MonitorTransitionGuard {
+    transition_in_progress: Arc<AtomicBool>,
+}
+
+impl Drop for MonitorTransitionGuard {
+    fn drop(&mut self) {
+        self.transition_in_progress.store(false, Ordering::Release);
+    }
+}
+
+enum SetupPersistenceSnapshot {
+    Missing,
+    Bytes(Vec<u8>),
+}
+
+impl SetupPersistenceSnapshot {
+    fn capture(path: &Path) -> Result<Self, String> {
+        match fs::read(path) {
+            Ok(bytes) => Ok(Self::Bytes(bytes)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::Missing),
+            Err(_) => Err("setup status could not be saved".to_owned()),
+        }
+    }
+
+    fn restore(&self, path: &Path) -> Result<(), String> {
+        match self {
+            Self::Missing => match fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(_) => Err("setup status could not be restored".to_owned()),
+            },
+            Self::Bytes(bytes) => {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|_| "setup status could not be restored".to_owned())?;
+                }
+                AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
+                    .write(|file| file.write_all(bytes).and_then(|_| file.sync_all()))
+                    .map_err(|_| "setup status could not be restored".to_owned())
+            }
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct StoredAccessMode {
+    access_mode: AccessMode,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -90,35 +236,45 @@ pub fn resolve_local_paths(app_data: &Path) -> LocalPaths {
 pub fn read_setup_status(path: &Path) -> Result<SetupStatus, String> {
     match fs::read(path) {
         Ok(bytes) => Ok(serde_json::from_slice::<PersistedSetupStatus>(&bytes)
-            .map(|stored| SetupStatus {
-                risk_accepted: stored.risk_accepted,
-                ..SetupStatus::default()
+            .ok()
+            .and_then(|stored| {
+                stored.access_mode.or_else(|| {
+                    stored
+                        .risk_accepted
+                        .is_some_and(|accepted| accepted)
+                        .then_some(AccessMode::Full)
+                })
             })
-            .unwrap_or_default()),
+            .map_or_else(SetupStatus::default, |mode| SetupStatus {
+                setup_complete: true,
+                access_mode: Some(mode),
+                ..SetupStatus::default()
+            })),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(SetupStatus::default()),
-        Err(_) => Err("setup status could not be read".to_owned()),
+        // The access decision is an authorization input. An unreadable file still fails closed
+        // to incomplete instead of preventing the local desktop companion from opening, but the
+        // fault is logged so permission or disk errors are not mistaken for a fresh install.
+        Err(error) => {
+            log::warn!("setup: status unreadable ({}), starting incomplete", error);
+            Ok(SetupStatus::default())
+        }
     }
 }
 
-pub fn accept_setup_risk(path: &Path) -> Result<SetupStatus, String> {
+pub fn save_access_mode(path: &Path, access_mode: AccessMode) -> Result<SetupStatus, String> {
+    let serialized = serde_json::to_vec(&StoredAccessMode { access_mode })
+        .map_err(|_| "setup status could not be saved")?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|_| "setup status could not be saved")?;
     }
-    let status = SetupStatus {
-        risk_accepted: true,
+    AtomicFile::new(path, OverwriteBehavior::AllowOverwrite)
+        .write(|file| file.write_all(&serialized).and_then(|_| file.sync_all()))
+        .map_err(|_| "setup status could not be saved")?;
+    Ok(SetupStatus {
+        setup_complete: true,
+        access_mode: Some(access_mode),
         ..SetupStatus::default()
-    };
-    let temporary = path.with_extension("tmp");
-    fs::write(
-        &temporary,
-        serde_json::to_vec(&PersistedSetupStatus {
-            risk_accepted: status.risk_accepted,
-        })
-        .map_err(|_| "setup status could not be saved")?,
-    )
-    .map_err(|_| "setup status could not be saved")?;
-    fs::rename(temporary, path).map_err(|_| "setup status could not be saved")?;
-    Ok(status)
+    })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -159,8 +315,11 @@ fn current_setup_status(stored: SetupStatus, game_running: bool) -> SetupStatus 
         }
     }
     SetupStatus {
-        risk_accepted: stored.risk_accepted,
-        desktop_capture_action_available: desktop_capture_action_available(input),
+        desktop_capture_action_available: stored
+            .access_mode
+            .is_some_and(|mode| mode.policy().capture_screen)
+            && desktop_capture_action_available(input),
+        ..stored
     }
 }
 
@@ -263,11 +422,42 @@ impl PresenceHold {
 ///
 /// Kept together because neither field means anything alone -- `started` without `running` is a
 /// debounce, and `running` without `started` is a refresh nothing will ever release.
+#[derive(Clone, Default)]
+struct RefreshIdle(Arc<(Mutex<bool>, std::sync::Condvar)>);
+
+impl RefreshIdle {
+    fn mark_running(&self) {
+        if let Ok(mut running) = self.0.0.lock() {
+            *running = true;
+        }
+    }
+
+    fn mark_idle(&self) {
+        if let Ok(mut running) = self.0.0.lock() {
+            *running = false;
+            self.0.1.notify_all();
+        }
+    }
+
+    fn wait(&self) {
+        let Ok(running) = self.0.0.lock() else {
+            return;
+        };
+        drop(
+            self.0
+                .1
+                .wait_while(running, |running| *running)
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+    }
+}
+
 #[derive(Default)]
 struct RefreshWindow {
     /// When the last refresh began, held after it ends so the debounce outlives it.
     started: Option<Instant>,
     running: bool,
+    idle: RefreshIdle,
 }
 
 impl RefreshWindow {
@@ -286,13 +476,29 @@ impl RefreshWindow {
             return false;
         }
         self.running = true;
+        self.idle.mark_running();
         self.started = Some(Instant::now());
         true
+    }
+
+    fn idle_waiter(&self) -> RefreshIdle {
+        self.idle.clone()
     }
 
     /// Release the window. The debounce keeps running from when the refresh began.
     fn finish(&mut self) {
         self.running = false;
+        self.idle.mark_idle();
+    }
+}
+fn report_access_policy(setup: &SetupStatus, transition: &TransitionGate) -> AccessPolicy {
+    if transition.is_active() {
+        AccessMode::Companion.policy()
+    } else {
+        setup
+            .access_mode
+            .map(AccessMode::policy)
+            .unwrap_or_else(|| AccessMode::Companion.policy())
     }
 }
 
@@ -301,9 +507,9 @@ struct Runtime {
     app_data: PathBuf,
     setup_path: PathBuf,
     setup: SetupStatus,
+    transition: TransitionGate,
     refresh: RefreshWindow,
-    monitor_started: bool,
-    /// Updated by the existing process watcher; setup status never starts a second watcher.
+    monitor: MonitorLifecycle,
     game_running: bool,
     /// Last-known EE.log path, cached so reports can include it even after the game exits.
     last_ee_log_path: Option<PathBuf>,
@@ -313,6 +519,30 @@ struct Runtime {
     live_prices: MarketPriceCache,
     market: market_account::MarketSession,
     presence: PresenceHold,
+}
+
+fn capability_authorized(
+    setup: &SetupStatus,
+    transition: &TransitionGate,
+    permitted: impl FnOnce(AccessPolicy) -> bool,
+) -> bool {
+    !transition.is_active()
+        && setup
+            .access_mode
+            .is_some_and(|mode| permitted(mode.policy()))
+}
+
+fn inventory_refresh_authorized(setup: &SetupStatus, transition: &TransitionGate) -> bool {
+    capability_authorized(setup, transition, |policy| policy.acquire_inventory)
+}
+fn market_inventory_writes_authorized(runtime: &Runtime) -> Result<(), String> {
+    if capability_authorized(&runtime.setup, &runtime.transition, |policy| {
+        policy.acquire_inventory
+    }) {
+        Ok(())
+    } else {
+        Err("ownership-dependent market changes require Full access mode".to_owned())
+    }
 }
 type SharedRuntime = Arc<Mutex<Runtime>>;
 
@@ -349,7 +579,8 @@ async fn collect_report_text(
             .map_err(|_| "application view is unavailable".to_owned())?;
         let health_json = serde_json::to_string_pretty(&view.health())
             .map_err(|_| "health could not be serialized".to_owned())?;
-        let request = build_report_request(&app, &runtime, &health_json, false);
+        let policy = report_access_policy(&runtime.setup, &runtime.transition);
+        let request = build_report_request(&app, &runtime, &health_json, policy, false);
         report::assemble_report_text(
             &request.meta,
             &request.health_json,
@@ -377,7 +608,8 @@ async fn collect_report(
             .map_err(|_| "application view is unavailable".to_owned())?;
         let health_json = serde_json::to_string_pretty(&view.health())
             .map_err(|_| "health could not be serialized".to_owned())?;
-        let request = build_report_request(&app, &runtime, &health_json, true);
+        let policy = report_access_policy(&runtime.setup, &runtime.transition);
+        let request = build_report_request(&app, &runtime, &health_json, policy, true);
         // The copy below can be hundreds of MB of EE.log. Holding the lock across it freezes the
         // UI, the monitor tick and the reward poller for its duration.
         drop(runtime);
@@ -391,6 +623,7 @@ fn build_report_request(
     app: &AppHandle,
     runtime: &Runtime,
     health_json: &str,
+    policy: AccessPolicy,
     want_ee_log: bool,
 ) -> report::ReportRequest {
     let os_arch = format!("{}/{}", std::env::consts::OS, std::env::consts::ARCH);
@@ -404,14 +637,9 @@ fn build_report_request(
         .path()
         .app_log_dir()
         .unwrap_or_else(|_| runtime.app_data.clone());
-    let ee_log_wanted = want_ee_log;
+    let ee_log_wanted = want_ee_log && policy.observe_ee_log;
     let ee_log_path = if ee_log_wanted {
-        GameMemory::new()
-            .discover()
-            .ok()
-            .flatten()
-            .and_then(|process| monitor::inventory_log_path(process.pid()))
-            .or_else(|| runtime.last_ee_log_path.clone())
+        runtime.last_ee_log_path.clone()
     } else {
         None
     };
@@ -522,49 +750,173 @@ async fn get_setup_status(state: State<'_, SharedRuntime>) -> Result<SetupStatus
     .map_err(|_| "setup task failed".to_owned())?
 }
 
+fn restore_previous_runtime<F>(
+    shared: &SharedRuntime,
+    previous_setup: SetupStatus,
+    mut lifecycle: MonitorLifecycle,
+    persistence_restore: Result<(), String>,
+    restart: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&mut MonitorLifecycle, AccessPolicy) -> Result<(), String>,
+{
+    let restart_result = previous_setup
+        .access_mode
+        .filter(|mode| mode.policy().starts_monitor())
+        .map_or(Ok(()), |mode| restart(&mut lifecycle, mode.policy()));
+    let effective_setup = if restart_result.is_ok() {
+        previous_setup
+    } else {
+        // The durable previous selection may recover on the next launch. This process cannot
+        // advertise Overlay or Full after failing to restore their required monitor.
+        SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Companion),
+            ..SetupStatus::default()
+        }
+    };
+    let mut runtime = shared
+        .lock()
+        .map_err(|_| "application state is unavailable".to_owned())?;
+    runtime.setup = effective_setup;
+    runtime.monitor = lifecycle;
+    persistence_restore.and(restart_result)
+}
+
+fn transition_monitor(
+    shared: &SharedRuntime,
+    app: AppHandle,
+    access_mode: AccessMode,
+) -> Result<SetupStatus, String> {
+    let policy = access_mode.policy();
+    let (setup_path, persistence, previous_setup, mut lifecycle, refresh_idle, transition_guard) = {
+        let mut runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        if runtime.monitor.policy() == policy.starts_monitor().then_some(policy)
+            && runtime.setup.access_mode == Some(access_mode)
+        {
+            return Ok(current_setup_status(
+                runtime.setup.clone(),
+                runtime.game_running,
+            ));
+        }
+        let transition_guard = runtime.transition.begin()?;
+        let persistence = SetupPersistenceSnapshot::capture(&runtime.setup_path)?;
+        let previous_setup = runtime.setup.clone();
+        // The visible setup stays on the previous mode until the transition succeeds.
+        // Observers polling get_setup_status keep seeing the effective mode (and the
+        // frontend keeps its Pending review) while cleanup, persistence, and startup run;
+        // authorization during the window is denied by the transition gate, not by this field.
+        (
+            runtime.setup_path.clone(),
+            persistence,
+            previous_setup,
+            std::mem::take(&mut runtime.monitor),
+            runtime.refresh.idle_waiter(),
+            transition_guard,
+        )
+    };
+    let _transition_guard = transition_guard;
+
+    if let Err(error) = lifecycle.stop() {
+        let rollback = restore_previous_runtime(
+            shared,
+            previous_setup,
+            lifecycle,
+            Ok(()),
+            |lifecycle, policy| lifecycle.start(Arc::clone(shared), app.clone(), policy),
+        );
+        return Err(match rollback {
+            Ok(()) => error,
+            Err(rollback_error) => format!("{error}; rollback failed: {rollback_error}"),
+        });
+    }
+    // `run_monitor` may already have handed a Full-mode refresh to a detached worker. Stopping
+    // the monitor prevents another handoff; waiting here makes transition success the boundary
+    // after which no process-memory acquisition from the old policy remains alive.
+    refresh_idle.wait();
+    let stored = match save_access_mode(&setup_path, access_mode) {
+        Ok(stored) => stored,
+        Err(error) => {
+            let rollback = restore_previous_runtime(
+                shared,
+                previous_setup,
+                lifecycle,
+                persistence.restore(&setup_path),
+                |lifecycle, policy| lifecycle.start(Arc::clone(shared), app, policy),
+            );
+            return Err(match rollback {
+                Ok(()) => error,
+                Err(rollback_error) => format!("{error}; rollback failed: {rollback_error}"),
+            });
+        }
+    };
+
+    if policy.starts_monitor()
+        && let Err(error) = lifecycle.start(Arc::clone(shared), app.clone(), policy)
+    {
+        let rollback = restore_previous_runtime(
+            shared,
+            previous_setup,
+            lifecycle,
+            persistence.restore(&setup_path),
+            |lifecycle, policy| lifecycle.start(Arc::clone(shared), app, policy),
+        );
+        return Err(match rollback {
+            Ok(()) => error,
+            Err(rollback_error) => format!("{error}; rollback failed: {rollback_error}"),
+        });
+    }
+
+    let mut runtime = shared
+        .lock()
+        .map_err(|_| "application state is unavailable".to_owned())?;
+    runtime.setup = stored.clone();
+    runtime.monitor = lifecycle;
+    Ok(current_setup_status(stored, runtime.game_running))
+}
+
 #[tauri::command]
-async fn accept_risk_disclosure(
+async fn set_access_mode(
     app: AppHandle,
     state: State<'_, SharedRuntime>,
+    access_mode: AccessMode,
 ) -> Result<SetupStatus, String> {
     let shared = Arc::clone(state.inner());
+    let worker_shared = Arc::clone(&shared);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        // The lock is dropped before `accept_setup_risk` writes and before `current_setup_status`
-        // probes the display server: both can block for seconds, and holding the central runtime
-        // mutex across them stalls every other command and monitor update.
-        let setup_path = {
-            let runtime = shared
-                .lock()
-                .map_err(|_| "application state is unavailable".to_owned())?;
-            runtime.setup_path.clone()
-        };
-        let stored = accept_setup_risk(&setup_path)?;
-        let game_running = {
-            let mut runtime = shared
-                .lock()
-                .map_err(|_| "application state is unavailable".to_owned())?;
-            runtime.setup = stored.clone();
-            runtime.game_running
-        };
-        Ok(current_setup_status(stored, game_running))
+        transition_monitor(&worker_shared, app, access_mode)
     })
     .await
     .map_err(|_| "setup task failed".to_owned())?;
     if result.is_ok() {
-        start_collection_prices(Arc::clone(state.inner()));
-        monitor::start(Arc::clone(state.inner()), app);
+        start_collection_prices(shared);
     }
     result
 }
 
 #[tauri::command]
 async fn authorize_screen_capture(
-    app: AppHandle,
+    _app: AppHandle,
     state: State<'_, SharedRuntime>,
 ) -> Result<SetupStatus, String> {
+    let capture_permitted = {
+        let runtime = state
+            .inner()
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        capability_authorized(&runtime.setup, &runtime.transition, |policy| {
+            policy.capture_screen
+        })
+    };
+    if !capture_permitted {
+        return Err("screen capture requires Overlay or Full access mode".to_owned());
+    }
+
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (app, state);
+        let _ = _app;
         Err("desktop capture is unavailable".to_owned())
     }
 
@@ -574,12 +926,24 @@ async fn authorize_screen_capture(
             .await
             .map_err(|_| "desktop capture task failed".to_owned())?
             .map_err(str::to_owned)?;
-
-        let status = get_setup_status(state.clone()).await?;
-        if status.risk_accepted {
-            monitor::start(Arc::clone(state.inner()), app);
+        // Portal authorization is an awaited system interaction. A downgrade can begin while the
+        // chooser is open, so the permission checked before it is not authority to retain the
+        // session afterward. Fail closed and retire the session the handshake just installed.
+        let capture_still_permitted = {
+            let runtime = state
+                .inner()
+                .lock()
+                .map_err(|_| "application state is unavailable".to_owned())?;
+            capability_authorized(&runtime.setup, &runtime.transition, |policy| {
+                policy.capture_screen
+            })
+        };
+        if !capture_still_permitted {
+            let _ = reward_capture::portal::PortalCapture::close();
+            return Err("screen capture requires Overlay or Full access mode".to_owned());
         }
-        Ok(status)
+
+        get_setup_status(state.clone()).await
     }
 }
 #[tauri::command]
@@ -707,7 +1071,8 @@ async fn load_fake_session(state: State<'_, SharedRuntime>) -> Result<AppView, S
 fn now_unix_seconds() -> String {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_secs())
+        .unwrap_or_default()
+        .as_secs()
         .to_string()
 }
 
@@ -741,9 +1106,17 @@ fn discard_if_stale(
             .map_err(|_| "application view is unavailable".to_owned()),
     )
 }
-
 fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
-    let (pacer, token, backing, cached_items, collection, snapshot, generation) = {
+    let (
+        pacer,
+        token,
+        backing,
+        cached_items,
+        collection,
+        snapshot,
+        inventory_evidence_available,
+        generation,
+    ) = {
         let runtime = shared
             .lock()
             .map_err(|_| "application state is unavailable".to_owned())?;
@@ -751,14 +1124,22 @@ fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
             .market
             .token()
             .map_err(|error| market_account::failure_message(error).to_owned())?;
+        let inventory_evidence_available =
+            capability_authorized(&runtime.setup, &runtime.transition, |policy| {
+                policy.acquire_inventory
+            });
         let collection = runtime
             .core
             .collection_for_reconciliation()
             .map_err(|_| "the collection could not be read".to_owned())?;
-        let snapshot = runtime
-            .core
-            .latest_snapshot_meta()
-            .map_err(|_| "the snapshot could not be read".to_owned())?;
+        let snapshot = if inventory_evidence_available {
+            runtime
+                .core
+                .latest_snapshot_meta()
+                .map_err(|_| "the snapshot could not be read".to_owned())?
+        } else {
+            None
+        };
         (
             runtime.live_prices.pacer(),
             token,
@@ -766,6 +1147,7 @@ fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
             runtime.market.cached_items(),
             collection,
             snapshot,
+            inventory_evidence_available,
             runtime.market.generation(),
         )
     };
@@ -800,15 +1182,11 @@ fn publish_account(shared: &SharedRuntime) -> Result<AppView, String> {
 
     // Unlocked from here: an item fetch (only on the first call after launch) and `list_mine` are
     // both real network round trips.
-    let outcome = fetch_account(
-        &transport,
-        &token,
-        backing,
-        cached_items,
-        &collection,
-        snapshot.as_ref(),
-        &now,
-    );
+    let evidence = inventory_evidence_available.then_some(InventoryEvidence {
+        collection: &collection,
+        snapshot: snapshot.as_ref(),
+    });
+    let outcome = fetch_account(&transport, &token, backing, cached_items, evidence, &now);
 
     let mut runtime = shared
         .lock()
@@ -853,6 +1231,15 @@ struct FetchedAccount {
     view: app_core::MarketAccountView,
 }
 
+/// The collection evidence `fetch_account` may reconcile orders against. `None` outside Full
+/// access: with no inventory evidence, orders reconcile against an empty collection with no
+/// snapshot and nothing is listable.
+#[derive(Clone, Copy)]
+struct InventoryEvidence<'a> {
+    collection: &'a warframe_domain::Collection,
+    snapshot: Option<&'a SnapshotMeta>,
+}
+
 /// The network part of `publish_account`, done with no runtime lock held.
 ///
 /// A refused credential is not an error here: it is the account's own state, and the interface has
@@ -862,8 +1249,7 @@ fn fetch_account(
     token: &warframe_market::MarketToken,
     backing: warframe_market::CredentialBacking,
     cached_items: Option<std::sync::Arc<warframe_market::MarketItems>>,
-    collection: &warframe_domain::Collection,
-    snapshot: Option<&SnapshotMeta>,
+    evidence: Option<InventoryEvidence<'_>>,
     now: &str,
 ) -> Result<FetchedAccount, warframe_market::MarketError> {
     let items = match cached_items {
@@ -872,9 +1258,17 @@ fn fetch_account(
     };
     match warframe_market::list_mine(transport, token) {
         Ok((orders, renewed)) => {
-            let reconciled = app_core::reconcile_orders(&orders, &items, collection, snapshot);
-            let view = app_core::MarketAccountView::linked(backing, reconciled, now.to_owned())
-                .with_listable(&items, collection);
+            let empty_collection = warframe_domain::Collection::default();
+            let (evidence_collection, evidence_snapshot) = evidence
+                .map_or((&empty_collection, None), |evidence| {
+                    (evidence.collection, evidence.snapshot)
+                });
+            let reconciled =
+                app_core::reconcile_orders(&orders, &items, evidence_collection, evidence_snapshot);
+            let mut view = app_core::MarketAccountView::linked(backing, reconciled, now.to_owned());
+            if let Some(evidence) = evidence.as_ref() {
+                view = view.with_listable(&items, evidence.collection);
+            }
             Ok(FetchedAccount {
                 items,
                 renewed,
@@ -1066,6 +1460,7 @@ async fn create_order(
             let runtime = shared
                 .lock()
                 .map_err(|_| "application state is unavailable".to_owned())?;
+            market_inventory_writes_authorized(&runtime)?;
             runtime.market.cached_items().ok_or_else(|| {
                 market_account::failure_message(warframe_market::MarketError::Unreachable)
                     .to_owned()
@@ -1112,6 +1507,7 @@ async fn set_order_quantity(
             let runtime = shared
                 .lock()
                 .map_err(|_| "application state is unavailable".to_owned())?;
+            market_inventory_writes_authorized(&runtime)?;
             market_account::authorize_quantity_write(runtime.core.market_account(), &order_id)
                 .map_err(|message| message.to_owned())?
         };
@@ -1143,6 +1539,7 @@ async fn update_order(
             let runtime = shared
                 .lock()
                 .map_err(|_| "application state is unavailable".to_owned())?;
+            market_inventory_writes_authorized(&runtime)?;
             let collection = runtime
                 .core
                 .collection_for_reconciliation()
@@ -1236,10 +1633,8 @@ fn refresh_blocking(shared: &SharedRuntime) -> Result<AppView, String> {
         let mut runtime = shared
             .lock()
             .map_err(|_| "application state is unavailable".to_owned())?;
-        if !runtime.setup.risk_accepted {
-            return Err(
-                "accept the read-only process-memory risk disclosure during setup first".to_owned(),
-            );
+        if !inventory_refresh_authorized(&runtime.setup, &runtime.transition) {
+            return Err("inventory refresh requires Full access mode".to_owned());
         }
         if !runtime.refresh.begin() {
             return runtime
@@ -1322,9 +1717,13 @@ fn apply_outcome(
     shared: &SharedRuntime,
     outcome: InventoryRefreshOutcome,
 ) -> Result<AppView, String> {
-    shared
+    let mut runtime = shared
         .lock()
-        .map_err(|_| "application state is unavailable".to_owned())?
+        .map_err(|_| "application state is unavailable".to_owned())?;
+    if !inventory_refresh_authorized(&runtime.setup, &runtime.transition) {
+        return Err("inventory refresh requires Full access mode".to_owned());
+    }
+    runtime
         .core
         .refresh_from(&CompletedOutcome(outcome))
         .map_err(|_| "inventory health could not be applied".to_owned())
@@ -1344,7 +1743,8 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         setup_path: paths.setup,
         setup,
         refresh: RefreshWindow::default(),
-        monitor_started: false,
+        transition: TransitionGate::default(),
+        monitor: MonitorLifecycle::default(),
         game_running: false,
         last_ee_log_path: None,
         live_prices,
@@ -1539,10 +1939,29 @@ fn store_checked_prices(
     Some((priced, date, stored))
 }
 
+fn show_reward_overlay_with(
+    setup: &SetupStatus,
+    transition: &TransitionGate,
+    show: impl FnOnce(),
+) -> Result<(), String> {
+    if !setup.setup_complete
+        || !capability_authorized(setup, transition, |policy| policy.show_overlays)
+    {
+        return Err("reward overlays are not authorized in the current access mode".to_owned());
+    }
+    show();
+    Ok(())
+}
+
 #[tauri::command]
-fn show_reward_overlay(app: AppHandle) {
+fn show_reward_overlay(app: AppHandle, state: State<'_, SharedRuntime>) -> Result<(), String> {
+    let runtime = state
+        .lock()
+        .map_err(|_| "application state is unavailable".to_owned())?;
     // The preview has no screen to measure, so it shows the full-squad strip.
-    overlay_window::show_reward_overlay(&app, reward_ocr::MAX_CARDS);
+    show_reward_overlay_with(&runtime.setup, &runtime.transition, || {
+        overlay_window::show_reward_overlay(&app, reward_ocr::MAX_CARDS);
+    })
 }
 
 #[tauri::command]
@@ -1669,19 +2088,34 @@ pub fn run() {
             // The kiosk window's whole IPC surface: `get_kiosk_view` pulls whatever the poller
             // last published, so the cell exists from the start, empty until a kiosk opens.
             app.manage(kiosk_view::KioskState::default());
-            if startup.risk_accepted {
+            if let Some(access_mode) = startup.access_mode {
                 start_collection_prices(Arc::clone(app.state::<SharedRuntime>().inner()));
-                monitor::start(
-                    Arc::clone(app.state::<SharedRuntime>().inner()),
-                    app.handle().clone(),
-                );
+                if access_mode.policy().starts_monitor() {
+                    let shared = Arc::clone(app.state::<SharedRuntime>().inner());
+                    let mut lifecycle = {
+                        let mut runtime =
+                            shared.lock().map_err(|_| "application state unavailable")?;
+                        std::mem::take(&mut runtime.monitor)
+                    };
+                    lifecycle
+                        .start(
+                            Arc::clone(&shared),
+                            app.handle().clone(),
+                            access_mode.policy(),
+                        )
+                        .map_err(std::io::Error::other)?;
+                    shared
+                        .lock()
+                        .map_err(|_| "application state unavailable")?
+                        .monitor = lifecycle;
+                }
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_view,
             get_setup_status,
-            accept_risk_disclosure,
+            set_access_mode,
             authorize_screen_capture,
             refresh_inventory,
             refresh_prices,
@@ -1772,7 +2206,13 @@ mod live_bench {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
-    use warframe_market::{CredentialBacking, CredentialStore, MarketError, MarketToken};
+    use warframe_domain::{
+        CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
+    };
+    use warframe_market::{
+        CredentialBacking, CredentialStore, MarketError, MarketItems, MarketRequest,
+        MarketResponse, MarketToken, MarketTransport,
+    };
 
     #[test]
     fn snapshot_clock_supplies_one_second_to_catalog_and_snapshot_metadata() {
@@ -1894,7 +2334,7 @@ mod tests {
         }
     }
 
-    fn test_runtime(directory: &Path) -> SharedRuntime {
+    pub(crate) fn test_runtime(directory: &Path) -> SharedRuntime {
         let core = AppCore::open(&directory.join("test.sqlite3")).expect("core opens");
         Arc::new(Mutex::new(Runtime {
             core,
@@ -1902,7 +2342,8 @@ mod tests {
             setup_path: directory.join("setup.json"),
             setup: SetupStatus::default(),
             refresh: RefreshWindow::default(),
-            monitor_started: false,
+            transition: TransitionGate::default(),
+            monitor: MonitorLifecycle::default(),
             game_running: false,
             last_ee_log_path: None,
             live_prices: MarketPriceCache::new(),
@@ -1931,6 +2372,295 @@ mod tests {
 
         window.started = Some(Instant::now() - Duration::from_secs(16));
         assert!(window.begin(), "past the debounce, refreshing is allowed");
+    }
+    #[test]
+    fn refresh_window_waits_for_the_running_operation_to_retire() {
+        let mut window = RefreshWindow::default();
+        assert!(window.begin());
+        let idle = window.idle_waiter();
+        let (retired_tx, retired_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            idle.wait();
+            retired_tx.send(()).expect("report retirement");
+        });
+
+        assert!(
+            retired_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+            "a transition must still be waiting while process-memory acquisition runs"
+        );
+        window.finish();
+        retired_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("transition resumes after refresh retirement");
+        waiter.join().expect("waiter exits");
+    }
+
+    #[test]
+    fn transition_gate_survives_lifecycle_extraction_and_rejects_overlap() {
+        let gate = TransitionGate::default();
+        let first = gate.begin().expect("first transition enters");
+        let mut lifecycle = MonitorLifecycle::default();
+        let _extracted = std::mem::take(&mut lifecycle);
+
+        assert_eq!(
+            gate.begin().err().as_deref(),
+            Some("access mode is already changing")
+        );
+
+        drop(first);
+        assert!(gate.begin().is_ok());
+    }
+
+    #[test]
+    fn failed_monitor_restart_does_not_advertise_a_dead_previous_mode() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        let previous_setup = SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Full),
+            ..SetupStatus::default()
+        };
+
+        let result = restore_previous_runtime(
+            &shared,
+            previous_setup,
+            MonitorLifecycle::default(),
+            Ok(()),
+            |_, _| Err("game monitor could not be started".to_owned()),
+        );
+
+        assert_eq!(
+            result.err().as_deref(),
+            Some("game monitor could not be started")
+        );
+        let runtime = shared.lock().expect("lock");
+        assert!(runtime.setup.setup_complete);
+        assert_eq!(runtime.setup.access_mode, Some(AccessMode::Companion));
+        assert!(runtime.monitor.policy().is_none());
+    }
+
+    #[test]
+    fn full_only_authorization_is_revoked_for_the_entire_transition() {
+        let mut effective = SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Full),
+            ..SetupStatus::default()
+        };
+        let gate = TransitionGate::default();
+        assert!(inventory_refresh_authorized(&effective, &gate));
+
+        let transition = gate.begin().expect("transition enters");
+        effective = SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Overlay),
+            ..SetupStatus::default()
+        };
+        assert!(!inventory_refresh_authorized(&effective, &gate));
+
+        effective.access_mode = Some(AccessMode::Full);
+        assert!(!inventory_refresh_authorized(&effective, &gate));
+        drop(transition);
+        assert!(inventory_refresh_authorized(&effective, &gate));
+    }
+
+    #[test]
+    fn reward_overlay_preview_is_not_shown_during_access_transition() {
+        let setup = SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Overlay),
+            ..SetupStatus::default()
+        };
+        let gate = TransitionGate::default();
+        let shown = std::cell::Cell::new(false);
+
+        show_reward_overlay_with(&setup, &gate, || shown.set(true))
+            .expect("effective Overlay access shows the preview");
+        assert!(shown.replace(false));
+
+        let transition = gate.begin().expect("transition begins");
+        assert_eq!(
+            show_reward_overlay_with(&setup, &gate, || shown.set(true))
+                .err()
+                .as_deref(),
+            Some("reward overlays are not authorized in the current access mode")
+        );
+        assert!(
+            !shown.get(),
+            "provisional access must not reach the side effect"
+        );
+        drop(transition);
+    }
+
+    #[test]
+    fn report_policy_excludes_game_log_while_access_is_transitioning() {
+        let setup = SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Full),
+            ..SetupStatus::default()
+        };
+        let gate = TransitionGate::default();
+        assert!(report_access_policy(&setup, &gate).observe_ee_log);
+
+        let transition = gate.begin().expect("transition begins");
+        assert!(!report_access_policy(&setup, &gate).observe_ee_log);
+        drop(transition);
+    }
+    #[test]
+    fn inventory_refresh_cannot_start_while_access_is_transitioning() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        let transition = {
+            let mut runtime = shared.lock().expect("lock");
+            runtime.setup = SetupStatus {
+                setup_complete: true,
+                access_mode: Some(AccessMode::Full),
+                ..SetupStatus::default()
+            };
+            assert!(runtime.refresh.begin());
+            runtime.transition.begin().expect("transition begins")
+        };
+
+        let result = refresh_blocking(&shared);
+
+        shared.lock().expect("lock").refresh.finish();
+        drop(transition);
+        assert_eq!(
+            result.err().as_deref(),
+            Some("inventory refresh requires Full access mode")
+        );
+    }
+
+    #[test]
+    fn inventory_outcome_cannot_publish_after_access_transition_begins() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        let transition = {
+            let mut runtime = shared.lock().expect("lock");
+            runtime.setup = SetupStatus {
+                setup_complete: true,
+                access_mode: Some(AccessMode::Full),
+                ..SetupStatus::default()
+            };
+            runtime.transition.begin().expect("transition begins")
+        };
+
+        let result = apply_outcome(&shared, InventoryRefreshOutcome::catalog_failed());
+
+        drop(transition);
+        assert_eq!(
+            result.err().as_deref(),
+            Some("inventory refresh requires Full access mode")
+        );
+    }
+
+    #[test]
+    fn ownership_dependent_market_writes_require_effective_full_access() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        let mut runtime = shared.lock().expect("lock");
+        runtime.setup = SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Full),
+            ..SetupStatus::default()
+        };
+        assert!(market_inventory_writes_authorized(&runtime).is_ok());
+        let guard = runtime.transition.begin().expect("transition begins");
+        assert!(market_inventory_writes_authorized(&runtime).is_err());
+        drop(guard);
+        runtime.setup.access_mode = Some(AccessMode::Overlay);
+        assert!(market_inventory_writes_authorized(&runtime).is_err());
+    }
+
+    struct ScriptedTransport {
+        replies: StdMutex<Vec<Result<MarketResponse, MarketError>>>,
+    }
+
+    impl MarketTransport for ScriptedTransport {
+        fn send(&self, _request: MarketRequest) -> Result<MarketResponse, MarketError> {
+            self.replies.lock().expect("replies").remove(0)
+        }
+    }
+
+    #[test]
+    fn account_fetch_discards_inventory_evidence_outside_full_access() {
+        const ITEMS: &str = r#"{"apiVersion":"0.25.0","data":[
+            {"id":"item-one","gameRef":"/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint",
+             "i18n":{"en":{"name":"Braton Prime Blueprint"}}}
+        ],"error":null}"#;
+        const ORDERS: &str = r#"{"apiVersion":"0.25.0","data":[
+            {"id":"order-one","itemId":"item-one","type":"sell","platinum":12,"quantity":1,
+             "perTrade":1,"visible":true,"updatedAt":"2026-07-30T10:00:00Z"}
+        ],"error":null}"#;
+        let item_path = "/Lotus/Types/Recipes/Weapons/BratonPrimeBlueprint";
+        let item = CatalogItem::new(
+            ItemId::new(item_path).expect("item id"),
+            "Braton Prime Blueprint",
+            Category::PrimePart,
+        )
+        .expect("catalog item");
+        let mut collection = Collection::default();
+        collection.replace(
+            InventorySnapshot::coherent(vec![InventoryEntry::new(item, 2)]).expect("snapshot"),
+        );
+        let snapshot = SnapshotMeta::new(
+            SnapshotInstant::parse_rfc_3339("2026-07-31T12:00:00Z").expect("instant"),
+            "build-for-test".to_owned(),
+            "test-fixture-source".to_owned(),
+        )
+        .expect("snapshot metadata");
+        let items = Arc::new(MarketItems::from_response(ITEMS.as_bytes()).expect("items"));
+        let fetch = |inventory_evidence_available: bool| {
+            let transport = ScriptedTransport {
+                replies: StdMutex::new(vec![Ok(MarketResponse {
+                    status: 200,
+                    authorization: Some("renewed".to_owned()),
+                    body: ORDERS.as_bytes().to_vec(),
+                })]),
+            };
+            let evidence = inventory_evidence_available.then_some(InventoryEvidence {
+                collection: &collection,
+                snapshot: Some(&snapshot),
+            });
+            fetch_account(
+                &transport,
+                &MarketToken::new("fake-token".to_owned()),
+                CredentialBacking::Database,
+                Some(Arc::clone(&items)),
+                evidence,
+                "2026-07-31T12:00:00Z",
+            )
+            .expect("account fetch")
+            .view
+        };
+
+        let without_evidence = fetch(false);
+        assert_eq!(
+            without_evidence.orders[0].status,
+            app_core::OrderStatus::Unverifiable
+        );
+        assert!(without_evidence.listable.is_empty());
+
+        let with_evidence = fetch(true);
+        assert_eq!(with_evidence.orders[0].status, app_core::OrderStatus::Ok);
+        assert_eq!(with_evidence.listable.len(), 1);
+    }
+
+    #[test]
+    fn persistence_snapshot_restores_missing_and_corrupt_state_exactly() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let missing = directory.path().join("missing.json");
+        let missing_snapshot = SetupPersistenceSnapshot::capture(&missing).expect("snapshot");
+        save_access_mode(&missing, AccessMode::Overlay).expect("write replacement");
+        missing_snapshot.restore(&missing).expect("restore missing");
+        assert!(!missing.exists());
+
+        let corrupt = directory.path().join("corrupt.json");
+        let original = b"{not-json\0\xff";
+        fs::write(&corrupt, original).expect("write corrupt state");
+        let corrupt_snapshot = SetupPersistenceSnapshot::capture(&corrupt).expect("snapshot");
+        save_access_mode(&corrupt, AccessMode::Full).expect("write replacement");
+        corrupt_snapshot.restore(&corrupt).expect("restore bytes");
+        assert_eq!(fs::read(corrupt).expect("read restored"), original);
     }
 
     /// A visual capture failure must not make healthy inventory acquisition or EE.log monitoring

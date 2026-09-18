@@ -180,10 +180,9 @@ describe('the linked screen', () => {
     expect(handlers.onLowerTo).toHaveBeenCalledWith('over', 1)
   })
 
-  /// The behaviour that makes the flags trustworthy, asserted at the screen: an order the backend
-  /// declined to judge looks like an ordinary row, making no claim. It still offers removal --
-  /// every row does -- but nothing on it says anything is wrong.
-  it('says nothing about an order it cannot verify', () => {
+  // An unverifiable order remains an ordinary, unflagged row, but the backend's status is still
+  // visible so the absence of an ownership judgment is not mistaken for a verified holding.
+  it('renders an unverifiable order without offering an ownership fix', () => {
     render(
       <OrdersView
         account={account({ orders: [entry('unknown', { state: 'unverifiable' })] })}
@@ -193,8 +192,23 @@ describe('the linked screen', () => {
       />,
     )
 
+    expect(screen.getByText('Unverifiable')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /lower to/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/no longer own/i)).not.toBeInTheDocument()
+  })
+
+  it('does not claim unverifiable listings match the collection', () => {
+    render(
+      <OrdersView
+        account={account({ orders: [entry('unknown', { state: 'unverifiable' })] })}
+        {...handlers}
+        busy={false}
+        error={null}
+      />,
+    )
+
+    expect(screen.getByText(/Ownership could not be verified/i)).toBeInTheDocument()
+    expect(screen.queryByText('Every listing matches the collection')).not.toBeInTheDocument()
   })
 
   it('disables the fixes while one is in flight, so a click is not sent twice', () => {

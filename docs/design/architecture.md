@@ -10,12 +10,13 @@ The product is one packaged desktop application built from a modular Rust worksp
 
 The first release provides:
 
-- automatic detection of Warframe, running through Wine or Proton on Linux or natively on Windows;
-- automatic synchronization of prime parts, relic quantities, and owned/mastered frames, weapons, and companions;
-- automatic detection of the relic reward screen;
+- three backend-enforced access modes, from a non-observing local companion through visible-pixel overlays to read-only process-memory inventory synchronization;
+- automatic detection of Warframe in Overlay and Full, running through Wine or Proton on Linux or natively on Windows;
+- automatic synchronization of prime parts, relic quantities, and owned/mastered frames, weapons, and companions in Full;
+- automatic detection of the relic reward screen in Overlay and Full;
 - a click-through reward advisor showing platinum value, ducats, ownership or set progress, and mastery relevance for every choice;
-- a catalog-first desktop collection browser with search, filters, categories, item detail, and synchronization diagnostics;
-- local caching of catalog and market data for degraded offline operation;
+- a catalog-first desktop collection browser with search, filters, categories, item detail, and synchronization diagnostics in every mode;
+- local caching of catalog, collection, and market data for degraded offline or non-observing use;
 - English UI recognition, with locale-independent catalog identities in storage; and
 - native packaging for Arch, Gentoo, Debian/Ubuntu, and Fedora, an AppImage fallback, and a per-user NSIS installer for Windows.
 
@@ -25,13 +26,26 @@ The MVP excludes macOS support — Warframe has no macOS client — as well as F
 
 ### First Run
 
-Setup presents the process-inspection risk disclosure and records its acceptance. It does not ask
-for screen-sharing permission or require a monitor choice. Read-only memory acquisition is enabled
-by default after disclosure. There is no guided inventory scan.
+Setup presents one discrete Companion, Overlay, and Full selector. Full may be the drafted choice,
+but TennoScope performs no running-game access until the player affirmatively confirms a mode.
+Missing, corrupt, unknown, and previously declined setup state remains incomplete. A previously
+accepted legacy disclosure migrates to Full so an existing installation preserves its behavior.
+
+The interface states both the features each mode provides and the exact Warframe access it uses.
+Companion provides catalog and relic reference data, the saved collection, prices and ducats,
+preferences, and separately authorized warframe.market workflows without observing Warframe.
+Overlay adds process presence, `EE.log`, visible-pixel capture with local OCR, and click-through
+overlays. Full adds read-only process-memory access and automatic or manual inventory acquisition.
+No mode writes or injects process memory, writes game files, automates input, or redirects traffic.
 
 ### Normal Launch
 
-The application detects Warframe running through Wine or Proton, fingerprints the game build, chooses a compatible reader definition, discovers the relevant structures, validates them, and atomically reconciles a collection snapshot. The desktop collection becomes usable without user interaction.
+The application starts only the services authorized by the effective mode. Companion performs no
+process discovery or log observation. Overlay detects Warframe and drives local visible-pixel
+overlays without reading process memory. Full additionally fingerprints the build, discovers and
+validates memory structures, and atomically reconciles collection snapshots. A downgrade joins
+prohibited workers and closes their resources before it reports success; failed transitions keep
+the prior effective mode.
 
 ### Relic Reward Overlay
 
@@ -60,6 +74,12 @@ Game Acquisition hides Wine/Proton process topology, log formats, memory layouts
 Production adapters cover `EE.log` and passive local artifacts, process memory, and process lifecycle. These are real internal seams because replay and synthetic adapters exercise the same acquisition behavior in tests.
 
 Memory access has one adapter per platform behind the same `MemoryReader`/`ProcessDiscovery` traits: procfs with `process_vm_readv` on Linux, `VirtualQueryEx` with `ReadProcessMemory` on Windows. They differ in one observable way. Linux resets and reads `/proc/<pid>/clear_refs` soft-dirty bits, so a poll rescans only the pages the game wrote; Windows has no equivalent that works on another process, so its adapter falls back to the trait defaults and rescans everything. Neither crate contains `unsafe` — every platform call is made through a crate that encapsulates its own.
+
+Access authorization is a closed Rust `AccessMode` and one derived `AccessPolicy`, never frontend
+visibility. Each running monitor generation receives an immutable policy. A mode transition stops
+and joins the prior generation before starting the next, and generation checks reject late scan,
+poller, refresh, and publication work. This keeps a downgrade from publishing data obtained through
+access the new mode does not permit.
 
 #### Screen Observer
 
@@ -192,8 +212,11 @@ Routine game changes should require only a reader-definition update. A major int
 
 ## Security and Privacy
 
-- Game interaction is read-only. The application never injects code, patches memory, automates input, or writes to the game process.
-- Read-only access is enabled by default only after first-run risk disclosure.
+- Game interaction is read-only. The application never injects code, patches or writes memory,
+  automates input, redirects traffic, or writes game files.
+- First run begins no Warframe observation until the player confirms an access mode. Companion
+  performs none; Overlay uses process presence, `EE.log`, and transient visible-pixel capture; Full
+  additionally reads process memory and acquires inventory.
 - Raw memory and captured frames are processed transiently and are not retained by default.
 - Reader-definition updates require a valid project signature and monotonic compatible version.
 - Distribution packages are updated through their package managers. AppImage users receive release notifications; application binaries are not silently replaced.
@@ -242,14 +265,15 @@ Real player memory or screenshots are not committed to the repository unless exp
 
 The MVP is successful when a supported Linux installation can:
 
-1. complete the process-inspection disclosure once;
-2. automatically detect Wine- or Proton-hosted Warframe on later launches;
-3. produce a coherent automatic collection/mastery snapshot without opening specific in-game screens;
-4. accurately apply inventory additions and legitimate deletions;
-5. detect an English relic reward screen and display four enriched advisor cards without intercepting game input;
-6. retain useful collection and price data while external sources are offline;
-7. degrade explicitly without corrupting collection state when a reader or capture fails; and
-8. install and run from the supported Arch, Gentoo, Debian/Ubuntu, Fedora, and AppImage artifacts across the stated X11, XWayland, and native-Wayland capture matrix.
+1. choose Companion, Overlay, or Full before any running-game access starts;
+2. use catalog, relic, saved-collection, price, ducat, preference, and optional warframe.market features in Companion without observing Warframe;
+3. detect Wine- or Proton-hosted Warframe and show local visible-pixel overlays in Overlay without process-memory or inventory access;
+4. produce a coherent automatic collection/mastery snapshot in Full without opening specific in-game screens;
+5. move to a lower-access mode only after prohibited workers and resources have stopped;
+6. accurately apply inventory additions and legitimate deletions;
+7. retain useful collection and price data while external sources are offline or inventory access is disabled;
+8. degrade explicitly without corrupting collection state when a reader or capture fails; and
+9. install and run from the supported Arch, Gentoo, Debian/Ubuntu, Fedora, and AppImage artifacts across the stated X11, XWayland, and native-Wayland capture matrix.
 
 ## License
 

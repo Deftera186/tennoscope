@@ -68,7 +68,7 @@
 
 /* ------------------------------------------------------------------ masthead */
 
-.assay { min-height: 100vh; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+.assay { min-width: 0; min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 
 .masthead {
   position: sticky; z-index: 5; top: 0;
@@ -89,16 +89,18 @@
 .office-name { font-family: var(--face-mark); font-size: 1.2rem; font-weight: 700; letter-spacing: .01em; text-transform: uppercase; color: var(--platinum); }
 .office-role { font-family: var(--face-register); font-size: .56rem; letter-spacing: .18em; text-transform: uppercase; color: var(--platinum-deep); white-space: nowrap; }
 
-/* Row two: the register's own business, navigation holding the left edge and the reader's state
-   against the right. The row owns the padding both children used to carry separately, so the tabs
-   and the state cluster sit on one optical line. The bottom padding is the nav's: it keeps the
-   cartouche points clear of the masthead rule instead of piercing it. */
+/* Row two is destination choice alone. Row three holds mutable runtime state and actions. Keeping
+   those concerns on separate lines guarantees that all six destinations remain readable at the
+   shipped 1180px width rather than hiding behind a scrollbar with no visible affordance. */
 .masthead-work {
-  display: flex; align-items: center; gap: var(--course);
-  padding: 0 clamp(var(--step), 3vw, var(--field)) 9px;
+  min-width: 0;
+  padding: 0 clamp(var(--step), 3vw, var(--field)) 6px;
 }
 
-.masthead-state { display: flex; flex: none; align-items: center; gap: var(--step); min-width: 0; }
+.masthead-state {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--step); min-width: 0;
+  padding: var(--tight) clamp(var(--step), 3vw, var(--field)); border-top: 1px solid var(--rule);
+}
 
 /* Assay state. Form and colour together — never colour alone. */
 .assay-state { display: flex; align-items: center; gap: .6rem; min-width: 0; }
@@ -119,10 +121,9 @@
 .assay-state.idle .assay-state-text strong { color: var(--platinum-dim); }
 .assay-state.degraded .assay-state-text strong { color: var(--gold); }
 .assay-state.failed .assay-state-text strong { color: var(--oxblood); }
-/* The message shares its row with the navigation now, so it is capped to what is left rather than
-   to half the window: the reader's verdict and the refresh stamp must not be pushed off the bar by
-   a long sentence. Ellipsis, and the Diagnostics screen carries the message in full. */
-.assay-state-text small { max-width: min(22vw, 17rem); overflow: hidden; color: var(--platinum-deep); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+/* The reader verdict yields before the snapshot and refresh controls; Diagnostics carries the full
+   message, while this operational row remains stable under long backend detail. */
+.assay-state-text small { max-width: min(52vw, 36rem); overflow: hidden; color: var(--platinum-deep); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
 
 .date-letter {
   padding-left: var(--step);
@@ -165,12 +166,9 @@
 .stamp:active:not(:disabled) { box-shadow: var(--strike-deep); }
 .stamp:disabled { opacity: .45; cursor: wait; }
 
-/* Navigation as a row of hallmark cartouches. Semantically an ordinary tab row:
-   real buttons, aria-current, full keyboard operation. */
-/* The row owns the padding now; the nav only takes the slack and yields it, so a narrow window
-   scrolls the tabs instead of shoving the state cluster off the bar. */
-.hallmark-row { display: flex; flex: 1 1 auto; gap: var(--hair); min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.hallmark-row::-webkit-scrollbar { display: none; }
+/* Navigation as a full-width row of hallmark cartouches. Six equal destinations fit without
+   horizontal scrolling at the regular desktop width. */
+.hallmark-row { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--hair); min-width: 0; }
 
 .punch {
   flex: none; padding: 1px 0 0; border: 0; border-radius: 0; background: var(--rule);
@@ -377,7 +375,7 @@
 }
 @media (prefers-reduced-motion: reduce) {
   /* The position is the reading, so it still moves; only its travel is undressed. */
-  .display-thumb, .display-track::after { transition: none; }
+  .display-thumb, .display-track::after, .access-track-progress, .access-thumb { transition: none; }
 }
 
 /* The provenance line states the baseline once, so no card needs a legend to explain a price's
@@ -700,16 +698,18 @@
 /* ---------------------------------------------------------- setup certificate */
 
 .certificate { min-height: 100vh; display: grid; align-content: center; padding: clamp(var(--step), 4vh, var(--field)) clamp(var(--step), 5vw, var(--field)); }
+.certificate:has(.access-selector) { align-content: start; padding-block: var(--step); }
 /* An engraved double frame with corner registration marks. A hallmark certificate
    is defined by its border; without one this is just a centred column. */
 .certificate-sheet {
-  position: relative; width: min(58rem, 100%); margin: 0 auto;
+  position: relative; width: 100%; max-width: 58rem; min-width: 0; margin: 0 auto;
   padding: clamp(var(--course), 5vh, var(--bed)) clamp(var(--step), 4vw, var(--field));
   box-shadow:
     inset 0 0 0 1px var(--rule),
     inset 0 0 0 5px var(--touchstone),
     inset 0 0 0 6px var(--rule);
 }
+.certificate:has(.access-selector) .certificate-sheet { padding-block: var(--course); padding-bottom: calc(var(--field) + 4.5rem); }
 .certificate-sheet::before, .certificate-sheet::after {
   position: absolute; width: 14px; height: 14px; content: '';
   border: 1px solid var(--rule-bright);
@@ -719,6 +719,9 @@
 .certificate .office { margin-bottom: clamp(var(--course), 6vh, var(--bed)); }
 .certificate h1 { font-size: clamp(2.8rem, 6vh + 3vw, 7rem); margin-bottom: var(--course); animation: strike .32s cubic-bezier(.16, 1, .3, 1) both; }
 .certificate .prose { font-size: 1rem; }
+.certificate:has(.access-selector) .office { margin-bottom: var(--step); }
+.certificate:has(.access-selector) h1 { max-width: none; margin-bottom: var(--tight); font-size: clamp(2.8rem, 6vh + 2.5vw, 5rem); line-height: .9; }
+.certificate:has(.access-selector) .prose { font-size: .88rem; }
 
 .clause-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: clamp(var(--course), 5vh, var(--field)) 0; padding: 1px; background: var(--rule); }
 .clause-pair article { padding: var(--course) var(--step); background: var(--touchstone); }
@@ -730,6 +733,69 @@
 
 .footnote { margin: 0 0 var(--course); max-width: 68ch; color: var(--platinum-deep); font-size: .76rem; line-height: 1.6; }
 
+/* ------------------------------------------------------ access mode register */
+.mode-setting { margin-bottom: var(--field); padding-bottom: var(--course); border-bottom: 1px solid var(--rule-bright); }
+.access-selector { margin: var(--course) 0; }
+.access-rail { min-width: 0; margin: 0; padding: 0; border: 0; }
+.access-stepper { padding: var(--step) var(--step) var(--course); border: 1px solid var(--rule); background: color-mix(in srgb, var(--touchstone) 92%, var(--platinum) 8%); }
+/* Disabled mutes the metals: progress, thumb and stops lose their gold so the rail reads inert. */
+.access-rail:disabled .access-track-progress { background: var(--platinum-deep); }
+.access-rail:disabled .access-thumb span { border-color: var(--platinum-deep); background: var(--platinum-deep); box-shadow: none; }
+.access-rail:disabled .access-node.included { border-color: var(--platinum-deep); background: transparent; }
+.access-track { position: relative; height: 1.55rem; margin: 0 calc(100% / 6) var(--tight); }
+.access-track-line, .access-track-progress { position: absolute; top: calc(50% - 1px); right: 0; left: 0; height: 2px; background: var(--rule-bright); }
+.access-track-progress { background: var(--gold); transform-origin: left center; transition: transform .16s ease-out; }
+.access-node { position: absolute; top: 50%; width: .55rem; height: .55rem; border: 1px solid var(--platinum-deep); background: var(--touchstone); transform: translate(-50%, -50%) rotate(45deg); cursor: pointer; }
+.access-node.included { border-color: var(--gold); background: color-mix(in srgb, var(--gold) 42%, var(--touchstone)); }
+.access-node:nth-child(3) { left: 0; }
+.access-node:nth-child(4) { left: 50%; }
+.access-node:nth-child(5) { left: 100%; }
+.access-node.active { border-color: var(--platinum); box-shadow: 0 0 0 3px color-mix(in srgb, var(--platinum) 16%, transparent); }
+.access-thumb { position: absolute; top: 50%; left: 0; width: 50%; transition: transform .16s ease-out; }
+.access-thumb span { display: block; width: 1rem; height: 1rem; border: 2px solid var(--gold); background: var(--platinum); box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 12%, transparent); transform: translate(-50%, -50%) rotate(45deg); }
+.access-stops { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--step); }
+.access-stop { position: relative; display: grid; align-content: start; justify-items: center; gap: .35rem; min-width: 0; min-height: 4.4rem; padding: var(--tight); color: var(--platinum-deep); text-align: center; cursor: pointer; }
+/* A short stem joins each stop to its diamond, so the rail reads as one control. */
+.access-stop::before { content: ""; width: 1px; height: 8px; background: var(--rule-bright); }
+.access-stop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.access-stop:has(input:focus-visible) { outline: 2px solid var(--platinum); outline-offset: 3px; }
+.access-stop:hover strong { color: var(--platinum); }
+.access-stop:active strong { color: var(--platinum); }
+.access-stop strong { font-family: var(--face-mark); font-size: clamp(1.05rem, 2.5vw, 1.45rem); line-height: 1; text-transform: uppercase; color: var(--platinum-dim); }
+.access-stop.selected strong { color: var(--platinum); }
+/* Form and colour together: the selected stop earns a gold strike, the effective stop a platinum lip. */
+.access-stop.selected { box-shadow: inset 0 -2px 0 var(--gold); }
+.access-stop.active { box-shadow: inset 0 2px 0 var(--platinum); }
+.access-stop.selected.active { box-shadow: inset 0 2px 0 var(--platinum), inset 0 -2px 0 var(--gold); }
+.access-stepper:has(.access-stop:hover) .access-track-line { background: var(--platinum-deep); }
+.access-mode-status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--tight) var(--step); padding: var(--tight) var(--step); border: 1px solid var(--rule); border-bottom: 0; color: var(--platinum-dim); font-family: var(--face-register); font-size: .62rem; letter-spacing: .1em; text-transform: uppercase; }
+.access-mode-status > span:first-child { display: flex; align-items: center; gap: .45rem; }
+.access-mode-status i { width: .45rem; height: .45rem; background: var(--platinum); transform: rotate(45deg); }
+.access-pending { color: var(--gold); }
+.access-detail { border: 1px solid var(--rule); border-top: 0; background: var(--touchstone); }
+.access-detail.review { box-shadow: inset 2px 0 0 var(--gold); background: color-mix(in srgb, var(--gold) 4%, var(--touchstone)); }
+.access-detail-head { display: grid; grid-template-columns: minmax(8rem, .32fr) minmax(0, 1fr); gap: var(--step); align-items: center; padding: var(--step); }
+.access-detail-head h3 { margin: 0; font-family: var(--face-mark); font-size: clamp(1.65rem, 4vw, 2.65rem); line-height: .95; text-transform: uppercase; color: var(--platinum); }
+.access-always-off h3 { margin: 0; color: var(--platinum-deep); white-space: nowrap; }
+.access-eyebrow { grid-column: 1 / -1; margin: 0; color: var(--gold); font-family: var(--face-register); font-size: .62rem; letter-spacing: .14em; text-transform: uppercase; }
+/* First-run detail: the selected stop's additions only; comparison lives in the stepper row. */
+.access-detail-body { display: flex; align-items: end; justify-content: space-between; gap: var(--step); padding: var(--step); border-top: 1px solid var(--rule); }
+.access-detail-body section { min-width: 0; }
+.access-detail-body .stamp { flex: 0 0 auto; }
+.access-detail h3, .access-always-off h3 { margin: 0 0 var(--tight); font-family: var(--face-register); font-size: .62rem; letter-spacing: .14em; text-transform: uppercase; color: var(--gold); }
+.access-detail ul { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .35rem var(--step); margin: 0; padding: 0; list-style: none; }
+.access-detail li { position: relative; padding-left: 1rem; color: var(--platinum-dim); font-size: .72rem; line-height: 1.45; }
+.access-detail li::before { position: absolute; left: 0; content: '—'; color: var(--gold); }
+.access-observation ul { grid-template-columns: 1fr; }
+.access-always-off { display: grid; grid-template-columns: minmax(8rem, auto) minmax(0, 1fr); gap: var(--tight) var(--step); align-items: baseline; padding: var(--tight) var(--step); border: 1px solid var(--rule); border-top: 0; color: var(--platinum-deep); }
+.access-always-off h3 { margin: 0; color: var(--platinum-deep); }
+.access-always-off ul { display: grid; grid-template-columns: repeat(5, minmax(0, auto)); justify-content: space-between; gap: var(--tight) var(--step); margin: 0; padding: 0; list-style: none; }
+.access-always-off li { font-size: .64rem; line-height: 1.4; }
+.prohibition-note { max-width: 58ch; margin: var(--tight) 0 0; color: var(--gold); font-size: .72rem; line-height: 1.5; }
+.prohibited-control { display: grid; justify-items: start; gap: var(--tight); }
+.stamp:disabled, .seal:disabled { cursor: not-allowed; opacity: .48; }
+
+
 .seal {
   display: flex; align-items: center; justify-content: space-between; gap: var(--step);
   width: 100%; padding: 1.25rem var(--step); border: 0; border-radius: 0;
@@ -740,6 +806,38 @@
 .seal:hover:not(:disabled) { background: #fff; }
 .seal:active:not(:disabled) { box-shadow: var(--strike-deep); }
 .seal:disabled { opacity: .5; cursor: wait; }
+.certificate:has(.access-selector) .seal { position: sticky; z-index: 2; bottom: var(--step); box-shadow: 0 -12px 24px var(--touchstone), var(--strike); }
+
+/* -- wide certificate ------------------------------------------------------
+   The window ships at 1180x760, but a tiled window runs wide (1890px here).
+   Past 90rem the sheet opens to the full window and the register reads as a
+   certificate proper: a letterhead title row over a two-column body -- the
+   three-stop rail on its plate at the left, the reading struck beside it --
+   the prohibitions as a full-width conditions line at the foot, and the
+   confirm seal closing the document. The floating 1180px design is untouched
+   below the breakpoint. */
+@media (min-width: 90rem) {
+  .certificate:has(.access-selector) .certificate-sheet { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: none; }
+  .certificate:has(.access-selector) .office { flex: 1 1 100%; margin-bottom: var(--course); }
+  .certificate:has(.access-selector) h1 { flex: 0 1 auto; min-width: 0; margin-bottom: 0; text-wrap: balance; }
+  .certificate:has(.access-selector) .prose { flex: 0 1 40ch; min-width: 0; align-self: flex-end; padding-bottom: .3rem; }
+  .certificate:has(.access-selector) .access-selector {
+    flex: 1 1 100%; display: grid;
+    grid-template-columns: minmax(0, 44fr) minmax(0, 56fr);
+  }
+  /* The two columns are one framed panel: the rail's right border meets the
+     detail's left border as the same double hairline the sheet itself uses. */
+  .certificate:has(.access-selector) .access-mode-status { grid-column: 1 / -1; }
+  .certificate:has(.access-selector) .access-rail { display: flex; }
+  .certificate:has(.access-selector) .access-stepper { flex: 1; display: flex; flex-direction: column; padding-block: var(--step); }
+  .certificate:has(.access-selector) .access-detail { grid-column: 2; display: flex; flex-direction: column; }
+  /* The review head wins back the top rule the stacked layout gave to nothing:
+     in first run the body's own top rule already strikes that seam. */
+  .certificate:has(.access-selector) .access-detail-head { border-top: 1px solid var(--rule); }
+  .certificate:has(.access-selector) .access-always-off { grid-column: 1 / -1; }
+  .certificate:has(.access-selector) .access-detail .access-observation ul { max-width: 62ch; }
+  .certificate:has(.access-selector) .error-banner { flex: 1 1 100%; }
+}
 
 
 
@@ -838,17 +936,33 @@
   .band-cell:first-child { border-top: 0; }
   .band-cell + .band-cell { padding-left: 0; border-left: 0; }
   .clause-pair { grid-template-columns: 1fr; }
+  .access-detail-grid { grid-template-columns: 1fr; }
+  .access-detail-grid section + section { border-top: 1px solid var(--rule); border-left: 0; }
   .assay-list { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 640px) {
-  /* The window's minimum is 360px. The two masthead rows keep their shape there: row one is only
-     the office mark and the window controls, and row two keeps navigation beside the state cluster
-     by dropping the state's message line -- Diagnostics carries it in full -- and letting the tabs
-     scroll. Nothing in the bar may refuse to shrink, or the whole document overflows sideways. */
+  .access-stepper { padding-inline: var(--tight); }
+  .access-stops { gap: 0; }
+  .access-stop { padding-inline: .35rem; }
+  .access-stop strong { min-width: 0; font-size: clamp(.9rem, 3.8vw, 1.2rem); }
+  .access-stop small { font-size: .62rem; }
+  .access-detail-head { grid-template-columns: 1fr; gap: var(--tight); align-items: start; }
+  .access-detail ul { grid-template-columns: 1fr; }
+  .access-detail-body, .access-always-off { align-items: flex-start; }
+  .access-detail-body { flex-direction: column; }
+  .access-detail-body .stamp { width: 100%; }
+  .access-always-off { grid-template-columns: 1fr; }
+  .access-always-off ul { grid-template-columns: 1fr; justify-content: start; }
+  .certificate-sheet { padding-inline: var(--step); }
+  .certificate:has(.access-selector) h1 { font-size: clamp(2.4rem, 12vw, 4.5rem); }
+  .certificate:has(.access-selector) .seal { position: static; }
+  /* On compact widths the three desktop masthead rows remain distinct. Navigation becomes a
+     discoverable horizontal strip only after equal labels genuinely cannot fit. */
   .office-role { display: none; }
-  .masthead-work { gap: var(--tight); }
-  .masthead-state { gap: var(--tight); }
+  .masthead-work { padding-inline: var(--step); overflow-x: auto; scrollbar-width: thin; }
+  .hallmark-row { display: flex; width: max-content; }
+  .masthead-state { gap: var(--tight); padding-inline: var(--step); }
   .assay-state-text small { display: none; }
   .date-letter { flex: none; padding-left: var(--tight); font-size: .55rem; }
   /* Collapse to the glyph only. sr-only, never display:none — these buttons take

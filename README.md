@@ -46,8 +46,8 @@ out the duplicates without giving Baro something valuable by mistake.
 
 Open one screen for gear, Prime parts, relics, resources, blueprints, mods, arcanes and
 more. Looking for one item? Search by name, or filter the collection down to owned,
-mastered or missing gear. TennoScope syncs when the game starts - nothing to export and
-nothing to scan by hand.
+mastered or missing gear. Full mode synchronizes when the game starts; Companion and
+Overlay keep the last collection visible as a timestamped saved snapshot.
 
 ![The collection browser](docs/screenshots/collection.png)
 
@@ -69,6 +69,26 @@ beside the inventory they came from. You can spot stale prices or listings for i
 no longer own, then list, delist and change your online status without leaving the app.
 
 ![The market orders page](docs/screenshots/market-orders.png)
+
+<div align="center">
+
+## Choose how TennoScope accesses Warframe
+
+</div>
+
+The mode controls running-game access in the backend. Catalog and relic reference data,
+saved collection browsing, platinum and ducat prices, preferences, and optional
+warframe.market features remain available without observing Warframe.
+
+| Mode | Available features | Warframe access used |
+| --- | --- | --- |
+| **Companion** | Catalog and relic reference, saved collection, prices and ducats, preferences, optional warframe.market | None |
+| **Overlay** | Everything in Companion, plus visible-pixel recognition and click-through overlays | Process presence, `EE.log`, and local screen capture |
+| **Full** | Everything in Overlay, plus automatic and manual inventory synchronization | Overlay access plus read-only process memory and Warframe's inventory endpoint |
+
+No mode writes or injects process memory, changes game files, automates input, redirects
+traffic, or sends TennoScope telemetry. Changing to a lower-access mode retires the access
+it no longer permits before the change completes.
 
 <div align="center">
 
@@ -94,11 +114,12 @@ Need help with a particular distribution, building from source or process permis
 See the [full install guide](docs/install.md).
 
 > [!IMPORTANT]
-> **Read this before you run it.** To fetch your collection, TennoScope reads a session
-> token from the Warframe process and sends it to Warframe's own inventory endpoint. It
-> never writes to the game, automates an action or affects gameplay. Digital Extremes has
-> not endorsed this. Any tool that inspects a game process may carry account-policy risk,
-> so the app shows this disclosure on first run and waits for you to accept it.
+> **Choose the access you want before TennoScope observes Warframe.** First run explains
+> Companion, Overlay and Full, and starts no running-game access until you confirm one.
+> Full reads a session token from the Warframe process and sends it only to Warframe's own
+> inventory endpoint. Overlay does not read process memory. TennoScope never writes to the
+> game or automates an action. It is an unofficial project and is not endorsed by Digital
+> Extremes.
 
 <div align="center">
 

@@ -11,6 +11,24 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Added
+
+- **Warframe access is now an explicit backend-enforced mode.** Companion keeps the catalog,
+  relic reference, saved collection, prices and ducats, preferences, and optional warframe.market
+  workflows useful without observing Warframe. Overlay adds process presence, `EE.log`, local
+  visible-pixel recognition, and click-through overlays without process-memory or inventory
+  access. Full adds read-only process memory and automatic or manual inventory synchronization.
+  First run starts no Warframe access until a mode is confirmed; legacy accepted installations
+  migrate to Full.
+
+### Changed
+
+- **Mode downgrades finish cleanup before becoming effective.** Prohibited monitor, capture,
+  overlay, memory, scanner, and inventory work is stopped and joined before success is reported,
+  while late work from an older runtime generation is discarded. Saved inventory remains visible
+  as a timestamped snapshot outside Full, and ownership-dependent order state is marked
+  unverifiable.
+
 ## [0.9.1] - 2026-09-14
 
 ### Changed
@@ -51,11 +69,11 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 - **Native-Wayland Warframe now has automatic, prompt-free capture where the compositor supports
   it.** Linux still takes an X11/XWayland game window first; when Warframe runs with
   `PROTON_ENABLE_WAYLAND=1`, capture tries wlroots screencopy, then KWin ScreenShot2, then an
-  already-authorized portal ScreenCast session. Gameplay never opens a desktop chooser. First run
-  still records only the read-only access risk disclosure; portal permission is granted separately
-  from Settings when that fallback is needed. Installed deb, rpm, Arch and Gentoo packages can use
-  KDE's silent ScreenShot2 path. AppImages cannot receive that KWin authorization and use the
-  portal fallback instead.
+  already-authorized portal ScreenCast session. Gameplay never opens a desktop chooser. In that
+  release, first run recorded only the read-only access disclosure; portal permission was granted
+  separately from Settings when that fallback was needed. Installed deb, rpm, Arch and Gentoo
+  packages can use KDE's silent ScreenShot2 path. AppImages cannot receive that KWin authorization
+  and use the portal fallback instead.
 
 - **The masthead is the window's titlebar.** The main window runs with the compositor's own
   decorations off, so on a desktop where nobody knows the window-management keys — KDE most of

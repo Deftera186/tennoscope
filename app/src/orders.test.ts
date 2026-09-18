@@ -55,7 +55,7 @@ describe('order flags', () => {
       'You own 1 of 3 listed',
     )
     expect(statusLabel(entry('c', { state: 'ok' }))).toBeNull()
-    expect(statusLabel(entry('d', { state: 'unverifiable' }))).toBeNull()
+    expect(statusLabel(entry('d', { state: 'unverifiable' }))).toBe('Unverifiable')
   })
 
   it('names the fix as the action it performs, and leaves removal to every row', () => {

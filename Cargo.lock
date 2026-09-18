@@ -5532,6 +5532,7 @@ version = "0.9.1"
 dependencies = [
  "app-core",
  "ashpd",
+ "atomicwrites",
  "gtk",
  "image",
  "libspa",

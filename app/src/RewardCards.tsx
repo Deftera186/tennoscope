@@ -14,11 +14,13 @@ export function RewardCards({
   cards,
   bestValueIndex,
   bestDucatIndex,
+  ownershipVerified = true,
   className = 'reward-grid',
 }: {
   cards: RewardCard[]
   bestValueIndex: number | null
   bestDucatIndex: number | null
+  ownershipVerified?: boolean
   className?: string
 }) {
   return <div className={className}>{cards.slice(0, 4).map((card, index) => {
@@ -49,10 +51,12 @@ export function RewardCards({
       </div>
 
       <div className="marks">
-        {card.owned > 0
-          ? <span className="hallmark owned">Owned ×{card.owned}</span>
-          : <span className="hallmark absent">Not owned</span>}
-        {card.mastery_relevant && <span className="hallmark mastered">Mastery needed</span>}
+        {ownershipVerified
+          ? card.owned > 0
+            ? <span className="hallmark owned">Owned ×{card.owned}</span>
+            : <span className="hallmark absent">Not owned</span>
+          : <span className="hallmark doubt">Unverifiable</span>}
+        {ownershipVerified && card.mastery_relevant && <span className="hallmark mastered">Mastery needed</span>}
         {uncertain && <span className="hallmark doubt">Uncertain · {Math.round(card.confidence * 100)}%</span>}
       </div>
     </article>

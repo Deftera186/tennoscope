@@ -18,6 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
+atomicwrites = "=0.4.4"
 serde_json = "1.0"
 serde.workspace = true
 log.workspace = true

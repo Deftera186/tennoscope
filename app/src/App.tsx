@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import './App.css'
 import {
-  acceptRiskDisclosure,
   authorizeScreenCapture,
   getSetupStatus,
   getView,
@@ -16,13 +15,16 @@ import {
   createOrder,
   updateOrder,
   setMarketPresence,
+  setAccessMode,
   setOrderQuantity,
   type AppView,
   type BackendHealth,
+  type AccessMode,
   type CollectionItem,
   type HealthState,
   type ItemCategory,
   type SetupStatus,
+  type MarketOrder,
   type Presence,
 } from './backend'
 import { hideRewardOverlay, showRewardOverlay } from './overlay'
@@ -37,6 +39,8 @@ import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, pageCount
 import { MAX_PRICE_FLOOR, readPriceFloor, readShowDucats, writePriceFloor, writeShowDucats } from './settings'
 import { snapshotFreshness, stampReading } from './freshness'
 import { reportBlockVisible } from './reportable'
+import { AccessSelector } from './AccessSelector'
+import { accessMode } from './access'
 
 type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
@@ -145,8 +149,10 @@ function WindowControls() {
 }
 
 function App() {
-  const [accepted, setAccepted] = useState<boolean | null>(null)
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null)
+  const [selectedMode, setSelectedMode] = useState<AccessMode>('full')
+  const [modeBusy, setModeBusy] = useState(false)
+  const [modeError, setModeError] = useState<string | null>(null)
   const [view, setView] = useState<AppView | null>(null)
   const [page, setPage] = useState<Page>('collection')
   const [busy, setBusy] = useState(false)
@@ -163,6 +169,8 @@ function App() {
   const foregroundInFlight = useRef(0)
   const setupGeneration = useRef(0)
   const captureAuthorizationInFlight = useRef(false)
+  const modeTransitionInFlight = useRef(false)
+  const effectiveModeRef = useRef<AccessMode | null>(null)
   const [captureAuthorizationBusy, setCaptureAuthorizationBusy] = useState(false)
 
   const requestView = useCallback(async (request: () => Promise<AppView>, failure: string) => {
@@ -203,13 +211,11 @@ function App() {
   useEffect(() => {
     getSetupStatus()
       .then(async status => {
+        effectiveModeRef.current = status.access_mode
         setSetupStatus(status)
-        setAccepted(status.risk_accepted)
-        if (status.risk_accepted) {
+        if (status.access_mode) setSelectedMode(status.access_mode)
+        if (status.setup_complete) {
           await requestView(getView, 'The local application backend is unavailable.')
-          // Populates the collection badges and nav count as soon as the app is usable, rather
-          // than leaving them blank until the player opens Orders. On an unlinked install this
-          // command makes no network request, so it costs nothing.
           await requestMarketStatus()
         }
       })
@@ -217,7 +223,7 @@ function App() {
   }, [requestView, requestMarketStatus])
 
   useEffect(() => {
-    if (!accepted) return
+    if (!setupStatus?.setup_complete) return
     let active = true
     let timer: ReturnType<typeof setTimeout> | undefined
     const schedule = () => { if (active) timer = setTimeout(poll, 2500) }
@@ -227,7 +233,14 @@ function App() {
       await Promise.all([
         requestView(getView, 'The live backend view could not be updated.'),
         getSetupStatus(1).then(status => {
-          if (active && generation === setupGeneration.current) setSetupStatus(status)
+          if (active && generation === setupGeneration.current) {
+            const modeChanged = status.access_mode !== effectiveModeRef.current
+            effectiveModeRef.current = status.access_mode
+            setSetupStatus(status)
+            if (modeChanged && status.access_mode && !modeTransitionInFlight.current) {
+              setSelectedMode(status.access_mode)
+            }
+          }
         }).catch(() => {
           // `getView` owns the shared backend failure banner. Keep the last known capture action
           // rather than hiding it because one capability poll failed.
@@ -242,27 +255,40 @@ function App() {
       viewGeneration.current += 1
       clearTimeout(timer)
     }
-  }, [accepted, requestView])
+  }, [setupStatus?.setup_complete, requestView])
 
   useEffect(() => {
     const timer = setInterval(() => setClock(new Date()), 30_000)
     return () => clearInterval(timer)
   }, [])
 
-  async function completeSetup() {
-    setBusy(true)
-    setError(null)
+  async function changeAccessMode(next: AccessMode) {
+    if (modeTransitionInFlight.current) return
+    modeTransitionInFlight.current = true
+    const previous = setupStatus?.access_mode ?? null
+    setModeBusy(true)
+    setModeError(null)
     try {
       await runForeground(async () => {
-        const status = await acceptRiskDisclosure()
+        const status = await setAccessMode(next)
+        effectiveModeRef.current = status.access_mode
         setSetupStatus(status)
-        setAccepted(status.risk_accepted)
+        if (status.access_mode) setSelectedMode(status.access_mode)
         await requestView(getView, 'The local application backend is unavailable.')
+        // Reconciliation depends on the effective mode: without this a Full-to-Companion
+        // downgrade keeps Full-era verified ownership and sellable flags until the player
+        // happens to open Orders. The helper merges only what it owns and stays silent on
+        // failure, so it is safe on every successful transition, not just first run.
+        await requestMarketStatus()
       })
     } catch {
-      setError('Setup could not be saved.')
+      const active = previous ? accessMode(previous).name : 'No mode'
+      // Keep the pending selection on every failure direction so retry is one Confirm click;
+      // the effective mode beside it still names what is actually active.
+      setModeError(`Could not change Warframe access. ${active} remains active. Review the mode and try again.`)
     } finally {
-      setBusy(false)
+      modeTransitionInFlight.current = false
+      setModeBusy(false)
     }
   }
 
@@ -275,7 +301,10 @@ function App() {
     const generation = ++setupGeneration.current
     try {
       const status = await authorizeScreenCapture()
-      if (generation === setupGeneration.current) setSetupStatus(status)
+      if (generation === setupGeneration.current) {
+        effectiveModeRef.current = status.access_mode
+        setSetupStatus(status)
+      }
     } finally {
       captureAuthorizationInFlight.current = false
       setCaptureAuthorizationBusy(false)
@@ -292,7 +321,7 @@ function App() {
    * Deliberately outside `runForeground`: a page refresh prices up to forty-eight items at three
    * requests a second, so it is on the wire for about sixteen seconds, and the whole promise of it
    * is that prices appear as they land. That only happens if the 2.5s poll keeps running through
-   * it. Ordering is still safe -- `requestView` applies a response only while its request is the
+   * it. Ordering remains coherent -- `requestView` applies a response only while its request is
    * newest one started, so an older view can never land on top of a newer one.
    *
    * The local flag exists only to hold the control down for the up-to-2.5s gap before the poll
@@ -373,19 +402,18 @@ function App() {
     if (next === 'orders') void ordersRefresh()
   }
 
-  if (accepted === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
-  if (accepted === false) return <SetupScreen busy={busy} error={error} onContinue={() => { void completeSetup() }}/>
+  if (setupStatus === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
+  if (!setupStatus?.setup_complete) return <SetupScreen selected={selectedMode} busy={modeBusy} error={modeError ?? error} onSelect={setSelectedMode} onContinue={() => { void changeAccessMode(selectedMode) }}/>
 
 
+  const effectiveMode = setupStatus.access_mode ?? 'companion'
   const liveState = view?.health.game_reader.state ?? 'degraded'
   const freshness = snapshotFreshness(view?.collection.snapshot, clock)
   return <div className="assay">
     <header className="masthead">
-      {/* Row one is the window's titlebar and nothing else: the office mark and the three window
-          controls, with the whole span between them a grab handle. `deep` leaves every control on
-          the bar clickable; Tauri's drag script stops at buttons on its own. The register's own
-          business — reader state, freshness, refresh — belongs to the app, so it sits on the row
-          below with the navigation rather than competing with window chrome for this line. */}
+      {/* Window chrome, destination choice, and runtime operations each keep a dedicated row. This
+          leaves every destination visible at the shipped 1180px width and prevents a long reader
+          message or refresh action from clipping the active page. */}
       <div className="masthead-top" data-tauri-drag-region="deep">
         <div className="office">
           <span className="office-name">TennoScope</span>
@@ -393,10 +421,6 @@ function App() {
         </div>
         <WindowControls/>
       </div>
-      {/* Row two carries the register's own business. The navigation holds the left edge and keeps
-          its horizontal scroll; the reader's state, the snapshot's age and the refresh stamp sit
-          against the right, so neither group is stranded mid-bar and the state gains no row of its
-          own in a 760px-tall window. */}
       <div className="masthead-work">
         <nav className="hallmark-row" aria-label="Primary">
           {(['collection', 'rewards', 'orders', 'diagnostics', 'settings', 'about'] as const).map(item => <button
@@ -415,20 +439,21 @@ function App() {
             </span>
           </button>)}
         </nav>
-        <div className="masthead-state">
-          <div className={`assay-state ${liveState}`}>
+      </div>
+      <section className="masthead-state" aria-label="Runtime operations">
+          <div className={`assay-state ${effectiveMode === 'companion' ? 'idle' : liveState}`}>
             <span className="state-mark" aria-hidden="true"/>
             <span className="assay-state-text">
-              <strong role="status">{liveState === 'ready' ? 'Watching Warframe' : liveState === 'idle' ? 'Idle' : liveState === 'failed' ? 'Attention — reader failed' : 'Attention needed'}</strong>
-              <small>{view?.health.game_reader.message ?? 'Connecting to local backend'}</small>
+              <strong role="status">{effectiveMode === 'companion' ? 'Companion mode' : liveState === 'ready' ? 'Watching Warframe' : liveState === 'idle' ? 'Idle' : liveState === 'failed' ? 'Attention — reader failed' : 'Attention needed'}</strong>
+              <small>{effectiveMode === 'companion' ? 'Using saved and reference data' : view?.health.game_reader.message ?? 'Connecting to local backend'}</small>
             </span>
           </div>
           {view && <span className="date-letter" title={freshness.detail}>{freshness.label}<span className="sr-only"> — {freshness.detail}</span></span>}
-          <button type="button" className="stamp" onClick={refresh} disabled={busy}>
+          <button type="button" className="stamp" onClick={refresh} disabled={busy || modeBusy || setupStatus?.access_mode !== 'full'} aria-describedby={setupStatus?.access_mode !== 'full' ? 'inventory-access-note' : undefined}>
             <Mark name="refresh" className="punch-glyph"/><span>{busy ? 'Refreshing…' : 'Refresh inventory'}</span>
           </button>
-        </div>
-      </div>
+          {setupStatus?.access_mode !== 'full' && <span id="inventory-access-note" className="sr-only">Full access is required to acquire inventory. The saved snapshot remains available.</span>}
+      </section>
     </header>
 
     <main className="sheet">
@@ -440,13 +465,13 @@ function App() {
           appears and disappears with its content is not announced by every reader. */}
       <p className="sr-only" role="status">{ordersNote}</p>
       {!view ? <LoadingView/> : <>
-        {page === 'collection' && <CollectionPage view={view} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} showDucats={showDucats} onToggleDucats={() => {
+        {page === 'collection' && <CollectionPage view={view} effectiveMode={effectiveMode} pricing={pricing} onPriceLive={priceLive} priceFloor={priceFloor} showDucats={showDucats} onToggleDucats={() => {
           setShowDucats(current => {
             writeShowDucats(!current)
             return !current
           })
         }} onSell={ordersSell} onUpdate={ordersUpdate} ordersBusy={ordersBusy}/>}
-        {page === 'rewards' && <RewardPage view={view}/>}
+        {page === 'rewards' && <RewardPage view={view} effectiveMode={effectiveMode}/>}
         {page === 'orders' && <OrdersView
           account={view.market_account}
           onSignIn={ordersSignIn}
@@ -462,43 +487,33 @@ function App() {
           busy={ordersBusy}
           error={ordersError}
         />}
-        {page === 'diagnostics' && <DiagnosticsPage view={view}/>}
-        {page === 'settings' && <SettingsPage view={view} priceFloor={priceFloor} desktopCaptureActionAvailable={setupStatus?.desktop_capture_action_available ?? false} captureAuthorizationBusy={captureAuthorizationBusy} captureNote={captureNote} onCaptureNote={setCaptureNote} onAuthorizeCapture={authorizeCapture} onPriceFloor={floor => {
+        {page === 'diagnostics' && <DiagnosticsPage view={view} effectiveMode={effectiveMode}/>}
+        {page === 'settings' && <SettingsPage view={view} priceFloor={priceFloor} effectiveMode={effectiveMode} selectedMode={selectedMode} modeBusy={modeBusy} modeError={modeError} onSelectMode={mode => {
+          setSelectedMode(mode)
+          setModeError(null)
+        }} onConfirmMode={() => { void changeAccessMode(selectedMode) }} desktopCaptureActionAvailable={setupStatus?.desktop_capture_action_available ?? false} captureAuthorizationBusy={captureAuthorizationBusy} captureNote={captureNote} onCaptureNote={setCaptureNote} onAuthorizeCapture={authorizeCapture} onPriceFloor={floor => {
           setPriceFloor(floor)
           writePriceFloor(floor)
         }}/>}
-        {page === 'about' && <AboutPage/>}
+        {page === 'about' && <AboutPage effectiveMode={effectiveMode}/>}
       </>}
     </main>
   </div>
 }
 
-/** The certificate of assay: the one-time disclosure, read before anything is inspected. */
-function SetupScreen({ busy, error, onContinue }: { busy: boolean; error: string | null; onContinue: () => void }) {
+function SetupScreen({ selected, busy, error, onSelect, onContinue }: { selected: AccessMode; busy: boolean; error: string | null; onSelect: (mode: AccessMode) => void; onContinue: () => void }) {
   return <main className="certificate">
     <section className="certificate-sheet" aria-labelledby="setup-title">
       <div className="office">
         <span className="office-name">TennoScope</span>
-        <span className="office-role">One-time setup · Read carefully</span>
+        <span className="office-role">One-time setup</span>
       </div>
-      <h1 id="setup-title" className="mark">Read-only game access</h1>
-      <p className="prose">Automatic inventory sync needs permission to inspect the running Warframe process and make a direct inventory request.</p>
-      <div className="clause-pair">
-        <article>
-          <span className="verdict-mark" aria-hidden="true"/>
-          <h2>Private by design</h2>
-          <p>The app never logs or uploads credentials or raw player payloads. Collection data stays on this device.</p>
-        </article>
-        <article className="caution">
-          <span className="verdict-mark caution" aria-hidden="true"/>
-          <h2>Know the risk</h2>
-          <p>Third-party software and process inspection may carry account-policy or anti-cheat risk, even when access is read-only.</p>
-        </article>
-      </div>
-      <p className="footnote">After acceptance, automatic read-only acquisition is enabled by default. You can revisit this disclosure in About.</p>
+      <h1 id="setup-title" className="mark">Choose Warframe access</h1>
+      <p className="prose">Each level includes the previous level. Nothing starts until you confirm.</p>
+      <AccessSelector value={selected} onChange={onSelect} applyingMode={busy ? selected : null} disabled={busy}/>
       {error && <p className="error-banner" role="alert">{error}</p>}
-      <button type="button" className="seal" onClick={onContinue} disabled={busy}>
-        {busy ? 'Saving locally…' : 'Accept risk and continue'}<span aria-hidden="true">→</span>
+      <button type="button" className="seal" onClick={onContinue} disabled={busy} aria-busy={busy}>
+        {busy ? `Applying ${accessMode(selected).name}…` : `Confirm ${accessMode(selected).name}`}<span aria-hidden="true">→</span>
       </button>
     </section>
   </main>
@@ -515,7 +530,9 @@ function LoadingView() {
   </section>
 }
 
-function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, onToggleDucats, onSell, onUpdate, ordersBusy }: { view: AppView; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number; showDucats: boolean; onToggleDucats: () => void; onSell: SellHandler; onUpdate: UpdateHandler; ordersBusy: boolean }) {
+function CollectionPage({ view, effectiveMode, pricing, onPriceLive, priceFloor, showDucats, onToggleDucats, onSell, onUpdate, ordersBusy }: { view: AppView; effectiveMode: AccessMode; pricing: boolean; onPriceLive: (ids: string[]) => void; priceFloor: number; showDucats: boolean; onToggleDucats: () => void; onSell: SellHandler; onUpdate: UpdateHandler; ordersBusy: boolean }) {
+  const ownershipVerified = effectiveMode === 'full'
+  const snapshotOnly = !ownershipVerified
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState<ItemCategory | 'all'>('all')
   const [ownership, setOwnership] = useState<Ownership>('all')
@@ -574,19 +591,22 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, on
   useEffect(() => {
     if (!showDucats && sort === 'ducats-desc') setSort('platinum-desc')
   }, [showDucats, sort])
+  useEffect(() => {
+    if (!ownershipVerified) setOwnership('all')
+  }, [ownershipVerified])
   useEffect(() => setPage(1), [search, category, ownership, sort])
   useEffect(() => setPage(value => clampPage(value, filtered.length)), [filtered.length])
 
   return <section className="page" aria-labelledby="collection-title">
     <div className="mark-head">
-      <h1 id="collection-title" className="mark">Your collection</h1>
-      <p className="prose">Canonical equipment, parts and relics observed on this account. Read only, held locally.</p>
+      <h1 id="collection-title" className="mark">{snapshotOnly ? 'Saved snapshot' : 'Your collection'}</h1>
+      <p className="prose">{snapshotOnly ? 'Your stored collection remains available for reference, valuation, and planning.' : 'Canonical equipment, parts and relics observed on this account. Read only, held locally.'}</p>
     </div>
 
     <div className={`assay-band${showDucats ? ' with-ducats' : ''}`}>
-      <BandCell kind="items" value={view.collection.total_entries} label="Items tracked" note={`${owned} currently owned`}/>
-      <BandCell kind="mastered" value={mastered} label="Mastered" note={masteryEligible ? `${Math.round(mastered / masteryEligible * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
-      <BandCell kind="missing" value={missing} label="Missing" note="From known collection data"/>
+      <BandCell kind="items" value={view.collection.total_entries} label={snapshotOnly ? 'Saved entries' : 'Items tracked'} note={snapshotOnly ? 'Entries retained in the saved snapshot' : `${owned} currently owned`}/>
+      <BandCell kind="mastered" value={mastered} label={snapshotOnly ? 'Mastery records' : 'Mastered'} note={snapshotOnly ? 'Historical snapshot; current mastery is unverifiable' : masteryEligible ? `${Math.round(mastered / masteryEligible * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
+      <BandCell kind="missing" value={missing} label={snapshotOnly ? 'Zero-quantity records' : 'Missing'} note={snapshotOnly ? 'Historical snapshot; current ownership is unverifiable' : 'From known collection data'}/>
       {/* Two figures and the one clause that qualifies them. The cell had five numbers in it and
           read as an argument about the collection rather than a valuation of it; the live-pass count
           was a second copy of the register line below, and the priced-item count mostly measured how
@@ -597,21 +617,24 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, on
         value={worth}
         unit={<MetalMark metal="plat" alt=" platinum"/>}
         aside={<>{figure(sellable)}<MetalMark metal="plat" alt=" platinum"/> sellable</>}
-        label="Collection worth"
-        note={priceFloor
-          ? `Sellable counts only the copies the market buys in a month, at ${priceFloor} platinum and over`
-          : 'Sellable counts only the copies the market buys in a month'}
+        label={snapshotOnly ? 'Saved snapshot value' : 'Collection worth'}
+        note={snapshotOnly
+          ? 'Valuation uses saved quantities; current ownership is unverifiable'
+          : priceFloor
+            ? `Sellable counts only the copies the market buys in a month, at ${priceFloor} platinum and over`
+            : 'Sellable counts only the copies the market buys in a month'}
       />
       {showDucats && <BandCell
         kind="ducats"
         value={ducatsAtStake}
         unit={<MetalMark metal="ducat" alt=" ducats"/>}
-        label="Ducats at stake"
-        note="Every owned prime part, at Baro Ki'Teer's posted prices"
+        label={snapshotOnly ? 'Saved snapshot ducats' : 'Ducats at stake'}
+        note={snapshotOnly ? 'Total uses saved quantities; current ownership is unverifiable' : "Every owned prime part, at Baro Ki'Teer's posted prices"}
       />}
     </div>
 
     <div className="register">
+      {view.collection.items.length ? <>
       <div className="register-controls">
         <label className="search-slot">
           <Mark name="search" className="punch-glyph"/>
@@ -660,41 +683,42 @@ function CollectionPage({ view, pricing, onPriceLive, priceFloor, showDucats, on
           from the left. An engraved hairline is what this system already uses to divide the sheet,
           so a reading struck into one needs no new component and nothing that spins. */}
       <div className="register-bar" style={inProgress ? { '--assay-progress': inProgress.done / Math.max(inProgress.total, 1) } as CSSProperties : undefined}>
-        <div className="tally" role="group" aria-label="Ownership filters">
+        {ownershipVerified && <div className="tally" role="group" aria-label="Ownership filters">
           {(['all', 'owned', 'mastered', 'missing', 'tradeable'] as const).map(filter => <button
             type="button"
             key={filter}
             aria-pressed={ownership === filter}
             onClick={() => setOwnership(filter)}
           >{filter[0].toUpperCase() + filter.slice(1)}</button>)}
-        </div>
+        </div>}
         <div className="provenance-row">
           <div className="register-status">
             <span className="register-line">{dumpDate ? `Prices from the ${shortDumpDate(dumpDate)} market summary` : 'No price summary loaded yet'}</span>
             <span className="register-line">{firstResult}–{lastResult} of {filtered.length}</span>
             {inProgress && <span className="register-line pricing" role="status">Checking live prices · {inProgress.done} of {inProgress.total}</span>}
-          </div>
-          {/* No count on the control while a pass runs: the register line beside it carries the one
-              readout, and a second copy of the same numbers on the thing that is disabled reads as
-              a different pass. The label only has to say the control is spoken for. */}
+          {/* Live prices come from the market dump and explicit price checks, neither of which
+              reads the game or needs verified ownership: Companion and Overlay keep valuation.
+              Selling still needs Full, and that gate lives on the sell controls, not here. */}
           <button
             type="button"
             className="stamp"
             disabled={pricing || inProgress !== null || pricableVisibleIds.length === 0}
             onClick={() => onPriceLive(pricableVisibleIds)}
           ><span>{pricing || inProgress ? 'Pricing…' : `Price these ${pricableVisibleIds.length}`}</span></button>
+          </div>
         </div>
       </div>
 
-      {filtered.length
-        ? <>
-          <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} showDucats={showDucats} listedOrder={listedOrderFor(view.market_account.orders, item.id)} sellable={view.market_account.link === 'linked' && isListable(item, view.market_account.listable)} onSell={onSell} onUpdate={onUpdate} busy={ordersBusy}/></li>)}</ul>
-          <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
-        </>
-        : <EmptyState
-          title={view.collection.items.length ? 'No matching items' : 'No inventory items yet'}
-          detail={view.collection.items.length ? 'Try another search or clear a filter.' : 'Start Warframe and refresh to create your first local snapshot.'}
-        />}
+        {filtered.length
+          ? <>
+            <ul className="collection-grid" aria-label="Collection items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} ownershipVerified={ownershipVerified} showDucats={showDucats} listedOrder={listedOrderFor(view.market_account.orders, item.id)} sellable={ownershipVerified && view.market_account.link === 'linked' && isListable(item, view.market_account.listable)} onSell={onSell} onUpdate={onUpdate} busy={ordersBusy}/></li>)}</ul>
+            <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
+          </>
+          : <EmptyState title="No matching items" detail="Try another search or clear a filter."/>}
+      </> : <EmptyState
+        title={snapshotOnly ? 'No saved inventory snapshot yet' : 'No inventory items yet'}
+        detail={snapshotOnly ? 'Full access can acquire one; Companion remains useful for reference, prices, and planning.' : 'Start Warframe and refresh to create your first local snapshot.'}
+      />}
     </div>
   </section>
 }
@@ -716,7 +740,7 @@ function BandCell({ kind, value, unit, aside, label, note }: { kind: string; val
   </div>
 }
 
-function CollectionEntry({ item, showDucats, listedOrder, sellable, onSell, onUpdate, busy }: { item: CollectionItem; showDucats: boolean; listedOrder: ReturnType<typeof listedOrderFor>; sellable: boolean; onSell: SellHandler; onUpdate: UpdateHandler; busy: boolean }) {
+function CollectionEntry({ item, ownershipVerified, showDucats, listedOrder, sellable, onSell, onUpdate, busy }: { item: CollectionItem; ownershipVerified: boolean; showDucats: boolean; listedOrder: MarketOrder | null; sellable: boolean; onSell: SellHandler; onUpdate: UpdateHandler; busy: boolean }) {
   const missing = item.quantity === 0
   const [artFailed, setArtFailed] = useState(false)
   const [selling, setSelling] = useState(false)
@@ -739,18 +763,20 @@ function CollectionEntry({ item, showDucats, listedOrder, sellable, onSell, onUp
       <span className="entry-cat">{categoryName[item.category]}</span>
       <h2 className="entry-name">{item.name}</h2>
       <div className="marks">
-        {missing
-          ? <span className="hallmark absent">Missing</span>
-          : <span className="hallmark owned">Owned ×{item.quantity}</span>}
+        {ownershipVerified
+          ? missing
+            ? <span className="hallmark absent">Missing</span>
+            : <span className="hallmark owned">Owned ×{item.quantity}</span>
+          : null}
         {rankLabel(item) && <span className={`hallmark rank${atMaxRank(item) ? ' maxed' : ''}`}>{rankLabel(item)}</span>}
-        {item.mastered && <span className="hallmark mastered">Mastered</span>}
+        {ownershipVerified && item.mastered && <span className="hallmark mastered">Mastered</span>}
         {listedOrder && <span className="hallmark">{listedLabel(listedOrder, item.quantity)}</span>}
         {item.platinum !== undefined && <span className={`price${item.live ? ' live' : ''}`}>
           <MetalMark metal="plat" alt="platinum "/>
           {item.platinum_ceiling === undefined
             ? <>
               <b>{item.platinum}</b>
-              {item.quantity > 1 && <em>{stackValue(item)} total</em>}
+              {ownershipVerified && item.quantity > 1 && <em>{stackValue(item)} total</em>}
             </>
             // Nobody sells a half-ranked card, so the market brackets it without ever quoting it.
             // The two ends are what is known; a single number here would be invented.
@@ -765,7 +791,7 @@ function CollectionEntry({ item, showDucats, listedOrder, sellable, onSell, onUp
           ? <span className="price ducat-reading">
             <MetalMark metal="ducat" alt="ducat "/>
             <b>{item.ducats}</b>
-            {item.quantity > 1 && <em>{item.ducats * item.quantity} total</em>}
+            {ownershipVerified && item.quantity > 1 && <em>{item.ducats * item.quantity} total</em>}
           </span>
           : item.category === 'prime_part' && <span className="ducat-unavailable">Ducat value unavailable</span>)}
       </div>
@@ -790,16 +816,20 @@ function Pagination({ current, total, onChange }: { current: number; total: numb
   </nav>
 }
 
-function RewardPage({ view }: { view: AppView }) {
+function RewardPage({ view, effectiveMode }: { view: AppView; effectiveMode: AccessMode }) {
+  const ownershipVerified = effectiveMode === 'full'
+  const companion = effectiveMode === 'companion'
   return <div className="page">
     <div className="mark-head">
       <h1 id="reward-title" className="mark">Reward advisor</h1>
-      <p className="prose">TennoScope watches EE.log for a Void Fissure reward, reads the four cards off the screen with OCR, and places advice below the reward row.</p>
+      <p className="prose">{companion
+        ? 'Live reward observation is inactive in Companion. Historical reward cards remain available with saved ownership marked unverifiable.'
+        : 'TennoScope watches EE.log for a Void Fissure reward, reads the four cards off the screen with OCR, and places advice below the reward row.'}</p>
     </div>
     <section aria-label="Reward advisor">
       {view.reward.cards.length
-        ? <RewardCards cards={view.reward.cards} bestValueIndex={view.reward.best_value_index} bestDucatIndex={view.reward.best_ducat_index}/>
-        : <EmptyState title="No reward choices detected" detail="The observer is waiting for an English Void Fissure reward screen."/>}
+        ? <RewardCards cards={view.reward.cards} bestValueIndex={view.reward.best_value_index} bestDucatIndex={view.reward.best_ducat_index} ownershipVerified={ownershipVerified}/>
+        : <EmptyState title="No reward choices detected" detail={companion ? 'Live reward observation is inactive in Companion; reference data remains available.' : 'The observer is waiting for an English Void Fissure reward screen.'}/>}
     </section>
   </div>
 }
@@ -865,17 +895,21 @@ function ReportBlock({ health, alwaysVisible }: { health: AppView['health']; alw
   )
 }
 
-function DiagnosticsPage({ view }: { view: AppView }) {
-  const systems = [
-    ['Game reader', view.health.game_reader],
-    ['EE.log', view.health.log_monitor],
-    ['Reward observer', view.health.capture],
+function DiagnosticsPage({ view, effectiveMode }: { view: AppView; effectiveMode: AccessMode }) {
+  const referenceSystems = [
     ['Catalog', view.health.catalog],
     ['Market data', view.health.market],
     ['Collection prices', view.health.collection_prices],
     ['Database', view.health.database],
     ['Market account', view.health.market_account],
   ] as const
+  const liveSystems = [
+    ['Game reader', view.health.game_reader],
+    ['EE.log', view.health.log_monitor],
+    ['Reward observer', view.health.capture],
+  ] as const
+  const systems = effectiveMode === 'companion' ? referenceSystems : [...liveSystems, ...referenceSystems]
+  const showAcquisition = effectiveMode === 'full'
   return <div className="page">
     <div className="mark-head">
       <h1 id="diagnostics-title" className="mark">Diagnostics</h1>
@@ -883,36 +917,57 @@ function DiagnosticsPage({ view }: { view: AppView }) {
     </div>
     <ReportBlock health={view.health}/>
     <section aria-label="Diagnostics">
+      {effectiveMode === 'companion' && <p className="prose">Live Warframe diagnostics are inactive in Companion. Local and reference services remain visible.</p>}
       <div className="procedure-head">
         <h2 className="column-head">Core services</h2>
       </div>
       <div className="assay-list">{systems.map(([label, health]) => <AssayRow key={label} label={label} health={health}/>)}</div>
 
-      <div className="procedure-head second">
-        <h2 className="column-head">Acquisition pipeline</h2>
-      </div>
-      {view.health.acquisition_stages.length
-        ? <ol className="stages">{view.health.acquisition_stages.map((stage, index) => {
-          const words = stage.stage.replaceAll('_', ' ')
-          const label = words[0].toUpperCase() + words.slice(1)
-          return <li key={stage.stage} className={stage.state}>
-            <span className={`ordinal ${stage.state}`}>{index + 1}</span>
-            <div><strong>{label}</strong><p>{stage.message}</p></div>
-            <span className="assay-verdict">{stage.state}</span>
-          </li>
-        })}</ol>
-        : <EmptyState title="No acquisition attempt yet" detail="Start Warframe or request a refresh to populate the five pipeline stages."/>}
+      {showAcquisition && <>
+        <div className="procedure-head second">
+          <h2 className="column-head">Acquisition pipeline</h2>
+        </div>
+        {view.health.acquisition_stages.length
+          ? <ol className="stages">{view.health.acquisition_stages.map((stage, index) => {
+            const words = stage.stage.replaceAll('_', ' ')
+            const label = words[0].toUpperCase() + words.slice(1)
+            return <li key={stage.stage} className={stage.state}>
+              <span className={`ordinal ${stage.state}`}>{index + 1}</span>
+              <div><strong>{label}</strong><p>{stage.message}</p></div>
+              <span className="assay-verdict">{stage.state}</span>
+            </li>
+          })}</ol>
+          : <EmptyState title="No acquisition attempt yet" detail="Start Warframe or request a refresh to populate the five pipeline stages."/>}
+      </>}
     </section>
   </div>
 }
 
-function SettingsPage({ view, priceFloor, desktopCaptureActionAvailable, captureAuthorizationBusy, captureNote, onCaptureNote, onAuthorizeCapture, onPriceFloor }: { view: AppView; priceFloor: number; desktopCaptureActionAvailable: boolean; captureAuthorizationBusy: boolean; captureNote: string | null; onCaptureNote: (note: string | null) => void; onAuthorizeCapture: () => Promise<void>; onPriceFloor: (floor: number) => void }) {
+function SettingsPage({ view, priceFloor, effectiveMode, selectedMode, modeBusy, modeError, onSelectMode, onConfirmMode, desktopCaptureActionAvailable, captureAuthorizationBusy, captureNote, onCaptureNote, onAuthorizeCapture, onPriceFloor }: { view: AppView; priceFloor: number; effectiveMode: AccessMode; selectedMode: AccessMode; modeBusy: boolean; modeError: string | null; onSelectMode: (mode: AccessMode) => void; onConfirmMode: () => void; desktopCaptureActionAvailable: boolean; captureAuthorizationBusy: boolean; captureNote: string | null; onCaptureNote: (note: string | null) => void; onAuthorizeCapture: () => Promise<void>; onPriceFloor: (floor: number) => void }) {
   const { sellable: total, sellableCount: counted } = collectionTotals(view.collection.items, priceFloor)
   return <section className="page" aria-labelledby="settings-title">
     <div className="mark-head">
       <h1 id="settings-title" className="mark">Settings</h1>
       <p className="prose">Preferences are held on this device, and take effect as they are set.</p>
     </div>
+    <section className="mode-setting" aria-labelledby="access-setting-title">
+      <div className="procedure-head access-setting-head">
+        <div>
+          <h2 id="access-setting-title" className="column-head">Warframe access</h2>
+          <p className="band-note">Every change needs confirmation. Nothing applies until you confirm.</p>
+        </div>
+      </div>
+      <AccessSelector
+        value={selectedMode}
+        effectiveMode={effectiveMode}
+        onChange={onSelectMode}
+        onConfirmUpgrade={onConfirmMode}
+        applyingMode={modeBusy ? selectedMode : null}
+        disabled={modeBusy}
+      />
+      {modeError && <p className="error-banner" role="alert">{modeError}</p>}
+    </section>
+
 
     <section aria-label="Preferences">
       <div className="procedure-head">
@@ -944,14 +999,14 @@ function SettingsPage({ view, priceFloor, desktopCaptureActionAvailable, capture
         <p className="band-note">{figure(counted)} stacks counted · {figure(total)} platinum sellable</p>
       </div>
 
-      <DesktopCaptureSetting actionAvailable={desktopCaptureActionAvailable} busy={captureAuthorizationBusy} note={captureNote} onNote={onCaptureNote} onAuthorize={onAuthorizeCapture}/>
+      <DesktopCaptureSetting actionAvailable={effectiveMode !== 'companion' && desktopCaptureActionAvailable} prohibited={effectiveMode === 'companion'} busy={captureAuthorizationBusy} note={captureNote} onNote={onCaptureNote} onAuthorize={onAuthorizeCapture}/>
 
       <div className="setting">
         <div>
           <h3>Reward overlay placement</h3>
           <p className="prose">The strip is drawn against the game's own window, so where it lands is compositor-specific and there is no way to see it without a fissure running. This puts it on screen with nothing to read, and takes it down again.</p>
         </div>
-        <OverlayPreviewToggle/>
+        <OverlayPreviewToggle prohibited={effectiveMode === 'companion'} busy={modeBusy}/>
       </div>
     </section>
 
@@ -964,7 +1019,7 @@ function SettingsPage({ view, priceFloor, desktopCaptureActionAvailable, capture
   </section>
 }
 
-function DesktopCaptureSetting({ actionAvailable, busy, note, onNote, onAuthorize }: { actionAvailable: boolean; busy: boolean; note: string | null; onNote: (note: string | null) => void; onAuthorize: () => Promise<void> }) {
+function DesktopCaptureSetting({ actionAvailable, prohibited, busy, note, onNote, onAuthorize }: { actionAvailable: boolean; prohibited: boolean; busy: boolean; note: string | null; onNote: (note: string | null) => void; onAuthorize: () => Promise<void> }) {
   useEffect(() => {
     if (actionAvailable && note === 'Desktop capture allowed.') {
       onNote('Desktop capture needs permission again.')
@@ -984,15 +1039,17 @@ function DesktopCaptureSetting({ actionAvailable, busy, note, onNote, onAuthoriz
     <div>
       <h3>Screen capture</h3>
       <p className="prose">Screen capture is automatic. Desktop sharing is only needed when Warframe is launched with PROTON_ENABLE_WAYLAND=1 and this compositor has no direct capture API.</p>
-      {actionAvailable && <p className="prose">The desktop opens its own screen chooser. Select every display where Warframe may run. KDE/GNOME may show an active screen-sharing indicator. TennoScope releases the session when the game exits.</p>}
+      {prohibited ? <p className="prohibition-note" id="capture-prohibited">Overlay or Full access is required because Companion does not use screen capture.</p> : actionAvailable && <p className="prose">The desktop opens its own screen chooser. Select every display where Warframe may run. KDE/GNOME may show an active screen-sharing indicator. TennoScope releases the session when the game exits.</p>}
     </div>
-    {actionAvailable && <button type="button" className="stamp" onClick={authorize} disabled={busy} aria-busy={busy}>{busy ? 'Allowing desktop capture…' : 'Allow desktop capture'}</button>}
+    {(actionAvailable || prohibited) && <button type="button" className="stamp" onClick={authorize} disabled={busy || prohibited} aria-busy={busy} aria-describedby={prohibited ? 'capture-prohibited' : undefined}>{busy ? 'Allowing desktop capture…' : 'Allow desktop capture'}</button>}
     <p className="band-note capture-status" role="status" aria-live="polite" aria-atomic="true">{note}</p>
   </div>
 }
 
 /** What the office says about itself: what it is, and what it does to your machine to say it. */
-function AboutPage() {
+function AboutPage({ effectiveMode }: { effectiveMode: AccessMode }) {
+  const observesGame = effectiveMode !== 'companion'
+  const acquiresInventory = effectiveMode === 'full'
   return <section className="page" aria-labelledby="about-title">
     <div className="mark-head">
       <h1 id="about-title" className="mark">About</h1>
@@ -1007,25 +1064,29 @@ function AboutPage() {
           <p className="prose">Your inventory snapshot and preferences are stored on this device in the application data directory. The UI has no telemetry or cloud account.</p>
         </div>
       </article>
-      <article className="clause caution">
-        <span className="clause-index" aria-hidden="true">Caution</span>
+      <article className={observesGame ? 'clause caution' : 'clause'}>
+        <span className="clause-index" aria-hidden="true">{observesGame ? 'Caution' : 'II'}</span>
         <div>
-          <h3>Read-only access disclosure</h3>
-          <p className="prose">TennoScope inspects the running game process. Third-party software and process inspection may carry account-policy or anti-cheat risk even when no game memory is modified.</p>
-        </div>
-      </article>
-      <article className="clause">
-        <span className="clause-index" aria-hidden="true">II</span>
-        <div>
-          <h3>Automatic synchronization</h3>
-          <p className="prose">The local EE.log monitor watches for inventory synchronization and refreshes automatically. Manual refresh remains available in the masthead.</p>
+          <h3>{observesGame ? 'Warframe access disclosure' : 'Companion access'}</h3>
+          <p className="prose">{effectiveMode === 'full'
+            ? 'Full access inspects the running game process using read-only memory access. Third-party software and process inspection may carry account-policy or anti-cheat risk even when no game memory is modified.'
+            : effectiveMode === 'overlay'
+              ? 'Overlay observes process presence, EE.log, and visible pixels to provide live reward assistance. It does not read process memory or acquire inventory.'
+              : 'Companion does not observe the running game process or EE.log, capture the screen, display overlays, read process memory, or acquire inventory.'}</p>
         </div>
       </article>
       <article className="clause">
         <span className="clause-index" aria-hidden="true">III</span>
         <div>
-          <h3>Reward overlay</h3>
-          <p className="prose">Reward names are read from the screen with OCR and matched against the squad's own relic pool. The strip is non-focusable and click-through, so it never takes input from the game. Settings can preview where it lands.</p>
+          <h3>Inventory synchronization</h3>
+          <p className="prose">{acquiresInventory ? 'Full access can synchronize inventory automatically and through the manual refresh in the masthead.' : 'Inventory synchronization is available only in Full access. Your existing saved snapshot remains available here.'}</p>
+        </div>
+      </article>
+      <article className="clause">
+        <span className="clause-index" aria-hidden="true">IV</span>
+        <div>
+          <h3>Reward assistance</h3>
+          <p className="prose">{observesGame ? 'Reward names can be read from visible screen pixels with OCR and matched against the squad’s relic pool. The overlay is non-focusable and click-through, so it never takes input from the game.' : 'The catalog and relic reference remain available for planning. Live screen recognition and the click-through overlay are available in Overlay and Full access.'}</p>
         </div>
       </article>
     </div>
@@ -1037,17 +1098,29 @@ function AboutPage() {
  * to see it without a fissure running -- but a preview you cannot dismiss does not
  * earn its place, which is why this is a toggle and not a one-way button.
  */
-function OverlayPreviewToggle() {
+function OverlayPreviewToggle({ prohibited, busy }: { prohibited: boolean; busy: boolean }) {
   const [shown, setShown] = useState(false)
-  return <button
-    type="button"
-    className="stamp"
-    aria-pressed={shown}
-    onClick={() => {
-      void (shown ? hideRewardOverlay() : showRewardOverlay())
-      setShown(!shown)
-    }}
-  ><span>{shown ? 'Hide reward overlay' : 'Preview reward overlay'}</span></button>
+  const [blocked, setBlocked] = useState(false)
+  return <div className="prohibited-control">
+    <button
+      type="button"
+      className="stamp"
+      aria-pressed={shown}
+      disabled={prohibited || busy}
+      aria-describedby={prohibited ? 'overlay-prohibited' : blocked ? 'overlay-blocked' : undefined}
+      onClick={() => {
+        // The backend rejects while an access transition holds the gate. Flip only after the
+        // command lands, so a click across a downgrade reports instead of desyncing the toggle.
+        const next = !shown
+        setBlocked(false)
+        void (shown ? hideRewardOverlay() : showRewardOverlay())
+          .then(() => setShown(next))
+          .catch(() => setBlocked(true))
+      }}
+    ><span>{shown ? 'Hide reward overlay' : 'Preview reward overlay'}</span></button>
+    {prohibited && <p id="overlay-prohibited" className="prohibition-note">Overlay or Full access is required because Companion does not create overlays.</p>}
+    {!prohibited && blocked && <p id="overlay-blocked" className="band-note" role="status">The overlay is unavailable while access is changing. Try again once the new mode is effective.</p>}
+  </div>
 }
 
 function EmptyState({ title, detail }: { title: string; detail: string }) {

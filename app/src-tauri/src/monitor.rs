@@ -1,5 +1,5 @@
 use super::{
-    GameMemory, SharedRuntime, apply_outcome, kiosk_geometry, kiosk_log,
+    AccessPolicy, SharedRuntime, apply_outcome, kiosk_geometry, kiosk_log,
     kiosk_ocr::{self, BasketRow, GridCell},
     kiosk_scroll,
     kiosk_view::{self, KioskState, KioskView},
@@ -25,6 +25,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(target_os = "linux")]
+use warframe_acquisition::LinuxProc as ProcessObserver;
+#[cfg(windows)]
+use warframe_acquisition::WindowsProc as ProcessObserver;
 use warframe_acquisition::{
     AcquisitionError, CatalogCache, CatalogIndex, GameProcess, MarketPriceCache, MemoryReader,
     ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry, RewardMemoryScanner,
@@ -729,6 +733,7 @@ struct RecordScans {
     records: Arc<Mutex<BTreeMap<String, String>>>,
     active: Arc<Mutex<BTreeSet<String>>>,
     generation: Arc<AtomicU64>,
+    workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
 impl RecordScans {
@@ -740,6 +745,19 @@ impl RecordScans {
         if let Ok(mut active) = self.active.lock() {
             active.clear();
         }
+        if let Ok(mut workers) = self.workers.lock() {
+            for worker in workers.drain(..) {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    fn track_worker(&self, worker: std::thread::JoinHandle<()>) {
+        if let Ok(mut workers) = self.workers.lock() {
+            workers.push(worker);
+        } else {
+            let _ = worker.join();
+        }
     }
 
     fn scan(
@@ -747,6 +765,7 @@ impl RecordScans {
         identity: String,
         process: GameProcess,
         candidates: &[warframe_acquisition::RewardNeedle],
+        generation: MonitorGeneration,
     ) {
         if candidates.is_empty() {
             return;
@@ -762,11 +781,19 @@ impl RecordScans {
         let candidates = candidates.to_vec();
         let records = Arc::clone(&self.records);
         let active = Arc::clone(&self.active);
-        let generation = Arc::clone(&self.generation);
-        let expected_generation = generation.load(Ordering::Acquire);
-        std::thread::spawn(move || {
+        let mission_generation = Arc::clone(&self.generation);
+        let expected_generation = mission_generation.load(Ordering::Acquire);
+        if !generation.is_current() {
+            release_player_record_scan(&identity, &active);
+            return;
+        }
+        let worker = std::thread::spawn(move || {
             let started = Instant::now();
-            let procfs = GameMemory::new();
+            if !generation.is_current() {
+                release_player_record_scan(&identity, &active);
+                return;
+            }
+            let procfs = ProcessObserver::new();
             let scanner = RewardMemoryScanner::new(
                 256 * 1024,
                 768 * 1024 * 1024,
@@ -774,9 +801,12 @@ impl RecordScans {
             );
             let resolution = scan_player_record_until_ready(
                 expected_generation,
-                &generation,
+                &mission_generation,
                 Duration::from_millis(750),
                 || {
+                    if !generation.is_current() {
+                        return warframe_acquisition::RewardResolution::Incomplete;
+                    }
                     scanner
                         .resolve_records(
                             &procfs,
@@ -793,15 +823,18 @@ impl RecordScans {
                 },
             );
             trace_responder_reward_scan(&identity, started.elapsed(), &resolution);
-            store_player_record_if_current(
-                expected_generation,
-                &generation,
-                &identity,
-                resolution,
-                &records,
-            );
+            if generation.is_current() {
+                store_player_record_if_current(
+                    expected_generation,
+                    &mission_generation,
+                    &identity,
+                    resolution,
+                    &records,
+                );
+            }
             release_player_record_scan(&identity, &active);
         });
+        self.track_worker(worker);
     }
 }
 
@@ -815,6 +848,7 @@ pub struct ScreenWatch {
     reads: Arc<Mutex<Option<Vec<String>>>>,
     polling: Arc<std::sync::atomic::AtomicBool>,
     gone: Arc<std::sync::atomic::AtomicBool>,
+    poller: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl ScreenWatch {
@@ -834,6 +868,11 @@ impl ScreenWatch {
 
     pub fn stop(&self) {
         self.polling.store(false, Ordering::Release);
+        if let Ok(mut poller) = self.poller.lock()
+            && let Some(poller) = poller.take()
+        {
+            let _ = poller.join();
+        }
     }
 
     pub fn running(&self) -> bool {
@@ -841,7 +880,12 @@ impl ScreenWatch {
     }
 
     fn arm(&self) {
-        spawn_reward_screen_poller(self);
+        if let Some(poller) =
+            spawn_reward_screen_poller_with(self, PollerTiming::live(), ScreenRewardSource::new)
+            && let Ok(mut slot) = self.poller.lock()
+        {
+            *slot = Some(poller);
+        }
     }
 
     fn gone_signal(&self) -> &std::sync::atomic::AtomicBool {
@@ -911,6 +955,15 @@ impl RewardReference {
     }
 }
 
+/// What one observed log event may do: the effective access policy, the monitor generation
+/// it belongs to, and the second it was observed in. Bundled so handler signatures stay small.
+#[derive(Clone, Copy)]
+struct EventScope<'a> {
+    policy: AccessPolicy,
+    generation: &'a MonitorGeneration,
+    now: u64,
+}
+
 /// Everything whose lifetime is one monitored Warframe process's reward stream.
 ///
 /// The monitor supplies events and application side effects; this session owns the coupled
@@ -959,23 +1012,25 @@ impl RewardSession {
         &mut self,
         event: RewardLogEvent,
         process: Option<GameProcess>,
-        procfs: &GameMemory,
+        procfs: &ProcessObserver,
         shared: &SharedRuntime,
         app: &AppHandle,
-        now: u64,
+        scope: EventScope<'_>,
     ) {
         match event {
             RewardLogEvent::RewardWindowOpened => {
-                if let Some(process) = process {
+                if scope.policy.read_process_memory
+                    && let Some(process) = process
+                {
                     let _ = procfs.reset_recent_writes(&process);
                 }
             }
             RewardLogEvent::ResponderExpected { identity } => {
-                self.scan_responder(identity, process);
+                self.scan_responder(identity, process, scope.policy, scope.generation);
             }
             RewardLogEvent::ResponderReceived { identity, is_local } => {
                 if !is_local {
-                    self.scan_responder(identity, process);
+                    self.scan_responder(identity, process, scope.policy, scope.generation);
                 }
             }
             RewardLogEvent::ResponsesComplete {
@@ -990,7 +1045,11 @@ impl RewardSession {
                 self.progress.remember(squad.clone());
                 // The screen read needs a window, not a process handle, but a dead game has neither:
                 // requiring the process keeps a vanished game from burning the retry deadline.
-                if process.is_some() && self.try_publish(&squad, shared, app, now).is_ok() {
+                if process.is_some()
+                    && self
+                        .try_publish(&squad, shared, app, scope.now, scope.generation)
+                        .is_ok()
+                {
                     self.progress.resolve();
                 }
             }
@@ -1002,7 +1061,11 @@ impl RewardSession {
                     self.memory.clear();
                     return;
                 };
-                self.memory.prepare_candidates(&candidates);
+                if scope.policy.read_process_memory {
+                    self.memory.prepare_candidates(&candidates);
+                } else {
+                    self.memory.clear();
+                }
                 // Publish the pool before arming, and on every baseline rather than only the first.
                 // A running poller reads this cell each poll, so later relic loads still reach it.
                 let entries = self.reference.pool_entries(&candidates);
@@ -1024,7 +1087,7 @@ impl RewardSession {
                     }
                     return;
                 };
-                match self.try_publish(&squad, shared, app, now) {
+                match self.try_publish(&squad, shared, app, scope.now, scope.generation) {
                     Ok(()) => self.progress.resolve(),
                     // Name the subsystem that actually failed. Reporting structured records here
                     // sends an investigation toward EE.log parsing even when capture is the fault.
@@ -1041,14 +1104,25 @@ impl RewardSession {
         }
     }
 
-    fn scan_responder(&self, identity: String, process: Option<GameProcess>) {
-        if self.progress.resolved() {
+    fn scan_responder(
+        &self,
+        identity: String,
+        process: Option<GameProcess>,
+        policy: AccessPolicy,
+        generation: &MonitorGeneration,
+    ) {
+        if self.progress.resolved() || !policy.read_process_memory {
             return;
         }
         let Some(process) = process else {
             return;
         };
-        self.scans.scan(identity, process, self.memory.candidates());
+        self.scans.scan(
+            identity,
+            process,
+            self.memory.candidates(),
+            generation.clone(),
+        );
     }
 
     fn try_publish(
@@ -1057,6 +1131,7 @@ impl RewardSession {
         shared: &SharedRuntime,
         app: &AppHandle,
         now: u64,
+        generation: &MonitorGeneration,
     ) -> Result<(), &'static str> {
         let result = read_squad_cards(
             squad,
@@ -1066,7 +1141,7 @@ impl RewardSession {
             &self.reference.rewards,
             self.watch.gone_signal(),
         )?;
-        self.publish(result, shared, app, now);
+        self.publish(result, shared, app, now, generation);
         Ok(())
     }
 
@@ -1076,6 +1151,7 @@ impl RewardSession {
         shared: &SharedRuntime,
         app: &AppHandle,
         now: u64,
+        generation: &MonitorGeneration,
     ) {
         let observations = result
             .choices
@@ -1101,6 +1177,7 @@ impl RewardSession {
                 &self.reference.rewards,
                 &self.price_cache,
                 now,
+                generation,
             );
         }
         if let Ok(mut runtime) = shared.lock() {
@@ -1126,7 +1203,13 @@ impl RewardSession {
         }
     }
 
-    fn drain_screen_watch(&mut self, shared: &SharedRuntime, app: &AppHandle, now: u64) {
+    fn drain_screen_watch(
+        &mut self,
+        shared: &SharedRuntime,
+        app: &AppHandle,
+        now: u64,
+        generation: &MonitorGeneration,
+    ) {
         if let Some(names) = self.watch.take_read()
             && !self.progress.resolved()
         {
@@ -1145,6 +1228,7 @@ impl RewardSession {
                 shared,
                 app,
                 now,
+                generation,
             );
             self.progress.resolve();
         }
@@ -1179,8 +1263,14 @@ impl RewardSession {
     }
 }
 
-fn monitor_game(shared: SharedRuntime, app: AppHandle) {
-    let procfs = GameMemory::new();
+pub(crate) fn run(
+    shared: SharedRuntime,
+    app: AppHandle,
+    policy: AccessPolicy,
+    generation: MonitorGeneration,
+) {
+    debug_assert!(policy.observe_process_presence);
+    let procfs = ProcessObserver::new();
     let mut machine = MonitorMachine::new(15);
     let mut reward_log = RewardLogMachine::default();
     let mut kiosk_session = KioskSession::new();
@@ -1307,7 +1397,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
     // directly. The closed-set match is its own detector: only the reward screen yields four names
     // from this squad's relic pool.
 
-    loop {
+    while generation.is_current() {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -1387,13 +1477,19 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             }
         };
         let result = machine.tick(input);
-        if result.refresh {
+        if result.refresh && policy.acquire_inventory {
             let refresh = Arc::clone(&shared);
+            let refresh_generation = generation.clone();
             spawn_monitor_refresh_task(move || {
-                let _ = refresh_blocking(&refresh);
+                if refresh_generation.is_current() {
+                    let _ = refresh_blocking(&refresh);
+                }
             });
         }
-        if let Some(error) = result.acquisition_health {
+        if policy.acquire_inventory
+            && let Some(error) = result.acquisition_health
+            && generation.is_current()
+        {
             let _ = apply_outcome(
                 &shared,
                 InventoryRefreshOutcome::acquisition_failed(
@@ -1415,7 +1511,20 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             }
         }
         for event in reward_log.observe_bytes(&log_bytes) {
-            reward_session.handle_event(event, process, &procfs, &shared, &app, now);
+            if generation.is_current() {
+                reward_session.handle_event(
+                    event,
+                    process,
+                    &procfs,
+                    &shared,
+                    &app,
+                    EventScope {
+                        policy,
+                        generation: &generation,
+                        now,
+                    },
+                );
+            }
         }
         // Same bytes, second machine: the kiosk's lifecycle is independent of the reward screen's
         // (the two never occur at once in practice, but neither knows about the other).
@@ -1436,7 +1545,7 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
             // both land here.
             kiosk_session.take_close(kiosk_view_cell.inner(), &kiosk_hide);
         }
-        reward_session.drain_screen_watch(&shared, &app, now);
+        reward_session.drain_screen_watch(&shared, &app, now, &generation);
         if process.is_none() {
             reward_session.game_gone(&app);
             // No game, no kiosk: the capture source is gone even if the miss streak has not
@@ -1458,7 +1567,17 @@ fn monitor_game(shared: SharedRuntime, app: AppHandle) {
         } else {
             Duration::from_millis(100)
         };
-        std::thread::sleep(poll_interval);
+        std::thread::park_timeout(poll_interval);
+    }
+    reward_session.close(&shared, &app);
+    if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
+        kiosk_session.close(kiosk_view_cell.inner(), &kiosk_hide, &kiosk_retire);
+    }
+    reward_ocr::clear_latest_matched_rect();
+    #[cfg(target_os = "linux")]
+    let _ = reward_capture::portal::PortalCapture::close();
+    if let Ok(mut runtime) = shared.lock() {
+        runtime.game_running = false;
     }
 }
 
@@ -1538,16 +1657,6 @@ fn read_squad_cards(
         VISUAL_READ_DEADLINE,
         visual_screen_gone,
     )
-}
-
-/// Watch for the reward screen instead of waiting to be told about it.
-///
-/// EE.log is flushed by the game seconds after the fact, so the announcement can arrive after the
-/// fifteen-second screen has closed. Relic loading is logged minutes earlier, which is early enough
-/// to survive any flush delay, so that is what arms this. Each poll is a capture plus four crops,
-/// roughly 150ms; the interval keeps it to about a tenth of a core while a fissure is running.
-fn spawn_reward_screen_poller(watch: &ScreenWatch) {
-    spawn_reward_screen_poller_with(watch, PollerTiming::live(), ScreenRewardSource::new);
 }
 
 /// The names the poller matches a card against, and the relics they came from.
@@ -2180,61 +2289,93 @@ fn spawn_market_price_fetch(
     reward_catalog: &[RewardCatalogEntry],
     price_cache: &MarketPriceCache,
     now: u64,
+    generation: &MonitorGeneration,
 ) {
     let names = choices.to_vec();
-    let shared = Arc::clone(shared);
-    let app = app.clone();
-    let reward_catalog = reward_catalog.to_vec();
     let price_cache = price_cache.clone();
-    std::thread::spawn(move || {
-        // Anything the pool warmed while the mission was still running is already here, so the
-        // common case does no requests at all and the overlay never shows a dash. Only a reward
-        // the warm pass missed -- a pool that never loaded, an API that was down then -- is
-        // fetched now, and it is fetched with no gap because the screen is already up.
-        let mut prices = names
-            .iter()
-            .filter_map(|choice| Some((choice.name.clone(), price_cache.get(&choice.name)?)))
-            .collect::<BTreeMap<_, _>>();
-        let missing = names
-            .iter()
-            .filter(|choice| !prices.contains_key(&choice.name))
-            .map(|choice| choice.name.clone())
-            .collect::<Vec<_>>();
-        let mut outcome = WarmOutcome::default();
-        if !missing.is_empty()
-            && let Some(market) = warframe_acquisition::WarframeMarketHttp::new()
-        {
-            outcome = price_cache.warm(&market, &missing, Duration::ZERO);
-            for name in missing {
-                if let Some(price) = price_cache.get(&name) {
-                    prices.insert(name, price);
+    let app = app.clone();
+    spawn_market_price_worker(
+        names,
+        Arc::clone(shared),
+        reward_catalog.to_vec(),
+        now,
+        generation.clone(),
+        move |choices| {
+            // Anything the pool warmed while the mission was still running is already here, so the
+            // common case does no requests at all and the overlay never shows a dash. Only a reward
+            // the warm pass missed -- a pool that never loaded, an API that was down then -- is
+            // fetched now, and it is fetched with no gap because the screen is already up.
+            let mut prices = choices
+                .iter()
+                .filter_map(|choice| Some((choice.name.clone(), price_cache.get(&choice.name)?)))
+                .collect::<BTreeMap<_, _>>();
+            let missing = choices
+                .iter()
+                .filter(|choice| !prices.contains_key(&choice.name))
+                .map(|choice| choice.name.clone())
+                .collect::<Vec<_>>();
+            let mut outcome = WarmOutcome::default();
+            if !missing.is_empty()
+                && let Some(market) = warframe_acquisition::WarframeMarketHttp::new()
+            {
+                outcome = price_cache.warm(&market, &missing, Duration::ZERO);
+                for name in missing {
+                    if let Some(price) = price_cache.get(&name) {
+                        prices.insert(name, price);
+                    }
                 }
             }
-        }
-        // An oversize response is worth saying even when the cache carried the screen, because it
-        // is the failure that stops every future price and nothing else would report it. An empty
-        // screen with no failure to name means no request was made at all.
-        let failure = outcome.failure().or_else(|| {
-            prices
-                .is_empty()
-                .then_some("warframe.market pricing is unavailable for these rewards")
+            // An oversize response is worth saying even when the cache carried the screen, because
+            // it stops every future price and nothing else would report it. An empty screen with no
+            // failure to name means no request was made at all.
+            let failure = outcome.failure().or_else(|| {
+                prices
+                    .is_empty()
+                    .then_some("warframe.market pricing is unavailable for these rewards")
+            });
+            (prices, failure)
+        },
+        move || {
+            let _ = app.emit_to("reward-overlay", "reward-updated", ());
+        },
+    );
+}
+
+fn spawn_market_price_worker<Fetch, Emit>(
+    choices: Vec<RewardObservation>,
+    shared: SharedRuntime,
+    reward_catalog: Vec<RewardCatalogEntry>,
+    now: u64,
+    generation: MonitorGeneration,
+    fetch: Fetch,
+    emit: Emit,
+) -> std::thread::JoinHandle<()>
+where
+    Fetch: FnOnce(&[RewardObservation]) -> (BTreeMap<String, u32>, Option<&'static str>)
+        + Send
+        + 'static,
+    Emit: FnOnce() + Send + 'static,
+{
+    std::thread::spawn(move || {
+        let (prices, failure) = fetch(&choices);
+        generation.publish(|| {
+            if let Some(failure) = failure
+                && let Ok(mut runtime) = shared.lock()
+            {
+                let _ = runtime.core.record_market_degraded(failure);
+            }
+            if prices.is_empty() {
+                return;
+            }
+            apply_reward_observations(&shared, &reward_catalog, &choices, &prices);
+            if let Ok(mut runtime) = shared.lock() {
+                let _ = runtime
+                    .core
+                    .record_market_ready(prices.len(), now.to_string());
+            }
+            emit();
         });
-        if let Some(failure) = failure
-            && let Ok(mut runtime) = shared.lock()
-        {
-            let _ = runtime.core.record_market_degraded(failure);
-        }
-        if prices.is_empty() {
-            return;
-        }
-        apply_reward_observations(&shared, &reward_catalog, &names, &prices);
-        if let Ok(mut runtime) = shared.lock() {
-            let _ = runtime
-                .core
-                .record_market_ready(prices.len(), now.to_string());
-        }
-        let _ = app.emit_to("reward-overlay", "reward-updated", ());
-    });
+    })
 }
 
 /// Price the whole relic pool while the mission is still being played.
@@ -2483,24 +2624,69 @@ pub fn build_monitor_input(
         log_bytes,
     )
 }
-pub(crate) fn start(shared: SharedRuntime, app: AppHandle) {
-    let should_start = shared
-        .lock()
-        .map(|mut runtime| {
-            if runtime.monitor_started {
-                false
-            } else {
-                runtime.monitor_started = true;
-                true
-            }
-        })
-        .unwrap_or(false);
-    if should_start {
-        std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_secs(3));
-            monitor_game(shared, app);
-        });
+
+/// A generation token captured by every worker and publication owned by one monitor run.
+#[derive(Clone, Debug)]
+pub struct MonitorGeneration {
+    id: u64,
+    current: Arc<AtomicU64>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    publication: Arc<Mutex<()>>,
+}
+
+impl MonitorGeneration {
+    pub fn new(id: u64, current: Arc<AtomicU64>) -> Self {
+        current.store(id, Ordering::Release);
+        Self {
+            id,
+            current,
+            stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            publication: Arc::new(Mutex::new(())),
+        }
     }
+
+    pub const fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn request_stop(&self) {
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        self.stop.store(true, Ordering::Release);
+    }
+
+    pub fn is_current(&self) -> bool {
+        !self.stop.load(Ordering::Acquire) && self.current.load(Ordering::Acquire) == self.id
+    }
+
+    pub fn publish(&self, publication: impl FnOnce()) -> bool {
+        let _publication = self
+            .publication
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if !self.is_current() {
+            return false;
+        }
+        publication();
+        true
+    }
+}
+
+/// Minimal lifecycle body used by contract tests without constructing a Tauri application.
+pub fn spawn_generation_worker(
+    generation: MonitorGeneration,
+    started: std::sync::mpsc::Sender<u64>,
+    retired: std::sync::mpsc::Sender<u64>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let _ = started.send(generation.id());
+        while generation.is_current() {
+            std::thread::park_timeout(Duration::from_millis(10));
+        }
+        let _ = retired.send(generation.id());
+    })
 }
 
 #[cfg(test)]
@@ -3103,6 +3289,36 @@ mod tests {
         ));
     }
     #[test]
+    fn resetting_record_scans_waits_for_memory_workers_to_retire() {
+        let scans = Arc::new(RecordScans::default());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            started_tx.send(()).expect("report worker start");
+            release_rx.recv().expect("release memory worker");
+        });
+        scans.track_worker(worker);
+        started_rx.recv().expect("memory worker starts");
+
+        let retiring = Arc::clone(&scans);
+        let (retired_tx, retired_rx) = std::sync::mpsc::channel();
+        let resetter = std::thread::spawn(move || {
+            retiring.reset();
+            retired_tx.send(()).expect("report retirement");
+        });
+        assert!(
+            retired_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+            "reset returned while a process-memory worker was still active"
+        );
+
+        release_tx.send(()).expect("release worker");
+        retired_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("reset returns after memory worker retires");
+        resetter.join().expect("resetter exits");
+    }
+    #[test]
+
     fn resetting_record_scans_invalidates_workers_and_clears_both_indexes() {
         let scans = RecordScans::default();
         scans.generation.store(41, Ordering::Release);
@@ -3122,6 +3338,118 @@ mod tests {
         assert_eq!(scans.generation.load(Ordering::Acquire), 42);
         assert!(scans.records.lock().expect("records").is_empty());
         assert!(scans.active.lock().expect("active scans").is_empty());
+    }
+
+    #[test]
+    fn retired_generation_rejects_detached_price_worker_effects() {
+        let directory = tempfile::tempdir().expect("temporary runtime");
+        let shared = crate::tests::test_runtime(directory.path());
+        let current = Arc::new(AtomicU64::new(0));
+        let generation = MonitorGeneration::new(16, current);
+        let (fetch_started_tx, fetch_started_rx) = std::sync::mpsc::channel();
+        let (release_fetch_tx, release_fetch_rx) = std::sync::mpsc::channel();
+        let emitted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_emitted = Arc::clone(&emitted);
+
+        let worker = spawn_market_price_worker(
+            vec![RewardObservation::certain("Forma Blueprint")],
+            Arc::clone(&shared),
+            vec![RewardCatalogEntry {
+                name: "Forma Blueprint".to_owned(),
+                ducats: 25,
+            }],
+            123,
+            generation.clone(),
+            move |_| {
+                fetch_started_tx.send(()).expect("report fetch completion");
+                release_fetch_rx.recv().expect("release price worker");
+                (
+                    BTreeMap::from([("Forma Blueprint".to_owned(), 12)]),
+                    Some("delayed market failure"),
+                )
+            },
+            move || {
+                worker_emitted.fetch_add(1, Ordering::AcqRel);
+            },
+        );
+        fetch_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("price worker reaches delayed publication");
+
+        generation.request_stop();
+        release_fetch_tx.send(()).expect("release price worker");
+        worker.join().expect("price worker exits");
+
+        let runtime = shared.lock().expect("runtime");
+        let view = runtime.core.current_view().expect("view builds");
+        assert!(
+            view.reward().cards().is_empty(),
+            "a retired price worker mutated the reward candidates"
+        );
+        assert_eq!(
+            view.health().market().message(),
+            "warframe.market pricing idle; nothing to price yet",
+            "a retired price worker mutated market health"
+        );
+        assert_eq!(
+            emitted.load(Ordering::Acquire),
+            0,
+            "a retired price worker emitted reward-updated"
+        );
+    }
+
+    #[test]
+    fn retiring_generation_waits_for_in_flight_publication() {
+        let current = Arc::new(AtomicU64::new(0));
+        let generation = MonitorGeneration::new(16, current);
+        let worker_generation = generation.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            worker_generation.publish(|| {
+                entered_tx.send(()).expect("report publication start");
+                release_rx.recv().expect("release publication");
+            })
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("publication starts");
+
+        let retiring_generation = generation.clone();
+        let (retired_tx, retired_rx) = std::sync::mpsc::channel();
+        let retire = std::thread::spawn(move || {
+            retiring_generation.request_stop();
+            retired_tx.send(()).expect("report retirement");
+        });
+        assert!(
+            retired_rx.recv_timeout(Duration::from_millis(20)).is_err(),
+            "retirement returned while a reward publication was still mutating runtime state"
+        );
+
+        release_tx.send(()).expect("release publication");
+        retired_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("retirement completes after publication");
+        assert!(worker.join().expect("publication worker exits"));
+        retire.join().expect("retirement worker exits");
+    }
+
+    #[test]
+    fn retired_generation_rejects_delayed_reward_publication() {
+        let current = Arc::new(AtomicU64::new(0));
+        let generation = MonitorGeneration::new(17, Arc::clone(&current));
+        let published = std::cell::Cell::new(false);
+
+        assert!(generation.publish(|| published.set(true)));
+        assert!(published.replace(false));
+
+        current.fetch_add(1, Ordering::AcqRel);
+        generation.request_stop();
+        assert!(!generation.publish(|| published.set(true)));
+        assert!(
+            !published.get(),
+            "a retired monitor must not publish a delayed price fetch"
+        );
     }
 
     #[test]

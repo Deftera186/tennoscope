@@ -31,6 +31,7 @@ export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefres
   const fetched = account.fetched_at ? stampReading(account.fetched_at) : null
   const freshness = fetched ? `Fetched ${fetched.relative}` : 'Orders have not been fetched yet'
   const needsRelink = account.link === 'needs_relink'
+  const ownershipUnverifiable = account.orders.some(entry => entry.status.state === 'unverifiable')
 
   return <section className="page" aria-labelledby="orders-title">
     <div className="mark-head">
@@ -49,7 +50,9 @@ export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefres
         <span className="band-label">Need attention</span>
         <p className="band-note">{account.flagged
           ? 'Listed above what this device says you hold'
-          : 'Every listing matches the collection'}</p>
+          : ownershipUnverifiable
+            ? 'Ownership could not be verified for every listing'
+            : 'Every listing matches the collection'}</p>
       </div>
       <div className="band-cell backing" data-summary="backing">
         {/* A refused credential is not a linked account. Reading "Linked" beside a refusal notice
