@@ -12,6 +12,8 @@
 //! garbled read still lands on the right item, which is what makes this trustworthy enough to be
 //! published rather than guessed at.
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     path::{Path, PathBuf},
     process::Command,
@@ -497,6 +499,13 @@ fn run_tesseract(
         .cloned()
         .unwrap_or_else(|| "tesseract".into());
     let mut command = Command::new(&program);
+    // Issue #12: on Windows a console-subsystem child spawned without CREATE_NO_WINDOW gets
+    // its own console window -- one per crop, three per reward poll off-screen, every two
+    // seconds -- which surfaces in the taskbar and steals the game out of focus. WGC capture
+    // itself creates no windows, and the overlay is focusable(false), so this spawn was the
+    // only recurring top-level window the poller owns.
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000);
     // One recognition thread per spawn: tesseract's own OpenMP pooling oversubscribes the
     // machine when several crops are read side by side, and the kiosk poller does exactly that.
     command.env("OMP_THREAD_LIMIT", "1");
