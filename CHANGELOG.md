@@ -11,6 +11,8 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-18
+
 ### Added
 
 - **Warframe access is now an explicit backend-enforced mode.** Companion keeps the catalog,
@@ -583,7 +585,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/Deftera186/tennoscope/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/Deftera186/tennoscope/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Deftera186/tennoscope/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/Deftera186/tennoscope/compare/v0.7.0...v0.8.0
