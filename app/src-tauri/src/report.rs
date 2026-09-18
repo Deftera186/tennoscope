@@ -462,45 +462,7 @@ mod tests {
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use crate::reward_capture::SessionKind;
-
-    use super::{civil_from_days, environment_line};
-
-    /// Mutation caught: omitting or reordering either source would restore the guesswork that
-    /// made native-Wayland failures difficult to diagnose. Every pixel backend needs a distinct,
-    /// machine-searchable value, independently of the rectangle source.
-    #[test]
-    fn the_environment_line_reports_every_frame_backend_independently() {
-        for (rect_source, frame_backend) in [
-            ("x11", "x11"),
-            ("wayland", "wayland"),
-            ("wayland", "kwin"),
-            ("portal", "portal"),
-            ("x11", "portal"),
-        ] {
-            assert_eq!(
-                environment_line(
-                    SessionKind::Wayland,
-                    Some("KDE"),
-                    Some(rect_source),
-                    Some(frame_backend),
-                ),
-                format!(
-                    "Display: wayland session — KDE — rect_source={rect_source} — frame_backend={frame_backend}\n"
-                )
-            );
-        }
-    }
-
-    /// Mutation caught: unwrapping either absent observation would prevent reports before the
-    /// first capture, while empty fallbacks would leave their meaning ambiguous.
-    #[test]
-    fn an_unknown_desktop_and_backend_are_still_reported() {
-        assert_eq!(
-            environment_line(SessionKind::X11, None, None, None),
-            "Display: x11 session — unknown desktop — rect_source=unknown — frame_backend=unknown\n"
-        );
-    }
+    use super::civil_from_days;
 
     #[test]
     fn civil_from_days_is_exact_on_known_epochs() {

@@ -84,14 +84,20 @@ access the new mode does not permit.
 #### Screen Observer
 
 Screen Observer hides X11/XWayland capture, native-Wayland compositor capture, portal ScreenCast,
-and Windows Graphics Capture behind one frame-selection and reward-recognition path. Capture and
+and Windows DXGI Desktop Duplication behind one frame-selection and reward-recognition path. Capture and
 preprocessing are in-process on both platforms; Tesseract provides OCR, and Linux uses `xwininfo`
 only to discover a game nested inside a Wine virtual desktop. On Linux, X11/XWayland wins whenever
 it finds the game.
 A native-Wayland game then tries wlroots screencopy, KWin ScreenShot2, and finally an
 already-live portal ScreenCast session; gameplay never negotiates a portal session or opens a
-desktop chooser. Windows captures through Windows Graphics Capture rather than GDI, because
-`BitBlt` against a D3D swapchain returns a black frame.
+desktop chooser. Windows uses the `win-capture` crate's DXGI Desktop Duplication backend rather
+than WGC, avoiding WGC's capture border without falling back to GDI for flip-model game content.
+Reward and kiosk readers share one serialized, lazily created duplication session; the last active
+reader releases it. Frame acquisition and GPU readback waits are bounded, failures use a shared
+retry cooldown, and monitor changes recreate the session on the output's owning adapter. The
+crate confines unsafe Windows calls to one module; the application remains unsafe-free. Cropping
+receives physical desktop coordinates and upright pixels, including rotated and negative-origin
+monitors. Windows OCR subprocesses use `CREATE_NO_WINDOW` so per-crop console windows do not appear.
 
 #### Observation Pipeline
 

@@ -39,4 +39,8 @@ The application is built from third-party crates and npm packages under their re
 
 The Linux capture backends add a platform stack worth naming, all of it GPL-3.0-compatible. The desktop-portal path uses [ashpd](https://github.com/bilelmoussaoui/ashpd) (MIT) for the `org.freedesktop.portal.ScreenCast` handshake and [pipewire](https://gitlab.freedesktop.org/pipewire/pipewire-rs) with `libspa` (both MIT) to read the granted stream; the KWin path uses [zbus](https://github.com/dbus2/zbus) (MIT) for `org.kde.KWin.ScreenShot2` and [rustix](https://github.com/bytecodealliance/rustix) (Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT) for the pipe it returns pixels over; the wlroots path uses [wayland-client](https://github.com/Smithay/wayland-rs) and `wayland-protocols` (both MIT) for the protocol probe and xdg-output geometry. These crates bind to the distribution's own PipeWire (MIT) and D-Bus libraries, which Linux packages depend on rather than bundle.
 
+Windows desktop capture uses [windows-rs](https://github.com/microsoft/windows-rs) 0.62.2
+(MIT OR Apache-2.0) for DXGI and Direct3D 11 bindings. The app's `win-capture` crate owns the
+duplication session; xcap remains responsible for Windows window discovery, not pixel capture.
+
 `keyring` 4.1.5 (MIT OR Apache-2.0) is called out individually: it is what stores the warframe.market credential in the platform's own secret store where one is available, and its license is GPL-3.0-compatible.

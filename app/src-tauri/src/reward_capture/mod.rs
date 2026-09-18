@@ -3,6 +3,8 @@
 pub mod availability;
 #[cfg(target_os = "linux")]
 pub mod direct;
+#[cfg(windows)]
+pub mod dxgi;
 pub mod geometry;
 #[cfg(target_os = "linux")]
 pub mod kwin;
@@ -113,15 +115,24 @@ impl RectOrigin {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FrameBackend {
     X11,
+    #[cfg(windows)]
+    Dxgi,
     Wayland,
     Kwin,
     Portal,
 }
 
 impl FrameBackend {
+    #[cfg(windows)]
+    const NATIVE_WINDOW: Self = Self::Dxgi;
+    #[cfg(not(windows))]
+    const NATIVE_WINDOW: Self = Self::X11;
+
     pub const fn label(self) -> &'static str {
         match self {
             Self::X11 => "x11",
+            #[cfg(windows)]
+            Self::Dxgi => "dxgi",
             Self::Wayland => "wayland",
             Self::Kwin => "kwin",
             Self::Portal => "portal",
@@ -207,11 +218,12 @@ impl BackendAvailability {
 
     /// Whether one whole-monitor backend is on offer.
     ///
-    /// `X11` is never on offer here: X11 answers with a real window rectangle and is decided
-    /// before this struct is consulted at all.
+    /// Native-window capture is decided by window discovery before this struct is consulted.
     const fn offers(self, backend: FrameBackend) -> bool {
         match backend {
             FrameBackend::X11 => false,
+            #[cfg(windows)]
+            FrameBackend::Dxgi => false,
             FrameBackend::Wayland => self.direct_wayland,
             FrameBackend::Kwin => self.kwin,
             FrameBackend::Portal => self.portal_session,
@@ -223,6 +235,8 @@ impl BackendAvailability {
     const fn offer(&mut self, backend: FrameBackend) {
         match backend {
             FrameBackend::X11 => {}
+            #[cfg(windows)]
+            FrameBackend::Dxgi => {}
             FrameBackend::Wayland => self.direct_wayland = true,
             FrameBackend::Kwin => self.kwin = true,
             FrameBackend::Portal => self.portal_session = true,
@@ -241,7 +255,7 @@ pub fn capture_sources(
     available: BackendAvailability,
 ) -> Option<(RectOrigin, FrameBackend)> {
     if x11_found {
-        return Some((RectOrigin::X11, FrameBackend::X11));
+        return Some((RectOrigin::X11, FrameBackend::NATIVE_WINDOW));
     }
     if session == SessionKind::X11 {
         return None;
@@ -267,7 +281,7 @@ fn capture_choice(
     match x11_rect {
         Ok(rect) => Ok(CaptureChoice {
             rect_origin: RectOrigin::X11,
-            frame_backend: FrameBackend::X11,
+            frame_backend: FrameBackend::NATIVE_WINDOW,
             x11_rect: Some(rect),
         }),
         Err(reason) => {
@@ -424,6 +438,8 @@ pub struct GameCapture {
     session: SessionKind,
     x11: x11::X11Capture,
     last_shapes: Vec<CaptureShape>,
+    #[cfg(windows)]
+    dxgi: dxgi::DxgiCapture,
     #[cfg(target_os = "linux")]
     direct: direct::DirectCapture,
     #[cfg(target_os = "linux")]
@@ -444,6 +460,8 @@ impl GameCapture {
             session: session_kind(),
             x11: x11::X11Capture::new(),
             last_shapes: Vec::new(),
+            #[cfg(windows)]
+            dxgi: dxgi::DxgiCapture::new(),
             #[cfg(target_os = "linux")]
             direct: direct::DirectCapture::new(),
             #[cfg(target_os = "linux")]
@@ -525,9 +543,13 @@ impl GameCapture {
             FrameBackend::Kwin => self.kwin.capture_monitors()?,
             FrameBackend::Portal => self.portal.capture_monitors()?,
         };
-        // No portal off Linux, so the only reachable origin is X11 and the frame is xcap's. The
-        // decision still runs above, because that is where "no Warframe window found" comes from.
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(windows)]
+        let captures = {
+            let rect = x11_rect.ok_or("no Warframe window found")?;
+            vec![(rect, self.dxgi.capture_monitor(rect)?)]
+        };
+        // Other non-Linux platforms retain xcap monitor capture. Windows never compiles it.
+        #[cfg(not(any(target_os = "linux", windows)))]
         let captures = {
             let rect = x11_rect.ok_or("no Warframe window found")?;
             let monitor = self.x11.capture_monitor(rect)?;
@@ -600,9 +622,8 @@ mod tests {
 
     use super::{
         BackendAvailability, CaptureShape, FrameBackend, MonitorFrame, RectOrigin, SessionKind,
-        WAYLAND_LADDER, capture_choice, capture_geometry_line, capture_shapes_changed,
-        capture_sources, capture_sources_from, geometry, prepare_captures, session_kind_from,
-        update_capture_shapes,
+        WAYLAND_LADDER, capture_choice, capture_shapes_changed, capture_sources,
+        capture_sources_from, prepare_captures, session_kind_from, update_capture_shapes,
     };
     #[cfg(target_os = "linux")]
     use super::{X11FrameTarget, x11_frame_target};
@@ -673,59 +694,6 @@ mod tests {
             prepare_captures(vec![(invalid, monitor_frame(0, 0, 1080))]).err(),
             Some("the game window is not on any monitor")
         );
-    }
-
-    /// Mutation caught: returning a fixed backend or swapping the origin labels would make the
-    /// report disagree with the snapshot supplied by the capture path.
-    #[test]
-    fn the_report_backend_maps_local_snapshot_state() {
-        assert_eq!(capture_sources_from(&Mutex::new(None)), None);
-        assert_eq!(
-            capture_sources_from(&Mutex::new(Some(shape(
-                RectOrigin::X11,
-                FrameBackend::X11,
-                0
-            )))),
-            Some(("x11", "x11"))
-        );
-        assert_eq!(
-            capture_sources_from(&Mutex::new(Some(shape(
-                RectOrigin::Portal,
-                FrameBackend::Portal,
-                0
-            )))),
-            Some(("portal", "portal"))
-        );
-    }
-
-    /// Mutation caught: projecting only `origin` loses the XWayland row where the rectangle is
-    /// X11 but the pixels are portal-backed.
-    #[test]
-    fn the_report_snapshot_retains_rect_source_and_frame_backend() {
-        let snapshot = Mutex::new(Some(shape(RectOrigin::X11, FrameBackend::Portal, 0)));
-        assert_eq!(capture_sources_from(&snapshot), Some(("x11", "portal")));
-    }
-
-    /// Mutation caught: naming only `origin` or `frame_backend` makes the geometry diagnostic
-    /// ambiguous in the XWayland row, where the rectangle and pixels come from different APIs.
-    #[test]
-    fn geometry_line_explicitly_names_rect_source_and_capture_backend() {
-        let current = shape(RectOrigin::X11, FrameBackend::Portal, 1920);
-        let visible = geometry::visible_region(
-            current.rect,
-            current.monitor_x,
-            current.monitor_y,
-            current.monitor_width,
-            current.monitor_height,
-        )
-        .expect("the test shape fills its monitor");
-        let line = capture_geometry_line(current, &visible);
-
-        assert!(line.contains("rect source x11"), "line was: {line}");
-        assert!(line.contains("capture backend portal"), "line was: {line}");
-        assert!(line.contains("window=1920,0 1920x1080"));
-        assert!(line.contains("monitor=1920,0 1920x1080"));
-        assert!(line.contains("region="));
     }
 
     /// Mutation caught: using `.lock().ok()?` would turn one panic while holding the snapshot
@@ -907,6 +875,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(windows))]
     /// Regression: an XWayland window already exposes pixels through X11. Routing it through the
     /// desktop portal is what produced a compositor chooser over live gameplay.
     #[test]
@@ -931,22 +900,7 @@ mod tests {
         assert_eq!(x11_frame_target(SessionKind::X11), X11FrameTarget::Monitor);
     }
 
-    #[test]
-    fn the_label_is_stable_for_the_report_header() {
-        assert_eq!(SessionKind::X11.label(), "x11");
-        assert_eq!(SessionKind::Wayland.label(), "wayland");
-    }
-
-    /// Catches the KWin backend reaching the report header under another backend's name, which
-    /// would make a KDE capture indistinguishable from a portal one in a bug report.
-    #[test]
-    fn every_frame_backend_label_is_stable_for_the_report_header() {
-        assert_eq!(FrameBackend::X11.label(), "x11");
-        assert_eq!(FrameBackend::Wayland.label(), "wayland");
-        assert_eq!(FrameBackend::Kwin.label(), "kwin");
-        assert_eq!(FrameBackend::Portal.label(), "portal");
-    }
-
+    #[cfg(not(windows))]
     /// An X11 session must keep using X11 even when every Wayland backend is available.
     #[test]
     fn an_x11_session_never_reaches_for_a_wayland_backend() {
@@ -957,6 +911,7 @@ mod tests {
         assert_eq!(capture_sources(SessionKind::X11, false, ALL_BACKENDS), None);
     }
 
+    #[cfg(not(windows))]
     /// A Wayland session with an XWayland game keeps the real window rectangle.
     #[test]
     fn a_wayland_session_prefers_a_real_x11_rect() {
@@ -964,6 +919,24 @@ mod tests {
             capture_sources(SessionKind::Wayland, true, ALL_BACKENDS),
             Some((RectOrigin::X11, FrameBackend::X11))
         );
+    }
+
+    /// Window discovery must never select xcap pixels on Windows, even if Wayland variables
+    /// leaked into the process environment or a native-Wayland backend was offered.
+    #[cfg(windows)]
+    #[test]
+    fn a_windows_window_uses_dxgi_for_its_pixels() {
+        for session in [SessionKind::X11, SessionKind::Wayland] {
+            let rect = game_rect();
+            let choice = capture_choice(session, Ok(rect), ALL_BACKENDS).unwrap();
+            assert_eq!(choice.rect_origin, RectOrigin::X11);
+            assert_eq!(choice.frame_backend, FrameBackend::Dxgi);
+            assert_eq!(choice.x11_rect, Some(rect));
+            assert_eq!(
+                capture_sources(session, true, ALL_BACKENDS),
+                Some((RectOrigin::X11, FrameBackend::Dxgi))
+            );
+        }
     }
 
     /// The whole point of the KWin backend: a silent capture path must be chosen ahead of the

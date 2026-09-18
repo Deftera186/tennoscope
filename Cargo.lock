@@ -5558,6 +5558,7 @@ dependencies = [
  "warframe-status",
  "wayland-client",
  "wayland-protocols",
+ "win-capture",
  "xcap",
  "xcb",
  "zbus",
@@ -6546,6 +6547,14 @@ name = "widestring"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
+name = "win-capture"
+version = "0.9.1"
+dependencies = [
+ "image",
+ "windows 0.62.2",
+]
 
 [[package]]
 name = "winapi"

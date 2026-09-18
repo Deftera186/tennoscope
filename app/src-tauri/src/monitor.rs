@@ -1238,11 +1238,14 @@ impl RewardSession {
         }
     }
 
-    fn game_gone(&mut self, app: &AppHandle) {
+    fn game_gone(&mut self, hide: &dyn Fn()) {
+        // Before any cards are recognized, misses alone cannot retire the poller's source.
+        // Join it before dropping the monitor reader so no game-session capture stays alive.
+        self.watch.stop();
         self.memory.clear();
         self.scans.reset();
         if self.observer.miss().hide {
-            overlay_window::hide_reward_overlay(app);
+            hide();
         }
         // Release the game-session screen cast; each later read locates Warframe again.
         if self.screen.take().is_some() {
@@ -1252,6 +1255,12 @@ impl RewardSession {
 
     fn close(&mut self, shared: &SharedRuntime, app: &AppHandle) {
         self.watch.stop();
+        // The monitor's log-driven reader is separate from the joined poller. Release its DXGI
+        // lease too, both at reward close and when observation access is revoked.
+        #[cfg(windows)]
+        {
+            self.screen = None;
+        }
         self.progress.reset();
         self.scans.reset();
         self.memory.clear();
@@ -1547,7 +1556,7 @@ pub(crate) fn run(
         }
         reward_session.drain_screen_watch(&shared, &app, now, &generation);
         if process.is_none() {
-            reward_session.game_gone(&app);
+            reward_session.game_gone(&|| overlay_window::hide_reward_overlay(&app));
             // No game, no kiosk: the capture source is gone even if the miss streak has not
             // finished counting.
             if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
@@ -3466,6 +3475,109 @@ mod tests {
 
         watch.stop();
         assert!(!watch.running());
+    }
+
+    #[test]
+    fn game_gone_stops_and_joins_a_poller_before_any_reward_is_recognized() {
+        use std::sync::mpsc;
+
+        struct UnrecognizedScreen {
+            read_started: Option<mpsc::Sender<()>>,
+            drop_started: mpsc::Sender<()>,
+            release_drop: mpsc::Receiver<()>,
+            drop_finished: mpsc::Sender<()>,
+        }
+
+        impl VisualRewardSource for UnrecognizedScreen {
+            fn choices(
+                &mut self,
+                _candidates: &[RewardCatalogEntry],
+            ) -> Result<Vec<String>, &'static str> {
+                if let Some(started) = self.read_started.take() {
+                    let _ = started.send(());
+                }
+                Err("a reward card read as blank")
+            }
+        }
+
+        impl Drop for UnrecognizedScreen {
+            fn drop(&mut self) {
+                let _ = self.drop_started.send(());
+                let _ = self.release_drop.recv();
+                let _ = self.drop_finished.send(());
+            }
+        }
+
+        let mut session = RewardSession::new(None, None, vec![], MarketPriceCache::default());
+        session.watch.adopt(
+            &["/Lotus/Types/Game/Projections/T2VoidProjectionLexPrimeCBronze".to_owned()],
+            vec![RewardCatalogEntry {
+                name: "Forma Blueprint".to_owned(),
+                ducats: 0,
+            }],
+        );
+        let (read_started_tx, read_started_rx) = mpsc::channel();
+        let (drop_started_tx, drop_started_rx) = mpsc::channel();
+        let (release_drop_tx, release_drop_rx) = mpsc::channel();
+        let (drop_finished_tx, drop_finished_rx) = mpsc::channel();
+        let poller = spawn_reward_screen_poller_with(
+            &session.watch,
+            PollerTiming {
+                interval: Duration::from_millis(1),
+                watch_interval: Duration::from_millis(1),
+                lifetime: POLLER_LIFETIME,
+            },
+            move || UnrecognizedScreen {
+                read_started: Some(read_started_tx),
+                drop_started: drop_started_tx,
+                release_drop: release_drop_rx,
+                drop_finished: drop_finished_tx,
+            },
+        )
+        .expect("nonempty relic pool arms the real poller");
+        *session.watch.poller.lock().expect("poller slot") = Some(poller);
+        let read_started = read_started_rx.recv_timeout(Duration::from_secs(1));
+
+        let polling = Arc::clone(&session.watch.polling);
+        let (returned_tx, returned_rx) = mpsc::channel();
+        let release = std::thread::spawn(move || {
+            let drop_started = drop_started_rx.recv_timeout(Duration::from_secs(1));
+            // Hold destruction open so merely clearing the stop flag cannot pass as a join.
+            let returned_before_release =
+                returned_rx.recv_timeout(Duration::from_millis(20)).is_ok();
+            // Clean up even if game_gone forgot to stop or join. No assertion may strand a
+            // capture worker at its 45-minute deadline or at the blocked Drop above.
+            polling.store(false, Ordering::Release);
+            let _ = release_drop_tx.send(());
+            (drop_started, returned_before_release)
+        });
+
+        session.game_gone(&|| {});
+        let dropped_before_return = drop_finished_rx.try_recv().is_ok();
+        let _ = returned_tx.send(());
+        let (drop_started, returned_before_release) = release.join().expect("release worker exits");
+        session.watch.stop();
+        let capture_released = dropped_before_return
+            || drop_finished_rx
+                .recv_timeout(Duration::from_secs(1))
+                .is_ok();
+
+        assert!(
+            read_started.is_ok(),
+            "the poller never read its capture source"
+        );
+        assert!(
+            capture_released,
+            "capture source failed to retire during cleanup"
+        );
+        assert!(
+            drop_started.is_ok(),
+            "game disappearance did not stop the pre-recognition poller"
+        );
+        assert!(
+            !returned_before_release && dropped_before_return,
+            "game disappearance returned before its capture source finished dropping"
+        );
     }
 
     #[test]

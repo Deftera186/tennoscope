@@ -66,7 +66,7 @@ tokio = { version = "1", default-features = false, features = [
 ] }
 
 [target."cfg(windows)".dependencies]
-xcap = { version = "0.9.7", features = ["image", "wgc"] }
+win-capture = { path = "../../crates/win-capture" }
 
 [dev-dependencies]
 tempfile = "3"

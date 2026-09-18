@@ -499,11 +499,8 @@ fn run_tesseract(
         .cloned()
         .unwrap_or_else(|| "tesseract".into());
     let mut command = Command::new(&program);
-    // Issue #12: on Windows a console-subsystem child spawned without CREATE_NO_WINDOW gets
-    // its own console window -- one per crop, three per reward poll off-screen, every two
-    // seconds -- which surfaces in the taskbar and steals the game out of focus. WGC capture
-    // itself creates no windows, and the overlay is focusable(false), so this spawn was the
-    // only recurring top-level window the poller owns.
+    // A GUI parent otherwise opens a console for this console-subsystem child.
+    // Reward polling can spawn three crops in quick succession (issue #12).
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
     // One recognition thread per spawn: tesseract's own OpenMP pooling oversubscribes the

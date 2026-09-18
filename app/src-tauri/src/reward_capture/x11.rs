@@ -14,9 +14,11 @@ use xcb::{
     x::{Drawable, GetImage, GetWindowAttributes, ImageFormat, ImageOrder, Window},
 };
 
+use super::GameRectSource;
 #[cfg(target_os = "linux")]
 use super::availability::RetryCooldown;
-use super::{GameFrameSource, GameRectSource, MonitorFrame};
+#[cfg(not(windows))]
+use super::{GameFrameSource, MonitorFrame};
 use crate::overlay_window::WindowRect;
 
 /// The game's window title. Warframe titles its window the same on every platform and under every
@@ -32,7 +34,7 @@ const XWININFO_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 #[cfg(target_os = "linux")]
 static XWININFO_RETRY: RetryCooldown = RetryCooldown::new(XWININFO_RETRY_INTERVAL);
 
-/// The X11-backed rect and frame source.
+/// Native window discovery on every platform, with pixel capture only off Windows.
 pub struct X11Capture {
     selected_window: Option<u32>,
 }
@@ -114,6 +116,7 @@ impl GameRectSource for X11Capture {
     }
 }
 
+#[cfg(not(windows))]
 impl GameFrameSource for X11Capture {
     fn capture_monitor(&mut self, rect: WindowRect) -> Result<MonitorFrame, &'static str> {
         let monitor = xcap::Monitor::from_point(rect.x, rect.y)
@@ -124,8 +127,7 @@ impl GameFrameSource for X11Capture {
         let height = monitor.height().map_err(|_| "could not read the monitor")?;
         // The whole monitor, then cropped by the caller: xcap's `capture_region` ignores which
         // monitor it was asked for (measured on a two-output desktop -- both outputs returned
-        // the first one's pixels), and `Window::capture_image` returns a stale frame for game
-        // windows on Windows (xcap#131).
+        // the first one's pixels). Windows uses DXGI and cannot enter this implementation.
         let image = monitor
             .capture_image()
             .map_err(|_| "could not capture the game window")?;

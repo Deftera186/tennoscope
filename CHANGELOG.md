@@ -29,6 +29,19 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   as a timestamped snapshot outside Full, and ownership-dependent order state is marked
   unverifiable.
 
+### Fixed
+
+- **Windows OCR no longer opens a console window for each crop.** Reward and kiosk recognition
+  launch Tesseract with `CREATE_NO_WINDOW`, preventing the recurring console flashes that can
+  interrupt a borderless game.
+- **Windows reward and kiosk capture now use DXGI Desktop Duplication instead of WGC.** This
+  avoids WGC's yellow capture border without disabling recognition. Concurrent readers share a
+  persistent session, release it when observation stops, and recover from display/device changes
+  with bounded frame waits and a retry cooldown. Capture supports secondary and rotated displays.
+- **Game exit now stops reward polling even before any reward cards were recognized.** The
+  worker is joined so a crashed or closed game cannot leave a capture session alive until the
+  reward poller's lifetime expires.
+
 ## [0.9.1] - 2026-09-14
 
 ### Changed
