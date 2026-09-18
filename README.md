@@ -72,23 +72,18 @@ no longer own, then list, delist and change your online status without leaving t
 
 <div align="center">
 
-## Choose how TennoScope accesses Warframe
+## You decide what it may touch
 
 </div>
 
-The mode controls running-game access in the backend. Catalog and relic reference data,
-saved collection browsing, platinum and ducat prices, preferences, and optional
-warframe.market features remain available without observing Warframe.
+Worried about third-party tools and your Warframe account? Fair. TennoScope asks
+up front: run as a Companion that never looks at the game, add Overlay screen
+reading for the reward advisor, or go Full for automatic inventory sync. Nothing
+starts until you confirm, and no mode ever writes to the game, automates input,
+or phones home. Change your mind later and the lower mode retires everything it
+no longer permits before the switch completes.
 
-| Mode | Available features | Warframe access used |
-| --- | --- | --- |
-| **Companion** | Catalog and relic reference, saved collection, prices and ducats, preferences, optional warframe.market | None |
-| **Overlay** | Everything in Companion, plus visible-pixel recognition and click-through overlays | Process presence, `EE.log`, and local screen capture |
-| **Full** | Everything in Overlay, plus automatic and manual inventory synchronization | Overlay access plus read-only process memory and Warframe's inventory endpoint |
-
-No mode writes or injects process memory, changes game files, automates input, redirects
-traffic, or sends TennoScope telemetry. Changing to a lower-access mode retires the access
-it no longer permits before the change completes.
+![Choose how TennoScope accesses Warframe](docs/screenshots/warframe-access.png)
 
 <div align="center">
 
