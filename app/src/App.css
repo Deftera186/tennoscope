@@ -817,7 +817,7 @@
    confirm seal closing the document. The floating 1180px design is untouched
    below the breakpoint. */
 @media (min-width: 90rem) {
-  .certificate:has(.access-selector) .certificate-sheet { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: none; }
+  .certificate:has(.access-selector) .certificate-sheet { display: flex; flex-wrap: wrap; justify-content: space-between; max-width: none; margin-block: auto; }
   .certificate:has(.access-selector) .office { flex: 1 1 100%; margin-bottom: var(--course); }
   .certificate:has(.access-selector) h1 { flex: 0 1 auto; min-width: 0; margin-bottom: 0; text-wrap: balance; }
   .certificate:has(.access-selector) .prose { flex: 0 1 40ch; min-width: 0; align-self: flex-end; padding-bottom: .3rem; }
@@ -826,14 +826,17 @@
     grid-template-columns: minmax(0, 44fr) minmax(0, 56fr);
   }
   /* The two columns are one framed panel: the rail's right border meets the
-     detail's left border as the same double hairline the sheet itself uses. */
+     detail's left border as the same double hairline the sheet itself uses.
+     In wide the panel's top rule belongs to the boxes, so the detail's reading
+     can sit centred in its field without breaking the seam. */
   .certificate:has(.access-selector) .access-mode-status { grid-column: 1 / -1; }
   .certificate:has(.access-selector) .access-rail { display: flex; }
   .certificate:has(.access-selector) .access-stepper { flex: 1; display: flex; flex-direction: column; padding-block: var(--step); }
-  .certificate:has(.access-selector) .access-detail { grid-column: 2; display: flex; flex-direction: column; }
-  /* The review head wins back the top rule the stacked layout gave to nothing:
-     in first run the body's own top rule already strikes that seam. */
-  .certificate:has(.access-selector) .access-detail-head { border-top: 1px solid var(--rule); }
+  .certificate:has(.access-selector) .access-detail {
+    grid-column: 2; display: flex; flex-direction: column;
+    border-top: 1px solid var(--rule); justify-content: center;
+  }
+  .certificate:has(.access-selector) .access-detail-body { border-top: 0; }
   .certificate:has(.access-selector) .access-always-off { grid-column: 1 / -1; }
   .certificate:has(.access-selector) .access-detail .access-observation ul { max-width: 62ch; }
   .certificate:has(.access-selector) .error-banner { flex: 1 1 100%; }
