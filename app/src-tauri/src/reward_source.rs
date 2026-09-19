@@ -377,7 +377,7 @@ fn trace_visual_read(attempt: u32, elapsed: Duration, outcome: &Result<Vec<Strin
 #[cfg(test)]
 mod visual_reason_tests {
     use std::sync::atomic::AtomicBool;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use warframe_acquisition::RewardCatalogEntry;
 
@@ -404,6 +404,7 @@ mod visual_reason_tests {
                 panic!("an empty candidate pool cannot become readable by capturing again");
             }
         }
+        let started = Instant::now();
         let outcome = RewardSourceCoordinator::new(false).visual_choices(
             &mut MustNotCapture,
             &[],
@@ -412,7 +413,13 @@ mod visual_reason_tests {
             Duration::from_secs(8),
             &AtomicBool::new(false),
         );
+        let elapsed = started.elapsed();
         assert_eq!(outcome.err(), Some("no reward candidates"));
+        // Allow scheduling headroom without permitting the eight-second retry deadline.
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "held the monitor thread for {elapsed:?} against an eight-second deadline"
+        );
     }
 
     /// The 2026-08-22 report blamed log parsing for a capture failure. The reason has to survive
