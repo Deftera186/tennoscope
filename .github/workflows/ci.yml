@@ -248,7 +248,15 @@ jobs:
 
           $app = Join-Path $installed 'tennoscope.exe'
           if (-not (Test-Path -LiteralPath $app -PathType Leaf)) { throw 'Installed app executable is missing' }
-          if ((Get-FileHash -LiteralPath $app).Hash -ne (Get-FileHash -LiteralPath 'target/release/tennoscope.exe').Hash) {
+          # Tauri patches the first bundle marker for NSIS, then restores the build executable.
+          # Reproduce that exact transformation; every other installed byte must still match.
+          $expected = [System.IO.File]::ReadAllBytes((Resolve-Path 'target/release/tennoscope.exe').Path)
+          $marker = '__TAURI_BUNDLE_TYPE_VAR_UNK'
+          $offset = [System.Text.Encoding]::ASCII.GetString($expected).IndexOf($marker, [System.StringComparison]::Ordinal)
+          if ($offset -lt 0) { throw 'Tauri bundle marker is absent from the build executable' }
+          [System.Text.Encoding]::ASCII.GetBytes('__TAURI_BUNDLE_TYPE_VAR_NSS').CopyTo($expected, $offset)
+          $expectedHash = [System.Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($expected))
+          if ((Get-FileHash -LiteralPath $app).Hash -ne $expectedHash) {
             throw 'Installed app does not match the diagnostic build'
           }
           $vendor = Resolve-Path 'app/src-tauri/vendor/tesseract'
