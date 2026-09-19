@@ -17,6 +17,7 @@ it('reveals the report folder without making reveal failure fatal', async () => 
     folder_path: '/tmp/reports/2026-08-28-205420',
     report_text: 'diagnostics',
     ee_log_included: true,
+    reward_diagnostic_samples: 0,
   }
   backend.collectReport.mockResolvedValue(collected)
   opener.revealItemInDir.mockRejectedValue(new Error('no file manager'))
@@ -30,6 +31,7 @@ it('returns the saved report while revealing its folder is still pending', async
     folder_path: '/tmp/reports/2026-08-28-205420',
     report_text: 'diagnostics',
     ee_log_included: true,
+    reward_diagnostic_samples: 0,
   }
   backend.collectReport.mockResolvedValue(collected)
   opener.revealItemInDir.mockReturnValue(new Promise<void>(() => {}))

@@ -1,12 +1,13 @@
 //! Report assembly for the Diagnostics report block.
 //!
 //! Two deliverables, with a privacy-aware pipeline:
-//! - `report_text` (clipboard / report.txt) is sanitized and never contains
-//!   EE.log content.
+//! - `report_text` (clipboard / report.txt) never contains EE.log content,
+//!   recorded frames, or recorded raw OCR output.
 //! - The report folder additionally carries the app log and, only for
 //!   acquisition failures, a sanitized copy of Warframe's EE.log (IPs and
-//!   email addresses redacted). The sanitized copy is safe to attach to a
-//!   public issue.
+//!   email addresses redacted).
+//! - An explicitly armed diagnostic session adds unredacted reward images
+//!   and OCR evidence to the saved folder only. Review these before sharing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -45,6 +46,7 @@ pub struct CollectedReport {
     pub report_text: String,
     pub folder_path: PathBuf,
     pub ee_log_included: bool,
+    pub reward_diagnostic_samples: usize,
 }
 
 /// What happened to EE.log on the way into a report.
@@ -72,6 +74,7 @@ pub fn collect_report(request: &ReportRequest) -> Result<CollectedReport, String
     let folder = reports.join(utc_stamp());
     fs::create_dir_all(&folder)
         .map_err(|error| format!("could not create the report folder: {error}"))?;
+    let reward_diagnostic_samples = crate::reward_diagnostics::export_to(&folder)?;
     let ee_log_wanted = request.ee_log_wanted
         && request
             .ee_log_path
@@ -89,7 +92,15 @@ pub fn collect_report(request: &ReportRequest) -> Result<CollectedReport, String
     } else {
         EeLogState::NotRequested
     };
-    let report_text = assemble_report_text(&request.meta, &request.health_json, ee_log_state)?;
+    let mut report_text = assemble_report_text(&request.meta, &request.health_json, ee_log_state)?;
+    let diagnostic_status = crate::reward_diagnostics::status();
+    if diagnostic_status.available {
+        report_text.push_str(&format!(
+            "\nReward diagnostics\nBuild: {}\nState: {}\nSamples included: {reward_diagnostic_samples}\n",
+            diagnostic_status.build_id, diagnostic_status.message
+        ));
+        report_text.push_str("Recording stops when logs are saved. Completed samples are in reward-diagnostics when present. Images and OCR evidence are not redacted and may contain player names, chat, or overlapping windows. Review all files before sharing, then ZIP the whole report folder. Nothing is uploaded automatically.\n");
+    }
     fs::write(folder.join("report.txt"), &report_text)
         .map_err(|error| format!("could not write report.txt: {error}"))?;
     for file in log_files(&request.meta.log_dir) {
@@ -105,11 +116,12 @@ pub fn collect_report(request: &ReportRequest) -> Result<CollectedReport, String
         report_text,
         folder_path: folder,
         ee_log_included: ee_log_state.included(),
+        reward_diagnostic_samples,
     })
 }
 
-/// Keep the newest few report folders. Each one holds up to 20 MiB of logs plus a possibly huge
-/// EE.log, and a frustrated player presses **Save logs** more than once.
+/// Keep the newest few report folders. Each one holds up to 20 MiB of logs, an optional
+/// bounded reward recording, and a possibly huge EE.log. Save logs may be pressed repeatedly.
 fn prune_reports(reports: &Path) {
     const KEEP: usize = 5;
     let Ok(entries) = fs::read_dir(reports) else {

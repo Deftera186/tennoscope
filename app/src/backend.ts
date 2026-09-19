@@ -69,10 +69,14 @@ export const getKioskView = () => invoke<KioskView | null>('get_kiosk_view')
 export const refreshInventory = () => invoke<AppView>('refresh_inventory')
 export const refreshPrices = (ids: string[]) => invoke<AppView>('refresh_prices', { itemIds: ids })
 export const loadFakeSession = () => invoke<AppView>('load_fake_session')
-export interface CollectedReport { folder_path: string; report_text: string; ee_log_included: boolean }
+export interface CollectedReport { folder_path: string; report_text: string; ee_log_included: boolean; reward_diagnostic_samples: number }
+export interface DiagnosticStatus { available: boolean; recording: boolean; samples: number; build_id: string; message: string }
 
 export const collectReport = () => invoke<CollectedReport>('collect_report')
 export const collectReportText = () => invoke<string>('collect_report_text')
+export const getRewardDiagnosticStatus = () => invoke<DiagnosticStatus>('get_reward_diagnostic_status')
+export const startRewardDiagnostic = () => invoke<DiagnosticStatus>('start_reward_diagnostic')
+export const stopRewardDiagnostic = () => invoke<DiagnosticStatus>('stop_reward_diagnostic')
 /**
  * Setup status, waiting out a backend that has not finished starting.
  *

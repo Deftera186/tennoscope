@@ -43,6 +43,7 @@ pub mod monitor;
 mod overlay_window;
 pub mod report;
 pub mod reward_capture;
+pub mod reward_diagnostics;
 mod reward_log;
 mod reward_observer;
 mod reward_ocr;
@@ -58,6 +59,8 @@ pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
+#[cfg(feature = "reward-diagnostics")]
+pub use reward_ocr::read_cards_in_diagnostic;
 pub use reward_ocr::{
     MAX_CARDS, ScreenRewardSource, TESSERACT_EXECUTABLE, best_match, card_block_left,
     card_block_width, luma, normalize_contrast, ocr_crop, prepare_crop, read_cards, read_cards_in,
@@ -619,6 +622,41 @@ async fn collect_report(
     .map_err(|_| "report task failed".to_owned())?
 }
 
+#[tauri::command]
+fn get_reward_diagnostic_status() -> reward_diagnostics::DiagnosticStatus {
+    reward_diagnostics::status()
+}
+
+fn start_reward_diagnostic_blocking(
+    shared: &SharedRuntime,
+) -> Result<reward_diagnostics::DiagnosticStatus, String> {
+    let runtime = shared
+        .lock()
+        .map_err(|_| "application state is unavailable".to_owned())?;
+    if !capability_authorized(&runtime.setup, &runtime.transition, |policy| {
+        policy.capture_screen
+    }) {
+        return Err("reward diagnostics require Overlay or Full access mode".to_owned());
+    }
+    // Serialize arming with access transitions; the recorder never starts a capture worker.
+    reward_diagnostics::start(&runtime.app_data)
+}
+
+#[tauri::command]
+async fn start_reward_diagnostic(
+    state: State<'_, SharedRuntime>,
+) -> Result<reward_diagnostics::DiagnosticStatus, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || start_reward_diagnostic_blocking(&shared))
+        .await
+        .map_err(|_| "reward diagnostic task failed".to_owned())?
+}
+
+#[tauri::command]
+fn stop_reward_diagnostic() -> reward_diagnostics::DiagnosticStatus {
+    reward_diagnostics::stop("Stopped by the player")
+}
+
 fn build_report_request(
     app: &AppHandle,
     runtime: &Runtime,
@@ -627,7 +665,9 @@ fn build_report_request(
     want_ee_log: bool,
 ) -> report::ReportRequest {
     let os_arch = format!("{}/{}", std::env::consts::OS, std::env::consts::ARCH);
-    let profile = if cfg!(debug_assertions) {
+    let profile = if cfg!(feature = "reward-diagnostics") {
+        format!("diagnostic {}", reward_diagnostics::status().build_id)
+    } else if cfg!(debug_assertions) {
         "pre-release".to_owned()
     } else {
         "stable".to_owned()
@@ -818,6 +858,7 @@ fn transition_monitor(
         )
     };
     let _transition_guard = transition_guard;
+    reward_diagnostics::stop("Access mode changed");
 
     if let Err(error) = lifecycle.stop() {
         let rollback = restore_previous_runtime(
@@ -2131,6 +2172,9 @@ pub fn run() {
             set_market_presence,
             collect_report,
             collect_report_text,
+            get_reward_diagnostic_status,
+            start_reward_diagnostic,
+            stop_reward_diagnostic,
             remove_order,
             create_order,
             set_order_quantity,
@@ -2461,6 +2505,24 @@ mod tests {
         assert!(!inventory_refresh_authorized(&effective, &gate));
         drop(transition);
         assert!(inventory_refresh_authorized(&effective, &gate));
+    }
+
+    #[cfg(feature = "reward-diagnostics")]
+    #[test]
+    fn diagnostic_recording_requires_effective_capture_permission() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        for access_mode in [None, Some(AccessMode::Companion)] {
+            shared.lock().expect("lock").setup.access_mode = access_mode;
+            assert!(start_reward_diagnostic_blocking(&shared).is_err());
+        }
+        let transition = {
+            let mut runtime = shared.lock().expect("lock");
+            runtime.setup.access_mode = Some(AccessMode::Full);
+            runtime.transition.begin().expect("transition begins")
+        };
+        assert!(start_reward_diagnostic_blocking(&shared).is_err());
+        drop(transition);
     }
 
     #[test]

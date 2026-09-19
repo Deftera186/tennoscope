@@ -162,7 +162,7 @@ impl VisualRewardSource for ScreenRewardSource {
     fn choices(&mut self, candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
         let frames = self.capture.capture_candidates()?;
         read_capture_candidates(&frames, &LATEST_MATCHED_RECT, |frame| {
-            read_cards_in(frame, candidates)
+            read_captured_cards(frame, candidates)
                 .map(|cards| cards.into_iter().map(|(name, _)| name).collect())
         })
     }
@@ -171,11 +171,11 @@ impl VisualRewardSource for ScreenRewardSource {
 fn read_capture_candidates<T>(
     candidates: &[crate::reward_capture::CapturedFrame],
     matched_rect: &std::sync::Mutex<Option<WindowRect>>,
-    mut read: impl FnMut(&DynamicImage) -> Result<T, &'static str>,
+    mut read: impl FnMut(&crate::reward_capture::CapturedFrame) -> Result<T, &'static str>,
 ) -> Result<T, &'static str> {
     let mut last_reason = "no Warframe window found";
     for candidate in candidates {
-        match read(&candidate.image) {
+        match read(candidate) {
             Ok(value) => {
                 set_matched_rect(matched_rect, candidate.rect);
                 return Ok(value);
@@ -184,6 +184,29 @@ fn read_capture_candidates<T>(
         }
     }
     Err(last_reason)
+}
+
+fn read_captured_cards(
+    frame: &crate::reward_capture::CapturedFrame,
+    candidates: &[RewardCatalogEntry],
+) -> Result<Vec<(String, f32)>, &'static str> {
+    let mut diagnostic = crate::reward_diagnostics::begin(frame, candidates);
+    let result = read_cards_inner(&frame.image, candidates, diagnostic.as_mut());
+    if let Some(diagnostic) = diagnostic {
+        diagnostic.finish(&result);
+    }
+    result
+}
+
+/// Offline diagnostic seam: uses exactly the live reward preprocessing/OCR/matching path and the
+/// supplied frame's capture geometry/backend. Call `reward_diagnostics::start` first to opt in;
+/// without it this performs recognition without saving evidence, just like the live source.
+#[cfg(feature = "reward-diagnostics")]
+pub fn read_cards_in_diagnostic(
+    frame: &crate::reward_capture::CapturedFrame,
+    candidates: &[RewardCatalogEntry],
+) -> Result<Vec<(String, f32)>, &'static str> {
+    read_captured_cards(frame, candidates)
 }
 
 /// Read the card titles out of a reward-screen image and match each to the relic pool.
@@ -219,6 +242,14 @@ pub fn read_cards_in(
     image: &DynamicImage,
     candidates: &[RewardCatalogEntry],
 ) -> Result<Vec<(String, f32)>, &'static str> {
+    read_cards_inner(image, candidates, None)
+}
+
+fn read_cards_inner(
+    image: &DynamicImage,
+    candidates: &[RewardCatalogEntry],
+    mut diagnostic: Option<&mut crate::reward_diagnostics::Attempt<'_>>,
+) -> Result<Vec<(String, f32)>, &'static str> {
     if candidates.is_empty() {
         return Err("no reward candidates");
     }
@@ -226,7 +257,14 @@ pub fn read_cards_in(
     // Up to three layouts per poll rather than one, so a poll off the reward screen costs
     // three crops instead of one -- about 200ms every two seconds. Narrow it by asking the log for
     // the squad size if that ever shows up in a profile.
-    let widest = read_cards_at(image, width, height, MAX_CARDS, candidates);
+    let widest = read_cards_at(
+        image,
+        width,
+        height,
+        MAX_CARDS,
+        candidates,
+        diagnostic.as_deref_mut(),
+    );
     if widest.is_ok() {
         return widest.map_err(|(_, reason)| reason);
     }
@@ -245,7 +283,14 @@ pub fn read_cards_in(
         if shares_slots_with_the_widest && !outside_the_block_is_empty {
             break;
         }
-        if let Ok(read) = read_cards_at(image, width, height, cards, candidates) {
+        if let Ok(read) = read_cards_at(
+            image,
+            width,
+            height,
+            cards,
+            candidates,
+            diagnostic.as_deref_mut(),
+        ) {
             return Ok(read);
         }
     }
@@ -263,19 +308,35 @@ fn read_cards_at(
     height: u32,
     cards: usize,
     candidates: &[RewardCatalogEntry],
+    mut diagnostic: Option<&mut crate::reward_diagnostics::Attempt<'_>>,
 ) -> Result<Vec<(String, f32)>, (usize, &'static str)> {
     let left = card_block_left(cards, width, height);
     let mut read = Vec::with_capacity(cards);
     for slot in 0..cards {
-        let (text, crop) = read_region(
+        let (text, crop, diagnostic_crop) = read_region(
             image,
-            (left + CARD_PITCH * slot as f32 * height as f32) as u32,
-            (TITLE_TOP * height as f32) as u32,
-            (CARD_WIDTH * height as f32) as u32,
-            (TITLE_HEIGHT * height as f32) as u32,
+            [
+                (left + CARD_PITCH * slot as f32 * height as f32) as u32,
+                (TITLE_TOP * height as f32) as u32,
+                (CARD_WIDTH * height as f32) as u32,
+                (TITLE_HEIGHT * height as f32) as u32,
+            ],
+            cards,
+            slot,
+            diagnostic.as_deref_mut(),
         )
         .map_err(|reason| (slot, reason))?;
         let matched = best_match(&text, candidates);
+        if let (Some(diagnostic), Some(index)) = (diagnostic.as_deref_mut(), diagnostic_crop) {
+            let error = match &matched {
+                None => Some(BLANK_CARD),
+                Some((_, score)) if *score < MATCH_FLOOR => {
+                    Some("reward card text did not match the relic pool")
+                }
+                Some(_) => None,
+            };
+            diagnostic.crop_outcome(index, matched.as_ref(), error);
+        }
         // Without the raw text a failed read is unattributable: reading the wrong place, reading a
         // screen that is not the reward screen, and reading a card whose name is not in the pool
         // all surface as the same error. The text alone is not enough either -- a misplaced crop
@@ -326,17 +387,40 @@ fn read_cards_at(
 /// usable band is 70-78% and 74% sits in it with room on both sides.
 fn read_region(
     image: &DynamicImage,
-    x: u32,
-    y: u32,
-    width: u32,
-    height: u32,
-) -> Result<(String, PathBuf), &'static str> {
+    rect: [u32; 4],
+    cards: usize,
+    slot: usize,
+    mut diagnostic: Option<&mut crate::reward_diagnostics::Attempt<'_>>,
+) -> Result<(String, PathBuf, Option<usize>), &'static str> {
+    let [x, y, width, height] = rect;
     let crop = scratch_file("reward-crop", "png");
-    prepare_crop(image, x, y, width, height)
-        .save(&crop)
-        .map_err(|_| "could not write the reward card crop")?;
-    let text = ocr_crop(&crop)?;
-    Ok((text, crop))
+    let prepared = prepare_crop(image, x, y, width, height);
+    // Retain these exact engine-input pixels before the ordinary scratch-file cleanup, including
+    // when writing the scratch file, launching Tesseract, or the process itself fails.
+    let diagnostic_crop = diagnostic
+        .as_deref_mut()
+        .and_then(|attempt| attempt.crop(&prepared, cards, slot, [x, y, width, height]));
+    let result = (|| {
+        prepared
+            .save(&crop)
+            .map_err(|_| "could not write the reward card crop")?;
+        run_tesseract(
+            &crop,
+            "11",
+            None,
+            diagnostic.as_deref_mut().zip(diagnostic_crop),
+        )
+    })();
+    match result {
+        Ok(text) => Ok((text, crop, diagnostic_crop)),
+        Err(reason) => {
+            if let (Some(diagnostic), Some(index)) = (diagnostic, diagnostic_crop) {
+                diagnostic.crop_outcome(index, None, Some(reason));
+            }
+            let _ = std::fs::remove_file(crop);
+            Err(reason)
+        }
+    }
 }
 
 /// Crop, greyscale, normalize, threshold, invert and upscale one card title.
@@ -481,18 +565,19 @@ pub fn use_bundled_tesseract(resource_dir: &Path) {
 /// does not need. What it costs is a little leading punctuation, which `normalise` drops before the
 /// match ever sees it.
 pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
-    run_tesseract(image, "11", None)
+    run_tesseract(image, "11", None, None)
 }
 
 /// OCR one already-isolated text line, restricted to the supplied glyph set.
 pub(crate) fn ocr_crop_line(image: &Path, whitelist: &str) -> Result<String, &'static str> {
-    run_tesseract(image, "7", Some(whitelist))
+    run_tesseract(image, "7", Some(whitelist), None)
 }
 
 fn run_tesseract(
     image: &Path,
     page_segmentation_mode: &str,
     whitelist: Option<&str>,
+    diagnostic: Option<(&mut crate::reward_diagnostics::Attempt<'_>, usize)>,
 ) -> Result<String, &'static str> {
     let program = TESSERACT
         .get()
@@ -510,7 +595,8 @@ fn run_tesseract(
     // compiled with, so it has to be told where to look. `--tessdata-dir` rather than the
     // `TESSDATA_PREFIX` environment variable because setting one of those is `unsafe` since the
     // 2024 edition, and this crate forbids that.
-    if let Some(directory) = program.parent().filter(|path| !path.as_os_str().is_empty()) {
+    let data = program.parent().filter(|path| !path.as_os_str().is_empty());
+    if let Some(directory) = data {
         command.args([
             std::ffi::OsStr::new("--tessdata-dir"),
             directory.as_os_str(),
@@ -522,8 +608,21 @@ fn run_tesseract(
     if let Some(whitelist) = whitelist {
         command.args(["-c", &format!("tessedit_char_whitelist={whitelist}")]);
     }
-    let text = command.output().map_err(|_| "tesseract is not available")?;
-    Ok(String::from_utf8_lossy(&text.stdout).into_owned())
+    let output = command.output();
+    if let Some((diagnostic, index)) = diagnostic {
+        diagnostic.process(index, &program, data, page_segmentation_mode, &output);
+    }
+    tesseract_result(output)
+}
+
+const ENGINE_FAILED: &str = "tesseract OCR engine failed";
+
+fn tesseract_result(output: std::io::Result<std::process::Output>) -> Result<String, &'static str> {
+    let output = output.map_err(|_| "tesseract is not available")?;
+    if !output.status.success() {
+        return Err(ENGINE_FAILED);
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Compare on alphanumerics only. That is what lets a read of "2 X Forma Blueprint W\:" land on
@@ -694,7 +793,7 @@ mod tests {
         let frames = [candidate(0, 10), candidate(1920, 20)];
 
         let result = read_capture_candidates(&frames, &matched, |image| {
-            if image.to_rgba8().get_pixel(0, 0)[0] == 20 {
+            if image.image.to_rgba8().get_pixel(0, 0)[0] == 20 {
                 Ok(vec!["Forma Blueprint".to_owned()])
             } else {
                 Err("reward card text did not match the relic pool")
@@ -714,7 +813,7 @@ mod tests {
 
         let result: Result<(), &'static str> =
             read_capture_candidates(&frames, &matched, |image| {
-                if image.to_rgba8().get_pixel(0, 0)[0] == 10 {
+                if image.image.to_rgba8().get_pixel(0, 0)[0] == 10 {
                     Err("a reward card read as blank")
                 } else {
                     Err("reward card text did not match the relic pool")
@@ -771,6 +870,49 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
             None
+        );
+    }
+
+    fn process_output(success: bool, stdout: &[u8]) -> std::process::Output {
+        #[cfg(unix)]
+        let status = {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(if success { 0 } else { 256 })
+        };
+        #[cfg(windows)]
+        let status = {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(if success { 0 } else { 1 })
+        };
+        std::process::Output {
+            status,
+            stdout: stdout.to_vec(),
+            stderr: b"engine diagnostic".to_vec(),
+        }
+    }
+
+    /// An engine failure with empty stdout used to masquerade as a blank reward card. Even
+    /// partial stdout from a failed process must not enter reward or kiosk matching.
+    #[test]
+    fn nonzero_ocr_exit_is_an_engine_failure_not_a_blank_or_partial_read() {
+        for stdout in [&b""[..], &b"Forma Blueprint"[..]] {
+            assert_eq!(
+                super::tesseract_result(Ok(process_output(false, stdout))),
+                Err(super::ENGINE_FAILED),
+            );
+        }
+        assert_ne!(super::ENGINE_FAILED, super::BLANK_CARD);
+    }
+
+    #[test]
+    fn successful_ocr_keeps_raw_text_and_launch_failure_stays_distinct() {
+        assert_eq!(
+            super::tesseract_result(Ok(process_output(true, b"Forma\r\n\r\nBlueprint\n"))),
+            Ok("Forma\r\n\r\nBlueprint\n".to_owned()),
+        );
+        assert_eq!(
+            super::tesseract_result(Err(std::io::Error::from(std::io::ErrorKind::NotFound))),
+            Err("tesseract is not available"),
         );
     }
 

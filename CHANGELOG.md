@@ -11,6 +11,18 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in reward evidence in diagnostic builds.** Support installers can record a bounded local
+  set of game frames, exact OCR crops, capture geometry, and OCR process results. Diagnostics
+  shows the build identity and a privacy warning before recording; Save logs includes completed
+  samples for manual review and sharing. Normal builds do not enable this feature.
+
+### Fixed
+
+- **OCR engine failures are no longer reported as blank reward cards.** A failing Tesseract
+  process now has a distinct error; diagnostic recordings retain its exit status and stderr.
+
 ## [0.10.0] - 2026-09-18
 
 ### Added

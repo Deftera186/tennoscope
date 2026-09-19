@@ -3,6 +3,9 @@ import './App.css'
 import {
   authorizeScreenCapture,
   getSetupStatus,
+  getRewardDiagnosticStatus,
+  startRewardDiagnostic,
+  stopRewardDiagnostic,
   getView,
   marketLinkToken,
   marketSignIn,
@@ -21,6 +24,8 @@ import {
   type BackendHealth,
   type AccessMode,
   type CollectionItem,
+  type CollectedReport,
+  type DiagnosticStatus,
   type HealthState,
   type ItemCategory,
   type SetupStatus,
@@ -487,7 +492,7 @@ function App() {
           busy={ordersBusy}
           error={ordersError}
         />}
-        {page === 'diagnostics' && <DiagnosticsPage view={view} effectiveMode={effectiveMode}/>}
+        {page === 'diagnostics' && <DiagnosticsPage view={view} effectiveMode={effectiveMode} modeBusy={modeBusy}/>}
         {page === 'settings' && <SettingsPage view={view} priceFloor={priceFloor} effectiveMode={effectiveMode} selectedMode={selectedMode} modeBusy={modeBusy} modeError={modeError} onSelectMode={mode => {
           setSelectedMode(mode)
           setModeError(null)
@@ -860,11 +865,45 @@ type ReportStatus =
   | { kind: 'busy' }
   | { kind: 'done'; message: string }
 
-function ReportBlock({ health, alwaysVisible }: { health: AppView['health']; alwaysVisible?: boolean }) {
+function ReportBlock({ health, effectiveMode, modeBusy, alwaysVisible }: { health: AppView['health']; effectiveMode: AccessMode; modeBusy: boolean; alwaysVisible?: boolean }) {
   const [status, setStatus] = useState<ReportStatus>({ kind: 'idle' })
+  const [diagnostic, setDiagnostic] = useState<DiagnosticStatus | null>(null)
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null)
+  const diagnosticGeneration = useRef(0)
+  const actionInFlight = useRef(false)
+  useEffect(() => {
+    let active = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = async () => {
+      let available = true
+      if (!actionInFlight.current) {
+        const generation = ++diagnosticGeneration.current
+        try {
+          const next = await getRewardDiagnosticStatus()
+          available = next.available
+          if (active && generation === diagnosticGeneration.current) {
+            setDiagnostic(next)
+            setDiagnosticError(null)
+          }
+        } catch (error) {
+          if (active && generation === diagnosticGeneration.current) setDiagnosticError(String(error))
+        }
+      }
+      if (active && available) timer = setTimeout(() => { void poll() }, 1000)
+    }
+    void poll()
+    return () => {
+      active = false
+      clearTimeout(timer)
+      diagnosticGeneration.current += 1
+    }
+  }, [])
   const broken = reportBlockVisible(health)
-  if (!alwaysVisible && !broken) return null
-  const run = async (action: () => Promise<void | { folder_path: string; ee_log_included: boolean }>, done: (result: { folder_path: string; ee_log_included: boolean } | null) => string) => {
+  if (!alwaysVisible && !broken && !diagnostic?.available) return null
+  const run = async (action: () => Promise<void | CollectedReport>, done: (result: CollectedReport | null) => string) => {
+    if (actionInFlight.current) return
+    actionInFlight.current = true
+    diagnosticGeneration.current += 1
     setStatus({ kind: 'busy' })
     try {
       const result = await action()
@@ -872,6 +911,24 @@ function ReportBlock({ health, alwaysVisible }: { health: AppView['health']; alw
       setStatus({ kind: 'done', message: done(resultOrNull) })
     } catch (error) {
       setStatus({ kind: 'done', message: String(error) })
+    }
+    finally {
+      actionInFlight.current = false
+    }
+  }
+  const runDiagnostic = async (action: () => Promise<DiagnosticStatus>) => {
+    if (actionInFlight.current) return
+    actionInFlight.current = true
+    diagnosticGeneration.current += 1
+    setStatus({ kind: 'busy' })
+    try {
+      setDiagnostic(await action())
+      setDiagnosticError(null)
+      setStatus({ kind: 'idle' })
+    } catch (error) {
+      setStatus({ kind: 'done', message: String(error) })
+    } finally {
+      actionInFlight.current = false
     }
   }
   return (
@@ -883,11 +940,24 @@ function ReportBlock({ health, alwaysVisible }: { health: AppView['health']; alw
           ? 'Strike a record of what failed. Review it before it leaves this machine — nothing is sent anywhere.'
           : 'Something not working right? Bundle your diagnostics and open an issue — nothing leaves this machine without you sending it.'}</p>
       </div>
+      {diagnostic?.available && <section className="reward-diagnostic" aria-label="Reward diagnostic recording">
+        <h3 className="column-head">Reward diagnostic recording</h3>
+        <p className="band-note">Build: {diagnostic.build_id}</p>
+        <p id="reward-diagnostic-privacy" className="prose">Recording saves game images and raw OCR locally. Images may include player names, chat, or overlapping windows. They are not redacted: review every image before sharing. Nothing is uploaded automatically.</p>
+        <p className="prose">Keeps up to 12 recent samples and 64 MiB, at most one sample every 3 seconds, for up to 10 minutes. A new recording replaces the previous session. Save logs stops recording and includes completed samples.</p>
+        <p className="band-note" role="status">{diagnostic.recording ? 'Recording' : 'Stopped'} · {diagnostic.samples} {diagnostic.samples === 1 ? 'sample' : 'samples'} · {diagnostic.message}</p>
+        {diagnosticError && <p className="prose" role="alert">Could not refresh recording status: {diagnosticError}</p>}
+        {effectiveMode === 'companion' && <p className="prose">Choose Overlay or Full access in Settings before recording.</p>}
+        <div className="report-actions">
+          <button type="button" className="stamp" aria-describedby="reward-diagnostic-privacy" disabled={status.kind === 'busy' || modeBusy || effectiveMode === 'companion' || diagnostic.recording || diagnosticError !== null} onClick={() => void runDiagnostic(startRewardDiagnostic)}>Record reward diagnostic</button>
+          {diagnostic.recording && <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void runDiagnostic(stopRewardDiagnostic)}>Stop recording</button>}
+        </div>
+      </section>}
       <div className="report-actions">
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(openIssue, () => 'OPENED THE ISSUE FORM IN YOUR BROWSER.')}>Open an issue</button>
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(copyReport, () => 'COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD OF THE ISSUE FORM.')}>Copy diagnostics</button>
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(saveReport, result =>
-          `SAVED TO ${result?.folder_path ?? '…'}${result?.ee_log_included ? ' — EE.LOG INCLUDED (SANITIZED) — SAFE TO ATTACH TO THE ISSUE.' : ''}`,
+          `SAVED TO ${result?.folder_path ?? '…'}${diagnostic?.available || result?.reward_diagnostic_samples ? ` — ${result?.reward_diagnostic_samples ?? 0} REWARD DIAGNOSTIC SAMPLES INCLUDED. REVIEW ALL IMAGES AND FILES BEFORE SHARING; ZIP THE WHOLE REPORT FOLDER.` : result?.ee_log_included ? ' — EE.LOG INCLUDED (SANITIZED). REVIEW FILES BEFORE SHARING.' : ''}`,
         )}>Save logs</button>
       </div>
       {status.kind === 'done' && <p className="report-status" role="status">{status.message}</p>}
@@ -895,7 +965,7 @@ function ReportBlock({ health, alwaysVisible }: { health: AppView['health']; alw
   )
 }
 
-function DiagnosticsPage({ view, effectiveMode }: { view: AppView; effectiveMode: AccessMode }) {
+function DiagnosticsPage({ view, effectiveMode, modeBusy }: { view: AppView; effectiveMode: AccessMode; modeBusy: boolean }) {
   const referenceSystems = [
     ['Catalog', view.health.catalog],
     ['Market data', view.health.market],
@@ -915,7 +985,7 @@ function DiagnosticsPage({ view, effectiveMode }: { view: AppView; effectiveMode
       <h1 id="diagnostics-title" className="mark">Diagnostics</h1>
       <p className="prose">Status messages are deliberately scrubbed of temporary access values.</p>
     </div>
-    <ReportBlock health={view.health}/>
+    <ReportBlock health={view.health} effectiveMode={effectiveMode} modeBusy={modeBusy}/>
     <section aria-label="Diagnostics">
       {effectiveMode === 'companion' && <p className="prose">Live Warframe diagnostics are inactive in Companion. Local and reference services remain visible.</p>}
       <div className="procedure-head">
@@ -1014,7 +1084,7 @@ function SettingsPage({ view, priceFloor, effectiveMode, selectedMode, modeBusy,
       <div className="procedure-head">
         <h2 className="column-head">Support</h2>
       </div>
-      <ReportBlock health={view.health} alwaysVisible/>
+      <ReportBlock health={view.health} effectiveMode={effectiveMode} modeBusy={modeBusy} alwaysVisible/>
     </section>
   </section>
 }

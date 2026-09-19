@@ -1017,6 +1017,19 @@ impl RewardSession {
         app: &AppHandle,
         scope: EventScope<'_>,
     ) {
+        #[cfg(feature = "reward-diagnostics")]
+        if crate::reward_diagnostics::status().recording {
+            let phase = match &event {
+                RewardLogEvent::RewardWindowOpened => Some("reward window opened"),
+                RewardLogEvent::ResponsesComplete { .. } => Some("reward responses complete"),
+                RewardLogEvent::ChoicesReady { .. } => Some("reward choices ready"),
+                RewardLogEvent::Closed => Some("reward screen closed"),
+                _ => None,
+            };
+            if let Some(phase) = phase {
+                log::info!("[reward-diagnostic] received EE.log event: {phase}");
+            }
+        }
         match event {
             RewardLogEvent::RewardWindowOpened => {
                 if scope.policy.read_process_memory
@@ -1255,6 +1268,7 @@ impl RewardSession {
 
     fn close(&mut self, shared: &SharedRuntime, app: &AppHandle) {
         self.watch.stop();
+        crate::reward_diagnostics::stop("Reward screen closed");
         // The monitor's log-driven reader is separate from the joined poller. Release its DXGI
         // lease too, both at reward close and when observation access is revoked.
         #[cfg(windows)]
@@ -1423,6 +1437,9 @@ pub(crate) fn run(
         let mut close_portal = false;
         if let Some(process) = confirmed_process {
             if process != announced_process {
+                if announced_process.is_some() && (process.is_none() || process_replaced) {
+                    crate::reward_diagnostics::stop("Warframe exited or restarted");
+                }
                 #[cfg(target_os = "linux")]
                 {
                     close_portal = should_close_portal(

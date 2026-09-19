@@ -7,6 +7,8 @@ const backend = vi.hoisted(() => ({
   marketStatus: vi.fn(), marketSignIn: vi.fn(), marketLinkToken: vi.fn(), marketSignOut: vi.fn(),
   refreshOrders: vi.fn(), removeOrder: vi.fn(), setOrderQuantity: vi.fn(),
   setMarketPresence: vi.fn(), createOrder: vi.fn(), updateOrder: vi.fn(),
+  getRewardDiagnosticStatus: vi.fn().mockResolvedValue({ available: false, recording: false, samples: 0, build_id: 'local diagnostic', message: '' }),
+  startRewardDiagnostic: vi.fn(), stopRewardDiagnostic: vi.fn(),
 }))
 const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverlay: vi.fn() }))
 const windowApi = vi.hoisted(() => ({

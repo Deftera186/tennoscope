@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      diagnostic_artifact:
+        description: Build an opt-in Windows reward diagnostic installer (artifact only)
+        type: boolean
+        default: false
 
 # A second push to the same branch cancels the first. Nothing here needs to finish twice.
 #
@@ -175,3 +180,153 @@ jobs:
       # oxlint, then tsc --noEmit, then vitest. Same command a contributor runs locally.
       - run: pnpm check
         working-directory: app
+
+  diagnostic-windows:
+    name: Windows diagnostic artifact
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnostic_artifact }}
+    needs: [rust, windows, frontend]
+    runs-on: windows-latest
+    env:
+      TENNOSCOPE_DIAGNOSTIC_BUILD: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      # Use the same portable engine and data as the release installer and Windows CI.
+      - name: Vendor tesseract for the bundle
+        run: ./scripts/vendor-windows-tesseract.ps1
+        shell: pwsh
+
+      - name: Put tesseract on PATH for diagnostic-feature tests
+        run: |
+          $vendor = Resolve-Path "app/src-tauri/vendor/tesseract"
+          "$vendor" >> $env:GITHUB_PATH
+          "TESSDATA_PREFIX=$vendor" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: windows
+          save-if: false
+
+      - name: Check diagnostic-feature Rust on Windows
+        run: cargo clippy --workspace --all-targets --features tennoscope/reward-diagnostics --locked -- -D warnings
+
+      - name: Test diagnostic-feature Rust on Windows
+        run: cargo test --workspace --features tennoscope/reward-diagnostics --locked
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: app/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: app/.node-version
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+
+      - name: Build optimized diagnostic installer
+        run: pnpm tauri build --bundles nsis --features reward-diagnostics
+        working-directory: app
+        env:
+          # Bounded, opt-in recording is separate from the unbounded debug crop retention.
+          # Keep this step-scoped so the release cache key still matches Windows CI.
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: "false"
+
+      - name: Install and smoke-test bundled OCR
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installers = @(Get-ChildItem -LiteralPath 'target/release/bundle/nsis' -Filter '*-setup.exe' -File)
+          if ($installers.Count -ne 1) { throw "Expected one NSIS installer, found $($installers.Count)" }
+          $installed = Join-Path $env:RUNNER_TEMP 'tennoscope-issue12-installed'
+          # NSIS requires /D to be last and unquoted, even when the path contains spaces.
+          $process = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$installed" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "NSIS install failed: $($process.ExitCode)" }
+
+          $app = Join-Path $installed 'tennoscope.exe'
+          if (-not (Test-Path -LiteralPath $app -PathType Leaf)) { throw 'Installed app executable is missing' }
+          if ((Get-FileHash -LiteralPath $app).Hash -ne (Get-FileHash -LiteralPath 'target/release/tennoscope.exe').Hash) {
+            throw 'Installed app does not match the diagnostic build'
+          }
+          $vendor = Resolve-Path 'app/src-tauri/vendor/tesseract'
+          $ocr = Join-Path $installed 'tesseract'
+          # Check every executable, DLL and data file survived the actual installer unchanged.
+          foreach ($source in Get-ChildItem -LiteralPath $vendor -File) {
+            $destination = Join-Path $ocr $source.Name
+            if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) { throw "Missing bundled file: $($source.Name)" }
+            if ((Get-FileHash -LiteralPath $source.FullName).Hash -ne (Get-FileHash -LiteralPath $destination).Hash) {
+              throw "Bundled file differs: $($source.Name)"
+            }
+          }
+
+          # No PATH or language-data fallback to the vendored development copy or runner tools.
+          Remove-Item -LiteralPath Env:TESSDATA_PREFIX -ErrorAction SilentlyContinue
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $env:OMP_THREAD_LIMIT = '1'
+          $fixture = (Resolve-Path 'app/src-tauri/tests/fixtures/reward-crop-ornament.png').Path
+          $stderr = Join-Path $env:RUNNER_TEMP 'tennoscope-bundled-ocr-stderr.txt'
+          $text = & (Join-Path $ocr 'tesseract.exe') --tessdata-dir $ocr $fixture - --psm 11 2> $stderr
+          $exitCode = $LASTEXITCODE
+          $errors = Get-Content -LiteralPath $stderr -Raw
+          Write-Host "Bundled OCR stdout: $($text -join ' ')"
+          Write-Host "Bundled OCR stderr: $errors"
+          if ($exitCode -ne 0) { throw "Bundled OCR failed: $exitCode" }
+          $normalised = (($text -join ' ') -replace '[^A-Za-z0-9]+', ' ').Trim()
+          if ($normalised -notmatch '\bDual Zoren Prime Handle\b') {
+            throw "Bundled OCR did not read Dual Zoren Prime Handle: $normalised"
+          }
+          Write-Host 'Installer and bundled OCR runtime smoke passed; this is not Windows 10 gameplay validation.'
+
+      - name: Prepare diagnostic artifact and instructions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -LiteralPath 'app/src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
+          $output = New-Item -ItemType Directory -Path 'diagnostic-artifact'
+          $installer = Get-ChildItem -LiteralPath 'target/release/bundle/nsis' -Filter '*-setup.exe' -File
+          $name = "TennoScope-$version-issue12-diagnostic-$env:GITHUB_SHA-setup.exe"
+          Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $output $name)
+          @"
+          TennoScope issue #12 - opt-in Windows reward diagnostic build
+          App version: $version (unchanged); diagnostic build SHA: $env:GITHUB_SHA
+          CI run: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID
+
+          This is an Actions artifact, not a release or a recognition fix. CI checks the
+          installer and bundled OCR at runtime; it does not validate Windows 10 gameplay.
+          The installer is unsigned and may trigger a Windows SmartScreen warning.
+          It uses the normal TennoScope app identity, so close TennoScope before installing.
+
+          1. Install $name. Open Diagnostics and confirm the diagnostic SHA shown above.
+          2. Allow screen capture and explicitly click Record reward diagnostic in
+             Diagnostics. Recording is off until you choose to start it.
+          3. Run a short squad fissure within 10 minutes. Keep Warframe focused through
+             the reward choices; do not switch windows while the reward cards are visible.
+          4. After the choices, click Save logs. This stops recording and saves the evidence.
+             ZIP the complete saved report folder, including reward-diagnostics, not just
+             the text logs. Screenshots are not included in copied clipboard text.
+          5. Review every image and the rest of the report before sharing. Images may show
+             player names, chat, or overlapping windows. Remove anything you do not want
+             to share, then attach the ZIP to issue #12 yourself. Nothing auto-uploads.
+
+          Recording is bounded: at most one sample every 3 seconds, the newest 12 samples,
+          64 MiB total, and a 10-minute session limit. Starting again replaces the previous
+          session, so save the report first. Reward close, game exit, or access downgrade
+          also stops recording without discarding captured evidence.
+
+          SHA256SUMS contains SHA-256 checksums of this file and the installer.
+          This Actions artifact expires after 14 days.
+          "@ | Set-Content -LiteralPath (Join-Path $output 'INSTRUCTIONS.txt') -Encoding utf8
+          Get-ChildItem -LiteralPath $output -File | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS') -Encoding ascii
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tennoscope-issue12-diagnostic-windows-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: diagnostic-artifact/
+          if-no-files-found: error
+          retention-days: 14

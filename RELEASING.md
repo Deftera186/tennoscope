@@ -69,6 +69,39 @@ GitHub release titles are `TennoScope v0.1.0`: the product name followed by the 
    of a published artifact, so this can only happen after step 6. Copy the ebuilds to the new
    version, regenerate the Manifests, run `pkgcheck scan`, and push.
 
+## Diagnostic Actions artifacts
+
+For a targeted Windows investigation, use an Actions artifact instead of a release. Push the
+diagnostic implementation to a branch, then manually dispatch the existing CI workflow there:
+
+```bash
+gh workflow run ci.yml --ref diagnostic/issue12 -f diagnostic_artifact=true
+```
+
+The optional job waits for the normal Linux, Windows, and frontend gates, then checks and tests
+the `reward-diagnostics` feature, builds an optimized NSIS installer, installs it, and exercises
+the installed bundled OCR engine against a known card crop. Release debug assertions stay off;
+the opt-in recorder, not unbounded debug crop retention, supplies the evidence. The installer
+and diagnostic report identify the exact commit through `TENNOSCOPE_DIAGNOSTIC_BUILD`.
+
+Only an Actions artifact is uploaded: installer, SHA-256 checksums, and reporter instructions,
+retained for 14 days. Download normally requires a GitHub login. Do not tag, publish a release,
+or update distribution packages for this path. The app version and install identity stay the
+same, so the reporter must close TennoScope before installing and can reinstall the stable build
+after the investigation.
+
+Recording is off by default. In Diagnostics, the reporter chooses **Record reward diagnostic**
+before a short squad fissure. Only the existing reward reader supplies frames; Companion cannot
+start it. The recorder keeps at most one sample per three seconds, the newest twelve samples,
+64 MiB, and a ten-minute session. Reward closure, game exit/restart, access changes, or Save logs
+stop recording. Save logs exports completed samples; an in-flight attempt is discarded. Starting
+again replaces the previous local session, so save it first.
+
+Ask for the whole saved report folder as a ZIP, including `reward-diagnostics`. Images and OCR
+evidence are not redacted and can contain names, chat, or overlapping windows; the reporter must
+review the files before sharing. Nothing uploads automatically, and clipboard diagnostics contain
+no screenshots or sampled raw OCR. Installer/OCR smoke is not live Windows 10 gameplay validation.
+
 ## Packaging
 
 The bundles the workflow attaches are built by `scripts/build-linux-bundles.sh`. Run by hand it

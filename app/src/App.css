@@ -575,6 +575,9 @@
 .report-plate:not(.broken) .report-title { color: var(--platinum); }
 .report-actions { display: flex; flex-wrap: wrap; gap: var(--step); padding-left: calc(1.1rem + var(--step)); }
 .report-status { margin: 0; padding-left: calc(1.1rem + var(--step)); font-family: var(--face-register); font-size: .58rem; letter-spacing: .1em; color: var(--platinum-dim); }
+.reward-diagnostic { display: grid; gap: var(--step); min-width: 0; padding-left: calc(1.1rem + var(--step)); }
+.reward-diagnostic .band-note { margin: 0; overflow-wrap: anywhere; }
+.reward-diagnostic .report-actions { padding-left: 0; }
 .procedure-head.second { margin-top: clamp(var(--course), 5vh, var(--field)); }
 .column-head { margin: 0; font-family: var(--face-register); font-size: .62rem; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; color: var(--platinum-dim); }
 
