@@ -272,6 +272,12 @@ impl RewardSourceCoordinator {
                 );
                 return Err("the reward screen closed first");
             }
+            // This pool is immutable for the whole retry. Capturing cannot fill it,
+            // and waiting here blocks delivery of the screen poller's valid result
+            // in Overlay mode, where memory-derived candidates are absent.
+            if candidates.is_empty() {
+                return Err("no reward candidates");
+            }
             attempts += 1;
             let attempt = visual.choices(candidates);
             trace_visual_read(attempts, started.elapsed(), &attempt);
@@ -385,6 +391,28 @@ mod visual_reason_tests {
         ) -> Result<Vec<String>, &'static str> {
             Err(self.0)
         }
+    }
+
+    /// In Overlay mode the log-event path has no memory-derived candidates. Retrying
+    /// that immutable empty pool blocks delivery of the independent screen poller's
+    /// successful read until the fifteen-second reward screen has already closed.
+    #[test]
+    fn an_empty_pool_does_not_block_the_monitor_with_capture_retries() {
+        struct MustNotCapture;
+        impl VisualRewardSource for MustNotCapture {
+            fn choices(&mut self, _: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
+                panic!("an empty candidate pool cannot become readable by capturing again");
+            }
+        }
+        let outcome = RewardSourceCoordinator::new(false).visual_choices(
+            &mut MustNotCapture,
+            &[],
+            4,
+            None,
+            Duration::from_secs(8),
+            &AtomicBool::new(false),
+        );
+        assert_eq!(outcome.err(), Some("no reward candidates"));
     }
 
     /// The 2026-08-22 report blamed log parsing for a capture failure. The reason has to survive
