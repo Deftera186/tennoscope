@@ -513,7 +513,7 @@ fn run_tesseract(
     if let Some(directory) = program.parent().filter(|path| !path.as_os_str().is_empty()) {
         command.args([
             std::ffi::OsStr::new("--tessdata-dir"),
-            directory.as_os_str(),
+            tessdata_dir_arg(directory).as_os_str(),
         ]);
     }
     command
@@ -524,6 +524,24 @@ fn run_tesseract(
     }
     let text = command.output().map_err(|_| "tesseract is not available")?;
     Ok(String::from_utf8_lossy(&text.stdout).into_owned())
+}
+
+/// The `--tessdata-dir` value Tesseract can actually open.
+///
+/// The installed app resolves its resource directory in verbatim `\\?\` form (issue #12),
+/// but Tesseract joins this directory to `eng.traineddata` with a forward slash, which
+/// verbatim paths reject -- so the open fails even though the file shipped. Strip the
+/// prefix; ordinary paths are untouched. String-level rather than `Prefix`-based so the
+/// behaviour is testable on every platform: install paths are valid Unicode in practice.
+fn tessdata_dir_arg(directory: &Path) -> PathBuf {
+    let text = directory.as_os_str().to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    directory.to_path_buf()
 }
 
 /// Compare on alphanumerics only. That is what lets a read of "2 X Forma Blueprint W\:" land on
@@ -916,5 +934,31 @@ mod tests {
         // a `> 0.9` assertion passes with the trailing-run loop deleted and pins nothing. Only the
         // rejoined run `Dual Zoren Prime Blueprint` reaches 1.0.
         assert!(score > 0.99, "scored {score} on a wrapped name under noise");
+    }
+
+    /// Issue #12: the installed app resolves its resource directory in verbatim `\\?\` form,
+    /// and Tesseract joins `--tessdata-dir` to the filename with `/`, which verbatim paths
+    /// reject -- so `eng.traineddata` fails to open even though it shipped. The directory
+    /// handed to Tesseract must never carry the verbatim prefix.
+    #[test]
+    fn verbatim_tessdata_dir_is_unprefixed_for_tesseract() {
+        assert_eq!(
+            super::tessdata_dir_arg(std::path::Path::new(
+                r"\\?\C:\Users\alice\AppData\Local\TennoScope\tesseract"
+            )),
+            std::path::PathBuf::from(r"C:\Users\alice\AppData\Local\TennoScope\tesseract"),
+        );
+        assert_eq!(
+            super::tessdata_dir_arg(std::path::Path::new(r"\\?\UNC\server\share\tesseract")),
+            std::path::PathBuf::from(r"\\server\share\tesseract"),
+        );
+        assert_eq!(
+            super::tessdata_dir_arg(std::path::Path::new(r"C:\normal\tesseract")),
+            std::path::PathBuf::from(r"C:\normal\tesseract"),
+        );
+        assert_eq!(
+            super::tessdata_dir_arg(std::path::Path::new("/usr/share/tessdata")),
+            std::path::PathBuf::from("/usr/share/tessdata"),
+        );
     }
 }

@@ -17,6 +17,10 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   so slow OCR cannot delay overlay show/hide, game-exit handling, or poller delivery. Results
   from a closed or replaced screen are retired instead of published, and delayed market prices
   stay gated by the monitor generation.
+- **Windows reward and kiosk recognition works in the installed app again.** The bundled
+  Tesseract received its data directory in verbatim `\\?\` form, which rejects the forward
+  slash Tesseract appends to the filename -- so `eng.traineddata` failed to open on every
+  read (issue #12). The directory is unprefixed before Tesseract ever sees it.
 
 ## [0.10.0] - 2026-09-18
 
