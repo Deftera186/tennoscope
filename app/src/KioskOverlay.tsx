@@ -75,6 +75,10 @@ export default function KioskOverlay() {
   // `kiosk-updated` events can overlap IPC reads. Only the newest-started read may publish;
   // otherwise a slow older response can roll the epoch, prices, and absolute offset back.
   const refreshSeq = useRef(0)
+  // Unreadable looks fade the chips; a settled read unhides them again -- but only when no
+  // unreadable look landed while the read was in flight, otherwise a stale pre-dialog view
+  // would briefly paint chips over the dialog until the next null re-fades them.
+  const fadeSeq = useRef(0)
 
   useEffect(() => {
     document.documentElement.classList.add('overlay-mode')
@@ -96,6 +100,7 @@ export default function KioskOverlay() {
     // loading, so the event is only a nudge and `get_kiosk_view` is the source of truth.
     const refresh = async () => {
       const refreshId = ++refreshSeq.current
+      const fadeAtRead = fadeSeq.current
       try {
         const seqAtRead = scrollSeq.current
         const next = await getKioskView()
@@ -106,9 +111,13 @@ export default function KioskOverlay() {
         }
         const sessionChanged = next.session !== sessionSeen.current
         if (sessionChanged) adoptSession(next.session)
-        if (next.epoch !== epochSeen.current) {
-          setFaded(false)
-        }
+        // A settled read means the grid was readable when the read began -- but only when no
+        // unreadable look landed while it was in flight. Otherwise the settling view predates
+        // the occlusion (an unreadable strip look during a dialog) and unhiding would paint
+        // stale chips over it until the next null re-fades them. Gating the old epoch check
+        // instead latched a single unreadable look into a permanently invisible overlay,
+        // because dialogs come and go mid-epoch while the epoch only advances on a re-anchor.
+        if (fadeAtRead === fadeSeq.current) setFaded(false)
         // Every settled read measured where the grid sits right now, so its offset is
         // authoritative whenever nothing has moved since the read began -- not just when
         // an anchor marks it. Adopting only anchors let each look's estimation error
@@ -128,7 +137,7 @@ export default function KioskOverlay() {
     // them until the next settled read publishes where the grid actually is.
     void listen<{ session: number, dy: number | null }>('kiosk-scroll', (event) => {
       if (!active || event.payload.session !== sessionSeen.current) return
-      if (event.payload.dy === null) { setFaded(true); return }
+      if (event.payload.dy === null) { fadeSeq.current += 1; setFaded(true); return }
       const delta = event.payload.dy
       scrollSeq.current += 1
       setOffset(previous => previous + delta)

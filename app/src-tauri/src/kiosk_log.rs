@@ -12,23 +12,26 @@
 //!        Created /Lotus/Interface/InventoryTest.swf
 //!        Subscribing for /Lotus/Interface/InventoryTest.swf      <- the screen owns input
 //!        InventoryTest.lua: PopulateGrid()
-//! close  InventoryTest.lua: DBG: HudVis 0                        <- exactly once per session
+//! close  InventoryTest.lua: DBG: HudVis 0                        <- per teardown, not per visit
 //!        Subscribing for /Lotus/Interface/ThemedButtonBar.swf    <- input went elsewhere
 //! ```
 //!
-//! Two facts from that census carry this module. First, `PopulateGrid()` runs **once per
-//! session**, at the open -- sessions of 100s, 233s and 290s spent scrolling logged exactly one
-//! -- so there is no such thing as a mid-session repopulate, and `HudVis 0` is unambiguous. An
-//! earlier reading of this log took `HudVis 0` for the first beat of a repopulate cycle and gave
-//! up on log-driven closes entirely; what it was actually looking at was a close immediately
-//! followed by a fresh open, which is what rapid open/close testing looks like from here.
+//! Two facts from that census carry this module. First, `PopulateGrid()` runs once per screen
+//! *build*, not once per visit: a sale confirm rebuilds the kiosk screen mid-visit (EE.log
+//! 2026-09-20 shows `Saving profile`, then `HudVis 0` plus a foreign subscription, then the
+//! full open markers and `PopulateGrid()` about a second later) while the player never leaves.
+//! So `HudVis 0` is necessary but not sufficient for "the visit ended" -- this machine still
+//! reports the edge, and the session layer only believes a close that stays silent past its
+//! grace window. An earlier reading of the 2026-08-23 log took `HudVis 0` for the first beat
+//! of a repopulate cycle and gave up on log-driven closes entirely; what it was actually
+//! looking at was a close immediately followed by a fresh open, which is what rapid open/close
+//! testing looks like from here.
 //!
 //! Second, only two screens ever take input from the kiosk: `ThemedButtonBar` (the ordinary
-//! exit, 52 times) and `ItemInfoPopup` (4). The popup case tears the kiosk down for real -- it
-//! is followed by `HudVis 1` and a fresh `Created`/`Subscribing` pair when the player returns --
-//! so treating a foreign subscription as a close is right in both cases, and the return re-opens
-//! on its own. That line is a second, independent witness to the same transition: whichever
-//! arrives first closes the session, and the other is ignored.
+//! exit, 52 times) and `ItemInfoPopup` (4). The popup case is *either* a real teardown *or*
+//! the sale-confirm rebuild above -- the markers are identical -- so a foreign subscription
+//! stays a close report, never a verdict: whichever witness arrives first opens the grace
+//! window, and the rebuild markers arriving inside it cancel the teardown.
 //!
 //! What the log deliberately does *not* decide is whether the grid is readable. Presence and
 //! readability were one question here for a while, keyed off the OCR miss streak, and every
@@ -47,10 +50,12 @@ pub enum KioskLogEvent {
 const MODE_MARKER: &str = "InventoryTest - CurrMode: Selling Prime Parts";
 const SWF_MARKER: &str = "/Lotus/Interface/InventoryTest.swf";
 const POPULATE_MARKER: &str = "PopulateGrid()";
-/// The kiosk's own teardown line, written once per session as the screen goes away.
+/// The kiosk's teardown line, written as the screen goes away -- including mid-visit rebuilds
+/// like the sale-confirm popup, so this is a close *report*, never a verdict on the visit.
 const CLOSE_MARKER: &str = "InventoryTest.lua: DBG: HudVis 0";
 /// Input subscriptions name the screen that owns the keyboard. One for a screen that is not
-/// the kiosk means the kiosk is no longer the screen in front of the player.
+/// the kiosk means the kiosk lost input -- either an exit or a mid-visit rebuild, which carry
+/// identical markers and are told apart by what follows, not by this line.
 const SUBSCRIBE_MARKER: &str = "Subscribing for /Lotus/Interface/";
 
 #[derive(Default)]

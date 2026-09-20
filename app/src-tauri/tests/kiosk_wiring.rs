@@ -2,8 +2,9 @@ use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
+use std::time::{Duration, Instant};
 
-use app_lib::monitor::KioskSession;
+use app_lib::monitor::{KIOSK_CLOSE_GRACE, KioskSession};
 use app_lib::{KioskState, KioskView};
 
 const MODE_LINE: &str =
@@ -12,6 +13,8 @@ const SWF_LINE: &str = "Created /Lotus/Interface/InventoryTest.swf\n";
 const POPULATE_LINE: &str = "InventoryTest.lua: PopulateGrid()\n";
 /// The game's own exit line, exactly as EE.log writes it (census: once per session).
 const CLOSE_LINE: &str = "75584.766 Script [Info]: InventoryTest.lua: DBG: HudVis 0\n";
+/// A foreign subscription exactly as EE.log writes it when the sale-confirm popup takes input.
+const POPUP_LINE: &str = "173.558 Input [Info]: Subscribing for /Lotus/Interface/ItemInfoPopup.swf with input filter /Lotus/Types/Input/ItemInfoPopupInputFilter\n";
 
 /// A spawn hook that records the flags it was handed, so the test can play the poller: consume
 /// the re-anchor request, or deliver the stop signal.
@@ -62,6 +65,12 @@ fn tally() -> (Arc<Mutex<usize>>, impl Fn() + use<>) {
 fn tally_of(count: &Arc<Mutex<usize>>) -> usize {
     count.lock().map(|count| *count).unwrap_or(0)
 }
+/// Monitor-tick timestamps are injected so a test can sit on either side of the close grace
+/// window without sleeping: `t0` for "right now", `after_grace(t0)` for "the close markers
+/// stayed silent past the window".
+fn after_grace(close_at: Instant) -> Instant {
+    close_at + KIOSK_CLOSE_GRACE + Duration::from_millis(50)
+}
 
 /// Opening the kiosk shows the overlay and spawns exactly one poller, even when both open
 /// markers (mode line and SWF creation) arrive in one batch -- the session must not double-arm
@@ -72,11 +81,13 @@ fn opening_spawns_one_poller_and_shows() {
     let session = &mut KioskSession::new();
     let spawns = SpawnLog::default();
     let (shows, show) = tally();
+    let t0 = Instant::now();
     session.observe(
         [MODE_LINE, SWF_LINE].concat().as_bytes(),
         &kiosk,
         &show,
         &spawns.hook(),
+        t0,
     );
     assert_eq!(spawns.spawns(), 1, "one poller, not one per marker");
     assert_eq!(tally_of(&shows), 1, "one show");
@@ -96,11 +107,12 @@ fn populate_re_requests_the_anchor_while_polling() {
     let spawns = SpawnLog::default();
     let noop = || ();
     let kiosk = KioskState::new();
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
+    let t0 = Instant::now();
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook(), t0);
     let reanchor = spawns.reanchor.lock().unwrap()[0].clone();
     assert!(reanchor.swap(false, Ordering::AcqRel), "open armed it");
 
-    session.observe(POPULATE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
+    session.observe(POPULATE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook(), t0);
     assert!(
         reanchor.load(Ordering::Acquire),
         "PopulateGrid must re-arm the anchor request"
@@ -112,8 +124,7 @@ fn populate_re_requests_the_anchor_while_polling() {
     );
 
     reanchor.store(false, Ordering::Release);
-    session.observe(POPULATE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
-    assert!(reanchor.load(Ordering::Acquire));
+    session.observe(POPULATE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook(), t0);
 }
 
 /// The log's close line must hide the overlay, clear the published view, consume exactly once,
@@ -128,61 +139,80 @@ fn the_logs_close_line_closes_and_a_reopen_rearms() {
     let kiosk = KioskState::new();
     let (hides, hide) = tally();
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
+    let t0 = Instant::now();
+    let settled = after_grace(t0);
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook(), t0);
     kiosk.set(KioskView {
         epoch: 4,
         ..KioskView::default()
     });
 
-    assert!(!session.take_close(&kiosk, &hide), "no verdict yet");
+    assert!(!session.take_close(&kiosk, &hide, t0), "no verdict yet");
     assert!(
         kiosk.get().is_some(),
         "a stray poll must not tear down a live session"
     );
 
-    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
-    assert!(session.take_close(&kiosk, &hide));
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook(), t0);
+    assert!(
+        !session.take_close(&kiosk, &hide, t0),
+        "a lone close is a maybe until the window passes"
+    );
+    assert!(session.take_close(&kiosk, &hide, settled));
     assert!(
         kiosk.get().is_none(),
         "the payload must not outlive the window"
     );
     assert_eq!(tally_of(&hides), 1);
     assert!(
-        !session.take_close(&kiosk, &hide),
+        !session.take_close(&kiosk, &hide, settled),
         "the verdict is consumed once"
     );
 
     // A populate from the dead session must do nothing...
-    session.observe(POPULATE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
+    session.observe(
+        POPULATE_LINE.as_bytes(),
+        &kiosk,
+        &noop,
+        &spawns.hook(),
+        settled,
+    );
     assert_eq!(spawns.spawns(), 1);
     // ...and a fresh open re-arms with fresh flags.
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook(), settled);
     assert_eq!(spawns.spawns(), 2, "the second visit arms a new poller");
 }
 
 /// The end-to-end shape of a session, in raw log bytes: the open shows the overlay and starts
-/// a poller, and the game's own exit line arms the close that the very next monitor tick
-/// consumes -- no OCR, no miss streak, no wait. This is the whole reason the log owns
-/// presence: it narrates both edges within ~50ms of the player's ESC.
+/// a poller, and the game's own exit line arms the close that a later monitor tick consumes
+/// once the grace window passes -- no OCR, no miss streak. This is the whole reason the log
+/// owns presence: it narrates both edges within ~50ms of the player's ESC.
 #[test]
 fn the_logs_exit_line_takes_the_overlay_down() {
     let session = &mut KioskSession::new();
     let spawns = SpawnLog::default();
     let kiosk = KioskState::new();
     let (hides, hide) = tally();
+    let t0 = Instant::now();
+    let settled = after_grace(t0);
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
     assert_eq!(spawns.spawns(), 1, "the open started a poller");
 
-    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
-    // The close arms on the log line and the monitor's next tick consumes it -- once.
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
+    // The close arms on the log line; the monitor's ticks inside the window must not act on
+    // it, and the first tick past the window consumes it -- once.
     assert!(
-        session.take_close(&kiosk, &hide),
+        !session.take_close(&kiosk, &hide, t0),
+        "inside the window the overlay stays up"
+    );
+    assert!(
+        session.take_close(&kiosk, &hide, settled),
         "the game's own exit line closed the session"
     );
     assert_eq!(tally_of(&hides), 1, "the overlay came down");
     assert!(
-        !session.take_close(&kiosk, &hide),
+        !session.take_close(&kiosk, &hide, settled),
         "consumed once; nothing left to tear down"
     );
 }
@@ -205,15 +235,23 @@ fn close_hides_and_returns_before_a_blocked_poller_exits() {
             }
         })
     };
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawn);
-    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawn);
+    let t0 = Instant::now();
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawn, t0);
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawn, t0);
+    // The verdict the closer thread consumes is the first tick past the window: it must
+    // still clear, hide, and return without joining the worker parked in OCR.
+    let settled = after_grace(t0);
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let kiosk_for_close = Arc::clone(&kiosk);
     let closer = std::thread::spawn(move || {
         let hidden = AtomicBool::new(false);
-        let closed = session.take_close(kiosk_for_close.as_ref(), &|| {
-            hidden.store(true, Ordering::Release);
-        });
+        let closed = session.take_close(
+            kiosk_for_close.as_ref(),
+            &|| {
+                hidden.store(true, Ordering::Release);
+            },
+            settled,
+        );
         done_tx
             .send((
                 closed,
@@ -241,30 +279,34 @@ fn a_second_visit_starts_a_fresh_poller() {
     let spawns = SpawnLog::default();
     let kiosk = KioskState::new();
 
-    session.observe(SWF_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
-    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
+    let t0 = Instant::now();
+    let settled = after_grace(t0);
+    session.observe(SWF_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
     assert!(
-        session.take_close(&kiosk, &|| ()),
+        session.take_close(&kiosk, &|| (), settled),
         "the first visit closed off its own exit line"
     );
 
-    session.observe(SWF_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
+    session.observe(SWF_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), settled);
     assert_eq!(spawns.spawns(), 2, "the second visit got its own poller");
 
     // The fresh poller's stop flag is clear: a tick later the session is still alive...
     let gone = spawns.gone.lock().unwrap()[1].clone();
     assert!(!gone.load(Ordering::Acquire));
     // ...and the second visit closes on its own exit line too.
-    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
-    assert!(session.take_close(&kiosk, &|| ()));
+    let t1 = settled + Duration::from_millis(10);
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t1);
+    assert!(session.take_close(&kiosk, &|| (), after_grace(t1)));
 }
 
 /// The monitor consuming a close must not erase the poller's stop signal.
 ///
-/// These are two different readers of one event: the monitor tears the window down on its next
-/// tick, and the poller thread stops looking. When they shared one consuming flag the monitor
-/// always won -- it set the flag and swapped it back four lines later in the same tick, while
-/// the thread only reads it every 60-400ms and can be parked inside tesseract for far longer.
+/// These are two different readers of one event: the monitor tears the window down once the
+/// close stays silent past the grace window, and the poller thread stops looking. When they
+/// shared one consuming flag the monitor always won -- it set the flag and swapped it back
+/// four lines later in the same tick, while the thread only reads it every 60-400ms and can
+/// be parked inside tesseract for far longer.
 /// The thread then never saw it and ran out its whole 45-minute lifetime: on 2026-08-23 every
 /// visit leaked a poller that kept capturing, publishing views and streaming scroll deltas over
 /// later sessions -- nineteen in one evening, two of them alive at once, double-counting the
@@ -275,11 +317,15 @@ fn a_consumed_close_still_tells_the_poller_to_stop() {
     let spawns = SpawnLog::default();
     let kiosk = KioskState::new();
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
+    let t0 = Instant::now();
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
     let gone = spawns.gone.lock().unwrap()[0].clone();
 
-    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
-    assert!(session.take_close(&kiosk, &|| ()), "the monitor's teardown");
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
+    assert!(
+        session.take_close(&kiosk, &|| (), after_grace(t0)),
+        "the monitor's teardown"
+    );
     assert!(
         gone.load(Ordering::Acquire),
         "the poller must still be told to stop after the monitor consumed the close"
@@ -295,12 +341,20 @@ fn a_reopen_cannot_revive_the_previous_poller() {
     let spawns = SpawnLog::default();
     let kiosk = KioskState::new();
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
+    let t0 = Instant::now();
+    let settled = after_grace(t0);
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
     let first = spawns.gone.lock().unwrap()[0].clone();
-    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
-    assert!(session.take_close(&kiosk, &|| ()));
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
+    assert!(session.take_close(&kiosk, &|| (), settled));
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
+    session.observe(
+        MODE_LINE.as_bytes(),
+        &kiosk,
+        &|| (),
+        &spawns.hook(),
+        settled,
+    );
     let second = spawns.gone.lock().unwrap()[1].clone();
     assert!(
         first.load(Ordering::Acquire),
@@ -343,9 +397,10 @@ fn a_kiosk_already_open_at_attach_is_adopted() {
 
     // And it ends the ordinary way: the machine must know it is open, or the exit line for a
     // session we joined late would be ignored.
-    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &show, &spawns.hook());
+    let t0 = Instant::now();
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &show, &spawns.hook(), t0);
     assert!(
-        session.take_close(&kiosk, &hide),
+        session.take_close(&kiosk, &hide, after_grace(t0)),
         "the adopted session closes on its own exit line"
     );
     assert_eq!(tally_of(&hides), 1);
@@ -391,86 +446,97 @@ fn adopting_twice_does_not_double_arm() {
     assert_eq!(tally_of(&shows), 1);
 }
 
-/// A close and the next open landing in ONE batch of log bytes must still arm the new visit.
+/// A close and the next open landing in ONE batch of log bytes is the same visit continuing.
 ///
-/// EE.log reaches the monitor in chunks, so closing the kiosk and reopening it inside a tick
-/// puts both markers in the same `observe` call. The close only *arms* a teardown -- the window
-/// work is the monitor's, on its next tick -- so the open that follows used to be dropped by
-/// the `poller_active` guard meant for duplicate open markers, and the player got a kiosk with
-/// no overlay at all until they closed and opened it slowly enough. The overlay is already up
-/// and stays up: the reopen cancels the pending teardown instead of flashing it.
+/// EE.log reaches the monitor in chunks, so the sale-confirm rebuild -- close markers, then
+/// the open markers again -- can land in a single `observe` call. Within one batch a rebuild
+/// is indistinguishable from an instant close-and-reopen, and continuity is the safe side of
+/// that ambiguity: nothing retires, the poller keeps reading, the published view stays up,
+/// and the overlay never blinks. (The old code retired on the close and re-armed on the open,
+/// wiping the view and churning the poller on every sale.)
 #[test]
-fn a_close_and_reopen_in_one_batch_rearms_without_a_flash() {
+fn a_close_and_reopen_in_one_batch_keeps_the_same_visit() {
     let session = &mut KioskSession::new();
     let spawns = SpawnLog::default();
     let (shows, show) = tally();
     let kiosk = KioskState::new();
     let (hides, hide) = tally();
+    let t0 = Instant::now();
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &show, &spawns.hook());
-    let first = spawns.gone.lock().unwrap()[0].clone();
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &show, &spawns.hook(), t0);
+    let poller = spawns.gone.lock().unwrap()[0].clone();
     kiosk.set(KioskView {
         epoch: 41,
         ..KioskView::default()
     });
+    let visit = kiosk.active_session();
 
     session.observe(
         [CLOSE_LINE, MODE_LINE, POPULATE_LINE].concat().as_bytes(),
         &kiosk,
         &show,
         &spawns.hook(),
+        t0,
     );
-    assert_eq!(spawns.spawns(), 2, "the reopen got its own poller");
-    assert!(first.load(Ordering::Acquire), "the old poller was stopped");
-    let second = spawns.gone.lock().unwrap()[1].clone();
+    assert_eq!(spawns.spawns(), 1, "no second poller for the same visit");
     assert!(
-        !second.load(Ordering::Acquire),
-        "the new one is free to look"
+        !poller.load(Ordering::Acquire),
+        "the running poller was never stopped"
     );
+    assert_eq!(kiosk.active_session(), visit, "still the same visit");
     assert!(
-        spawns.reanchor.lock().unwrap()[1].load(Ordering::Acquire),
-        "and it anchors its first read"
-    );
-    assert!(
-        kiosk.get().is_none(),
-        "the reopened visit must not show the previous visit while fresh OCR is pending"
+        kiosk.get().is_some(),
+        "the published view stayed up through the rebuild"
     );
 
     assert!(
-        !session.take_close(&kiosk, &hide),
+        !session.take_close(&kiosk, &hide, t0),
         "the kiosk is on screen: nothing to tear down"
     );
+    assert!(
+        !session.take_close(&kiosk, &hide, after_grace(t0)),
+        "the cancelled teardown stays cancelled"
+    );
     assert_eq!(tally_of(&hides), 0, "the overlay never blinked");
-    assert_eq!(tally_of(&shows), 2);
+    assert_eq!(tally_of(&shows), 1, "never re-shown: it never came down");
 }
 
-/// The same batch ending on a close still tears the overlay down -- the player closed the
-/// kiosk, reopened it and closed it again faster than one tick.
+/// The same batch ending on a close still tears the overlay down -- the teardown only waits
+/// for the grace window, and a batch whose last word is a close leaves one pending. (The
+/// middle open cancels the first close's deadline and the last close re-arms it; no second
+/// poller ever spawns, so there is no short-lived visit to stop.)
 #[test]
 fn a_batch_that_ends_closed_still_tears_down() {
     let session = &mut KioskSession::new();
     let spawns = SpawnLog::default();
     let kiosk = KioskState::new();
     let (hides, hide) = tally();
+    let t0 = Instant::now();
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook());
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
     kiosk.set(KioskView::default());
     session.observe(
         [CLOSE_LINE, MODE_LINE, CLOSE_LINE].concat().as_bytes(),
         &kiosk,
         &|| (),
         &spawns.hook(),
+        t0,
+    );
+    assert_eq!(spawns.spawns(), 1, "the visit never re-armed");
+    assert!(
+        !session.take_close(&kiosk, &hide, t0),
+        "inside the window the overlay stays up"
     );
     assert!(
-        session.take_close(&kiosk, &hide),
+        session.take_close(&kiosk, &hide, after_grace(t0)),
         "the last word in the batch was a close"
     );
     assert_eq!(tally_of(&hides), 1);
     assert!(kiosk.get().is_none(), "and the payload went with it");
-    let second = spawns.gone.lock().unwrap()[1].clone();
+    let poller = spawns.gone.lock().unwrap()[0].clone();
     assert!(
-        second.load(Ordering::Acquire),
-        "the short-lived visit's poller was stopped too"
+        poller.load(Ordering::Acquire),
+        "the visit's poller was stopped too"
     );
 }
 
@@ -485,7 +551,8 @@ fn process_death_closes_the_session() {
     let (hides, hide) = tally();
     let (retirements, retire) = tally();
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
+    let t0 = Instant::now();
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook(), t0);
     kiosk.set(KioskView::default());
     let gone = spawns.gone.lock().unwrap()[0].clone();
     session.close(&kiosk, &hide, &retire);
@@ -505,7 +572,7 @@ fn process_death_closes_the_session() {
     session.close(&kiosk, &hide, &retire);
     assert_eq!(tally_of(&hides), 1);
     assert_eq!(tally_of(&retirements), 1);
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook());
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &noop, &spawns.hook(), t0);
     assert_eq!(spawns.spawns(), 2);
 }
 
@@ -530,12 +597,108 @@ fn process_death_joins_the_kiosk_poller_before_portal_teardown() {
         }
     };
 
-    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawn);
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawn, Instant::now());
     session.close(&kiosk, &|| (), &|| ());
     order.lock().unwrap().push("portal closed");
 
     assert_eq!(
         order.lock().unwrap().as_slice(),
         ["poller stopped", "portal closed"]
+    );
+}
+
+/// A sale confirm rebuilds the kiosk screen mid-visit: EE.log shows `Saving profile`, then
+/// `HudVis 0` plus a foreign subscription, then the full open markers and `PopulateGrid()`
+/// about a second later -- the player never leaves. Those transient close markers must not
+/// take the overlay down when the rebuild follows in later batches.
+#[test]
+fn a_sale_confirm_rebuild_split_across_batches_keeps_the_overlay_up() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+    let (hides, hide) = tally();
+    let (shows, show) = tally();
+
+    let t0 = Instant::now();
+    // The rebuild lands ~1s after the close markers, inside the window.
+    let rebuilding = t0 + Duration::from_millis(1000);
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &show, &spawns.hook(), t0);
+    kiosk.set(KioskView {
+        epoch: 7,
+        ..KioskView::default()
+    });
+    let visit = kiosk.active_session();
+
+    // The profile save and the transient close markers land in one batch...
+    session.observe(
+        [CLOSE_LINE, POPUP_LINE].concat().as_bytes(),
+        &kiosk,
+        &show,
+        &spawns.hook(),
+        t0,
+    );
+    // ...and the monitor ticks that follow must not tear down: a lone close is a
+    // maybe-rebuild, not a verdict.
+    assert!(
+        !session.take_close(&kiosk, &hide, rebuilding),
+        "the overlay must ride out the rebuild window"
+    );
+    assert_eq!(tally_of(&hides), 0, "the window never blinked");
+    assert!(kiosk.get().is_some(), "the published view stays up");
+    assert_eq!(spawns.spawns(), 1, "no second poller for the same visit");
+    assert_eq!(kiosk.active_session(), visit, "the visit is continuous");
+
+    // ...then the rebuild markers arrive a second later and the visit continues.
+    session.observe(
+        [MODE_LINE, SWF_LINE, POPULATE_LINE].concat().as_bytes(),
+        &kiosk,
+        &show,
+        &spawns.hook(),
+        rebuilding,
+    );
+    assert!(
+        !session.take_close(&kiosk, &hide, rebuilding),
+        "the rebuild cancels the pending teardown"
+    );
+    assert_eq!(tally_of(&hides), 0, "still no blink");
+    assert_eq!(spawns.spawns(), 1, "the running poller was never stopped");
+    assert_eq!(kiosk.active_session(), visit, "still the same visit");
+    assert_eq!(tally_of(&shows), 1, "never re-shown: it never came down");
+}
+
+/// A close with no rebuild after it still takes the overlay down: the grace window delays
+/// the verdict, it does not cancel it. This is the genuine-exit half of the flap pair above.
+#[test]
+fn silence_past_the_grace_window_tears_the_session_down() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+    let (hides, hide) = tally();
+    let t0 = Instant::now();
+
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
+    kiosk.set(KioskView::default());
+    let poller = spawns.gone.lock().unwrap()[0].clone();
+    session.observe(CLOSE_LINE.as_bytes(), &kiosk, &|| (), &spawns.hook(), t0);
+
+    assert!(
+        !session.take_close(&kiosk, &hide, t0),
+        "inside the window the overlay lingers"
+    );
+    assert_eq!(tally_of(&hides), 0);
+    assert!(kiosk.get().is_some(), "and so does the published view");
+    assert!(
+        session.take_close(&kiosk, &hide, after_grace(t0)),
+        "silence past the window is the verdict"
+    );
+    assert_eq!(tally_of(&hides), 1, "the overlay came down");
+    assert!(kiosk.get().is_none(), "and the payload went with it");
+    assert!(
+        poller.load(Ordering::Acquire),
+        "the visit's poller was stopped"
+    );
+    assert!(
+        !session.take_close(&kiosk, &hide, after_grace(t0)),
+        "consumed once; nothing left to tear down"
     );
 }

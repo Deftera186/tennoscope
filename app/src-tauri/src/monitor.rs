@@ -44,6 +44,11 @@ const KIOSK_POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// The kiosk poller's cadence while the grid is drifting: a grim capture costs ~25ms, so a 60ms
 /// tick streams scroll offsets in near real time and still leaves the CPU alone.
 const KIOSK_MOTION_INTERVAL: Duration = Duration::from_millis(60);
+/// How long a kiosk close stays a maybe: a sale confirm rebuilds the kiosk screen mid-visit
+/// (EE.log `Saving profile`, then `HudVis 0` plus a foreign subscription, then the full open
+/// markers about a second later), so the monitor only tears down once the close markers stay
+/// silent past this window. A reopen inside the window cancels the pending teardown.
+pub const KIOSK_CLOSE_GRACE: Duration = Duration::from_millis(1500);
 
 /// Tell the kiosk window which visit now owns it; it retires any previous visit synchronously,
 /// then fetches the latest epoch itself.
@@ -508,6 +513,10 @@ pub struct KioskSession {
     /// A close the monitor has not torn down yet. Deliberately not the poller's stop flag: see
     /// `KioskLogEvent::KioskClosed` below for what sharing one cost.
     close_pending: bool,
+    /// A close observed but not yet believed: the teardown verdict waits until this deadline so
+    /// a sale-confirm rebuild (close markers, then the open markers again ~1s later) rides out
+    /// as the same visit. `None` while the kiosk is confidently open.
+    close_deadline: Option<Instant>,
     /// The overlay is on screen, so a teardown has something to take down. Separate from
     /// `poller_active` because a close retires the poller at once while the window waits for
     /// the monitor's next tick -- and a reopen in between cancels the teardown entirely.
@@ -524,18 +533,19 @@ impl KioskSession {
         Self::default()
     }
 
-    /// Feed incremental EE.log bytes into the kiosk lifecycle. `spawn_poller` receives the
-    /// session identity and shared flags: `reanchor` requests a read and `gone` permanently stops
-    /// the worker. State is retired on the close event itself, before a later open in the same
-    /// byte batch can re-arm.
+    /// Feed incremental EE.log bytes into the kiosk lifecycle, stamped with the monitor tick
+    /// that delivered them. `spawn_poller` receives the session identity and shared flags:
+    /// `reanchor` requests a read and `gone` permanently stops the worker. A close only arms
+    /// a teardown deadline -- a later open inside the window cancels it before anything retires,
+    /// so a sale-confirm rebuild rides out as the same visit.
     pub fn observe(
         &mut self,
         bytes: &[u8],
         kiosk_view: &KioskState,
         show: &dyn Fn(),
         spawn_poller: &SpawnKioskPoller<'_>,
-    ) -> bool {
-        let mut state_retired = false;
+        now: Instant,
+    ) {
         for event in self.machine.observe_bytes(bytes) {
             log::debug!("[DEBUG-kiosk] ee event {event:?}");
             match event {
@@ -543,6 +553,11 @@ impl KioskSession {
                     if self.poller_active {
                         // The machine already de-duplicates, but both open markers can land in
                         // one batch and a second poller would race the first for the same flags.
+                        // A teardown pending here means the open markers are the sale-confirm
+                        // rebuild arriving inside the window: cancel it and carry on as the
+                        // same visit instead of churning the session.
+                        self.close_pending = false;
+                        self.close_deadline = None;
                         continue;
                     }
                     self.arm(kiosk_view, show, spawn_poller);
@@ -553,34 +568,21 @@ impl KioskSession {
                     }
                 }
                 kiosk_log::KioskLogEvent::KioskClosed => {
-                    // One event, two readers that must both get it: the poller thread stops
-                    // looking, and the monitor takes the window down on its next tick. They
-                    // shared a single consuming flag once, and the monitor always won it --
-                    // set here, swapped back by `take_close` a few lines later in the same
-                    // tick, while the thread was still asleep or parked inside tesseract. It
-                    // never saw the stop and ran out its 45-minute lifetime instead, so every
-                    // visit leaked a live poller that went on capturing, publishing views and
-                    // streaming scroll deltas across later sessions (nineteen in one evening,
-                    // two at once, double-counting the scroll the overlay accumulates).
-                    self.gone.store(true, Ordering::Release);
-                    if let Some(poller) = self.poller.take() {
-                        self.retired_pollers.push(poller);
-                    }
-                    if let Some(session) = self.active_session.take() {
-                        kiosk_view.end_session(session);
-                        state_retired = true;
-                    }
-                    // The session is over *here*, not when the monitor gets round to the
-                    // window: a close and the next open arrive in one batch whenever the
-                    // player reopens inside a tick, and leaving this set until `take_close`
-                    // ran made the open look like a duplicate marker and dropped it -- a kiosk
-                    // with no overlay for the whole visit.
-                    self.poller_active = false;
+                    // A close is a maybe, not a verdict. The sale-confirm popup rebuilds the
+                    // kiosk screen mid-visit -- EE.log shows `Saving profile`, then `HudVis 0`
+                    // plus a foreign subscription, then the full open markers about a second
+                    // later -- and retiring here took the overlay down on every sale. So this
+                    // only arms a deadline: the poller keeps reading, the session and the
+                    // published view stay put, and the monitor's next ticks call `take_close`,
+                    // which tears down only once the markers stay silent past the window.
+                    // (One event, two readers still holds: the poller's stop comes from
+                    // `close_overlay` at teardown, never from a flag shared with the monitor,
+                    // so the 45-minute-leak lesson stands.)
                     self.close_pending = true;
+                    self.close_deadline = Some(now + KIOSK_CLOSE_GRACE);
                 }
             }
         }
-        state_retired
     }
 
     /// Adopt whatever state a stretch of log *ends* in -- called once when the monitor attaches
@@ -625,11 +627,13 @@ impl KioskSession {
         show: &dyn Fn(),
         spawn_poller: &SpawnKioskPoller<'_>,
     ) {
+        // Pending is already false here -- a close no longer retires, so an open while one is
+        // pending cancels it in `observe` and never reaches this -- but a reopen must never
+        // inherit a stale deadline, so both are cleared unconditionally.
+        self.close_pending = false;
+        self.close_deadline = None;
         self.poller_active = true;
         self.overlay_up = true;
-        // A teardown armed earlier in this same batch belongs to the visit that just ended;
-        // the player is back on the screen, so the overlay stays up instead of blinking.
-        self.close_pending = false;
         // Flags are per poller, never recycled. The previous visit's thread may still be
         // winding down -- it reads its stop every 60-400ms -- and clearing a shared flag for
         // this poller would un-stop that one as well, which a player who reopens quickly can
@@ -641,14 +645,20 @@ impl KioskSession {
         self.poller = Some(spawn_poller(session, &self.reanchor, &self.gone));
         show();
     }
-
-    /// Did the session end? Consumed once; the teardown is `close_overlay`'s. The verdict comes
-    /// from the log (`KioskClosed`) -- the poller only ever stops looking, it does not judge.
-    pub fn take_close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) -> bool {
-        std::mem::take(&mut self.close_pending) && {
-            self.close_overlay(kiosk_view, hide);
-            true
+    /// Did the session end? True only once a close has stayed silent past the grace window, at
+    /// which point the teardown is `close_overlay`'s. Inside the window this is false: the visit
+    /// is still alive and a later open cancels the pending teardown outright. The verdict comes
+    /// from sustained log silence, not a single line -- the poller only ever stops looking, it
+    /// does not judge.
+    pub fn take_close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn(), now: Instant) -> bool {
+        if !self.close_pending {
+            return false;
         }
+        if self.close_deadline.is_some_and(|deadline| now < deadline) {
+            return false;
+        }
+        self.close_overlay(kiosk_view, hide);
+        true
     }
 
     /// Tear the session down because the game process died. Unlike a normal kiosk close, process
@@ -673,6 +683,7 @@ impl KioskSession {
     /// publish into that session after it observes its permanent stop flag.
     fn close_overlay(&mut self, kiosk_view: &KioskState, hide: &dyn Fn()) {
         self.close_pending = false;
+        self.close_deadline = None;
         self.poller_active = false;
         self.gone.store(true, Ordering::Release);
         if let Some(poller) = self.poller.take() {
@@ -1352,21 +1363,23 @@ pub(crate) fn run(
         // Same bytes, second machine: the kiosk's lifecycle is independent of the reward screen's
         // (the two never occur at once in practice, but neither knows about the other).
         if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
-            let state_retired = kiosk_session.observe(
+            // A monotonic stamp for the close grace window: the tick's wall clock has only
+            // one-second resolution, too coarse for a 1.5s window.
+            let tick = Instant::now();
+            kiosk_session.observe(
                 &log_bytes,
                 kiosk_view_cell.inner(),
                 &kiosk_show,
                 &kiosk_spawn,
+                tick,
             );
-            // A same-batch reopen deliberately leaves the window up. Publish the resulting
-            // lifecycle identity before starting an IPC read, so the webview retires the old
-            // visit synchronously and rejects its already-queued scroll events.
-            if state_retired {
+            // The log's close line and the game process dying are the only closes there are;
+            // both land here. A close tears down only once it has stayed silent past the grace
+            // window, so a sale-confirm rebuild never blinks; the emit retires the visit in the
+            // frontend exactly when the backend clears it.
+            if kiosk_session.take_close(kiosk_view_cell.inner(), &kiosk_hide, tick) {
                 emit_kiosk_update(&app, kiosk_view_cell.active_session());
             }
-            // The log's close line and the game process dying are the only closes there are;
-            // both land here.
-            kiosk_session.take_close(kiosk_view_cell.inner(), &kiosk_hide);
         }
         reward_session.drain_recognition(&shared, &app, now, &generation);
         if process.is_none() {

@@ -262,4 +262,44 @@ describe('kiosk overlay route', () => {
     expect(grid).toHaveStyle({ transform: 'translateY(calc(-142 * var(--h)))' })
     expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
   })
+
+  it('unfades when the same epoch republishes after an unreadable look', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const strip = await screen.findByTestId('kiosk-strip')
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+
+    // The quantity dialog occludes the strip mid-visit: one unreadable look fades the chips.
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
+
+    // The next settled publish restores them even though nothing re-anchored: the epoch only
+    // advances on a re-anchor, while dialogs come and go mid-epoch. A latch here is a
+    // permanently invisible overlay for the rest of the visit.
+    backend.getKioskView.mockResolvedValue({ ...sampleView })
+    events.listeners['kiosk-updated']?.({ payload: 7 })
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+    expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
+  })
+
+  it('keeps faded when an unreadable look lands mid-read', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const strip = await screen.findByTestId('kiosk-strip')
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+
+    // A settled read starts while the grid is readable...
+    const pending = deferred<KioskView | null>()
+    backend.getKioskView.mockReturnValueOnce(pending.promise)
+    events.listeners['kiosk-updated']?.({ payload: 7 })
+    // ...then the quantity dialog occludes the strip mid-read: the stale pre-dialog view
+    // must not unhide over it when it settles.
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
+    pending.resolve({ ...sampleView })
+    await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
+
+    // The next clean publish restores the chips.
+    events.listeners['kiosk-updated']?.({ payload: 7 })
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+    expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
+  })
 })
