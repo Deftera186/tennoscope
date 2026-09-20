@@ -1,4 +1,3 @@
-use std::sync::atomic::AtomicBool;
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex, atomic::AtomicU64},
@@ -6,8 +5,8 @@ use std::{
 };
 
 use app_lib::monitor::{
-    assemble_player_record_choices, release_player_record_scan, reward_path_matches,
-    rotate_choices_to_local, scan_player_record_until_ready, store_player_record_if_current,
+    assemble_player_record_choices, release_player_record_scan, rotate_choices_to_local,
+    scan_player_record_until_ready, store_player_record_if_current,
 };
 use app_lib::{
     LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSource, RewardSourceCoordinator,
@@ -407,14 +406,6 @@ fn confirmed_player_records_publish_immediately_without_ocr() {
 }
 
 #[test]
-fn store_items_log_paths_match_catalog_type_paths() {
-    assert!(reward_path_matches(
-        "/Lotus/StoreItems/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb",
-        "/Lotus/Types/Recipes/Weapons/WeaponParts/PrimeDaikyuUpperLimb",
-    ));
-}
-
-#[test]
 fn accumulated_player_records_are_assembled_with_local_reward_first() {
     let records = std::collections::BTreeMap::from([
         ("remote-a".to_owned(), "Orthos Prime Blueprint".to_owned()),
@@ -450,199 +441,4 @@ fn a_finished_early_scan_releases_the_identity_for_the_real_response() {
     release_player_record_scan("remote-player", &active);
 
     assert!(active.lock().unwrap().insert("remote-player".to_owned()));
-}
-
-/// The client-mode path. Memory cannot attribute the cards, so the screen supplies all four and the
-/// log's local reward is the check that the read is sane.
-#[test]
-fn visual_choices_publish_when_they_contain_the_logged_local_reward() {
-    let mut visual = Visual {
-        names: Ok(vec!["A".into(), "B".into(), "C".into(), "D".into()]),
-        calls: 0,
-    };
-    let result = RewardSourceCoordinator::new(false)
-        .visual_choices(
-            &mut visual,
-            &catalog(),
-            4,
-            Some("C"),
-            Duration::from_millis(50),
-            &AtomicBool::new(false),
-        )
-        .expect("a read containing the local reward publishes");
-    assert_eq!(result.choices.names, ["A", "B", "C", "D"]);
-    assert_eq!(result.choices.source, RewardChoiceSource::Ocr);
-    assert_eq!(result.diagnostic, RewardSourceDiagnostic::MemoryFallback);
-    assert_eq!(visual.calls, 1);
-}
-
-#[test]
-fn visual_choices_are_dropped_when_the_logged_local_reward_is_absent() {
-    let mut visual = Visual {
-        names: Ok(vec!["A".into(), "B".into(), "C".into(), "D".into()]),
-        calls: 0,
-    };
-    // The log is exact about the local player's reward, so a read missing it is wrong somewhere.
-    assert_eq!(
-        RewardSourceCoordinator::new(false).visual_choices(
-            &mut visual,
-            &catalog(),
-            4,
-            Some("Z"),
-            Duration::ZERO,
-            &AtomicBool::new(false)
-        ),
-        Err("the reward screen did not show the logged reward")
-    );
-}
-
-#[test]
-fn visual_choices_are_dropped_when_the_card_count_is_wrong() {
-    let mut visual = Visual {
-        names: Ok(vec!["A".into(), "B".into()]),
-        calls: 0,
-    };
-    assert_eq!(
-        RewardSourceCoordinator::new(false).visual_choices(
-            &mut visual,
-            &catalog(),
-            4,
-            None,
-            Duration::ZERO,
-            &AtomicBool::new(false)
-        ),
-        Err("the reward screen showed a different number of cards")
-    );
-}
-
-#[test]
-fn a_failed_capture_publishes_nothing() {
-    let mut visual = Visual {
-        names: Err("no Warframe window found"),
-        calls: 0,
-    };
-    assert_eq!(
-        RewardSourceCoordinator::new(false).visual_choices(
-            &mut visual,
-            &catalog(),
-            4,
-            Some("A"),
-            Duration::ZERO,
-            &AtomicBool::new(false)
-        ),
-        Err("no Warframe window found")
-    );
-}
-
-struct SlowVisual {
-    failures: usize,
-    calls: usize,
-    names: Vec<String>,
-}
-
-impl VisualRewardSource for SlowVisual {
-    fn choices(&mut self, _candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
-        self.calls += 1;
-        if self.calls <= self.failures {
-            // What an unpainted reward screen looks like to the matcher.
-            return Err("a reward card read as blank");
-        }
-        Ok(self.names.clone())
-    }
-}
-
-/// The log announces the rewards about three milliseconds before Warframe paints the cards, so the
-/// first capture reads an empty screen. Retry until the cards exist rather than giving up on the
-/// first blank read.
-#[test]
-fn visual_choices_retry_until_the_cards_are_painted() {
-    let mut visual = SlowVisual {
-        failures: 2,
-        calls: 0,
-        names: vec!["A".into(), "B".into(), "C".into(), "D".into()],
-    };
-    let result = RewardSourceCoordinator::new(false)
-        .visual_choices(
-            &mut visual,
-            &catalog(),
-            4,
-            Some("C"),
-            Duration::from_millis(1_500),
-            &AtomicBool::new(false),
-        )
-        .expect("a later attempt sees the painted cards");
-    assert_eq!(result.choices.names, ["A", "B", "C", "D"]);
-    assert_eq!(visual.calls, 3, "should have retried past the blank reads");
-}
-
-#[test]
-fn visual_choices_give_up_at_the_deadline() {
-    let mut visual = SlowVisual {
-        failures: usize::MAX,
-        calls: 0,
-        names: Vec::new(),
-    };
-    assert_eq!(
-        RewardSourceCoordinator::new(false).visual_choices(
-            &mut visual,
-            &catalog(),
-            4,
-            None,
-            Duration::from_millis(250),
-            &AtomicBool::new(false)
-        ),
-        Err("a reward card read as blank")
-    );
-    assert!(visual.calls >= 2, "should have retried before giving up");
-}
-
-/// The reason a live overlay sat over the game for seconds after the rewards had gone.
-///
-/// This retry runs on the monitor thread, and that thread is also the one that notices the screen
-/// disappear and takes the overlay down. EE.log's flush delay means the retry is routinely entered
-/// after the screen has already closed, and it used to grind the whole eight-second deadline first
-/// -- with the monitor blocked behind it, holding up a hide it had already been told to perform.
-#[test]
-fn a_screen_that_has_already_gone_stops_the_retry_instead_of_blocking_the_monitor() {
-    struct NeverPaints {
-        attempts: Arc<AtomicU64>,
-    }
-    impl app_lib::VisualRewardSource for NeverPaints {
-        fn choices(
-            &mut self,
-            _candidates: &[RewardCatalogEntry],
-        ) -> Result<Vec<String>, &'static str> {
-            self.attempts
-                .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-            Err("a reward card read as blank")
-        }
-    }
-
-    let attempts = Arc::new(AtomicU64::new(0));
-    let mut visual = NeverPaints {
-        attempts: Arc::clone(&attempts),
-    };
-    let gone = AtomicBool::new(true);
-    let started = std::time::Instant::now();
-
-    let result = RewardSourceCoordinator::new(false).visual_choices(
-        &mut visual,
-        &catalog(),
-        4,
-        None,
-        Duration::from_secs(8),
-        &gone,
-    );
-
-    assert_eq!(result, Err("the reward screen closed first"));
-    assert_eq!(
-        attempts.load(std::sync::atomic::Ordering::Acquire),
-        0,
-        "must not even capture once when the screen is known to be gone"
-    );
-    assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "held the monitor thread for {:?} against an eight-second deadline",
-        started.elapsed()
-    );
 }

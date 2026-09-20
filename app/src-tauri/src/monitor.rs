@@ -7,10 +7,8 @@ use super::{
     reward_log::{RewardLogEvent, RewardLogMachine},
     reward_observer::{RewardObservation, RewardObserverState},
     reward_ocr::{self, ScreenRewardSource},
-    reward_source::{
-        LiveMemoryRewardState, RewardChoiceSet, RewardChoiceSource, RewardSourceCoordinator,
-        RewardSourceDiagnostic, RewardSourceResult, VisualRewardSource,
-    },
+    reward_recognition::{RecognitionTiming, RecognizedRewards, RewardRecognition},
+    reward_source::LiveMemoryRewardState,
 };
 use app_core::InventoryRefreshOutcome;
 use std::{
@@ -36,28 +34,8 @@ use warframe_acquisition::{
 };
 use warframe_domain::RewardCandidate;
 
-/// How long to keep re-reading the reward screen before giving up. The cards appear a few
-/// milliseconds after the log announces them and the screen lives for fifteen seconds, so this is
-/// generous enough to cover a slow paint while still leaving the overlay useful.
-const VISUAL_READ_DEADLINE: Duration = Duration::from_secs(8);
-
-/// Gap between screen polls while a fissure mission is running. A poll costs about 160ms, almost
-/// all of it process startup rather than OCR, so the interval is the only real lever on cost. Two
-/// seconds keeps it near 8% of one core while still giving roughly seven attempts at a screen that
-/// lives for fifteen.
-const POLLER_INTERVAL: Duration = Duration::from_secs(2);
-/// Once the cards are up the screen only lives fifteen seconds, so the question changes from "is
-/// it here yet" to "has it gone", and that wants answering quickly.
-const POLLER_WATCH_INTERVAL: Duration = Duration::from_millis(400);
-/// Consecutive failed reads before the screen counts as closed. Cards read blank often enough
-/// mid-screen that one miss is not evidence.
-const POLLER_GONE_STREAK: u32 = 2;
-/// Consecutive routine misses before one is worth a warning.
-///
-/// Before cards are found the poller runs every two seconds, so fifteen uninterrupted routine
-/// misses represent roughly thirty seconds without a usable reward read.
-const ROUTINE_MISS_WARNING_STREAK: u32 = 15;
 /// Upper bound on how long a single fissure mission is worth watching for.
+/// Shared with the kiosk poller; reward recognition owns its own search/watch cadence.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 /// The kiosk poller's steady cadence: the kiosk stays up while the player browses, so there is
 /// no "found it, watch faster" split like the reward screen's -- one rate fast enough to feel
@@ -838,146 +816,30 @@ impl RecordScans {
     }
 }
 
-/// The shared state of the reward-screen poller.
-///
-/// The pool, delivered read, worker flag and screen-gone signal describe one watch. Keeping them
-/// together prevents a caller from arming with one pool while draining another watch's signals.
-#[derive(Default)]
-pub struct ScreenWatch {
-    pool: SharedRelicPool,
-    reads: Arc<Mutex<Option<Vec<String>>>>,
-    polling: Arc<std::sync::atomic::AtomicBool>,
-    gone: Arc<std::sync::atomic::AtomicBool>,
-    poller: Mutex<Option<std::thread::JoinHandle<()>>>,
-}
-
-impl ScreenWatch {
-    pub fn adopt(&self, relics: &[String], entries: Vec<RewardCatalogEntry>) {
-        if let Ok(mut pool) = self.pool.lock() {
-            pool.adopt(relics, entries);
-        }
-    }
-
-    pub fn take_read(&self) -> Option<Vec<String>> {
-        self.reads.lock().ok().and_then(|mut slot| slot.take())
-    }
-
-    pub fn take_gone(&self) -> bool {
-        self.gone.swap(false, Ordering::AcqRel)
-    }
-
-    pub fn stop(&self) {
-        self.polling.store(false, Ordering::Release);
-        if let Ok(mut poller) = self.poller.lock()
-            && let Some(poller) = poller.take()
-        {
-            let _ = poller.join();
-        }
-    }
-
-    pub fn running(&self) -> bool {
-        self.polling.load(Ordering::Acquire)
-    }
-
-    fn arm(&self) {
-        if let Some(poller) =
-            spawn_reward_screen_poller_with(self, PollerTiming::live(), ScreenRewardSource::new)
-            && let Ok(mut slot) = self.poller.lock()
-        {
-            *slot = Some(poller);
-        }
-    }
-
-    fn gone_signal(&self) -> &std::sync::atomic::AtomicBool {
-        &self.gone
-    }
-
-    fn trace_published(&self, names: &[String]) {
-        if let Ok(pool) = self.pool.lock() {
-            pool.trace_published(names);
-        }
-    }
-}
-
-/// What the monitor knows about the squad whose reward screen is approaching.
-#[derive(Default)]
-struct SquadProgress {
-    resolved: bool,
-    pending: Option<PendingRewardSquad>,
-}
-
-impl SquadProgress {
-    fn remember(&mut self, squad: PendingRewardSquad) {
-        self.pending = Some(squad);
-    }
-
-    fn squad(&self, expected: usize) -> Option<&PendingRewardSquad> {
-        self.pending
-            .as_ref()
-            .filter(|squad| squad.screen_order.len() == expected)
-    }
-
-    fn resolved(&self) -> bool {
-        self.resolved
-    }
-
-    fn resolve(&mut self) {
-        self.resolved = true;
-    }
-
-    fn reset(&mut self) {
-        self.resolved = false;
-        self.pending = None;
-    }
-}
-
-/// The catalogs used to turn a squad's relic paths into the reward names visible on its screen.
-struct RewardReference {
-    catalog: Option<CatalogIndex>,
-    relics: Option<RelicRewardIndex>,
-    rewards: Vec<RewardCatalogEntry>,
-}
-
-impl RewardReference {
-    fn candidates_for(&self, relic_paths: &[String]) -> Vec<warframe_acquisition::RewardNeedle> {
-        self.catalog
-            .as_ref()
-            .zip(self.relics.as_ref())
-            .map(|(catalog, relics)| relics.candidates_for_projection_paths(relic_paths, catalog))
-            .unwrap_or_default()
-    }
-
-    fn pool_entries(
-        &self,
-        candidates: &[warframe_acquisition::RewardNeedle],
-    ) -> Vec<RewardCatalogEntry> {
-        relic_pool_entries(candidates, &self.rewards)
-    }
-}
-
 /// What one observed log event may do: the effective access policy, the monitor generation
 /// it belongs to, and the second it was observed in. Bundled so handler signatures stay small.
 #[derive(Clone, Copy)]
 struct EventScope<'a> {
     policy: AccessPolicy,
     generation: &'a MonitorGeneration,
-    now: u64,
 }
 
 /// Everything whose lifetime is one monitored Warframe process's reward stream.
 ///
 /// The monitor supplies events and application side effects; this session owns the coupled
-/// observation, responder-scan and screen-watch state that must turn over together.
+/// observation, responder-scan and recognition state that must turn over together.
+/// Recognition owns the catalog-derived relic pool, background OCR, acceptance and
+/// stale-result retirement. The monitor never captures synchronously.
 struct RewardSession {
-    reference: RewardReference,
+    recognition: RewardRecognition<ScreenRewardSource, fn() -> ScreenRewardSource>,
     memory: LiveMemoryRewardState,
-    coordinator: RewardSourceCoordinator,
     observer: RewardObserverState,
-    progress: SquadProgress,
     scans: RecordScans,
-    watch: ScreenWatch,
-    screen: Option<ScreenRewardSource>,
     price_cache: MarketPriceCache,
+    /// Consecutive background failures and their reason, so routine pre-screen blanks do not
+    /// mark health degraded every poll while broken capture still reports immediately.
+    degraded_reason: Option<String>,
+    degraded_streak: u32,
 }
 
 impl RewardSession {
@@ -988,23 +850,23 @@ impl RewardSession {
         price_cache: MarketPriceCache,
     ) -> Self {
         Self {
-            reference: RewardReference {
+            recognition: RewardRecognition::new(
                 catalog,
                 relics,
                 rewards,
-            },
+                RecognitionTiming::live(),
+                ScreenRewardSource::new,
+            ),
             memory: LiveMemoryRewardState::new(RewardMemoryScanner::new(
                 256 * 1024,
                 768 * 1024 * 1024,
                 Duration::from_millis(1_500),
             )),
-            coordinator: RewardSourceCoordinator::new(cfg!(debug_assertions)),
             observer: RewardObserverState::new(1, 1),
-            progress: SquadProgress::default(),
             scans: RecordScans::default(),
-            watch: ScreenWatch::default(),
-            screen: None,
             price_cache,
+            degraded_reason: None,
+            degraded_streak: 0,
         }
     }
 
@@ -1033,72 +895,39 @@ impl RewardSession {
                     self.scan_responder(identity, process, scope.policy, scope.generation);
                 }
             }
-            RewardLogEvent::ResponsesComplete {
-                screen_order,
-                local_reward_path,
-                ..
-            } => {
-                let squad = PendingRewardSquad {
-                    screen_order,
-                    local_reward_path,
-                };
-                self.progress.remember(squad.clone());
-                // The screen read needs a window, not a process handle, but a dead game has neither:
-                // requiring the process keeps a vanished game from burning the retry deadline.
-                if process.is_some()
-                    && self
-                        .try_publish(&squad, shared, app, scope.now, scope.generation)
-                        .is_ok()
-                {
-                    self.progress.resolve();
+            RewardLogEvent::ResponsesComplete { .. } => {
+                // Constraints for the background reader; never captures here.
+                // A vanished game has no window to read, so skip stale rosters.
+                if process.is_some() {
+                    self.recognition.observe(&event);
                 }
             }
-            RewardLogEvent::BaselineRequested { relic_paths } => {
-                self.progress.reset();
+            RewardLogEvent::BaselineRequested { .. } => {
                 self.scans.reset();
-                let candidates = self.reference.candidates_for(&relic_paths);
                 let Some(_process) = process else {
                     self.memory.clear();
+                    self.recognition.close();
                     return;
                 };
+                self.recognition.observe(&event);
+                // Keep the dormant responder-scan candidates in step with recognition.
+                // Recognition owns the catalog derivation; memory only mirrors it.
+                let candidates = self.recognition.candidates();
                 if scope.policy.read_process_memory {
                     self.memory.prepare_candidates(&candidates);
                 } else {
                     self.memory.clear();
                 }
-                // Publish the pool before arming, and on every baseline rather than only the first.
-                // A running poller reads this cell each poll, so later relic loads still reach it.
-                let entries = self.reference.pool_entries(&candidates);
-                self.watch.adopt(&relic_paths, entries.clone());
+                // Price the pool while the mission is still running; the reward screen is
+                // minutes away. Warming never blocks event handling.
+                let entries = self.recognition.pool_entries();
                 spawn_market_price_warm(&entries, &self.price_cache);
-                self.watch.arm();
             }
-            RewardLogEvent::ChoicesReady {
-                expected_choices, ..
-            } => {
-                if self.progress.resolved() || process.is_none() {
+            RewardLogEvent::ChoicesReady { .. } => {
+                if process.is_none() {
                     return;
                 }
-                let Some(squad) = self.progress.squad(expected_choices).cloned() else {
-                    if let Ok(mut runtime) = shared.lock() {
-                        let _ = runtime
-                            .core
-                            .record_capture_degraded("Structured reward records were incomplete");
-                    }
-                    return;
-                };
-                match self.try_publish(&squad, shared, app, scope.now, scope.generation) {
-                    Ok(()) => self.progress.resolve(),
-                    // Name the subsystem that actually failed. Reporting structured records here
-                    // sends an investigation toward EE.log parsing even when capture is the fault.
-                    Err(reason) => {
-                        if let Ok(mut runtime) = shared.lock() {
-                            let _ = runtime.core.record_capture_degraded(format!(
-                                "Screen capture failed: {reason}"
-                            ));
-                        }
-                    }
-                }
+                self.recognition.observe(&event);
             }
             RewardLogEvent::Closed => self.close(shared, app),
         }
@@ -1111,7 +940,7 @@ impl RewardSession {
         policy: AccessPolicy,
         generation: &MonitorGeneration,
     ) {
-        if self.progress.resolved() || !policy.read_process_memory {
+        if self.recognition.resolved() || !policy.read_process_memory {
             return;
         }
         let Some(process) = process else {
@@ -1120,151 +949,137 @@ impl RewardSession {
         self.scans.scan(
             identity,
             process,
-            self.memory.candidates(),
+            &self.recognition.candidates(),
             generation.clone(),
         );
     }
 
-    fn try_publish(
-        &mut self,
-        squad: &PendingRewardSquad,
-        shared: &SharedRuntime,
-        app: &AppHandle,
-        now: u64,
-        generation: &MonitorGeneration,
-    ) -> Result<(), &'static str> {
-        let result = read_squad_cards(
-            squad,
-            &self.memory,
-            &self.coordinator,
-            self.screen.get_or_insert_with(ScreenRewardSource::new),
-            &self.reference.rewards,
-            self.watch.gone_signal(),
-        )?;
-        self.publish(result, shared, app, now, generation);
-        Ok(())
-    }
-
     fn publish(
         &mut self,
-        result: RewardSourceResult,
+        recognized: RecognizedRewards,
         shared: &SharedRuntime,
         app: &AppHandle,
         now: u64,
         generation: &MonitorGeneration,
     ) {
-        let observations = result
-            .choices
-            .names
-            .into_iter()
-            .map(RewardObservation::certain)
-            .collect::<Vec<_>>();
-        let transition = self.observer.observe(observations);
-        let mut overlay_notice = None;
-        if transition.publish {
-            apply_reward_observations(
-                shared,
-                &self.reference.rewards,
-                &transition.choices,
-                &BTreeMap::new(),
-            );
-            overlay_notice = overlay_window::show_reward_overlay(app, transition.choices.len());
-            let _ = app.emit_to("reward-overlay", "reward-updated", ());
-            spawn_market_price_fetch(
-                &transition.choices,
-                shared,
-                app,
-                &self.reference.rewards,
-                &self.price_cache,
-                now,
-                generation,
-            );
-        }
-        if let Ok(mut runtime) = shared.lock() {
-            let source = match result.choices.source {
-                RewardChoiceSource::Memory => "memory",
-                RewardChoiceSource::Ocr => "ocr",
-            };
-            let _ = runtime.core.record_capture_source_ready(
-                source,
-                result.choices.elapsed.as_millis(),
-                now.to_string(),
-            );
-            // Read the cards but could not find the window to draw over: on Windows that is
-            // exclusive fullscreen, and the player is the only one who can fix it.
-            if let Some(notice) = overlay_notice {
-                let _ = runtime.core.record_capture_degraded(notice);
+        let publication = recognized.publication.clone();
+        let names = recognized.names;
+        let elapsed = recognized.elapsed;
+        // Only the first publication for this epoch runs; late duplicates and stale
+        // delayed effects are declined by the same gate.
+        publication.publish(|| {
+            let observations = names
+                .into_iter()
+                .map(RewardObservation::certain)
+                .collect::<Vec<_>>();
+            let transition = self.observer.observe(observations);
+            let mut overlay_notice = None;
+            if transition.publish {
+                apply_reward_observations(
+                    shared,
+                    self.recognition.rewards(),
+                    &transition.choices,
+                    &BTreeMap::new(),
+                );
+                overlay_notice = overlay_window::show_reward_overlay(app, transition.choices.len());
+                let _ = app.emit_to("reward-overlay", "reward-updated", ());
+                spawn_market_price_fetch(
+                    &transition.choices,
+                    shared,
+                    app,
+                    self.recognition.rewards(),
+                    &self.price_cache,
+                    now,
+                    generation,
+                );
             }
-            if result.diagnostic == RewardSourceDiagnostic::Disagreement {
-                let _ = runtime
-                    .core
-                    .record_capture_degraded("memory and OCR reward recognition disagreed");
+            if let Ok(mut runtime) = shared.lock() {
+                let _ = runtime.core.record_capture_source_ready(
+                    "ocr",
+                    elapsed.as_millis(),
+                    now.to_string(),
+                );
+                // Read the cards but could not find the window to draw over: on Windows that is
+                // exclusive fullscreen, and the player is the only one who can fix it.
+                if let Some(notice) = overlay_notice {
+                    let _ = runtime.core.record_capture_degraded(notice);
+                }
             }
-        }
+        });
     }
 
-    fn drain_screen_watch(
+    fn drain_recognition(
         &mut self,
         shared: &SharedRuntime,
         app: &AppHandle,
         now: u64,
         generation: &MonitorGeneration,
     ) {
-        if let Some(names) = self.watch.take_read()
-            && !self.progress.resolved()
-        {
-            // The poller's closed-set match is the only evidence on this path, so retain the exact
-            // candidate pool alongside the published names in the capture trace.
-            self.watch.trace_published(&names);
-            self.publish(
-                RewardSourceResult {
-                    choices: RewardChoiceSet {
-                        names,
-                        source: RewardChoiceSource::Ocr,
-                        elapsed: Duration::ZERO,
-                    },
-                    diagnostic: RewardSourceDiagnostic::MemoryFallback,
-                },
-                shared,
-                app,
-                now,
-                generation,
-            );
-            self.progress.resolve();
+        // The monitor never captures here; it only drains what the background reader found.
+        // A slow capture therefore cannot delay overlay hide, game-gone or the next event.
+        let update = self.recognition.poll();
+        let had_recognized = update.recognized.is_some();
+        if let Some(recognized) = update.recognized {
+            self.publish(recognized, shared, app, now, generation);
+        }
+        if let Some(failure) = update.failure {
+            let (reason, streak) = if self.degraded_reason.as_deref() == Some(&failure.reason) {
+                self.degraded_streak = self.degraded_streak.saturating_add(1);
+                (
+                    self.degraded_reason.clone().unwrap_or_default(),
+                    self.degraded_streak,
+                )
+            } else {
+                self.degraded_reason = Some(failure.reason.clone());
+                self.degraded_streak = 1;
+                (failure.reason.clone(), 1)
+            };
+            // Routine pre-screen blanks only matter after a sustained streak; broken capture
+            // reports immediately. Without this gate a baseline set minutes before the screen
+            // would mark health degraded every poll while nothing is expected on screen.
+            if crate::reward_recognition::poll_failure_is_worth_warning(&reason, streak)
+                && let Ok(mut runtime) = shared.lock()
+            {
+                let _ = runtime
+                    .core
+                    .record_capture_degraded(format!("Screen capture failed: {reason}"));
+            }
+        } else if had_recognized || update.hide {
+            self.degraded_reason = None;
+            self.degraded_streak = 0;
         }
         // The capture signal beats EE.log's delayed shutdown line and prevents a stale overlay.
-        if self.watch.take_gone() && self.observer.miss().hide {
+        if update.hide && self.observer.miss().hide {
             overlay_window::hide_reward_overlay(app);
         }
     }
 
     fn game_gone(&mut self, hide: &dyn Fn()) {
-        // Before any cards are recognized, misses alone cannot retire the poller's source.
-        // Join it before dropping the monitor reader so no game-session capture stays alive.
-        self.watch.stop();
+        // Suspend without clearing the pool: a transient process-absent tick must not blind the
+        // fissure, since relic baselines are one-shot log lines with no recovery path. The worker
+        // drops its source and pauses; recognition resumes against the preserved pool when the
+        // process returns. Full clearing is reserved for the log's Closed event.
+        self.recognition.suspend();
         self.memory.clear();
         self.scans.reset();
         if self.observer.miss().hide {
             hide();
         }
-        // Release the game-session screen cast; each later read locates Warframe again.
-        if self.screen.take().is_some() {
-            log::debug!("[DEBUG-capture] game gone; released the monitor thread's capture");
-        }
+    }
+
+    fn resume(&mut self) {
+        self.recognition.resume();
     }
 
     fn close(&mut self, shared: &SharedRuntime, app: &AppHandle) {
-        self.watch.stop();
-        // The monitor's log-driven reader is separate from the joined poller. Release its DXGI
-        // lease too, both at reward close and when observation access is revoked.
-        #[cfg(windows)]
-        {
-            self.screen = None;
-        }
-        self.progress.reset();
+        self.recognition.close();
         self.scans.reset();
         self.memory.clear();
         self.observer.miss();
+        // A new screen starts a fresh degraded-health streak; otherwise the next fissure's
+        // first routine blank could hit the warning threshold on the previous screen's count.
+        self.degraded_reason = None;
+        self.degraded_streak = 0;
         overlay_window::hide_reward_overlay(app);
         if let Ok(mut runtime) = shared.lock() {
             let _ = runtime.core.apply_reward_candidates(Vec::new());
@@ -1530,7 +1345,6 @@ pub(crate) fn run(
                     EventScope {
                         policy,
                         generation: &generation,
-                        now,
                     },
                 );
             }
@@ -1554,7 +1368,7 @@ pub(crate) fn run(
             // both land here.
             kiosk_session.take_close(kiosk_view_cell.inner(), &kiosk_hide);
         }
-        reward_session.drain_screen_watch(&shared, &app, now, &generation);
+        reward_session.drain_recognition(&shared, &app, now, &generation);
         if process.is_none() {
             reward_session.game_gone(&|| overlay_window::hide_reward_overlay(&app));
             // No game, no kiosk: the capture source is gone even if the miss streak has not
@@ -1570,6 +1384,10 @@ pub(crate) fn run(
                      the screen-sharing indicator may stay lit until this process exits"
                 );
             }
+        } else {
+            // A returning process resumes recognition against the preserved pool; suspend
+            // made the absence idempotent, so this is a no-op while already active.
+            reward_session.resume();
         }
         let poll_interval = if reward_log.reward_window_open() {
             Duration::from_millis(10)
@@ -1620,284 +1438,6 @@ fn load_relic_catalog(app_data: &Path) -> Option<RelicRewardIndex> {
         .load(&source, now)
         .ok()
         .map(|catalog| catalog.index().clone())
-}
-
-/// The squad roster in screen order, plus the one reward EE.log states outright. `local_identity`
-/// used to ride along for the memory scan's per-player attribution; the screen read needs only the
-/// local player's reward name, as a check that the four cards it read include the one the log
-/// already confirmed.
-#[derive(Clone, Debug)]
-struct PendingRewardSquad {
-    screen_order: Vec<String>,
-    local_reward_path: Option<String>,
-}
-
-/// Read the squad's cards off the screen, against the pool their own relics resolve to.
-///
-/// Kept as a narrow seam so tests can prove the caller-owned visual source and squad-specific
-/// candidate pool are used without constructing an `AppHandle`.
-fn read_squad_cards(
-    squad: &PendingRewardSquad,
-    memory_state: &LiveMemoryRewardState,
-    coordinator: &RewardSourceCoordinator,
-    visual: &mut dyn VisualRewardSource,
-    reward_catalog: &[RewardCatalogEntry],
-    visual_screen_gone: &std::sync::atomic::AtomicBool,
-) -> Result<RewardSourceResult, &'static str> {
-    let local_choice = squad.local_reward_path.as_deref().and_then(|path| {
-        memory_state
-            .candidates()
-            .iter()
-            .find(|needle| {
-                needle.internal_paths().iter().any(|candidate| {
-                    reward_path_matches(path, std::str::from_utf8(candidate).unwrap_or(""))
-                })
-            })
-            .map(|needle| needle.choice_name().to_owned())
-    });
-    // Matching a card against the squad's own relic pool rather than the whole catalog is what
-    // keeps a garbled read on the right item; a few dozen names, not a few thousand.
-    let pool = relic_pool_entries(memory_state.candidates(), reward_catalog);
-    coordinator.visual_choices(
-        visual,
-        &pool,
-        squad.screen_order.len(),
-        local_choice.as_deref(),
-        VISUAL_READ_DEADLINE,
-        visual_screen_gone,
-    )
-}
-
-/// The names the poller matches a card against, and the relics they came from.
-///
-/// The relics ride along because they are what says *which fissure* a pool describes. Length
-/// cannot: a pool is not better for being bigger, it is right or wrong depending on whose relics
-/// are on screen.
-#[derive(Clone, Debug, Default)]
-pub struct RelicPool {
-    relics: Vec<String>,
-    entries: Vec<RewardCatalogEntry>,
-}
-
-impl RelicPool {
-    /// Take on the pool this fissure's relics resolve to, replacing whatever was here.
-    ///
-    /// This used to keep whichever pool was longer, which is safe within a fissure and wrong
-    /// between them. `loaded_relics` is append-only until the reward screen shuts down and the
-    /// catalog is resolved once before the monitor loop, so a later baseline in the same fissure
-    /// can only ever resolve a superset -- the length test never did anything there. Across
-    /// fissures it did the only thing it could: kept the older, bigger pool.
-    ///
-    /// 2026-08-20 is what that cost. A 38-name pool from a fissure two hours earlier outlived the
-    /// application restart between them and displaced a 16-name one, and the closed-set match has
-    /// no way to say "not in the pool" -- it returns the nearest name it was given. All four cards
-    /// were published wrong, above the match floor, without a single failed read to show for it.
-    pub fn adopt(&mut self, relics: &[String], entries: Vec<RewardCatalogEntry>) {
-        self.relics = relics.to_vec();
-        self.entries = entries;
-    }
-
-    pub fn entries(&self) -> &[RewardCatalogEntry] {
-        &self.entries
-    }
-
-    /// Record what a published read was matched against.
-    ///
-    /// At Info, not Debug, and that is the whole reason it exists. The pool already announced
-    /// itself at `[DEBUG-poller] arm pool=38`, but the stable build's file target keeps `<= Info`
-    /// -- so on 2026-08-20 a player sent a report in which all four cards were wrong, all four
-    /// were above the match floor, nothing had failed, and there was no line anywhere saying the
-    /// pool belonged to a fissure two hours earlier. It had to be reconstructed afterwards by
-    /// reading the squad's relics out of the cached catalog by hand.
-    ///
-    /// The relic paths are trimmed to their names because the prefix is the same on every one and
-    /// four of them do not fit a log line otherwise.
-    pub fn trace_published(&self, names: &[String]) {
-        let relics = self
-            .relics
-            .iter()
-            .map(|path| path.rsplit('/').next().unwrap_or(path))
-            .collect::<Vec<_>>();
-        log::info!(
-            "reward: published cards={names:?} pool={} relics={relics:?}",
-            self.entries.len(),
-        );
-    }
-
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
-
-/// The relic pool the poller matches against, shared because it is still growing when the poller
-/// starts.
-///
-/// Each squad member's relic is logged as it loads, and the baseline fires on the second one --
-/// long before the other two arrive. The pool was passed to the poller by value at that moment, so
-/// the later relics were only ever seen by the arming call that the "already running" guard then
-/// declined. The poller spent the rest of the fissure matching a screen of four rewards against a
-/// pool that only knew two relics' worth, and one unmatched card fails the whole read, so the
-/// overlay never appeared. Observed live on 2026-07-27: armed at 11 names, the 17-name pool
-/// declined, and `Banshee Prime Neuroptics Blueprint` -- on screen, in the newer pool, not in the
-/// older one -- failed every attempt.
-pub type SharedRelicPool = Arc<Mutex<RelicPool>>;
-
-/// Whether this poll failure deserves a warning, given how many times its reason has repeated.
-///
-/// Blank cards and pool misses are routine away from the reward screen, so only a sustained streak
-/// warns. Other failures indicate broken capture and warn immediately. Each class warns only once
-/// per uninterrupted streak.
-fn poll_failure_is_worth_warning(reason: &str, consecutive: u32) -> bool {
-    let routine = matches!(
-        reason,
-        "a reward card read as blank" | "reward card text did not match the relic pool"
-    );
-    if routine {
-        consecutive == ROUTINE_MISS_WARNING_STREAK
-    } else {
-        consecutive == 1
-    }
-}
-
-/// How often the poller looks, before and after it has found the cards.
-///
-/// Two rates because the poller does two jobs. Before the cards it may wait minutes, so it looks
-/// slowly. Once they are up the screen only lives fifteen seconds and the question becomes when it
-/// disappears, which wants a fast answer -- a miss costs one crop, since the read stops at the
-/// first card that will not match.
-#[derive(Clone, Copy, Debug)]
-pub struct PollerTiming {
-    pub interval: Duration,
-    pub watch_interval: Duration,
-    pub lifetime: Duration,
-}
-
-impl PollerTiming {
-    pub const fn live() -> Self {
-        Self {
-            interval: POLLER_INTERVAL,
-            watch_interval: POLLER_WATCH_INTERVAL,
-            lifetime: POLLER_LIFETIME,
-        }
-    }
-}
-
-/// The body of the poller, with the screen and the clock as parameters.
-///
-/// Four live runs produced no overlay and no way to tell arming from polling from reading, because
-/// the only way to reach this loop was to play a fissure. Taking the source as an argument lets a
-/// test drive it against a scripted screen in milliseconds, which is how the retry, the stop flag,
-/// and the four-name guard below are actually checked rather than argued about.
-///
-/// Returns the join handle so a test can wait for the thread instead of sleeping, and `None` when
-/// arming was declined.
-pub fn spawn_reward_screen_poller_with<S, F>(
-    watch: &ScreenWatch,
-    timing: PollerTiming,
-    make_source: F,
-) -> Option<std::thread::JoinHandle<()>>
-where
-    F: FnOnce() -> S + Send + 'static,
-    // The source is constructed inside the spawned thread, then born, read and dropped there.
-    // Keeping the factory `Send` is sufficient; requiring `S: Send` would impose a constraint the
-    // ownership model does not need.
-    S: VisualRewardSource + 'static,
-{
-    // Claim the flag only once this call is definitely going to spawn. Taking it first and then
-    // bailing on an empty pool leaves it set with no thread behind it, and since only a running
-    // poller or the screen shutting down ever clears it, every later relic load in that fissure is
-    // declined as a duplicate. The first relic pair is exactly when the pool can still be empty --
-    // a vaulted relic resolves to no candidates -- so the poller was being poisoned before the
-    // fissure that needed it had even started.
-    let pool_size = watch.pool.lock().map(|pool| pool.len()).unwrap_or(0);
-    if pool_size == 0 {
-        log::debug!("[DEBUG-poller] arm declined: empty pool");
-        return None;
-    }
-    let already_running = watch.polling.swap(true, Ordering::AcqRel);
-    log::debug!("[DEBUG-poller] arm pool={pool_size} already_running={already_running}");
-    if already_running {
-        return None;
-    }
-    let pool = Arc::clone(&watch.pool);
-    let visual_reads = Arc::clone(&watch.reads);
-    let visual_polling = Arc::clone(&watch.polling);
-    let visual_screen_gone = Arc::clone(&watch.gone);
-    Some(std::thread::spawn(move || {
-        let mut source = make_source();
-        let deadline = Instant::now() + timing.lifetime;
-        // Keep polling after the cards are found, to see the screen go away. The shutdown line in
-        // EE.log arrives with the same flush delay as everything else, so hiding on it leaves the
-        // overlay up for seconds after the screen it describes has gone.
-        let mut found = false;
-        let mut misses = 0_u32;
-        let mut last_reason: Option<&'static str> = None;
-        let mut repeated = 0_u32;
-        while visual_polling.load(Ordering::Acquire) && Instant::now() < deadline {
-            // Re-read the pool every poll rather than capturing it at arm time. Squadmates' relics
-            // are still loading when this thread starts, and a card missing from the pool fails the
-            // whole screen.
-            let current = pool
-                .lock()
-                .map(|pool| pool.entries().to_vec())
-                .unwrap_or_default();
-            if current.is_empty() {
-                std::thread::sleep(timing.interval);
-                continue;
-            }
-            let outcome = VisualRewardSource::choices(&mut source, &current);
-            if let Err(reason) = &outcome {
-                if last_reason == Some(*reason) {
-                    repeated = repeated.saturating_add(1);
-                } else {
-                    last_reason = Some(*reason);
-                    repeated = 1;
-                }
-                if poll_failure_is_worth_warning(reason, repeated) {
-                    log::warn!("[DEBUG-poller] poll failed: {reason}");
-                } else {
-                    log::debug!("[DEBUG-poller] poll failed: {reason} (x{repeated})");
-                }
-            } else {
-                last_reason = None;
-                repeated = 0;
-            }
-            match outcome {
-                // However many cards the screen has -- the reader reports the layout it found, and
-                // a squad of three is three cards, not a failed read of four. Requiring four here
-                // is what threw away a good three-card read even after the crops were looking in
-                // the right place. Two is the floor because one reward is not a choice.
-                Ok(names) if names.len() >= 2 => {
-                    if !found && let Ok(mut slot) = visual_reads.lock() {
-                        *slot = Some(names);
-                        found = true;
-                    }
-                    misses = 0;
-                }
-                // A card reads blank often enough mid-screen that one miss cannot mean the screen
-                // closed; require a streak before taking the overlay down.
-                _ if found => {
-                    misses += 1;
-                    if misses >= POLLER_GONE_STREAK {
-                        log::debug!("[DEBUG-poller] reward screen gone");
-                        visual_screen_gone.store(true, Ordering::Release);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-            std::thread::sleep(if found {
-                timing.watch_interval
-            } else {
-                timing.interval
-            });
-        }
-        visual_polling.store(false, Ordering::Release);
-    }))
 }
 
 /// How often the kiosk poller looks, and how long it may run.
@@ -2167,26 +1707,6 @@ where
     })
 }
 
-/// The relic pool as catalog entries, so the visual source can match against exactly the rewards
-/// this squad's relics can produce.
-fn relic_pool_entries(
-    candidates: &[warframe_acquisition::RewardNeedle],
-    reward_catalog: &[RewardCatalogEntry],
-) -> Vec<RewardCatalogEntry> {
-    candidates
-        .iter()
-        .map(|needle| RewardCatalogEntry {
-            name: needle.choice_name().to_owned(),
-            ducats: reward_catalog
-                .iter()
-                .find(|entry| {
-                    warframe_acquisition::reward_name_matches(&entry.name, needle.choice_name())
-                })
-                .map_or(0, |entry| entry.ducats),
-        })
-        .collect()
-}
-
 pub fn release_player_record_scan(identity: &str, active_scans: &Mutex<BTreeSet<String>>) {
     if let Ok(mut active) = active_scans.lock() {
         active.remove(identity);
@@ -2197,13 +1717,6 @@ pub fn rotate_choices_to_local(choices: &mut [String], local_name: &str) {
     if let Some(index) = choices.iter().position(|name| name == local_name) {
         choices.rotate_left(index);
     }
-}
-
-pub fn reward_path_matches(log_path: &str, catalog_path: &str) -> bool {
-    log_path == catalog_path
-        || log_path
-            .strip_prefix("/Lotus/StoreItems")
-            .is_some_and(|suffix| catalog_path == format!("/Lotus{suffix}"))
 }
 
 pub fn assemble_player_record_choices(
@@ -2291,6 +1804,9 @@ fn trace_responder_reward_scan(
 /// what separates them. But the cards matter more than their prices, and the reward screen only
 /// lives for fifteen seconds, so the overlay goes up first and the prices land when they land. The
 /// cards render an em dash until then.
+// Seven thread inputs (choices, runtime, window, catalog, cache, clock and generation);
+// bundling them would hide that shape behind a struct built once.
+#[allow(clippy::too_many_arguments)]
 fn spawn_market_price_fetch(
     choices: &[RewardObservation],
     shared: &SharedRuntime,
@@ -2350,6 +1866,8 @@ fn spawn_market_price_fetch(
     );
 }
 
+// Seven inputs plus the fetch/emit closures; see the fetch above.
+#[allow(clippy::too_many_arguments)]
 fn spawn_market_price_worker<Fetch, Emit>(
     choices: Vec<RewardObservation>,
     shared: SharedRuntime,
@@ -2367,6 +1885,9 @@ where
 {
     std::thread::spawn(move || {
         let (prices, failure) = fetch(&choices);
+        // Delayed prices are gated by the monitor generation alone, as before: the initial
+        // overlay publication already consumed the single-use epoch token, so reusing it here
+        // would decline every delayed price update.
         generation.publish(|| {
             if let Some(failure) = failure
                 && let Ok(mut runtime) = shared.lock()
@@ -3047,222 +2568,8 @@ mod tests {
     }
 
     #[test]
-    fn a_discovery_error_is_not_a_confirmed_game_exit() {
-        let failure: Result<Option<u32>, &str> = Err("procfs was temporarily unreadable");
-        assert_eq!(confirmed_process_observation(&failure), None);
-        assert_eq!(
-            confirmed_process_observation::<u32, &str>(&Ok(None)),
-            Some(None)
-        );
-    }
-
-    /// Mutation caught: treating routine blank and pool misses like capture failures would warn on
-    /// every ordinary gameplay poll again.
-    #[test]
-    fn a_single_routine_miss_is_not_a_warning() {
-        assert!(!poll_failure_is_worth_warning(
-            "a reward card read as blank",
-            1
-        ));
-        assert!(!poll_failure_is_worth_warning(
-            "reward card text did not match the relic pool",
-            1
-        ));
-    }
-
-    /// Mutation caught: using an off-by-one or `>=` threshold would either miss the one warning or
-    /// repeat it after roughly 30 seconds of uninterrupted pre-detection routine misses.
-    #[test]
-    fn a_persistent_routine_miss_warns_once_at_the_threshold() {
-        assert!(poll_failure_is_worth_warning(
-            "a reward card read as blank",
-            15
-        ));
-        assert!(!poll_failure_is_worth_warning(
-            "a reward card read as blank",
-            16
-        ));
-    }
-
-    /// Mutation caught: applying routine-miss handling to a capture failure would delay its first
-    /// warning, while accepting every occurrence would bury the report in repeats.
-    #[test]
-    fn a_missing_window_warns_immediately_but_does_not_repeat() {
-        assert!(poll_failure_is_worth_warning("no Warframe window found", 1));
-        assert!(!poll_failure_is_worth_warning(
-            "no Warframe window found",
-            2
-        ));
-        assert!(!poll_failure_is_worth_warning(
-            "no Warframe window found",
-            249
-        ));
-    }
-
-    #[test]
     fn monitor_path_changed_fires_on_the_first_observation() {
         assert!(monitor_path_changed(None, 42, None));
-    }
-
-    /// A screen reader that records reads on the injected instance.
-    ///
-    /// Reads landing on this instance prove the event path reuses its caller-owned source instead
-    /// of constructing an unrelated reader for each event.
-    struct CountedScreen {
-        cards: Vec<String>,
-        /// The pool of the last read, so a test can check what the read was matched against.
-        seen: Vec<String>,
-        /// Reads that landed on *this* instance. The discriminating counter: a
-        /// `read_squad_cards` that built a source of its own would leave this at zero however many
-        /// times it was called, because the reads would land on its private instance instead.
-        reads: u32,
-    }
-
-    impl CountedScreen {
-        fn new(cards: &[&str]) -> Self {
-            Self {
-                cards: cards.iter().map(|name| (*name).to_owned()).collect(),
-                seen: Vec::new(),
-                reads: 0,
-            }
-        }
-    }
-
-    impl VisualRewardSource for CountedScreen {
-        fn choices(
-            &mut self,
-            candidates: &[RewardCatalogEntry],
-        ) -> Result<Vec<String>, &'static str> {
-            self.reads += 1;
-            self.seen = candidates
-                .iter()
-                .map(|entry| entry.name.clone())
-                .collect::<Vec<_>>();
-            Ok(self.cards.clone())
-        }
-    }
-
-    fn squad_of(names: &[&str], local_reward_path: Option<&str>) -> PendingRewardSquad {
-        PendingRewardSquad {
-            screen_order: names.iter().map(|name| (*name).to_owned()).collect(),
-            local_reward_path: local_reward_path.map(str::to_owned),
-        }
-    }
-
-    fn memory_state_for(needles: Vec<warframe_acquisition::RewardNeedle>) -> LiveMemoryRewardState {
-        let mut state = LiveMemoryRewardState::new(RewardMemoryScanner::new(
-            4096,
-            1024 * 1024,
-            Duration::from_millis(1),
-        ));
-        state.prepare_candidates(&needles);
-        state
-    }
-
-    /// The read must land on the source it was handed, not on one built inside.
-    ///
-    /// The assertion is on reads landing on this instance. Counting test-side constructions would
-    /// not catch an implementation that quietly built a private source.
-    #[test]
-    fn the_screen_read_lands_on_the_source_it_was_given() {
-        let mut screen = CountedScreen::new(&["A", "B"]);
-        let state = memory_state_for(vec![
-            warframe_acquisition::RewardNeedle::new("A", ["/Lotus/A"]).expect("needle"),
-            warframe_acquisition::RewardNeedle::new("B", ["/Lotus/B"]).expect("needle"),
-        ]);
-
-        let result = read_squad_cards(
-            &squad_of(&["one", "two"], None),
-            &state,
-            &RewardSourceCoordinator::new(false),
-            &mut screen,
-            &[],
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .expect("the injected screen's cards are published");
-
-        assert_eq!(result.choices.names, vec!["A".to_owned(), "B".to_owned()]);
-        assert_eq!(
-            screen.reads, 1,
-            "the read went somewhere other than the source it was given"
-        );
-    }
-
-    /// A whole fissure run's worth of reward events must reuse its caller-owned source.
-    ///
-    /// `RewardSession::try_publish` is reached twice per reward screen -- from
-    /// `ResponsesComplete` and again from `ChoicesReady`. Eight reward events must therefore
-    /// produce eight reads on the same instance. A count of zero here means the event path ignored
-    /// the source it was given and built an unrelated reader instead.
-    #[test]
-    fn a_run_of_reward_screens_reads_through_the_same_source_every_time() {
-        let mut screen = CountedScreen::new(&["A", "B"]);
-        let state = memory_state_for(vec![
-            warframe_acquisition::RewardNeedle::new("A", ["/Lotus/A"]).expect("needle"),
-            warframe_acquisition::RewardNeedle::new("B", ["/Lotus/B"]).expect("needle"),
-        ]);
-        let coordinator = RewardSourceCoordinator::new(false);
-        let squad = squad_of(&["one", "two"], None);
-
-        // Four fissures, both reward events each.
-        for _ in 0..8 {
-            assert!(
-                read_squad_cards(
-                    &squad,
-                    &state,
-                    &coordinator,
-                    &mut screen,
-                    &[],
-                    &std::sync::atomic::AtomicBool::new(false),
-                )
-                .is_ok(),
-                "every read should publish"
-            );
-        }
-
-        assert_eq!(
-            screen.reads, 8,
-            "eight reward events did not all read through the one source they were given"
-        );
-    }
-
-    /// The pool a card is matched against is the squad's own relics, not the whole catalog.
-    ///
-    /// Pinned because `read_squad_cards` builds that pool for `RewardSession::try_publish`.
-    /// A read handed the full catalog is the 2026-08-20 failure mode: the closed-set match cannot
-    /// say "not in the pool", it returns
-    /// the nearest name it was given, so a too-wide pool publishes confident nonsense.
-    #[test]
-    fn the_read_is_matched_against_the_squads_own_relic_pool() {
-        let mut screen = CountedScreen::new(&["A", "B"]);
-        let state = memory_state_for(vec![
-            warframe_acquisition::RewardNeedle::new("A", ["/Lotus/A"]).expect("needle"),
-            warframe_acquisition::RewardNeedle::new("B", ["/Lotus/B"]).expect("needle"),
-        ]);
-        // The catalog knows a reward this squad's relics cannot drop.
-        let catalog = ["A", "B", "Elsewhere Prime Blueprint"]
-            .into_iter()
-            .map(|name| RewardCatalogEntry {
-                name: name.to_owned(),
-                ducats: 0,
-            })
-            .collect::<Vec<_>>();
-
-        read_squad_cards(
-            &squad_of(&["one", "two"], None),
-            &state,
-            &RewardSourceCoordinator::new(false),
-            &mut screen,
-            &catalog,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .expect("the cards are published");
-
-        assert_eq!(
-            screen.seen,
-            vec!["A".to_owned(), "B".to_owned()],
-            "the read was matched against something other than the squad's own relic pool"
-        );
     }
 
     #[test]
@@ -3349,6 +2656,8 @@ mod tests {
         assert!(scans.active.lock().expect("active scans").is_empty());
     }
 
+    /// Delayed market prices are gated by the monitor generation alone: a retired generation
+    /// must not mutate reward candidates, market health, or emit updates.
     #[test]
     fn retired_generation_rejects_detached_price_worker_effects() {
         let directory = tempfile::tempdir().expect("temporary runtime");
@@ -3406,7 +2715,6 @@ mod tests {
             "a retired price worker emitted reward-updated"
         );
     }
-
     #[test]
     fn retiring_generation_waits_for_in_flight_publication() {
         let current = Arc::new(AtomicU64::new(0));
@@ -3459,148 +2767,5 @@ mod tests {
             !published.get(),
             "a retired monitor must not publish a delayed price fetch"
         );
-    }
-
-    #[test]
-    fn screen_watch_drains_signals_once_and_stops_the_poller() {
-        let watch = ScreenWatch::default();
-        watch.polling.store(true, Ordering::Release);
-        *watch.reads.lock().expect("visual reads") = Some(vec!["Forma Blueprint".to_owned()]);
-        watch.gone.store(true, Ordering::Release);
-
-        assert_eq!(watch.take_read(), Some(vec!["Forma Blueprint".to_owned()]));
-        assert_eq!(watch.take_read(), None);
-        assert!(watch.take_gone());
-        assert!(!watch.take_gone());
-
-        watch.stop();
-        assert!(!watch.running());
-    }
-
-    #[test]
-    fn game_gone_stops_and_joins_a_poller_before_any_reward_is_recognized() {
-        use std::sync::mpsc;
-
-        struct UnrecognizedScreen {
-            read_started: Option<mpsc::Sender<()>>,
-            drop_started: mpsc::Sender<()>,
-            release_drop: mpsc::Receiver<()>,
-            drop_finished: mpsc::Sender<()>,
-        }
-
-        impl VisualRewardSource for UnrecognizedScreen {
-            fn choices(
-                &mut self,
-                _candidates: &[RewardCatalogEntry],
-            ) -> Result<Vec<String>, &'static str> {
-                if let Some(started) = self.read_started.take() {
-                    let _ = started.send(());
-                }
-                Err("a reward card read as blank")
-            }
-        }
-
-        impl Drop for UnrecognizedScreen {
-            fn drop(&mut self) {
-                let _ = self.drop_started.send(());
-                let _ = self.release_drop.recv();
-                let _ = self.drop_finished.send(());
-            }
-        }
-
-        let mut session = RewardSession::new(None, None, vec![], MarketPriceCache::default());
-        session.watch.adopt(
-            &["/Lotus/Types/Game/Projections/T2VoidProjectionLexPrimeCBronze".to_owned()],
-            vec![RewardCatalogEntry {
-                name: "Forma Blueprint".to_owned(),
-                ducats: 0,
-            }],
-        );
-        let (read_started_tx, read_started_rx) = mpsc::channel();
-        let (drop_started_tx, drop_started_rx) = mpsc::channel();
-        let (release_drop_tx, release_drop_rx) = mpsc::channel();
-        let (drop_finished_tx, drop_finished_rx) = mpsc::channel();
-        let poller = spawn_reward_screen_poller_with(
-            &session.watch,
-            PollerTiming {
-                interval: Duration::from_millis(1),
-                watch_interval: Duration::from_millis(1),
-                lifetime: POLLER_LIFETIME,
-            },
-            move || UnrecognizedScreen {
-                read_started: Some(read_started_tx),
-                drop_started: drop_started_tx,
-                release_drop: release_drop_rx,
-                drop_finished: drop_finished_tx,
-            },
-        )
-        .expect("nonempty relic pool arms the real poller");
-        *session.watch.poller.lock().expect("poller slot") = Some(poller);
-        let read_started = read_started_rx.recv_timeout(Duration::from_secs(1));
-
-        let polling = Arc::clone(&session.watch.polling);
-        let (returned_tx, returned_rx) = mpsc::channel();
-        let release = std::thread::spawn(move || {
-            let drop_started = drop_started_rx.recv_timeout(Duration::from_secs(1));
-            // Hold destruction open so merely clearing the stop flag cannot pass as a join.
-            let returned_before_release =
-                returned_rx.recv_timeout(Duration::from_millis(20)).is_ok();
-            // Clean up even if game_gone forgot to stop or join. No assertion may strand a
-            // capture worker at its 45-minute deadline or at the blocked Drop above.
-            polling.store(false, Ordering::Release);
-            let _ = release_drop_tx.send(());
-            (drop_started, returned_before_release)
-        });
-
-        session.game_gone(&|| {});
-        let dropped_before_return = drop_finished_rx.try_recv().is_ok();
-        let _ = returned_tx.send(());
-        let (drop_started, returned_before_release) = release.join().expect("release worker exits");
-        session.watch.stop();
-        let capture_released = dropped_before_return
-            || drop_finished_rx
-                .recv_timeout(Duration::from_secs(1))
-                .is_ok();
-
-        assert!(
-            read_started.is_ok(),
-            "the poller never read its capture source"
-        );
-        assert!(
-            capture_released,
-            "capture source failed to retire during cleanup"
-        );
-        assert!(
-            drop_started.is_ok(),
-            "game disappearance did not stop the pre-recognition poller"
-        );
-        assert!(
-            !returned_before_release && dropped_before_return,
-            "game disappearance returned before its capture source finished dropping"
-        );
-    }
-
-    #[test]
-    fn squad_progress_accepts_only_the_expected_roster_and_resets_as_one_unit() {
-        let mut progress = SquadProgress::default();
-        progress.remember(squad_of(&["one", "two"], Some("/Lotus/A")));
-
-        assert!(progress.squad(1).is_none());
-        assert_eq!(
-            progress
-                .squad(2)
-                .expect("matching squad")
-                .screen_order
-                .len(),
-            2
-        );
-        assert!(!progress.resolved());
-
-        progress.resolve();
-        assert!(progress.resolved());
-
-        progress.reset();
-        assert!(!progress.resolved());
-        assert!(progress.squad(2).is_none());
     }
 }

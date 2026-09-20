@@ -11,6 +11,13 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+### Fixed
+- **Reward recognition runs on a background reader and no longer blocks the monitor.**
+  Log events update shared relic context while a single worker performs capture and retries,
+  so slow OCR cannot delay overlay show/hide, game-exit handling, or poller delivery. Results
+  from a closed or replaced screen are retired instead of published, and delayed market prices
+  stay gated by the monitor generation.
+
 ## [0.10.0] - 2026-09-18
 
 ### Added
