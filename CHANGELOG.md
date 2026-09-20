@@ -11,6 +11,8 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-09-20
+
 ### Fixed
 - **Reward recognition runs on a background reader and no longer blocks the monitor.**
   Log events update shared relic context while a single worker performs capture and retries,
@@ -21,6 +23,11 @@ schema, and its configuration — may change in any minor release. `0.x.y` bumps
   Tesseract received its data directory in verbatim `\\?\` form, which rejects the forward
   slash Tesseract appends to the filename -- so `eng.traineddata` failed to open on every
   read (issue #12). The directory is unprefixed before Tesseract ever sees it.
+- **Ducat kiosk overlay stays up while picking items.** Confirming a sale rebuilds the kiosk
+  screen, and its close markers no longer end the visit: a close waits out a 1.5s grace
+  window and a rebuild inside it continues the same session. The quantity dialog no longer
+  blanks the chips either: an unreadable moment fades them and the next settled read
+  restores them.
 
 ## [0.10.0] - 2026-09-18
 
@@ -591,12 +598,11 @@ First release.
 
 ### Security
 
-- Account identifiers and nonces are held in memory only, redacted from `Debug` and `Display`, and
-  never written to the database or any log.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/Deftera186/tennoscope/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Deftera186/tennoscope/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/Deftera186/tennoscope/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/Deftera186/tennoscope/compare/v0.8.0...v0.9.0
