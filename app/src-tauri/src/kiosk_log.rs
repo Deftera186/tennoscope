@@ -19,7 +19,7 @@
 //! Two facts from that census carry this module. First, `PopulateGrid()` runs once per screen
 //! *build*, not once per visit: a sale confirm rebuilds the kiosk screen mid-visit (EE.log
 //! 2026-09-20 shows `Saving profile`, then `HudVis 0` plus a foreign subscription, then the
-//! full open markers and `PopulateGrid()` about a second later) while the player never leaves.
+//! full open markers and `PopulateGrid()` one to two seconds later) while the player never leaves.
 //! So `HudVis 0` is necessary but not sufficient for "the visit ended" -- this machine still
 //! reports the edge, and the session layer only believes a close that stays silent past its
 //! grace window. An earlier reading of the 2026-08-23 log took `HudVis 0` for the first beat

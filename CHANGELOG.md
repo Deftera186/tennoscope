@@ -14,6 +14,12 @@ see the difference.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ducat kiosk overlay rides out slower sale-confirm rebuilds.** The close grace
+  window is 3s instead of 1.5s: a measured 1.67s rebuild on a live session tore
+  the overlay down just past the old window, blanking prices after every sale.
+
 ## [0.11.0] - 2026-09-20
 
 ### Fixed

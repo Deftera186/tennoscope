@@ -46,9 +46,10 @@ const KIOSK_POLL_INTERVAL: Duration = Duration::from_millis(400);
 const KIOSK_MOTION_INTERVAL: Duration = Duration::from_millis(60);
 /// How long a kiosk close stays a maybe: a sale confirm rebuilds the kiosk screen mid-visit
 /// (EE.log `Saving profile`, then `HudVis 0` plus a foreign subscription, then the full open
-/// markers about a second later), so the monitor only tears down once the close markers stay
-/// silent past this window. A reopen inside the window cancels the pending teardown.
-pub const KIOSK_CLOSE_GRACE: Duration = Duration::from_millis(1500);
+/// markers one to two seconds later -- measured 1.67s on a 2026-09-20 live session), so the
+/// monitor only tears down once the close markers stay silent past this window. A reopen
+/// inside the window cancels the pending teardown.
+pub const KIOSK_CLOSE_GRACE: Duration = Duration::from_millis(3000);
 
 /// Tell the kiosk window which visit now owns it; it retires any previous visit synchronously,
 /// then fetches the latest epoch itself.
@@ -514,8 +515,8 @@ pub struct KioskSession {
     /// `KioskLogEvent::KioskClosed` below for what sharing one cost.
     close_pending: bool,
     /// A close observed but not yet believed: the teardown verdict waits until this deadline so
-    /// a sale-confirm rebuild (close markers, then the open markers again ~1s later) rides out
-    /// as the same visit. `None` while the kiosk is confidently open.
+    /// a sale-confirm rebuild (close markers, then the open markers again one to two seconds
+    /// later) rides out as the same visit. `None` while the kiosk is confidently open.
     close_deadline: Option<Instant>,
     /// The overlay is on screen, so a teardown has something to take down. Separate from
     /// `poller_active` because a close retires the poller at once while the window waits for
@@ -570,7 +571,7 @@ impl KioskSession {
                 kiosk_log::KioskLogEvent::KioskClosed => {
                     // A close is a maybe, not a verdict. The sale-confirm popup rebuilds the
                     // kiosk screen mid-visit -- EE.log shows `Saving profile`, then `HudVis 0`
-                    // plus a foreign subscription, then the full open markers about a second
+                    // plus a foreign subscription, then the full open markers one to two seconds
                     // later -- and retiring here took the overlay down on every sale. So this
                     // only arms a deadline: the poller keeps reading, the session and the
                     // published view stay put, and the monitor's next ticks call `take_close`,
@@ -1364,7 +1365,7 @@ pub(crate) fn run(
         // (the two never occur at once in practice, but neither knows about the other).
         if let Some(kiosk_view_cell) = app.try_state::<KioskState>() {
             // A monotonic stamp for the close grace window: the tick's wall clock has only
-            // one-second resolution, too coarse for a 1.5s window.
+            // one-second resolution, too coarse for the window.
             let tick = Instant::now();
             kiosk_session.observe(
                 &log_bytes,

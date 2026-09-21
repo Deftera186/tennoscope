@@ -666,6 +666,119 @@ fn a_sale_confirm_rebuild_split_across_batches_keeps_the_overlay_up() {
     assert_eq!(tally_of(&shows), 1, "never re-shown: it never came down");
 }
 
+/// A slower sale-confirm rebuild must ride out the same window: measured 1.67s on a
+/// 2026-09-20 live session (`Saving profile` + `HudVis 0` at 20767.4s, reopen at
+/// 20769.1s), past the 1.5s grace that covered the ~1s rebuilds seen before.
+#[test]
+fn a_slow_sale_confirm_rebuild_keeps_the_overlay_up() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+    let (hides, hide) = tally();
+    let (shows, show) = tally();
+
+    let t0 = Instant::now();
+    // The user's measured rebuild gap, rounded up with a little margin.
+    let rebuilding = t0 + Duration::from_millis(1700);
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &show, &spawns.hook(), t0);
+    kiosk.set(KioskView {
+        epoch: 7,
+        ..KioskView::default()
+    });
+    let visit = kiosk.active_session();
+
+    session.observe(
+        [CLOSE_LINE, POPUP_LINE].concat().as_bytes(),
+        &kiosk,
+        &show,
+        &spawns.hook(),
+        t0,
+    );
+    assert!(
+        !session.take_close(&kiosk, &hide, rebuilding),
+        "the overlay must ride out a 1.7s rebuild"
+    );
+    assert_eq!(tally_of(&hides), 0, "the window never blinked");
+    assert!(kiosk.get().is_some(), "the published view stays up");
+
+    session.observe(
+        [MODE_LINE, SWF_LINE, POPULATE_LINE].concat().as_bytes(),
+        &kiosk,
+        &show,
+        &spawns.hook(),
+        rebuilding,
+    );
+    assert!(
+        !session.take_close(&kiosk, &hide, rebuilding),
+        "the rebuild cancels the pending teardown"
+    );
+    assert_eq!(tally_of(&hides), 0, "still no blink");
+    assert_eq!(spawns.spawns(), 1, "the running poller was never stopped");
+    assert_eq!(kiosk.active_session(), visit, "still the same visit");
+    assert_eq!(tally_of(&shows), 1, "never re-shown: it never came down");
+}
+
+/// A sale-confirm rebuild arriving past the window is a new visit, not continuity: the
+/// silence in between was the verdict, so the teardown must have happened (overlay down,
+/// view cleared, old poller stopped) and the reopen re-arms from scratch.
+#[test]
+fn a_sale_confirm_rebuild_past_the_grace_starts_a_new_visit() {
+    let session = &mut KioskSession::new();
+    let spawns = SpawnLog::default();
+    let kiosk = KioskState::new();
+    let (hides, hide) = tally();
+    let (shows, show) = tally();
+
+    let t0 = Instant::now();
+    session.observe(MODE_LINE.as_bytes(), &kiosk, &show, &spawns.hook(), t0);
+    kiosk.set(KioskView {
+        epoch: 7,
+        ..KioskView::default()
+    });
+    let visit = kiosk.active_session();
+    let poller = spawns.gone.lock().unwrap()[0].clone();
+
+    session.observe(
+        [CLOSE_LINE, POPUP_LINE].concat().as_bytes(),
+        &kiosk,
+        &show,
+        &spawns.hook(),
+        t0,
+    );
+
+    // Silence past the window is the verdict, even with a reopen coming later.
+    assert!(
+        session.take_close(&kiosk, &hide, after_grace(t0)),
+        "silence past the window tears the session down"
+    );
+    assert_eq!(tally_of(&hides), 1, "the overlay came down");
+    assert!(kiosk.get().is_none(), "and the payload went with it");
+    assert!(
+        poller.load(Ordering::Acquire),
+        "the visit's poller was stopped"
+    );
+
+    // The late rebuild re-arms from scratch as a new visit.
+    session.observe(
+        [MODE_LINE, SWF_LINE, POPULATE_LINE].concat().as_bytes(),
+        &kiosk,
+        &show,
+        &spawns.hook(),
+        after_grace(t0),
+    );
+    assert_eq!(spawns.spawns(), 2, "the new visit arms a new poller");
+    assert_ne!(
+        kiosk.active_session(),
+        visit,
+        "a new visit identity, not continuity"
+    );
+    assert_eq!(tally_of(&shows), 2, "re-shown: it had come down");
+    assert!(
+        !session.take_close(&kiosk, &hide, after_grace(t0)),
+        "the verdict is consumed; nothing left to tear down"
+    );
+}
+
 /// A close with no rebuild after it still takes the overlay down: the grace window delays
 /// the verdict, it does not cancel it. This is the genuine-exit half of the flap pair above.
 #[test]
