@@ -5,9 +5,12 @@ All notable changes to this project are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html).
 
-While the major version is `0`, the public surface — the application's behaviour, its on-disk
-schema, and its configuration — may change in any minor release. `0.x.y` bumps `y` for fixes and
-`x` for anything else.
+While the major version is `0`, per semver §4 anything may change, but bumps mean:
+patch for backwards-compatible bug fixes (including corrections to existing behaviour),
+minor for new backwards-compatible functionality or incompatible changes until `1.0.0`
+declares stability. Releases through `0.11.0` treated any user-visible behaviour change as
+minor; from here on a fix that restores intended behaviour is a patch even when the user can
+see the difference.
 
 ## [Unreleased]
 

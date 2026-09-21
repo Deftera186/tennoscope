@@ -7,14 +7,16 @@ that builds an artifact, and even then the GitHub release is created as a **draf
 
 [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html). The first release is `0.1.0`.
 
-While the major version is `0`, the public surface — application behaviour, the SQLite schema, and
-setup state — may change in any minor release:
+While the major version is `0`, per semver §4 anything may change, but bumps mean:
 
 | Change | Bump |
 | --- | --- |
-| Bug fix, no behaviour change a user would have to adapt to | `0.1.0` → `0.1.1` |
-| New feature, or any change to the schema, setup state, or an existing behaviour | `0.1.0` → `0.2.0` |
+| Backwards-compatible bug fix, including corrections to existing behaviour | `0.10.0` → `0.10.1` |
+| New functionality, backwards compatible | `0.10.0` → `0.11.0` |
+| Incompatible change to the schema, setup state, API, or behaviour | `0.10.0` → `0.11.0` until `1.0.0` declares stability |
 | First release the project is willing to keep compatible | `1.0.0` |
+
+Prior releases through `0.11.0` treated any user-visible behaviour change as minor; from here on a fix that restores intended behaviour is a patch even when the user can see the difference.
 
 Tags are `v`-prefixed: `v0.1.0`. The version inside the repository is not.
 GitHub release titles are `TennoScope v0.1.0`: the product name followed by the exact tag.
