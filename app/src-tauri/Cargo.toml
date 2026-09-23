@@ -36,6 +36,10 @@ xcap = { version = "0.9.7", features = ["image"] }
 warframe-market = { path = "../../crates/warframe-market" }
 warframe-status = { path = "../../crates/warframe-status" }
 regex = "1"
+tauri-plugin-process = "2"
+semver = "1"
+url = "2"
+time = { version = "0.3", features = ["formatting"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
@@ -67,6 +71,9 @@ tokio = { version = "1", default-features = false, features = [
 
 [target."cfg(windows)".dependencies]
 win-capture = { path = "../../crates/win-capture" }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-updater = "2"
 
 [dev-dependencies]
 tempfile = "3"

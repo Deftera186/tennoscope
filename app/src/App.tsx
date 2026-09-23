@@ -3,6 +3,7 @@ import './App.css'
 import {
   authorizeScreenCapture,
   getSetupStatus,
+  getVersionInfo,
   getView,
   marketLinkToken,
   marketSignIn,
@@ -38,6 +39,9 @@ import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
 import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, readShowDucats, writePriceFloor, writeShowDucats } from './settings'
 import { snapshotFreshness, stampReading } from './freshness'
+import { bootUpdateChecks } from './updateStore'
+import { version as APP_VERSION } from '../package.json'
+import { UpdateMark, UpdatesSetting } from './UpdateSettings'
 import { reportBlockVisible } from './reportable'
 import { AccessSelector } from './AccessSelector'
 import { accessMode } from './access'
@@ -262,6 +266,11 @@ function App() {
     return () => clearInterval(timer)
   }, [])
 
+  // Update checks live outside the 2.5s backend poll: daily, not live.
+  useEffect(() => {
+    bootUpdateChecks()
+  }, [])
+
   async function changeAccessMode(next: AccessMode) {
     if (modeTransitionInFlight.current) return
     modeTransitionInFlight.current = true
@@ -448,6 +457,7 @@ function App() {
               <small>{effectiveMode === 'companion' ? 'Using saved and reference data' : view?.health.game_reader.message ?? 'Connecting to local backend'}</small>
             </span>
           </div>
+          <UpdateMark onOpen={() => openPage('settings')}/>
           {view && <span className="date-letter" title={freshness.detail}>{freshness.label}<span className="sr-only"> — {freshness.detail}</span></span>}
           <button type="button" className="stamp" onClick={refresh} disabled={busy || modeBusy || setupStatus?.access_mode !== 'full'} aria-describedby={setupStatus?.access_mode !== 'full' ? 'inventory-access-note' : undefined}>
             <Mark name="refresh" className="punch-glyph"/><span>{busy ? 'Refreshing…' : 'Refresh inventory'}</span>
@@ -1008,6 +1018,7 @@ function SettingsPage({ view, priceFloor, effectiveMode, selectedMode, modeBusy,
         </div>
         <OverlayPreviewToggle prohibited={effectiveMode === 'companion'} busy={modeBusy}/>
       </div>
+      <UpdatesSetting observesGame={effectiveMode !== 'companion'}/>
     </section>
 
     <section aria-label="Support">
@@ -1018,6 +1029,7 @@ function SettingsPage({ view, priceFloor, effectiveMode, selectedMode, modeBusy,
     </section>
   </section>
 }
+
 
 function DesktopCaptureSetting({ actionAvailable, prohibited, busy, note, onNote, onAuthorize }: { actionAvailable: boolean; prohibited: boolean; busy: boolean; note: string | null; onNote: (note: string | null) => void; onAuthorize: () => Promise<void> }) {
   useEffect(() => {
@@ -1050,10 +1062,30 @@ function DesktopCaptureSetting({ actionAvailable, prohibited, busy, note, onNote
 function AboutPage({ effectiveMode }: { effectiveMode: AccessMode }) {
   const observesGame = effectiveMode !== 'companion'
   const acquiresInventory = effectiveMode === 'full'
+  const [versionLine, setVersionLine] = useState<string>(`Version ${APP_VERSION}`)
+  // The version is a frontend build constant: the line renders even when the
+  // backend is down, gaining installer identity once getVersionInfo lands.
+  useEffect(() => {
+    getVersionInfo()
+      .then(info => {
+        const installer = info.kind === 'appimage'
+          ? 'AppImage'
+          : info.kind === 'portable_win'
+            ? 'Windows install'
+            : info.kind === 'system_linux'
+              ? (info.manager ?? 'System package')
+              : info.kind === 'system_win'
+                ? 'Windows system install'
+                : 'Unknown install'
+        setVersionLine(`Version ${info.version} · ${installer}`)
+      })
+      .catch(() => {})
+  }, [])
   return <section className="page" aria-labelledby="about-title">
     <div className="mark-head">
       <h1 id="about-title" className="mark">About</h1>
       <p className="prose">TennoScope is a free, open-source, local-first companion. GPLv3 · MVP.</p>
+      <p className="prose">{versionLine}</p>
     </div>
 
     <div className="clauses">

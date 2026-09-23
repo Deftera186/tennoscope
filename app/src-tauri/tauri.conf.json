@@ -61,6 +61,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "appimage",
       "deb",
@@ -107,6 +108,17 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDM3Nzc4RDY5MTAwNkNCMEMKUldRTXl3WVFhWTEzTi9nc0NlNTFwemc4Rm5xdGJRZE9CY2JkdWt2WHc5b3BzODR0N2Y5UDZlS1AK",
+      "endpoints": [
+        "https://github.com/Deftera186/tennoscope/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

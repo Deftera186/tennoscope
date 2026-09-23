@@ -1361,3 +1361,34 @@
 .kiosk-chip .kiosk-mark { height: calc(12 * var(--h)); }
 .kiosk-pair .kiosk-mark { height: calc(18 * var(--h)); align-self: flex-end; }
 .kiosk-total .kiosk-mark { height: calc(19 * var(--h)); }
+
+/* Updates: the masthead mark is a text pill with its own diamond, never the
+ * assay-state grammar (ready there means Watching Warframe) and never
+ * color-only. The row reuses .setting/.stamp/.band-note; only the download
+ * progress, the command chip and the checkbox rows need their own rules. */
+.update-mark {
+  display: inline-flex; align-items: center; gap: .45em;
+  padding: .3em .7em; border: 1px solid var(--gold, #c9a227); border-radius: 999px;
+  background: transparent; color: inherit; font: inherit; font-size: .78rem;
+  cursor: pointer; white-space: nowrap;
+}
+.update-dot {
+  width: .6em; height: .6em; flex: none; background: var(--gold, #c9a227);
+  transform: rotate(45deg);
+}
+@media (forced-colors: active) {
+  .update-dot { background: ButtonText; }
+}
+.update-progress { width: 100%; margin-top: var(--tight); }
+.update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5em; margin-top: var(--tight); }
+.update-actions .prose { flex-basis: 100%; }
+.command-chip { display: flex; flex-basis: 100%; gap: .5em; align-items: center; }
+.command-chip input {
+  flex: 1; min-width: 0; padding: .45em .6em; font-family: ui-monospace, monospace;
+  font-size: .78rem; color: inherit; background: transparent;
+  border: 1px solid currentColor; border-radius: 4px;
+}
+.check-row { display: flex; align-items: flex-start; gap: .5em; margin-top: var(--tight); font-size: .85rem; }
+.update-channel { margin-top: var(--tight); font-size: .85rem; }
+.update-channel summary { cursor: pointer; }
+.update-channel .check-row { margin-top: .4em; }

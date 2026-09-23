@@ -7,6 +7,7 @@ const backend = vi.hoisted(() => ({
   marketStatus: vi.fn(), marketSignIn: vi.fn(), marketLinkToken: vi.fn(), marketSignOut: vi.fn(),
   refreshOrders: vi.fn(), removeOrder: vi.fn(), setOrderQuantity: vi.fn(),
   setMarketPresence: vi.fn(), createOrder: vi.fn(), updateOrder: vi.fn(),
+  getVersionInfo: vi.fn(), updateCheck: vi.fn(), updateDownloadAndInstall: vi.fn(),
 }))
 const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverlay: vi.fn() }))
 const windowApi = vi.hoisted(() => ({
@@ -19,8 +20,13 @@ const windowApi = vi.hoisted(() => ({
 vi.mock('./backend', () => backend)
 vi.mock('./overlay', () => overlay)
 vi.mock('./window', () => windowApi)
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }))
+vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn(() => Promise.resolve()) }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: vi.fn(() => Promise.resolve()) }))
+vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: vi.fn(() => Promise.resolve()) }))
 
 import App from './App'
+import { resetUpdateStoreForTests } from './updateStore'
 import type { AppView } from './backend'
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -95,9 +101,13 @@ describe('MVP desktop interface', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()  // The price floor outlives a render, which is the point of it.
+    resetUpdateStoreForTests()
     backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
     backend.setAccessMode.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
     backend.getView.mockResolvedValue(view)
+    backend.getVersionInfo.mockResolvedValue({ version: '0.11.0', channel: 'stable', kind: 'unknown', writable: false, updatable: false, manager: null, manager_command: null })
+    backend.updateCheck.mockResolvedValue({ kind: 'unknown', updatable: false, update: null })
+    backend.updateDownloadAndInstall.mockResolvedValue({ version: '0.12.0', current_version: '0.11.0', notes: null, date: null, feed: 'stable' })
     backend.refreshInventory.mockResolvedValue(view)
     backend.refreshPrices.mockResolvedValue(view)
     backend.marketStatus.mockResolvedValue(view)

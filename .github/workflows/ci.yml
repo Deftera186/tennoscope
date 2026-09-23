@@ -42,6 +42,10 @@ jobs:
       # cheap shell harnesses: Cargo/pnpm are replaced with recorders, so no second build occurs.
       - run: ./scripts/test-check-windows.sh
       - run: ./scripts/test-arch-pkgbuild.sh
+      # Updater feed generation is fail-closed shell + stdlib python; the verify
+      # twin needs pynacl for the Ed25519 checks (same as the release job).
+      - run: ./scripts/test-build-update-feed.sh
+      - run: pip install --break-system-packages pynacl && ./scripts/test-verify-update-feed.sh
 
       # Tauri's Linux system libraries plus tesseract. Screen capture and the crop pipeline are
       # Rust now, so tesseract is the only thing the reward tests still shell out to.
@@ -144,12 +148,21 @@ jobs:
         shell: pwsh
 
       - uses: Swatinem/rust-cache@v2
-        with:
-          # See the Linux job: the release workflow reads this.
-          shared-key: windows
-
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  # Validates what the updater and the Winget track ship: the manifests must
+  # pass winget's own validator on a real Windows runner (the format is
+  # Microsoft's, so only their tool can bless it). The local Windows VM proved
+  # the packaged installer itself: silent per-user install, no elevation.
+  packaging:
+    name: Packaging
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate winget manifests
+        run: winget validate --manifest packaging/winget
 
   frontend:
     name: Frontend

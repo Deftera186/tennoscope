@@ -109,3 +109,11 @@ export const createOrder = (collectionId: string, platinum: number, quantity: nu
   invoke<AppView>('create_order', { collectionId, platinum, quantity, visible })
 export const updateOrder = (orderId: string, platinum: number, quantity: number) =>
   invoke<AppView>('update_order', { orderId, platinum, quantity })
+
+export type InstallKind = 'appimage' | 'system_linux' | 'portable_win' | 'system_win' | 'unknown'
+export interface VersionInfo { version: string; channel: string; kind: InstallKind; writable: boolean; updatable: boolean; manager: string | null; manager_command: string | null }
+export interface UpdateSummary { version: string; current_version: string; notes: string | null; date: string | null; feed: string }
+export interface CheckResult { kind: InstallKind; updatable: boolean; update: UpdateSummary | null }
+export const getVersionInfo = () => invoke<VersionInfo>('get_version_info')
+export const updateCheck = (feed: string) => invoke<CheckResult>('update_check', { feed })
+export const updateDownloadAndInstall = (feed: string) => invoke<UpdateSummary>('update_download_and_install', { feed })
