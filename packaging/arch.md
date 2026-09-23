@@ -29,14 +29,10 @@ a remote and fails in a bare directory holding only a downloaded `PKGBUILD`. `pa
 
 ## The recipe
 
-`source` points at the tag's GitHub archive, so `makepkg` fetches it. `sha256sums` is `SKIP` — this
-recipe is not distributed through a package repository, and the tarball arrives over HTTPS from the
-same place the `PKGBUILD` did. If you are repackaging this for anyone but yourself, replace it with
-a real digest:
-
-```bash
-updpkgsums
-```
+`source` points at the tag's GitHub archive, so `makepkg` fetches it. `sha256sums`
+carries the release tarball digest (pinned 2026-09-22 for `v0.11.0`; re-pin per
+release with `updpkgsums`). If you are repackaging a different commit, replace it
+with a fresh digest:
 
 The recipe builds the locked Rust workspace and frontend, runs both test suites, and installs
 `tennoscope`, its desktop entry, icon, GPLv3 license and third-party notices. Dependency resolution
@@ -70,4 +66,5 @@ asserts every card reads at >= 0.9. `tesseract-data-eng` ships upstream's combin
 Arch. Skipped rather than loosened, because that floor is what proves the crop geometry everywhere
 else.
 
-Before any AUR submission: use a literal `sha256sums` digest, and add a `.SRCINFO`.
+Before any AUR submission: add a `.SRCINFO` (`makepkg --printsrcinfo`, needs an Arch
+box — the digest above is already literal).

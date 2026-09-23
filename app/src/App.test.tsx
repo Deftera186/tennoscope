@@ -7,6 +7,7 @@ const backend = vi.hoisted(() => ({
   marketStatus: vi.fn(), marketSignIn: vi.fn(), marketLinkToken: vi.fn(), marketSignOut: vi.fn(),
   refreshOrders: vi.fn(), removeOrder: vi.fn(), setOrderQuantity: vi.fn(),
   setMarketPresence: vi.fn(), createOrder: vi.fn(), updateOrder: vi.fn(),
+  getVersionInfo: vi.fn(), updateCheck: vi.fn(), updateDownloadAndInstall: vi.fn(),
 }))
 const overlay = vi.hoisted(() => ({ showRewardOverlay: vi.fn(), hideRewardOverlay: vi.fn() }))
 const windowApi = vi.hoisted(() => ({
@@ -19,8 +20,13 @@ const windowApi = vi.hoisted(() => ({
 vi.mock('./backend', () => backend)
 vi.mock('./overlay', () => overlay)
 vi.mock('./window', () => windowApi)
+vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }))
+vi.mock('@tauri-apps/plugin-opener', () => ({ openUrl: vi.fn(() => Promise.resolve()) }))
+vi.mock('@tauri-apps/plugin-clipboard-manager', () => ({ writeText: vi.fn(() => Promise.resolve()) }))
+vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: vi.fn(() => Promise.resolve()) }))
 
 import App from './App'
+import { resetUpdateStoreForTests } from './updateStore'
 import type { AppView } from './backend'
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -95,9 +101,13 @@ describe('MVP desktop interface', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()  // The price floor outlives a render, which is the point of it.
+    resetUpdateStoreForTests()
     backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
     backend.setAccessMode.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
     backend.getView.mockResolvedValue(view)
+    backend.getVersionInfo.mockResolvedValue({ version: '0.11.0', channel: 'stable', kind: 'unknown', writable: false, updatable: false, manager: null, manager_command: null })
+    backend.updateCheck.mockResolvedValue({ kind: 'unknown', updatable: false, update: null })
+    backend.updateDownloadAndInstall.mockResolvedValue({ version: '0.12.0', current_version: '0.11.0', notes: null, date: null, feed: 'stable' })
     backend.refreshInventory.mockResolvedValue(view)
     backend.refreshPrices.mockResolvedValue(view)
     backend.marketStatus.mockResolvedValue(view)
@@ -652,7 +662,7 @@ describe('MVP desktop interface', () => {
     expect(within(navigation).queryByRole('button', { name: 'Refresh inventory' })).not.toBeInTheDocument()
     const operations = screen.getByRole('region', { name: 'Runtime operations' })
     expect(within(operations).getByRole('button', { name: 'Refresh inventory' })).toBeInTheDocument()
-    expect(within(operations).getByRole('status')).toBeInTheDocument()
+    expect(within(operations).getAllByRole('status').find(node => node.textContent)).toBeInTheDocument()
   })
 
   it('keeps live view polling while desktop authorization is pending', async () => {
@@ -778,7 +788,7 @@ describe('MVP desktop interface', () => {
     expect(backend.refreshInventory).toHaveBeenCalledOnce()
     // The reader's own state is announced in the masthead; the sheet below carries its own status
     // regions, so this is scoped to the one that speaks for the reader.
-    expect(within(screen.getByRole('banner')).getByRole('status')).toHaveTextContent(/Watching|Attention/)
+    expect(within(screen.getByRole('banner')).getAllByRole('status').find(node => node.textContent)).toHaveTextContent(/Watching|Attention/)
   })
 
   it('does not let an older poll overwrite a newer manual refresh', async () => {

@@ -48,6 +48,10 @@ mod reward_observer;
 mod reward_ocr;
 pub mod reward_recognition;
 mod reward_source;
+// The updater serves desktop bundles only (AppImage, NSIS); its dependency
+// is likewise absent on mobile, so everything referencing it gates together.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+mod update;
 pub use access::{AccessMode, AccessPolicy};
 pub use kiosk_ocr::{BasketRow, GridCell};
 pub use kiosk_view::{KioskState, KioskView};
@@ -2014,7 +2018,12 @@ pub fn run() {
     if std::env::var_os("DISPLAY").is_some() {
         gtk::gdk::set_allowed_backends("x11");
     }
-    tauri::Builder::default()
+    let builder = tauri::Builder::default().plugin(tauri_plugin_process::init());
+    // The updater serves desktop bundles only (AppImage, NSIS); its dependency
+    // is absent on mobile, so registration gates together with the module.
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    builder
         // Raise the window that is already open rather than starting a rival process. Two instances
         // tail the same EE.log, write the same database and draw two override-redirect overlays at
         // the same coordinates over the game, where whichever raised last wins -- so the strip on
@@ -2139,7 +2148,13 @@ pub fn run() {
             remove_order,
             create_order,
             set_order_quantity,
-            update_order
+            update_order,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            update::get_version_info,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            update::update_check,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            update::update_download_and_install
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

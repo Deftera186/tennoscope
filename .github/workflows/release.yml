@@ -51,7 +51,7 @@ jobs:
           # Keep this in step with the `name:` of every job in ci.yml. The step below asserts the
           # count, because this filter only selects: a renamed job would silently fall out of the
           # allowlist and stop gating anything.
-          check-regexp: ^(Rust|Rust \(Windows\)|Frontend)$
+          check-regexp: ^(Rust|Rust \(Windows\)|Frontend|Packaging)$
           # `success` only. The default admits `skipped`, which would let a CI job that never ran
           # stand in for one that passed.
           allowed-conclusions: success
@@ -62,16 +62,16 @@ jobs:
 
       # The step above proves every check it *matched* passed. It cannot notice one that stopped
       # matching -- it fails only when the filtered set is entirely empty. Rename `Frontend` to
-      # `Web` and the gate quietly waits on two jobs instead of three, and a release ships with a
+      # `Web` and the gate quietly waits on three jobs instead of four, and a release ships with a
       # frontend nothing checked. This is the only thing that would say so.
       - name: CI gated on every job it should have
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          expected=3
+          expected=4
           found=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs" \
             --paginate --jq '.check_runs[]
-              | select(.name | test("^(Rust|Rust \\(Windows\\)|Frontend)$"))
+              | select(.name | test("^(Rust|Rust \\(Windows\\)|Frontend|Packaging)$"))
               | select(.conclusion == "success")
               | .name' | sort -u | wc -l)
           if [ "$found" -ne "$expected" ]; then
@@ -101,7 +101,15 @@ jobs:
   windows:
     name: Windows installer
     needs: gate
+    # Branch `workflow_dispatch` runs skip these entirely: the signing key must
+    # never meet attacker-influenced build code. Scratch-tag verification uses
+    # real tags (`vX.Y.Z-updater.N`), never branches.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: windows-latest
+    # Signing secrets come from the `release` environment, never the repo scope,
+    # and only tag builds reach these jobs (see the gate). Branch
+    # `workflow_dispatch` runs never see the private key.
+    environment: release
     # Only the `release` job writes anything. These two build from a shared cache, so the
     # narrower token is worth the two lines.
     permissions:
@@ -152,6 +160,14 @@ jobs:
           # resulting hash cannot match CI's -- which is why this job missed its cache even though
           # its key prefix already agreed.
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
+          # Bakes the updater channel into the binary (beta comparator for `-rc` tags).
+          TENNOSCOPE_CHANNEL: ${{ contains(github.ref_name, '-') && 'beta' || 'stable' }}
+          # Signs the updater artifacts (`.sig` next to every bundle). The key has no
+          # password today, so this is empty -- and it must stay in lockstep with the
+          # re-sign step below: the day the key gains `-p`, both variables change
+          # together or the build hangs on a password prompt instead of failing.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
 
       # The installer is unsigned: a code-signing certificate costs money this project does not
       # take. SmartScreen will warn on first run until the download builds reputation, which is
@@ -159,12 +175,16 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: target/release/bundle/nsis/*-setup.exe
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*.sig
 
   bundles:
-    name: Linux bundles
     needs: gate
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # Same secret scoping as the Windows job above.
+    environment: release
     # Only the `release` job writes anything. These two build from a shared cache, so the
     # narrower token is worth the two lines.
     permissions:
@@ -221,12 +241,31 @@ jobs:
         env:
           # See the Windows job.
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
+          TENNOSCOPE_CHANNEL: ${{ contains(github.ref_name, '-') && 'beta' || 'stable' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+
+      # The bundle helper repacks the AppImage AFTER `tauri build`, so the
+      # build-time `.sig` covers pre-patch bytes. Re-sign the final file: a
+      # stale signature would fail verification on every Linux self-update.
+      # The CLI prompts for a key password when none is configured; the empty
+      # variable plus closed stdin keeps headless runners from hanging on it.
+      - name: Re-sign final AppImage
+        working-directory: app
+        run: |
+          appimage=$(ls ../target/release/bundle/appimage/*.AppImage | grep -v '\.sig$' | head -1)
+          pnpm tauri signer sign "$appimage" < /dev/null
+          ls "$appimage.sig"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-bundles
           path: |
             target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.sig
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm
 
@@ -238,9 +277,23 @@ jobs:
     needs: [windows, bundles]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+
+      # Feeds are generated from the shipped `.sig` contents, never by hand --
+      # and fail closed when a signature is missing or empty.
+      - name: Build updater feeds
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          ./scripts/build-update-feed.sh --version "$version" --tag "${{ github.ref_name }}" --artifacts artifacts --out feeds
+
+      - name: Verify updater feeds
+        run: |
+          pip install --break-system-packages pynacl
+          ./scripts/verify-update-feed.sh --feeds feeds --artifacts artifacts --tauri-conf app/src-tauri/tauri.conf.json
 
       # A draft, not a publish. The release notes are written by hand from CHANGELOG.md and the
       # release goes out when the maintainer says so.
@@ -262,6 +315,9 @@ jobs:
           # rather than a draft quietly missing the Linux downloads.
           files: |
             artifacts/linux-bundles/appimage/*.AppImage
+            artifacts/linux-bundles/appimage/*.sig
             artifacts/linux-bundles/deb/*.deb
             artifacts/linux-bundles/rpm/*.rpm
             artifacts/windows-installer/*.exe
+            artifacts/windows-installer/*.sig
+            feeds/*.json
