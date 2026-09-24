@@ -1,0 +1,24 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: TennoScope
+Label: TennoScope
+Suite: stable
+Codename: stable
+Date: Thu, 24 Sep 2026 16:33:33 GMT
+Architectures: amd64
+Components: main
+Description: Local-first Warframe collection and relic companion
+MD5Sum:
+ 4c02e608fa2ae4b98a872cae88ab1e73            19900 main/binary-amd64/Packages
+ b67c5cf58cb3cfa66cbc76f095c89a2b             3031 main/binary-amd64/Packages.gz
+SHA256:
+ 0c2fb1f10c6de06f2613d179d1660d3c24c7a860d86dccc1cf323b20ca75d4dd            19900 main/binary-amd64/Packages
+ 3e809118307c44819c355e9fc40f4bd984b6292698b2f1ed35d90759a22937c8             3031 main/binary-amd64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iHUEARYKAB0WIQT+NnT1TGWyee9cXo7uFgf4Wp64AgUCarVQ3QAKCRDuFgf4Wp64
+AlpCAP9oXj+d40CFnuhvNtJ3oqhqKe105jcaCv6Y518ja6/chQD+LPSYRGDKYUOo
+aqjY2uYAm/HST7WY2Zf40NReSzkEVgI=
+=RQnY
+-----END PGP SIGNATURE-----

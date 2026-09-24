@@ -1,0 +1,391 @@
+Package: tenno-scope
+Version: 0.1.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 18323
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: x11-utils, imagemagick, tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.1.0_amd64.deb
+Size: 6076974
+MD5sum: e88a31eca2cd9710e44efe00f7e1de82
+SHA1: 02b003a0f157aecde365471f4eb9792c85ff245a
+SHA256: 16416def17d664f244d7c1208e15ff2db2f33beaabb12064b58fe3e02365f3e8
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.10.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 42985
+Depends: libpipewire-0.3-0, libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.10.0_amd64.deb
+Size: 13927420
+MD5sum: 063d100dddd4500d6c3e87af8d66cd8a
+SHA1: a0b6538650a1c46f797784aba94b483243d86f34
+SHA256: d5242cb115268d7da4161a9df3f0c7496a006277bd19affce8dbcae342b7b800
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.11.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 43055
+Depends: libpipewire-0.3-0, libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.11.0_amd64.deb
+Size: 13952040
+MD5sum: 08b0c78c546c150de40bcce4c3982661
+SHA1: d935609fdc3d034508b46c6f35f2e027da76c49c
+SHA256: 478706c68e35a86f92e35c3f406d9fbe74c2357132a64fac4b3f46072e4fea98
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.12.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 45390
+Depends: libpipewire-0.3-0, libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.12.0_amd64.deb
+Size: 14694342
+MD5sum: f0b850f9cbca118b2e78a12e9f7e4cb0
+SHA1: f7227d891ebb4848ad66febbe377fe0b2142de93
+SHA256: 44ebe8ddf4cabd0c5905b102f26e3a331e482e94f800ca0fd520a209d796bd09
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.2.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 18508
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: x11-utils, imagemagick, tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.2.0_amd64.deb
+Size: 6135314
+MD5sum: 0abfa44735fba53522d017bb5877f752
+SHA1: 98dae18dfac7a9ec3b801803d88119d837e65494
+SHA256: aec21eb39ae83772bbf0a5918795059cc733eb3863c5b35f8d16034c3fc3ebb9
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.3.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 21476
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: x11-utils, imagemagick, tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.3.0_amd64.deb
+Size: 7160508
+MD5sum: 1c54716224a2a27df10427e0ddc4e690
+SHA1: 4878cd9bcbb3ba37eb9ba3811042ccaee462a3d4
+SHA256: bfac677ce7899bcd5fe6fabf8d75353643ba00ceca53e4c3bc01435a6cbe1cd8
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.3.1
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 21492
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: x11-utils, imagemagick, tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.3.1_amd64.deb
+Size: 7165218
+MD5sum: c6992c8e6df4585a2236896c83b16dd1
+SHA1: f0d8077de04c555cd871c7cc1fab103babd58943
+SHA256: 8c001b1c3c76eeb25265cd6b01c5a872d4b4249301a026a522e433a9ab05d2ba
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.4.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 21563
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: x11-utils, imagemagick, tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.4.0_amd64.deb
+Size: 7185160
+MD5sum: 3a9734bd61f40c47714292ba895f8d22
+SHA1: ef71f782f58fb43c33f5b499a60cd500daf4b436
+SHA256: 8c9ba44908a76ada63b0c88f813f6c3bb9b38abcc7e9dad8a442462a0922ed74
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.4.1
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 21562
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: x11-utils, imagemagick, tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.4.1_amd64.deb
+Size: 7185132
+MD5sum: d3c7700651cb0b0b61ee28bbb819996b
+SHA1: 265c6e54ecf985de086b67016d4286db383c7ab8
+SHA256: b2a1de1f155a2cec30a1fa8de1775219a4d40c8262f31a1e2551c6460ef263a0
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.5.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 33671
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.5.0_amd64.deb
+Size: 11194776
+MD5sum: 8358ef87c4d573ec4e776909f818402a
+SHA1: b367d3beb56ac0d412659bf69157917f94a0dd40
+SHA256: cd0e6078854180946afd61450a5abd73bdc55b2a6ebbda68d3a3c540e5e425f8
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.5.1
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 33660
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.5.1_amd64.deb
+Size: 11192324
+MD5sum: 3c01cd4b4a7dc722402293d50909a1b5
+SHA1: 513d5c9e93178803c90a9c562aa9b555100a72d1
+SHA256: be0e172c02126c89857a3a18bd8ed1cc0f47f9f53e6b527a562d321c4f92de7d
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.5.2
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 33662
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.5.2_amd64.deb
+Size: 11194270
+MD5sum: 13a9480c1dfec349850232886236c5f3
+SHA1: 533e6587c3e03b1a1cab41f7d42ae548d814101f
+SHA256: 0b3b9e093e63dbf9bb47ff37e5f8b472ad56ae6de3b6aae315990f558ede3b02
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.5.3
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 33665
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.5.3_amd64.deb
+Size: 11202654
+MD5sum: f2d47f2325219d5b8eae0b9045508ff1
+SHA1: cb0208def88d6988ccb52bff71edc7e92b06ac0c
+SHA256: 219c49f6afcff9b007f4246bf5a49962756e0ba68ef2dfdd764a4e8bd8c25fd2
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.5.4
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 33666
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.5.4_amd64.deb
+Size: 11202072
+MD5sum: 1ccad5b2cb0cb7ada8e93f3a4a9c42f2
+SHA1: 4df3b6bb65d211843e4cdc715a1a1294e0ca0b7f
+SHA256: 55ba0769a48bdc3d812fd7fbc5194fd81f07bbec9d928834e4d368eab50edfec
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.5.5
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 37606
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.5.5_amd64.deb
+Size: 12346712
+MD5sum: 117bba6f7eb9641f614eb0bf4248582e
+SHA1: 4cf7ec673f10d8324a9e49466c21b4632627e664
+SHA256: 246aa4e8b8bf2ffd47d78c762eb35d7c242c51201531966a85aca0cc7b73a4b1
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.5.6
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 37583
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.5.6_amd64.deb
+Size: 12365876
+MD5sum: 16cc0d2b2f8b455009b1f86830e0fae3
+SHA1: 1ee47fdae01ed1e3f34bf69111a7c6cf118e37d3
+SHA256: 14c28a58ee407052599e14cd3a12aca35e6cda7d7f86ea7b603c597233ab5151
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.5.7
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 37586
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.5.7_amd64.deb
+Size: 12372686
+MD5sum: 91efb25407a8ddcbfb4734468ff0956b
+SHA1: 02d6f0b005f791ee3d0a3eb678a217c6357aa8f8
+SHA256: 9124daff5dc6138ed9bef84cec15a730754ef84d426c81227198855248421493
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.6.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 39487
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.6.0_amd64.deb
+Size: 12882520
+MD5sum: a1a01240905db280c8c74577990449cf
+SHA1: 7d416c37488b1ea98c15d9e709044254a1398856
+SHA256: 3717e2e2892ad612f5fd6925a9f0055835e64f7afb5285290f3adc201c47e811
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.6.1
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 39473
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.6.1_amd64.deb
+Size: 12880794
+MD5sum: fbae8da9c332fc3567c70ca2e7ef8390
+SHA1: 29976e8b56d8950e891d67112d9fbc146decf54a
+SHA256: f5ef2a88e74c7a8546ff49be3829a103f4b2989174f92defaf2e7d90bbcfc4aa
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.7.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 39569
+Depends: libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.7.0_amd64.deb
+Size: 12914558
+MD5sum: b4331bbb062a67c0b32a448744a8a161
+SHA1: 852e0811f36c6f946179b6aec59abbb424d3c42a
+SHA256: 6b130998a38542a524e6a0a996634ca2a83994df8fceea6a65516f8f4c42e6d4
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.8.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 42760
+Depends: libpipewire-0.3-0, libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.8.0_amd64.deb
+Size: 13819178
+MD5sum: 7275f9b200345d205bae5a6aea0bd6cc
+SHA1: e7b350c8b33700c0a26ae42faf3fa9d72279e9db
+SHA256: 4be2d6558adc463d2f79c776b1bbf347358f47d417953ba79789c6feee2202c3
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.9.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 42982
+Depends: libpipewire-0.3-0, libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.9.0_amd64.deb
+Size: 13888184
+MD5sum: 65dbde63946e5879900454de1b941a30
+SHA1: be3b009695699d0194b22aef378b7c713ce081bb
+SHA256: d0db61fa74ccb15a3a4c7d132da579538b081648aede11760cf740f2088d0081
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
+Version: 0.9.1
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 42897
+Depends: libpipewire-0.3-0, libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng
+Filename: pool/main/TennoScope_0.9.1_amd64.deb
+Size: 13899050
+MD5sum: 68484e55a1ed2de114bb0ba06bf0470b
+SHA1: c4dadffc2882d27ebb7c44320dbfb37d74c7bea3
+SHA256: 03b1a8b5efbc19e13315d29d8a3f658fd4076e4d60745d8d049b2e02f917419a
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
