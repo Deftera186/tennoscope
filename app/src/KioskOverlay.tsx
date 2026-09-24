@@ -79,6 +79,13 @@ export default function KioskOverlay() {
   // unreadable look landed while the read was in flight, otherwise a stale pre-dialog view
   // would briefly paint chips over the dialog until the next null re-fades them.
   const fadeSeq = useRef(0)
+  // A single torn frame or one mid-animation look is not blindness; the backend already only
+  // emits null for unmeasurable or absent strips, but its 60ms cadence means one noisy look
+  // could blink a good view. The fade lands only after this many consecutive nulls, so
+  // isolated misses cost nothing and genuine occlusion (a dialog up, a cinematic over the
+  // pane) still fades within a few ticks.
+  const NULL_STREAK_TO_FADE = 3
+  const nullStreak = useRef(0)
 
   useEffect(() => {
     document.documentElement.classList.add('overlay-mode')
@@ -117,6 +124,7 @@ export default function KioskOverlay() {
         // stale chips over it until the next null re-fades them. Gating the old epoch check
         // instead latched a single unreadable look into a permanently invisible overlay,
         // because dialogs come and go mid-epoch while the epoch only advances on a re-anchor.
+        nullStreak.current = 0
         if (fadeAtRead === fadeSeq.current) setFaded(false)
         // Every settled read measured where the grid sits right now, so its offset is
         // authoritative whenever nothing has moved since the read began -- not just when
@@ -134,10 +142,18 @@ export default function KioskOverlay() {
 
     // While the grid moves the backend streams how far it moved since the last look -- the
     // chips ride the scroll by accumulating those deltas. An unreadable look (null) fades
-    // them until the next settled read publishes where the grid actually is.
+    // them until the next settled read publishes where the grid actually is -- but only
+    // after a short run of nulls, so one noisy look cannot blink a good view.
     void listen<{ session: number, dy: number | null }>('kiosk-scroll', (event) => {
       if (!active || event.payload.session !== sessionSeen.current) return
-      if (event.payload.dy === null) { fadeSeq.current += 1; setFaded(true); return }
+      if (event.payload.dy === null) {
+        nullStreak.current += 1
+        if (nullStreak.current < NULL_STREAK_TO_FADE) return
+        fadeSeq.current += 1
+        setFaded(true)
+        return
+      }
+      nullStreak.current = 0
       const delta = event.payload.dy
       scrollSeq.current += 1
       setOffset(previous => previous + delta)
