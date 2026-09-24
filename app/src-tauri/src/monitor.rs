@@ -1164,9 +1164,14 @@ pub(crate) fn run(
                     .map(|runtime| runtime.core.collection_prices())
                     .unwrap_or_default();
                 kiosk_view::build_view(epoch, &frame.cells, &frame.basket, |name| {
-                    cache
-                        .get(name)
-                        .or_else(|| table.as_ref().and_then(|table| table.price_for(name)))
+                    // The dump's median of completed trades is the honest number for a
+                    // sell-advice overlay: what copies actually went for. The live cache
+                    // holds the lowest current ask, which a single joke listing can set
+                    // arbitrarily high, so it only stands in where the dump has no price.
+                    table
+                        .as_ref()
+                        .and_then(|table| table.price_for(name))
+                        .or_else(|| cache.get(name))
                 })
             }
         };
@@ -1480,6 +1485,7 @@ impl KioskPollerTiming {
 }
 
 /// One whole poller attempt: what the screen said, per slot.
+#[derive(Clone, Default)]
 pub struct KioskRead {
     pub cells: Vec<GridCell>,
     pub basket: Vec<BasketRow>,
@@ -1582,9 +1588,19 @@ impl KioskFrameSource for ScreenKioskSource {
     }
 }
 
+/// The few cells a located-phase read must produce before neighbouring phases are tried.
+/// A populated grid page holds a dozen-plus readable labels; blank reads mean the phase is
+/// wrong, and only then is a second (cheap, OCR-gated) read worth its cost.
+const KIOSK_PHASE_RETRY_FLOOR: usize = 4;
+
 /// How many consecutive still looks before the screen counts as settled and the read runs. One
 /// still look can be a flick's mid-detent hitch; two is a scroll that has actually stopped.
 const KIOSK_SETTLE_LOOKS: u32 = 2;
+/// How many consecutive unmeasurable-but-present looks the poller waits before reading anyway.
+/// In-place animation (hover-card renders, dialog pulses) defeats frame-to-frame correlation
+/// without moving the grid a pixel; the locator still names the bands, so a read after this
+/// many looks publishes anchored on the locator alone instead of never publishing at all.
+const KIOSK_UNMEASURED_READ_LOOKS: u32 = 3;
 
 /// The kiosk poller's body, with the screen and the join as parameters.
 ///
@@ -1626,6 +1642,11 @@ where
         let mut epoch = 0_u64;
         let mut last_strip: Option<Vec<f32>> = None;
         let mut static_looks = 0_u32;
+        let mut unmeasured_looks: u32 = 0;
+        // Set when an unmeasured run falls through to a locator-anchored read, cleared at the
+        // read so the normal two-look settle gate resumes afterwards.
+        let mut unmeasured_fell_through = false;
+
         let deadline = Instant::now() + timing.lifetime;
         // The top anchor is the LOCATOR's on purpose -- deriving it from the OCR crop's rect
         // coupled the two, and growing the crop to catch three-line labels dragged the locator's
@@ -1659,14 +1680,42 @@ where
                 (_, None) => None,
             };
             last_strip = reading.cloned();
-            let Some(frame_delta) = frame_delta else {
-                // Blindness is not stillness. Fade stale chips and restart settling; otherwise
-                // two torn/flat looks can launch OCR against a displacement we never measured.
-                emit_scroll(None);
-                static_looks = 0;
-                std::thread::sleep(timing.motion_interval);
-                continue;
+            let frame_delta = match frame_delta {
+                Some(delta) => delta,
+                // Unmeasurable but the strip itself read: the pane is there and the
+                // locator below can still name its bands. What failed is only the
+                // frame-to-frame correlation, which in-place animation (a hover
+                // card's render, a dialog's pulse) breaks without moving the grid.
+                // Treating that as blindness faded the chips through any animated
+                // but still pane, so the overlay only ever appeared in rare truly
+                // static moments. Count these looks separately instead: a short run
+                // still reads -- the read re-anchors through the locator, so
+                // in-place animation cannot misalign its crops. A strip that did not
+                // even read is real blindness (a cinematic over the pane, the kiosk
+                // gone) and keeps the fade verdict.
+                None if reading.is_some() => {
+                    unmeasured_looks = unmeasured_looks.saturating_add(1);
+                    if unmeasured_looks < KIOSK_UNMEASURED_READ_LOOKS {
+                        emit_scroll(None);
+                        std::thread::sleep(timing.motion_interval);
+                        continue;
+                    }
+                    // Fall through to the locator read with no measured delta: the crop
+                    // placement comes from the locator alone, and the emitted null keeps
+                    // the frontend from treating this publish as a measured stillness.
+                    emit_scroll(None);
+                    unmeasured_fell_through = true;
+                    0
+                }
+                None => {
+                    unmeasured_looks = 0;
+                    static_looks = 0;
+                    emit_scroll(None);
+                    std::thread::sleep(timing.motion_interval);
+                    continue;
+                }
             };
+            unmeasured_looks = 0;
             if frame_delta.abs() > 1 {
                 // Stream the frame's movement; the frontend accumulates the deltas. Deltas
                 // need no anchor and no range, so the chips follow a scroll of any length.
@@ -1677,18 +1726,24 @@ where
             }
             // Two readable, agreeing looks mean settled. The settled read locates itself -- the
             // grid's own label rows name the offset at any scroll position, so the crops land on
-            // the text instead of the gaps.
-            static_looks += 1;
-            if static_looks < KIOSK_SETTLE_LOOKS {
-                std::thread::sleep(timing.motion_interval);
-                continue;
+            // the text instead of the gaps. An unmeasured run that fell through above bypasses
+            // the two-look gate for this one read; the locator gates it on its own.
+            let read_now = unmeasured_fell_through;
+            unmeasured_fell_through = false;
+            if !read_now {
+                static_looks = static_looks.saturating_add(1);
+                if static_looks < KIOSK_SETTLE_LOOKS {
+                    std::thread::sleep(timing.motion_interval);
+                    continue;
+                }
             }
             static_looks = 0;
             let located = reading.and_then(|strip| {
                 let at = kiosk_geometry::label_anchors(strip.len());
                 kiosk_scroll::label_offset(strip, at.strip_top, at.first_top, at.pitch, at.band)
+                    .map(|dy| (dy, at.pitch))
             });
-            let Some(dy) = located else {
+            let Some((dy, pitch)) = located else {
                 // No label band anywhere in the pane: an animation frame, a capture that came
                 // back torn, or a grid the player has filtered down to nothing. None of those
                 // is a closed kiosk, and none of them is worth publishing over a good view.
@@ -1696,7 +1751,32 @@ where
                 std::thread::sleep(timing.interval);
                 continue;
             };
-            match source.read_kiosk(&candidates, dy) {
+            // The fold answers a phase, and a sparse pane -- few populated rows after
+            // sales, a hover card swallowing bands -- can resolve its tied run one
+            // whole pitch off: every crop then lands between label bands and reads
+            // blank, while the dy-independent basket reads fine underneath. Content
+            // is the referee the fold cannot be: read the located phase first, and
+            // when almost nothing is readable, try the neighbouring phases and keep
+            // whichever the screen actually holds text at. Blank crops are gated
+            // before OCR, so the retries only pay on the failure they exist to fix.
+            let mut read_dy = dy;
+            let mut read = source.read_kiosk(&candidates, dy);
+            if matches!(&read, Ok(frame) if frame.cells.len() < KIOSK_PHASE_RETRY_FLOOR) {
+                let mut best_cells = read.as_ref().map_or(0, |frame| frame.cells.len());
+                for shifted in [dy - pitch, dy + pitch] {
+                    match source.read_kiosk(&candidates, shifted) {
+                        Ok(frame) if frame.cells.len() > best_cells => {
+                            best_cells = frame.cells.len();
+                            read = Ok(frame);
+                            read_dy = shifted;
+                        }
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+            }
+            let dy = read_dy;
+            match read {
                 Ok(frame) => {
                     // A read costs the better part of a second of OCR. A close that landed
                     // while it ran means this frame describes a screen that is already gone,
@@ -2246,6 +2326,10 @@ mod tests {
         profiles: StdMutex<Vec<Option<Vec<f32>>>>,
         /// Set as a read begins: the log's close line landing while OCR is still running.
         closes_mid_read: Option<Arc<AtomicBool>>,
+        /// When set, `read_kiosk` answers from this per-dy map instead of popping `looks`:
+        /// the read at the map's key returns its value, any other dy returns an empty page.
+        /// For pinning the poller's phase-retry against content.
+        reads_by_dy: Option<StdMutex<std::collections::HashMap<i32, KioskRead>>>,
     }
 
     impl ScriptedKiosk {
@@ -2254,6 +2338,7 @@ mod tests {
                 looks: StdMutex::new(looks),
                 profiles: StdMutex::new(vec![None]),
                 closes_mid_read: None,
+                reads_by_dy: None,
             }
         }
 
@@ -2266,16 +2351,32 @@ mod tests {
             self.closes_mid_read = Some(Arc::clone(gone));
             self
         }
+
+        fn with_reads_by_dy(mut self, reads: Vec<(i32, KioskRead)>) -> Self {
+            self.reads_by_dy = Some(StdMutex::new(reads.into_iter().collect()));
+            self
+        }
     }
 
     impl KioskFrameSource for ScriptedKiosk {
         fn read_kiosk(
             &mut self,
             _candidates: &[RewardCatalogEntry],
-            _dy: i32,
+            dy: i32,
         ) -> Result<KioskRead, &'static str> {
             if let Some(gone) = &self.closes_mid_read {
                 gone.store(true, Ordering::Release);
+            }
+            if let Some(reads) = &self.reads_by_dy {
+                // A dy-keyed script answers the mapped dy and an empty page otherwise, so a
+                // test can stand in for a misphased locator: one dy holds the grid, the
+                // neighbours read blank.
+                return Ok(reads
+                    .lock()
+                    .expect("reads by dy")
+                    .get(&dy)
+                    .cloned()
+                    .unwrap_or_default());
             }
             // An exhausted script is a vanished screen: the read fails instead of a panic
             // inside the poller thread. It is NOT a close -- only the log ends a session.
@@ -2529,6 +2630,95 @@ mod tests {
             "the narrowed grid published on the fresh anchor"
         );
         assert_eq!(published[0].cells.len(), 1);
+    }
+    /// A sparse pane can resolve the locator's fold one whole pitch off, and the crops
+    /// then land between label bands: the read publishes no cells while the
+    /// dy-independent basket reads fine underneath. Content is the referee: when the
+    /// located phase reads almost nothing, the neighbouring phases are tried and
+    /// whichever holds the grid wins -- and the published offset follows it.
+    #[test]
+    fn a_misphased_locator_recovers_by_reading_neighbouring_phases() {
+        // The strip's true phase is 0, so the locator names dy=0; the grid's text, though,
+        // sits one pitch down (the fold misphased), so only dy=+222 reads cells.
+        let full_page = KioskRead {
+            cells: vec![
+                scripted_cell("Recovered row one"),
+                scripted_cell("Recovered row two"),
+                scripted_cell("Recovered row three"),
+                scripted_cell("Recovered row four"),
+                scripted_cell("Recovered row five"),
+            ],
+            basket: vec![],
+        };
+        // The locator's answer carries its plateau slack, so key the recovery phase on
+        // whatever it actually names for this strip rather than assuming 0.
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates");
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 6])
+            .with_reads_by_dy(vec![(located + anchors.pitch, full_page)]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "the poller publishes once the content names the phase"
+        );
+        assert_eq!(published[0].cells.len(), 5);
+        assert_eq!(
+            published[0].scroll_dy,
+            located + anchors.pitch,
+            "the published offset follows the phase the text was found at"
+        );
+    }
+
+    /// An animated-but-present pane defeats frame-to-frame correlation without moving
+    /// the grid: hover-card renders, dialog pulses. Those looks are unmeasurable, not
+    /// blind -- the strip read and the locator can still name the bands -- so after a
+    /// short run the poller reads anyway, anchored on the locator.
+    #[test]
+    fn an_unmeasurable_but_present_strip_publishes_after_a_run() {
+        // The same locatable strip with a large hover-card block rendered into it: the
+        // block's uniform brightness drowns the frame-to-frame correlation (the estimate
+        // answers None), exactly as an in-place animation does, while the label bands
+        // stay intact for the locator.
+        let hover_block = |with: bool| {
+            let mut strip = label_strip();
+            if with {
+                for row in strip.iter_mut().take(500).skip(300) {
+                    *row = 100.0;
+                }
+            }
+            strip
+        };
+        // Pops come off the back: alternate absent/block looks, unmeasurable every pair.
+        let source = ScriptedKiosk::new(vec![
+            Ok(KioskRead {
+                cells: vec![scripted_cell("Animated hover row")],
+                basket: vec![],
+            }),
+            Err("script exhausted"),
+        ])
+        .with_profiles(vec![
+            Some(hover_block(false)),
+            Some(hover_block(true)),
+            Some(hover_block(false)),
+            Some(hover_block(true)),
+            Some(hover_block(false)),
+            Some(hover_block(true)),
+        ]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "an unmeasurable-but-present strip still publishes anchored on the locator"
+        );
     }
 
     /// Motion streams frame-to-frame deltas -- not offsets against some anchor -- and the

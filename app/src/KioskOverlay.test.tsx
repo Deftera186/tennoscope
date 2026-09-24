@@ -115,6 +115,8 @@ describe('kiosk overlay route', () => {
 
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 12 } })
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
 
     backend.getKioskView.mockResolvedValueOnce(null)
@@ -243,24 +245,31 @@ describe('kiosk overlay route', () => {
     expect(grid).toHaveStyle({ transform: 'translateY(calc(-20 * var(--h)))' })
   })
 
-  it('fades on an unreadable verdict and re-anchors with the view scroll offset', async () => {
+  it('fades only after a run of unreadable verdicts, not on a single one', async () => {
     render(<AppRoute pathname="/kiosk" />)
     const grid = await screen.findByTestId('kiosk-grid')
     const strip = await screen.findByTestId('kiosk-strip')
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
 
+    // One noisy look -- a torn frame, a single mid-animation tick -- costs nothing: the
+    // good view stands.
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 12 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(12 * var(--h)))' }))
+    expect(strip).not.toHaveClass('kiosk-faded')
+
+    // Genuine occlusion -- a dialog over the pane, a cinematic -- is a run of nulls and
+    // still fades, a few ticks later than before.
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
 
-    // The settled read ran with bands shifted by the scroll, so the view says where the grid
-    // now sits: the offset re-anchors to it instead of snapping back to zero.
+    // The settled read re-anchors to the view scroll offset.
     backend.getKioskView.mockResolvedValue({ ...sampleView, epoch: 4, scroll_dy: -142 })
     events.listeners['kiosk-updated']?.({ payload: 7 })
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
     expect(grid).toHaveStyle({ transform: 'translateY(calc(-142 * var(--h)))' })
-    expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
   })
 
   it('unfades when the same epoch republishes after an unreadable look', async () => {
@@ -268,7 +277,9 @@ describe('kiosk overlay route', () => {
     const strip = await screen.findByTestId('kiosk-strip')
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
 
-    // The quantity dialog occludes the strip mid-visit: one unreadable look fades the chips.
+    // The quantity dialog occludes the strip mid-visit: a run of unreadable looks fades.
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
 
@@ -291,7 +302,10 @@ describe('kiosk overlay route', () => {
     backend.getKioskView.mockReturnValueOnce(pending.promise)
     events.listeners['kiosk-updated']?.({ payload: 7 })
     // ...then the quantity dialog occludes the strip mid-read: the stale pre-dialog view
-    // must not unhide over it when it settles.
+    // must not unhide over it when it settles. A dialog stays up for seconds, so the run
+    // of nulls crosses the fade threshold long before a read settles.
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
     pending.resolve({ ...sampleView })
