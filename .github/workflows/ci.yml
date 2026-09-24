@@ -166,7 +166,9 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Validate winget manifests
-        run: winget validate --manifest packaging/winget
+        # The version manifest pulls in its installer + locale siblings; pointing
+        # at the directory makes newer winget reject the README as rootless.
+        run: winget validate --manifest packaging/winget/Deftera186.TennoScope.yaml
 
   frontend:
     name: Frontend
