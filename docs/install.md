@@ -51,12 +51,34 @@ Building from source takes a while: it compiles the full Rust workspace. The
 
 ## Debian, Ubuntu, Fedora
 
-Download the `.deb` or `.rpm` from the
+Debian and Ubuntu install from this project's APT repository, so updates arrive
+with everything else. The repository publishes with the next release — until
+then there is no `gh-pages` branch and the `key.asc` URL below 404s:
+
+```bash
+curl -fsSL https://deftera186.github.io/tennoscope/key.asc | sudo gpg --dearmor -o /usr/share/keyrings/tennoscope.gpg
+echo "deb [signed-by=/usr/share/keyrings/tennoscope.gpg] https://deftera186.github.io/tennoscope stable main" | sudo tee /etc/apt/sources.list.d/tennoscope.list > /dev/null
+sudo apt update
+sudo apt install tenno-scope
+```
+
+Fedora uses the [COPR](../packaging/copr/README.md):
+
+```bash
+sudo dnf copr enable deftera/tennoscope && sudo dnf install tennoscope
+```
+
+A one-off `.rpm` also works:
+
+```bash
+sudo dnf install ./TennoScope-*.x86_64.rpm    # Fedora, without the COPR
+```
+
+Prefer manual downloads? The `.deb` is on the
 [latest release](https://github.com/Deftera186/tennoscope/releases/latest):
 
 ```bash
 sudo apt install ./TennoScope_*_amd64.deb     # Debian, Ubuntu
-sudo dnf install ./TennoScope-*.x86_64.rpm    # Fedora
 ```
 
 ## Windows

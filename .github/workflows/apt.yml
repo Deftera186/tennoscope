@@ -1,0 +1,101 @@
+name: APT repository
+
+# Publishes downloaded .debs into a signed APT repo on the gh-pages branch.
+# Fires when the maintainer publishes a finalized release. Serves the stable
+# suite only: prereleases never reach it.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    name: Publish APT repo
+    runs-on: ubuntu-latest
+    # Stable suite only: a promoted RC must not land beside releases.
+    if: ${{ !github.event.release.prerelease }}
+    # Serialized: two publishes share one pool, and the loser must wait for
+    # the winner's tip rather than racing it.
+    concurrency:
+      group: apt-publish
+      cancel-in-progress: false
+    steps:
+      # Main line, not the tag: scripts and key material must be current at
+      # publish time, especially across a key rotation.
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Fetch release debs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p debs
+          gh release download "${{ github.ref_name }}" \
+            --pattern 'TennoScope_*_amd64.deb' --dir debs --repo "${{ github.repository }}"
+          ls debs/*.deb
+
+      # The repository serves one package name. A renamed bundle must fail here,
+      # not as a broken Packages index users cannot install from.
+      - name: The deb names the published package
+        run: |
+          for deb in debs/*.deb; do
+            name=$(dpkg-deb -f "$deb" Package)
+            [ "$name" = "tenno-scope" ] || { echo "$deb names package '$name', expected 'tenno-scope'" >&2; exit 1; }
+          done
+          echo "all debs name tenno-scope"
+
+      - name: Import repository signing key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          [ -n "$APT_SIGNING_KEY" ] || { echo "signing secret is empty" >&2; exit 1; }
+          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
+          # The secret and the committed public half must be the same key: any
+          # skew ships signatures no installed key can verify.
+          imported=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/{print $10; exit}')
+          published=$(gpg --with-colons --show-keys packaging/apt/key.asc | awk -F: '/^fpr:/{print $10; exit}')
+          [ -n "$imported" ] && [ "$imported" = "$published" ] \
+            || { echo "signing secret does not match committed public key" >&2; exit 1; }
+          echo "KEYID=$imported" >> "$GITHUB_ENV"
+
+      - name: Prepare site checkout
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            git clone --branch gh-pages --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" site
+          else
+            # First publish: seed the pool from every finalized release so no
+            # retained version is silently dropped. Releases predating APT
+            # packaging simply have no matching assets and are skipped aloud.
+            mkdir -p site debs-backfill
+            git -C site init -q
+            git -C site remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            tags=$(gh release list --repo "${{ github.repository }}" --exclude-drafts --exclude-pre-releases --limit 1000 --json tagName --jq '.[].tagName')
+            for tag in $tags; do
+              gh release download "$tag" --pattern 'TennoScope_*_amd64.deb' --dir debs-backfill --repo "${{ github.repository }}" \
+                || echo "no APT debs for $tag -- skipping"
+            done
+            cp -n debs-backfill/*.deb debs/ 2>/dev/null || true
+          fi
+
+      - name: Rebuild signed repository
+        run: |
+          cp packaging/apt/key.asc site/key.asc
+          ./scripts/build-apt-repo.sh --repo site --key-id "$KEYID" \
+            $(for deb in debs/*.deb; do printf -- '--deb %s ' "$deb"; done)
+      - name: Publish to gh-pages
+        run: |
+          cd site
+          git checkout -q -B gh-pages
+          git add -A
+          # No quiet-path: Date and fresh signatures make every publish unique.
+          # One commit per published release is the normal shape here.
+          git -c user.name="tennoscope-ci" -c user.email="tennoscope-ci@users.noreply.github.com" \
+            commit -qm "apt: publish ${{ github.ref_name }}"
+          git push --force-with-lease origin gh-pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
