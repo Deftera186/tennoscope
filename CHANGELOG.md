@@ -14,6 +14,22 @@ see the difference.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-24
+
+### Added
+
+- **Download-and-prompt self-update for portable installs.** Portable
+  AppImages and per-user Windows installs now check for new versions daily,
+  download only when asked, and restart to finish — nothing installs itself.
+  A masthead mark announces offered and downloaded updates, and the About
+  page names the installed version with its installer identity. System
+  installs (deb/rpm/Gentoo/Arch) check too but get a package-manager nudge
+  with a copyable command instead of an install button that could never work.
+- **Signed APT repository.** Release `.deb`s feed a multiversion signed APT
+  pool on first publish; Debian/Ubuntu install with
+  `sudo apt install tenno-scope`. Fedora gains a COPR (`deftera/tennoscope`),
+  and Windows gains a Winget package.
+
 ### Fixed
 
 - **Ducat kiosk overlay rides out slower sale-confirm rebuilds.** The close grace
@@ -610,7 +626,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/Deftera186/tennoscope/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Deftera186/tennoscope/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Deftera186/tennoscope/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/Deftera186/tennoscope/compare/v0.9.0...v0.9.1
