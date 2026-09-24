@@ -195,3 +195,79 @@ jobs:
       # oxlint, then tsc --noEmit, then vitest. Same command a contributor runs locally.
       - run: pnpm check
         working-directory: app
+
+  kiosk-debug:
+    # Temporary diagnostic in the issue-#12 tradition: runs ONLY on
+    # diagnostic/* branches. Builds the Linux AppImage with debug assertions
+    # so the `[DEBUG-...]` kiosk tracing (ee events, poller spawns, publish
+    # epochs, followed EE.log path) survives, and uploads it as a 7-day
+    # artifact. Never runs on main or PRs; the branch is deleted once the
+    # tester logs are in.
+    name: Kiosk debug artifact
+    if: startsWith(github.ref, 'refs/heads/diagnostic/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libpipewire-0.3-dev \
+            libclang-dev \
+            libgbm-dev \
+            libegl-dev \
+            libwayland-dev \
+            libxcb1-dev \
+            libarchive-tools
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Reads what CI's `Rust` job saved; never writes, so the
+          # debug-assertions build cannot perturb the release cache.
+          shared-key: linux
+          save-if: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: app/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: app/.node-version
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+
+      # Release signs with the real key from the `release` environment, which
+      # a scratch run must never touch. Generate a throwaway keypair instead:
+      # the build signs cleanly, and the signature verifies against nothing
+      # real, so this binary can neither publish nor accept an update.
+      # (Branch-only, deleted after.)
+      - name: Ephemeral throwaway signing key
+        working-directory: app
+        run: |
+          pnpm tauri signer generate -w /tmp/scratch-sign.key --ci < /dev/null
+          echo "TAURI_SIGNING_PRIVATE_KEY=$(cat /tmp/scratch-sign.key)" >> "$GITHUB_ENV"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=" >> "$GITHUB_ENV"
+          shred -u /tmp/scratch-sign.key
+
+      # HEAD has green CI (all four jobs), the same precondition the release
+      # workflow's gate enforces -- so --skip-gates only drops what CI ran.
+      - run: ./scripts/build-linux-bundles.sh --skip-gates appimage
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tennoscope-debug-kiosk
+          retention-days: 7
+          path: target/release/bundle/appimage/*.AppImage
