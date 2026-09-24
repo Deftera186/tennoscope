@@ -14,7 +14,7 @@ attached to each GitHub release. Beyond those:
   see [copr/README.md](copr/README.md).
 - **Debian/Ubuntu** — this project's APT repository, built from each release; see
   [apt/README.md](apt/README.md).
-- **Windows** — [`winget`](winget/README.md) manifests for `winget-pkgs`.
+- **Windows** — [`winget`](winget.md) manifests for `winget-pkgs`.
 
 Release artifacts are minisign-signed for the in-app updater (see
 [`../docs/install.md`](../docs/install.md) for what that touches); the APT
