@@ -113,7 +113,7 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
     <p ref={statusRef} tabIndex={-1} className="band-note capture-status" role="status" aria-live="polite" aria-atomic="true">
       {store.phase === 'checking' && 'Checking for updates…'}
       {store.phase === 'current' && info && `You are on ${info.version} — the latest version. ${lastChecked}`}
-      {store.phase === 'idle' && info && `You are on ${info.version}. ${lastChecked}`}
+      {store.phase === 'idle' && info && (store.note ?? `You are on ${info.version}. ${lastChecked}`)}
       {store.phase === 'idle' && !info && (store.note ?? 'Update checks are unavailable while the backend is down. Press Check now to try again.')}
       {store.phase === 'failed' && store.note}
       {store.phase === 'offered' && actionable && `${actionable.version} is available — actions below.`}

@@ -45,6 +45,7 @@ check "no deb or rpm keys" sh -c "! grep -Eq '\"(deb|rpm)' '$out/latest.json'"
 rm -f "$out"/*.json
 sh "$feed" --version 0.12.0 --tag v0.12.0-rc1 --artifacts "$artifacts" --out "$out" >/dev/null
 check "rc writes only the beta feed" sh -c "! test -f '$out/latest.json' && test -f '$out/latest-beta.json'"
+check "rc beta feed carries the tag suffix" grep -q '"version": "0.12.0-rc1"' "$out/latest-beta.json"
 
 rm -f "$artifacts/nsis/TennoScope-0.12.0-x86_64-setup.exe.sig"
 check "missing sig fails closed" sh -c "! sh '$feed' --version 0.12.0 --tag v0.12.0 --artifacts '$artifacts' --out '$out' >/dev/null 2>&1"

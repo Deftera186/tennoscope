@@ -8,7 +8,7 @@
     "kiosk-overlay"
   ],
   "permissions": [
-    "process:default",
+    "process:allow-restart",
     "core:default",
     "core:window:allow-hide",
     "core:window:allow-show",

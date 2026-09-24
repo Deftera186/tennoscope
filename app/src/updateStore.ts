@@ -184,14 +184,6 @@ export function checkForUpdatesNow(): Promise<void> {
   return runCheck(true)
 }
 
-/** C1: `update_download_and_install` takes (feed, expected_version) and
- *  rejects with `superseded:{v}` when the feed moves under the offer. The
- *  shared wrapper types only the feed, so the call site widens it here and
- *  the backend file itself stays untouched. */
-const installUpdate = updateDownloadAndInstall as unknown as (
-  feed: string,
-  expectedVersion: string,
-) => Promise<UpdateSummary>
 
 export async function downloadUpdate(): Promise<void> {
   const { available } = snapshot
@@ -220,7 +212,7 @@ export async function downloadUpdate(): Promise<void> {
       // offer cannot redirect the install to a different version. The
       // expected version rides along so a feed that moved under the offer
       // fails as `superseded:{v}` instead of installing the wrong build.
-      const done = await installUpdate(available.feed, available.version)
+      const done = await updateDownloadAndInstall(available.feed, available.version)
       set({ phase: 'ready', available: done, downloaded: null, total: null })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -273,6 +265,10 @@ export function dismissOffered(): void {
     // record — the second dismissal after a lapse — then the snooze renews.
     if (snoozedUntil(available.version) !== null) dismissVersion(available.version)
     snoozeVersion(available.version)
+    // The idle row would otherwise give no acknowledgment that the reminder
+    // was armed; the next check clears this note when it reports.
+    set({ phase: 'idle', available: null, note: `Noted — ${available.version} will remind you in 7 days.` })
+    return
   }
   set({ phase: 'idle', available: null, note: null })
 }

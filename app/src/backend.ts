@@ -116,4 +116,5 @@ export interface UpdateSummary { version: string; current_version: string; notes
 export interface CheckResult { kind: InstallKind; updatable: boolean; update: UpdateSummary | null }
 export const getVersionInfo = () => invoke<VersionInfo>('get_version_info')
 export const updateCheck = (feed: string) => invoke<CheckResult>('update_check', { feed })
-export const updateDownloadAndInstall = (feed: string) => invoke<UpdateSummary>('update_download_and_install', { feed })
+export const updateDownloadAndInstall = (feed: string, expectedVersion: string) =>
+  invoke<UpdateSummary>('update_download_and_install', { feed, expectedVersion })

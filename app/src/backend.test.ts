@@ -16,6 +16,7 @@ import {
   setAccessMode,
   setOrderQuantity,
   updateOrder,
+  updateDownloadAndInstall,
 } from './backend'
 
 describe('typed Tauri command bridge', () => {
@@ -108,6 +109,14 @@ describe('typed Tauri command bridge', () => {
       orderId: 'order-one',
       platinum: 19,
       quantity: 3,
+    })
+  })
+  it('pins the offered version on the install call', async () => {
+    invoke.mockResolvedValueOnce({ version: '0.12.0' })
+    await updateDownloadAndInstall('stable', '0.12.0')
+    expect(invoke).toHaveBeenCalledWith('update_download_and_install', {
+      feed: 'stable',
+      expectedVersion: '0.12.0',
     })
   })
 })

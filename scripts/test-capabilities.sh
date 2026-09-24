@@ -8,7 +8,7 @@ set -eu
 script_dir=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH='' cd -- "$script_dir/.." && pwd)
 
-required="process:default core:default core:window:allow-hide core:window:allow-show core:window:allow-minimize core:window:allow-toggle-maximize core:window:allow-close core:window:allow-start-dragging opener:allow-open-url opener:allow-reveal-item-in-dir clipboard-manager:allow-write-text"
+required="process:allow-restart core:default core:window:allow-hide core:window:allow-show core:window:allow-minimize core:window:allow-toggle-maximize core:window:allow-close core:window:allow-start-dragging opener:allow-open-url opener:allow-reveal-item-in-dir clipboard-manager:allow-write-text"
 
 missing=$(REQUIRED="$required" python3 - "$repo_root/app/src-tauri/capabilities/default.json" <<'EOF'
 import json

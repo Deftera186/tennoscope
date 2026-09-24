@@ -45,6 +45,18 @@ is_prerelease=false
 case "$tag" in
   *"-"*) is_prerelease=true ;;
 esac
+if [ "$is_prerelease" = true ]; then
+  # An RC tag builds from the plain workspace version, so the installed RC
+  # reports e.g. 0.12.0 -- and a beta feed stamped 0.12.0 would offer the RC
+  # its own running build. Stamp prerelease feeds with the tag suffix
+  # (0.12.0-rc1 < 0.12.0) so the self-offer can never happen; the later
+  # stable 0.12.0 still satisfies the beta comparator.
+  version="${tag#v}"
+  case "$version" in
+    *"-"*) ;;
+    *) echo "prerelease tag '$tag' has no version suffix -- refusing to guess" >&2; exit 1 ;;
+  esac
+fi
 
 # One updater entry per artifact kind present. deb/rpm are installable system
 # packages and deliberately never appear here.

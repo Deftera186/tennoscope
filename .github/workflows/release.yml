@@ -166,6 +166,8 @@ jobs:
           # password today, so this is empty -- and it must stay in lockstep with the
           # re-sign step below: the day the key gains a password, both variables change
           # together or the build fails (exit 6) on the password prompt rather than hanging.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
 
       # The installer is unsigned: a code-signing certificate costs money this project does not
       # take. SmartScreen will warn on first run until the download builds reputation, which is
