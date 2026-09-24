@@ -24,7 +24,7 @@ check() {
 # Minimal real .deb: dpkg-scanpackages reads its control fields for real.
 pkgdir="$test_root/pkg/DEBIAN"
 mkdir -p "$pkgdir" "$test_root/pkg/usr/bin"
-printf 'Package: tennoscope\nVersion: 0.11.0\nArchitecture: amd64\nMaintainer: TennoScope\nDescription: fixture\n' >"$pkgdir/control"
+printf 'Package: tenno-scope\nVersion: 0.11.0\nArchitecture: amd64\nMaintainer: TennoScope\nDescription: fixture\n' >"$pkgdir/control"
 printf '#!/bin/sh\necho hi\n' >"$test_root/pkg/usr/bin/tennoscope"
 chmod 755 "$test_root/pkg/usr/bin/tennoscope"
 dpkg-deb --build "$test_root/pkg" "$test_root/TennoScope_0.11.0_amd64.deb" >/dev/null
@@ -43,7 +43,7 @@ check "Release has no signature without key" sh -c "! test -f '$repo/dists/stabl
 # Second release accumulates: both versions stay installable.
 pkgdir2="$test_root/pkg2/DEBIAN"
 mkdir -p "$pkgdir2" "$test_root/pkg2/usr/bin"
-printf 'Package: tennoscope\nVersion: 0.12.0\nArchitecture: amd64\nMaintainer: TennoScope\nDescription: fixture\n' >"$pkgdir2/control"
+printf 'Package: tenno-scope\nVersion: 0.12.0\nArchitecture: amd64\nMaintainer: TennoScope\nDescription: fixture\n' >"$pkgdir2/control"
 printf '#!/bin/sh\necho hi\n' >"$test_root/pkg2/usr/bin/tennoscope"
 chmod 755 "$test_root/pkg2/usr/bin/tennoscope"
 dpkg-deb --build "$test_root/pkg2" "$test_root/TennoScope_0.12.0_amd64.deb" >/dev/null
