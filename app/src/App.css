@@ -1372,7 +1372,11 @@
   background: transparent; color: inherit; font: inherit; font-size: .78rem;
   cursor: pointer; white-space: nowrap; min-height: 24px;
 }
-.update-mark:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+/* Hallmark · component: update-mark · genre: editorial · theme: assay-register
+ * states: default · hover · focus · active · disabled(n/a, never disabled) · loading(n/a) · error(n/a) · success(n/a)
+ * The diamond never changes: hover lifts the pill, press strikes it. */
+.update-mark:hover { background: var(--raised); border-color: var(--platinum); }
+.update-mark:active { background: var(--raised); border-color: var(--platinum); box-shadow: var(--strike-deep); }
 .update-dot {
   width: .6em; height: .6em; flex: none; background: var(--gold, #c9a227);
   transform: rotate(45deg); forced-color-adjust: none;
