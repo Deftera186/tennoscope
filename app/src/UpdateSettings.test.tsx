@@ -109,7 +109,7 @@ describe('UpdatesSetting', () => {
     backend.updateCheck.mockResolvedValue({ kind: 'appimage', updatable: true, update })
     render(<UpdatesSetting observesGame={false} />)
     bootUpdateChecks()
-    expect(await screen.findByText(/Reminders are paused/)).toBeInTheDocument()
+    expect(await screen.findAllByText(/dismissed 0\.12\.0 twice/)).toHaveLength(2)
     expect(screen.queryByText(/the latest version/)).not.toBeInTheDocument()
   })
 })

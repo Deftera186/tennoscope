@@ -10,8 +10,16 @@ attached to each GitHub release. Beyond those:
   which is in the official overlays database. See [gentoo.md](gentoo.md).
 - **Arch** — [`arch/PKGBUILD`](arch/PKGBUILD) builds from the release tarball. No AUR package is
   published; see [arch.md](arch.md).
+- **Fedora** — [`COPR`](https://copr.fedorainfracloud.org/coprs/deftera/tennoscope/) build;
+  see [copr/README.md](copr/README.md).
+- **Debian/Ubuntu** — this project's APT repository, built from each release; see
+  [apt/README.md](apt/README.md).
+- **Windows** — [`winget`](winget/README.md) manifests for `winget-pkgs`.
 
-There is no APT, DNF/Copr or other binary repository, and nothing here is signed.
+Release artifacts are minisign-signed for the in-app updater (see
+[`../docs/install.md`](../docs/install.md) for what that touches); the APT
+repository carries its own signing key. Flathub is
+[evaluated and deferred](flathub.md).
 
 All source builds need network access to resolve the Rust and npm lockfiles unless a distributor
 supplies vendored sources and an offline workflow.

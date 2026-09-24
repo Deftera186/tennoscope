@@ -1,7 +1,7 @@
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const backend = vi.hoisted(() => ({ getView: vi.fn() }))
+const backend = vi.hoisted(() => ({ getView: vi.fn(), getVersionInfo: vi.fn(), updateCheck: vi.fn(), updateDownloadAndInstall: vi.fn() }))
 const overlay = vi.hoisted(() => ({ hideRewardOverlay: vi.fn() }))
 const events = vi.hoisted(() => ({ listener: undefined as undefined | (() => void), listen: vi.fn() }))
 vi.mock('./backend', () => backend)

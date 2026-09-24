@@ -965,7 +965,7 @@
   .office-role { display: none; }
   .masthead-work { padding-inline: var(--step); overflow-x: auto; scrollbar-width: thin; }
   .hallmark-row { display: flex; width: max-content; }
-  .masthead-state { gap: var(--tight); padding-inline: var(--step); }
+  .masthead-state { flex-wrap: wrap; gap: var(--tight); padding-inline: var(--step); }
   .assay-state-text small { display: none; }
   .date-letter { flex: none; padding-left: var(--tight); font-size: .55rem; }
   /* Collapse to the glyph only. sr-only, never display:none — these buttons take
@@ -1387,7 +1387,17 @@
     min-width: 0; overflow: hidden; text-overflow: ellipsis;
   }
 }
-.update-progress { width: 100%; margin-top: var(--tight); }
+.update-progress {
+  width: 100%; height: 2px; margin-top: var(--tight);
+  appearance: none; border: 0; border-radius: 0;
+  background: var(--rule-bright); color: var(--platinum);
+  accent-color: var(--platinum);
+}
+/* The dial's engraved groove, struck through: the track is the same 2px
+ * register groove the range inputs draw, the fill the same platinum. */
+.update-progress::-webkit-progress-bar { background: var(--rule-bright); border-radius: 0; }
+.update-progress::-webkit-progress-value { background: var(--platinum); border-radius: 0; }
+.update-progress::-moz-progress-bar { background: var(--platinum); border-radius: 0; }
 .update-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5em; margin-top: var(--tight); }
 .update-actions .prose { flex-basis: 100%; }
 .command-chip { display: flex; flex-basis: 100%; gap: .5em; align-items: center; }

@@ -68,6 +68,24 @@ if [ -z "$found_appimage" ] && [ -z "$found_nsis" ]; then
   exit 1
 fi
 
+# Fail closed on ambiguity: at most one artifact per updater platform kind.
+# A second AppImage or NSIS bundle means the feed would silently pick one,
+# so abort and name the duplicates instead.
+if [ -n "$found_appimage" ]; then
+  n_appimage=$(printf '%s\n' "$found_appimage" | wc -l)
+  if [ "$n_appimage" -gt 1 ]; then
+    echo "multiple AppImage artifacts for linux-x86_64 -- refusing to guess: $(printf '%s' "$found_appimage" | tr '\n' ' ')" >&2
+    exit 1
+  fi
+fi
+if [ -n "$found_nsis" ]; then
+  n_nsis=$(printf '%s\n' "$found_nsis" | wc -l)
+  if [ "$n_nsis" -gt 1 ]; then
+    echo "multiple NSIS artifacts for windows-x86_64 -- refusing to guess: $(printf '%s' "$found_nsis" | tr '\n' ' ')" >&2
+    exit 1
+  fi
+fi
+
 for file in $found_appimage; do
   add_entry "linux-x86_64" "$file"
 done

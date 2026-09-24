@@ -70,8 +70,8 @@ function feed(): string {
 }
 
 /** An offered version the UI should stay quiet about on this check. Manual
- *  checks bypass snooze and surface-dedupe (the user is asking again); only a
- *  twice-dismissed version stays silent everywhere. */
+ *  checks bypass snooze and surface-dedupe (the user is asking again) but
+ *  never strike; only a twice-dismissed version stays silent everywhere. */
 function suppressed(version: string, date: string | null, manual: boolean): boolean {
   if (dismissedCount(version) >= 2) return true
   if (manual) return false
@@ -123,9 +123,11 @@ async function runCheck(manual: boolean): Promise<void> {
         set({ phase: 'suppressed', available: update, lastCheck: at, note: null })
         return
       }
-      // A fulfilled snooze is spent: clear it so the surfaced-date rule quiets
-      // later auto-checks instead of nagging every launch.
-      if (snoozedUntil(update.version)) clearSnooze(update.version)
+      // A manual check bypasses snooze and surface-dedupe but never strikes:
+      // the record is spent so a later Not-now snoozes fresh. An auto-check
+      // keeps the record: dismissing an already-snoozed version accrues the
+      // strike, so the re-offer must not clear it first.
+      if (manual && snoozedUntil(update.version)) clearSnooze(update.version)
       if (update.date) writeUpdateLastSurfaced(update.date)
       set({ phase: 'offered', available: update, lastCheck: at })
     } catch {
@@ -182,6 +184,15 @@ export function checkForUpdatesNow(): Promise<void> {
   return runCheck(true)
 }
 
+/** C1: `update_download_and_install` takes (feed, expected_version) and
+ *  rejects with `superseded:{v}` when the feed moves under the offer. The
+ *  shared wrapper types only the feed, so the call site widens it here and
+ *  the backend file itself stays untouched. */
+const installUpdate = updateDownloadAndInstall as unknown as (
+  feed: string,
+  expectedVersion: string,
+) => Promise<UpdateSummary>
+
 export async function downloadUpdate(): Promise<void> {
   const { available } = snapshot
   if (!available || snapshot.phase === 'downloading') return
@@ -206,11 +217,21 @@ export async function downloadUpdate(): Promise<void> {
     }
     try {
       // The offer's feed, not the current pref: a channel toggle after the
-      // offer cannot redirect the install to a different version.
-      const done = await updateDownloadAndInstall(available.feed)
+      // offer cannot redirect the install to a different version. The
+      // expected version rides along so a feed that moved under the offer
+      // fails as `superseded:{v}` instead of installing the wrong build.
+      const done = await installUpdate(available.feed, available.version)
       set({ phase: 'ready', available: done, downloaded: null, total: null })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
+      if (message.startsWith('superseded:')) {
+        // The feed moved: leave downloading first (a concurrent check would
+        // no-op while it owns the phase), then re-check to re-offer the new
+        // version. Never auto-install it.
+        set({ phase: 'checking', downloaded: null, total: null, note: null })
+        await checkForUpdatesNow()
+        return
+      }
       set({
         phase: 'failed',
         downloaded: null,
@@ -247,7 +268,10 @@ export function resetUpdateStoreForTests(): void {
 export function dismissOffered(): void {
   const { available } = snapshot
   if (available) {
-    dismissVersion(available.version)
+    // Honest model: "Not now" snoozes 7 days with no strike. A strike
+    // accrues only when dismissing a version that already has a snooze
+    // record — the second dismissal after a lapse — then the snooze renews.
+    if (snoozedUntil(available.version) !== null) dismissVersion(available.version)
     snoozeVersion(available.version)
   }
   set({ phase: 'idle', available: null, note: null })

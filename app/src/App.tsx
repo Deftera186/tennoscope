@@ -1084,8 +1084,10 @@ function AboutPage({ effectiveMode }: { effectiveMode: AccessMode }) {
   return <section className="page" aria-labelledby="about-title">
     <div className="mark-head">
       <h1 id="about-title" className="mark">About</h1>
-      <p className="prose">TennoScope is a free, open-source, local-first companion. GPLv3 · MVP.</p>
-      <p className="prose">{versionLine}</p>
+      <div>
+        <p className="prose">TennoScope is a free, open-source, local-first companion. GPLv3 · MVP.</p>
+        <p className="prose">{versionLine}</p>
+      </div>
     </div>
 
     <div className="clauses">

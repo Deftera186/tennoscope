@@ -144,7 +144,10 @@ export function writeUpdateLastSurfaced(pubDate: string): void {
   }
 }
 
-/** Dismissals per version. Two strikes and this version stays quiet. */
+/** Strikes per version. "Not now" alone never strikes: it only snoozes the
+ *  version for 7 days. A strike accrues only when dismissing a version that
+ *  already has a snooze record — i.e. the second dismissal after a lapse.
+ *  Two strikes and this version stays quiet until the next version. */
 const DISMISS_KEY = 'tennoscope.update-dismissed'
 
 function readDismissed(): Record<string, number> {
@@ -177,9 +180,11 @@ export function dismissVersion(version: string): void {
 }
 
 /**
- * "Not now" snoozes a version for 7 days. Separate from the double-dismiss
- * rule: a snoozed version stays quiet until the timer lapses, a twice-dismissed
- * one until the next version — whichever surfaces first wins.
+ *  "Not now" snoozes a version for 7 days with no strike. The snooze record
+ *  is what the next dismissal looks for: dismissing a version that already
+ *  has one accrues the strike (second dismissal after a lapse), then the
+ *  snooze is renewed. An expired snooze re-offers once instead of staying
+ *  quiet; a twice-dismissed version stays quiet until the next version.
  */
 const SNOOZE_KEY = 'tennoscope.update-snoozed'
 

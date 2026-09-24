@@ -149,6 +149,9 @@ jobs:
         shell: pwsh
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # See the Linux job: the release workflow reads this.
+          shared-key: windows
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 

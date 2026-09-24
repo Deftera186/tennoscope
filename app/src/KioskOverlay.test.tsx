@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const backend = vi.hoisted(() => ({ getKioskView: vi.fn() }))
+const backend = vi.hoisted(() => ({ getKioskView: vi.fn(), getVersionInfo: vi.fn(), updateCheck: vi.fn(), updateDownloadAndInstall: vi.fn() }))
 const events = vi.hoisted(() => ({
   listeners: {} as Record<string, ((event: { payload: unknown }) => void) | undefined>,
   listen: vi.fn(),

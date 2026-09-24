@@ -13,7 +13,7 @@ export function UpdateMark({ onOpen }: { onOpen: () => void }) {
   const notice = useUpdateNotice()
   return <>
     <span className="sr-only" role="status">{notice ? (notice.downloaded ? `Update ready — ${notice.version}. Open Settings to restart.` : `Update available — ${notice.version}. Open Settings to review it.`) : ''}</span>
-    {notice && <button type="button" className="update-mark" onClick={onOpen} aria-label={notice.downloaded ? `Update ready — ${notice.version}` : `Update available — ${notice.version}`}>
+    {notice && <button type="button" className="update-mark" onClick={onOpen} aria-label={notice.downloaded ? `Update ready — ${notice.version}. Open Settings to restart.` : `Update available — ${notice.version}. Open Settings to review it.`}>
       <span className="update-dot" aria-hidden="true"/>
       <span className="update-text" aria-hidden="true">{notice.downloaded ? `Update ready — ${notice.version}` : `Update available — ${notice.version}`}</span>
     </button>}
@@ -85,7 +85,7 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
             const next = !autoCheck
             writeUpdateAutoCheck(next)
             setAutoCheck(next)
-            if (next) act(() => void checkForUpdatesNow())
+            if (next) void checkForUpdatesNow()
           }}
         />
         <span>Check for updates daily</span>
@@ -96,14 +96,14 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
           <input
             type="checkbox"
             checked={prerelease}
-            onChange={() => {
-              const next = !prerelease
-              writeUpdatePrerelease(next)
-              setPrerelease(next)
-              // Either direction changes the feed: re-check so a stale beta
-              // offer can never linger after opting out.
-              act(() => void checkForUpdatesNow())
-            }}
+          onChange={() => {
+            const next = !prerelease
+            writeUpdatePrerelease(next)
+            setPrerelease(next)
+            // Either direction changes the feed: re-check so a stale beta
+            // offer can never linger after opting out.
+            void checkForUpdatesNow()
+          }}
           />
           <span>Get beta builds. Betas may break reward reads; switch back anytime.</span>
         </label>
@@ -116,14 +116,19 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
       {store.phase === 'idle' && info && `You are on ${info.version}. ${lastChecked}`}
       {store.phase === 'idle' && !info && (store.note ?? 'Update checks are unavailable while the backend is down. Press Check now to try again.')}
       {store.phase === 'failed' && store.note}
-      {store.phase === 'suppressed' && actionable && `${actionable.version} is available. Reminders are paused — press Check now to see it again.`}
+      {store.phase === 'offered' && actionable && `${actionable.version} is available — actions below.`}
+      {store.phase === 'ready' && actionable && `${actionable.version} is downloaded — restart to finish.`}
+      {store.phase === 'suppressed' && actionable && dismissedCount(actionable.version) >= 2
+        && `You dismissed ${actionable.version} twice, so automatic reminders stay off until the next version.`}
+      {store.phase === 'suppressed' && actionable && dismissedCount(actionable.version) < 2
+        && `${actionable.version} is available, actions below.`}
       {store.phase === 'downloading' && actionable && `Downloading ${actionable.version} — progress below.`}
     </p>
     {store.phase === 'downloading' && <>
-      <progress className="update-progress" max={store.total ?? undefined} value={store.downloaded ?? undefined} aria-label={`Downloading ${actionable?.version ?? 'update'}`} aria-valuetext={actionable ? (percent === null ? 'Download starting' : `Download ${percent} percent${store.total ? `, ${((store.downloaded ?? 0) / 1048576).toFixed(1)} of ${(store.total / 1048576).toFixed(1)} megabytes` : ''}`) : undefined}/>
+      <progress className="update-progress" max={store.total ?? undefined} value={store.total == null ? undefined : (store.downloaded ?? undefined)} aria-label={`Downloading ${actionable?.version ?? 'update'}`} aria-valuetext={actionable ? (percent === null ? 'Download starting' : `Download ${percent} percent${store.total ? `, ${((store.downloaded ?? 0) / 1048576).toFixed(1)} of ${(store.total / 1048576).toFixed(1)} megabytes` : ''}`) : undefined}/>
       <p className="band-note" aria-hidden="true">{actionable && (percent === null ? 'Starting…' : `${percent}%${store.total ? ` · ${((store.downloaded ?? 0) / 1048576).toFixed(1)} of ${(store.total / 1048576).toFixed(1)} MB` : ''}`)}</p>
     </>}
-    <p className="sr-only" role="status">{store.phase === 'downloading' ? (milestone !== null ? `Download ${milestone}%` : 'Download started') : ''}</p>
+    <p className="sr-only" role="status">{store.phase === 'downloading' && milestone !== null && milestone > 0 ? `Download ${milestone}%` : ''}</p>
     {store.phase === 'offered' && actionable && updatable && <div className="update-actions">
       <p className="prose">{actionable.version} is available. Press Download to fetch it, then restart to finish.</p>
       {metered && <p className="prohibition-note">You are on a metered connection. Press Download only when ready.</p>}
@@ -136,9 +141,9 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
         ? <p className="prose">{actionable.version} is available, but TennoScope cannot replace its own file where it lives. Move the AppImage somewhere writable, or press Open release page to get it by hand.</p>
         : <p className="prose">{actionable.version} is available{info?.manager ? ` through ${info.manager}` : ' from your system package manager'}. Press Open release page to get it.</p>}
       {info?.manager_command && <>
-        <p className="band-note">Copy, then run in a terminal:</p>
+        <p className="band-note" id="update-command-offered">Copy, then run in a terminal:</p>
         <div className="command-chip">
-          <input value={info.manager_command} readOnly onFocus={event => event.currentTarget.select()} aria-label="Package manager command"/>
+          <input value={info.manager_command} readOnly onFocus={event => event.currentTarget.select()} aria-label="Package manager command" aria-describedby="update-command-offered"/>
           <button type="button" className="stamp" onClick={() => void copyCommand(info.manager_command ?? '')}>{copied ? 'Copied' : 'Copy'}</button>
         </div>
         <p className="sr-only" role="status">{copyNote ?? ''}</p>
@@ -157,13 +162,24 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
       <button type="button" className="stamp" onClick={() => act(() => void downloadUpdate())} disabled={busy}>Retry download</button>
       <button type="button" className="stamp" onClick={() => void openUrl(releaseTagUrl(actionable.version))}>Open release page</button>
     </div>}
+    {store.phase === 'failed' && actionable && !updatable && <div className="update-actions">
+      {info?.manager_command && <>
+        <p className="band-note" id="update-command-failed">Copy, then run in a terminal:</p>
+        <div className="command-chip">
+          <input value={info.manager_command} readOnly onFocus={event => event.currentTarget.select()} aria-label="Package manager command" aria-describedby="update-command-failed"/>
+          <button type="button" className="stamp" onClick={() => void copyCommand(info.manager_command ?? '')}>{copied ? 'Copied' : 'Copy'}</button>
+        </div>
+        <p className="sr-only" role="status">{copyNote ?? ''}</p>
+      </>}
+      <button type="button" className="stamp" onClick={() => void openUrl(releaseTagUrl(actionable.version))}>Open release page</button>
+    </div>}
     {store.phase === 'ready' && actionable && !deferred && <div className="update-actions">
       <p className="prose">{actionable.version} is downloaded. Restart TennoScope to finish — your settings stay as they are.{observesGame && ' Restart hides the reward overlay until relaunch.'}</p>
       <button type="button" className="stamp" onClick={() => act(() => void restartToUpdate())}>Restart now</button>
-      <button type="button" className="stamp" onClick={() => act(() => setDeferred(true))}>Later, keep the mark</button>
+      <button type="button" className="stamp" onClick={() => act(() => setDeferred(true))}>Later</button>
     </div>}
     {store.phase === 'ready' && actionable && deferred && <div className="update-actions">
-      <p className="prose">{actionable.version} is downloaded — restart to finish.{observesGame && ' Restart hides the reward overlay until relaunch.'}</p>
+      <p className="prose">{actionable.version} is downloaded and stays downloaded until you restart. Restart TennoScope to finish — your settings stay as they are.{observesGame && ' Restart hides the reward overlay until relaunch.'}</p>
       <button type="button" className="stamp" onClick={() => act(() => void restartToUpdate())}>Restart now</button>
     </div>}
   </div>

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Release gate for the updater feeds: schema, pinned URLs, signature freshness,
+# Release gate for the updater feeds: schema, pinned URLs,
 # and cryptographic verification against the pubkey committed in tauri.conf.json.
 # Fails closed on anything unexpected. Needs python3 and the `nacl` module
 # (`pip install pynacl`); the release job installs it before calling this.
@@ -8,14 +8,16 @@ set -eu
 feeds=""
 artifacts=""
 tauri_conf=""
+expect=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --feeds) feeds="${2-}"; shift 2 ;;
     --artifacts) artifacts="${2-}"; shift 2 ;;
     --tauri-conf) tauri_conf="${2-}"; shift 2 ;;
+    --expect) expect="${2-}"; shift 2 ;;
     -h|--help)
-      echo "usage: $0 --feeds DIR --artifacts DIR --tauri-conf tauri.conf.json" >&2
+      echo "usage: $0 --feeds DIR --artifacts DIR --tauri-conf tauri.conf.json [--expect stable|beta]" >&2
       exit 0
       ;;
     *)
@@ -28,9 +30,13 @@ done
 [ -n "$feeds" ] || { echo "--feeds is required" >&2; exit 2; }
 [ -n "$artifacts" ] || { echo "--artifacts is required" >&2; exit 2; }
 [ -n "$tauri_conf" ] || { echo "--tauri-conf is required" >&2; exit 2; }
+case "$expect" in
+  ""|stable|beta) ;;
+  *) echo "unknown --expect '$expect' (want stable|beta)" >&2; exit 2 ;;
+esac
 command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 127; }
 
-export VERIFY_FEEDS="$feeds" VERIFY_ARTIFACTS="$artifacts" VERIFY_CONF="$tauri_conf"
+export VERIFY_FEEDS="$feeds" VERIFY_ARTIFACTS="$artifacts" VERIFY_CONF="$tauri_conf" VERIFY_EXPECT="$expect"
 
 python3 <<'EOF'
 import base64
@@ -70,6 +76,12 @@ artifacts = os.environ["VERIFY_ARTIFACTS"]
 names = sorted(f for f in os.listdir(feeds) if f.endswith(".json"))
 if not names:
     fail(f"no feed files in {feeds}")
+
+expect = os.environ.get("VERIFY_EXPECT", "")
+if expect == "stable" and names != ["latest-beta.json", "latest.json"]:
+    fail(f"--expect stable needs exactly latest.json and latest-beta.json, found {names}")
+elif expect == "beta" and names != ["latest-beta.json"]:
+    fail(f"--expect beta needs exactly latest-beta.json, found {names}")
 
 for name in names:
     with open(os.path.join(feeds, name), encoding="utf-8") as handle:
@@ -131,17 +143,12 @@ for name in names:
         except BadSignatureError:
             fail(f"{name}/{platform}: file signature INVALID for {asset}")
             continue
-        # Freshness: the trusted comment pins the filename and signing time. A
-        # stale build-time signature (pre-repack) names the right file but an
-        # older instant than the artifact it ships beside.
+        # The trusted comment pins the filename the signature was made for.
+        # (No freshness comparison against file modification times here:
+        # download-artifact re-extracts with current times, so it could never pass.)
         trusted = lines[2]
         if f"file:{asset}" not in trusted.replace(" ", ""):
             fail(f"{name}/{platform}: trusted comment does not pin {asset}")
-            continue
-        stamp = re.search(r"timestamp:(\d+)", trusted)
-        mtime = os.path.getmtime(found)
-        if not stamp or int(stamp.group(1)) < int(mtime) - 120:
-            fail(f"{name}/{platform}: signature predates the artifact (stale re-sign?)")
             continue
         print(f"{name}/{platform}: ok ({asset})")
 

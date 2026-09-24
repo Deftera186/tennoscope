@@ -275,10 +275,36 @@ pub async fn update_check(app: AppHandle, feed: String) -> Result<CheckResult, S
     })
 }
 
+/// Offer-version gate for the install path: the frontend passes back the
+/// version it showed, and the fresh check must still offer exactly that.
+/// Semver comparison throughout — never string equality — so build metadata
+/// and a leading `v` never count as a mismatch.
+fn version_matches(found: &semver::Version, expected: &str) -> bool {
+    let expected = expected.trim();
+    let expected = expected.strip_prefix('v').unwrap_or(expected);
+    match expected.parse::<semver::Version>() {
+        Ok(expected) => {
+            // Field comparison ignores build metadata per semver precedence.
+            found.major == expected.major
+                && found.minor == expected.minor
+                && found.patch == expected.patch
+                && found.pre == expected.pre
+        }
+        Err(_) => false,
+    }
+}
+
+/// Error shape the frontend matches on (the `"superseded:"` prefix) to
+/// re-check instead of reporting a failure.
+fn superseded_error(found_version: &str) -> String {
+    format!("superseded:{found_version}")
+}
+
 #[tauri::command]
 pub async fn update_download_and_install(
     app: AppHandle,
     feed: String,
+    expected_version: String,
 ) -> Result<UpdateSummary, String> {
     let (kind, writable) = current_classification();
     if !updatable(kind, writable) {
@@ -301,6 +327,16 @@ pub async fn update_download_and_install(
     else {
         return Err("no update available".to_owned());
     };
+    // The offer may have moved since the frontend checked: when the fresh
+    // check yields a version other than expected_version, install nothing
+    // and report the superseded shape so the UI re-checks instead.
+    let found_version: semver::Version = match found.version.parse() {
+        Ok(found_version) => found_version,
+        Err(_) => return Err(superseded_error(&found.version)),
+    };
+    if !version_matches(&found_version, &expected_version) {
+        return Err(superseded_error(&found.version));
+    }
     let summary = UpdateSummary {
         version: found.version.clone(),
         current_version: found.current_version.clone(),
@@ -519,6 +555,28 @@ mod tests {
         assert!(!updatable(InstallKind::SystemLinux, true));
         assert!(!updatable(InstallKind::SystemWin, true));
         assert!(!updatable(InstallKind::Unknown, true));
+    }
+
+    #[test]
+    fn matching_offer_passes_expected_version_gate() {
+        // Exact match proceeds to install; semver equality (not string
+        // equality) also ignores build metadata and a leading `v`.
+        assert!(version_matches(&v("1.2.3"), "1.2.3"));
+        assert!(version_matches(&v("1.2.3"), "v1.2.3"));
+        assert!(version_matches(&v("1.2.3+build.1"), "1.2.3"));
+    }
+
+    #[test]
+    fn moved_offer_reports_superseded_shape() {
+        // A fresh check that yields anything other than the offered version
+        // installs nothing; the error shape tells the UI to re-check.
+        assert!(!version_matches(&v("1.2.4"), "1.2.3"));
+        assert!(!version_matches(&v("1.10.0"), "1.9.0"));
+        assert!(!version_matches(&v("1.2.3-rc.1"), "1.2.3"));
+        assert!(!version_matches(&v("1.2.3"), "not-a-version"));
+        let err = superseded_error("1.2.4");
+        assert!(err.starts_with("superseded:"));
+        assert!(err.contains("1.2.4"));
     }
 
     #[test]

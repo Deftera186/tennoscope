@@ -51,5 +51,16 @@ check "missing sig fails closed" sh -c "! sh '$feed' --version 0.12.0 --tag v0.1
 : >"$artifacts/nsis/TennoScope-0.12.0-x86_64-setup.exe.sig"
 check "empty sig fails closed" sh -c "! sh '$feed' --version 0.12.0 --tag v0.12.0 --artifacts '$artifacts' --out '$out' >/dev/null 2>&1"
 
+printf 'SIG-EXE' >"$artifacts/nsis/TennoScope-0.12.0-x86_64-setup.exe.sig"
+printf 'fake-appimage-dup' >"$artifacts/appimage/TennoScope-0.12.0-x86_64-duplicate.AppImage"
+printf 'SIG-DUP' >"$artifacts/appimage/TennoScope-0.12.0-x86_64-duplicate.AppImage.sig"
+check "duplicate-artifact-fails closed" sh -c "! sh '$feed' --version 0.12.0 --tag v0.12.0 --artifacts '$artifacts' --out '$out' >/dev/null 2>&1"
+check "duplicate message names culprits" sh -c "sh '$feed' --version 0.12.0 --tag v0.12.0 --artifacts '$artifacts' --out '$out' 2>&1 | grep -q 'TennoScope-0.12.0-x86_64-duplicate.AppImage'"
+rm "$artifacts/appimage/TennoScope-0.12.0-x86_64-duplicate.AppImage" "$artifacts/appimage/TennoScope-0.12.0-x86_64-duplicate.AppImage.sig"
+printf 'fake-exe-dup' >"$artifacts/nsis/TennoScope-0.12.0-x86_64-duplicate-setup.exe"
+printf 'SIG-EXE-DUP' >"$artifacts/nsis/TennoScope-0.12.0-x86_64-duplicate-setup.exe.sig"
+check "duplicate nsis fails closed" sh -c "! sh '$feed' --version 0.12.0 --tag v0.12.0 --artifacts '$artifacts' --out '$out' >/dev/null 2>&1"
+rm "$artifacts/nsis/TennoScope-0.12.0-x86_64-duplicate-setup.exe" "$artifacts/nsis/TennoScope-0.12.0-x86_64-duplicate-setup.exe.sig"
+
 echo "feed tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

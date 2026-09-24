@@ -96,17 +96,20 @@ json.dump(d, open(p, 'w'))
 "
 check "non-semver version fails" sh -c "! sh '$script_dir/verify-update-feed.sh' --feeds '$test_root/feeds' --artifacts '$test_root/artifacts' --tauri-conf '$test_root/tauri.conf.json' >/dev/null 2>&1"
 python3 -c "
-import base64, json
+import json
 p = '$test_root/feeds/latest.json'
 d = json.load(open(p))
 d['version'] = '0.12.0'
 d['platforms']['linux-x86_64']['url'] = 'https://github.com/Deftera186/tennoscope/releases/download/v0.12.0/TennoScope-0.12.0-x86_64.AppImage'
-text = base64.b64decode(d['platforms']['linux-x86_64']['signature']).decode()
-lines = text.splitlines()
-lines[2] = 'trusted comment: timestamp:1000\tfile:TennoScope-0.12.0-x86_64.AppImage'
-d['platforms']['linux-x86_64']['signature'] = base64.b64encode(('\n'.join(lines) + '\n').encode()).decode()
+json.dump(d, open(p, 'w'))
 "
-check "stale pre-repack signature fails" sh -c "! sh '$script_dir/verify-update-feed.sh' --feeds '$test_root/feeds' --artifacts '$test_root/artifacts' --tauri-conf '$test_root/tauri.conf.json' >/dev/null 2>&1"
+check "--expect stable mismatch fails" sh -c "! sh '$script_dir/verify-update-feed.sh' --feeds '$test_root/feeds' --artifacts '$test_root/artifacts' --tauri-conf '$test_root/tauri.conf.json' --expect stable >/dev/null 2>&1"
+check "--expect beta mismatch fails" sh -c "! sh '$script_dir/verify-update-feed.sh' --feeds '$test_root/feeds' --artifacts '$test_root/artifacts' --tauri-conf '$test_root/tauri.conf.json' --expect beta >/dev/null 2>&1"
+cp "$test_root/feeds/latest.json" "$test_root/feeds/latest-beta.json"
+check "--expect stable passes with both feeds" sh -c "sh '$script_dir/verify-update-feed.sh' --feeds '$test_root/feeds' --artifacts '$test_root/artifacts' --tauri-conf '$test_root/tauri.conf.json' --expect stable >/dev/null 2>&1"
+rm "$test_root/feeds/latest.json"
+check "--expect beta passes with only the beta feed" sh -c "sh '$script_dir/verify-update-feed.sh' --feeds '$test_root/feeds' --artifacts '$test_root/artifacts' --tauri-conf '$test_root/tauri.conf.json' --expect beta >/dev/null 2>&1"
+mv "$test_root/feeds/latest-beta.json" "$test_root/feeds/latest.json"
 
 echo "verify tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

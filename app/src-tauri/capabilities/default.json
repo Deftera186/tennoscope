@@ -8,7 +8,6 @@
     "kiosk-overlay"
   ],
   "permissions": [
-    "updater:default",
     "process:default",
     "core:default",
     "core:window:allow-hide",

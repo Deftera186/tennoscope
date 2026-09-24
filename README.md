@@ -94,7 +94,8 @@ no longer permits before the switch completes.
 | System | How |
 | --- | --- |
 | Windows | [Installer](https://github.com/Deftera186/tennoscope/releases/latest) from the latest release |
-| Debian, Ubuntu, Fedora | [`.deb` or `.rpm`](https://github.com/Deftera186/tennoscope/releases/latest) from the latest release |
+| Debian, Ubuntu | `sudo apt install tenno-scope` from this project's [APT repository](docs/install.md#debian-ubuntu-fedora) |
+| Fedora | `sudo dnf copr enable deftera/tennoscope && sudo dnf install tennoscope` |
 | Arch-based, incl. Steam Deck | `curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch/PKGBUILD && makepkg -si` |
 | Gentoo | `games-util/tennoscope-bin` from the [`deftera`](https://github.com/Deftera186/deftera-overlay) overlay |
 | Any other Linux | [AppImage](https://github.com/Deftera186/tennoscope/releases/latest) from the latest release |
