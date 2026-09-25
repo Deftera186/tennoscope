@@ -1682,6 +1682,13 @@ where
         let mut looks_unmeasured = 0u64;
         let mut looks_still = 0u64;
         let mut looks_reads = 0u64;
+        // Heartbeat + blind-reason tracking for the next diagnostic round: per-look
+        // verdicts are otherwise silent, which once hid a 48-second stretch with a
+        // single settle behind "no evidence". Both log at debug level, bounded.
+        let mut last_heartbeat = Instant::now();
+        let mut last_blind_reason: Option<&'static str> = None;
+        let mut last_located_dy: Option<i32> = None;
+        let mut last_publish: Option<Instant> = None;
         // The last settle's proven correction to the located phase: content-proven, so it
         // rides the next settle directly instead of paying the ladder again. Retired the
         // moment it stops reading text.
@@ -1699,6 +1706,18 @@ where
             if gone.load(Ordering::Acquire) {
                 break;
             }
+            // Heartbeat: per-look verdicts only flush on publish today, so a visit that
+            // never settles leaves no trace at all. One line per 15 s bounds the volume
+            // while making motion-vs-blindness visible either way.
+            if last_heartbeat.elapsed() >= Duration::from_secs(15) {
+                last_heartbeat = Instant::now();
+                let since_publish = last_publish.map_or(-1, |at| at.elapsed().as_secs() as i64);
+                log::debug!(
+                    "[DEBUG-kiosk] heartbeat epoch={epoch} looks=still:{looks_still}/motion:{looks_motion}/blind:{looks_blind}/unmeasured:{looks_unmeasured}/reads:{looks_reads} located={} last_publish={}s ago",
+                    last_located_dy.map_or("none".to_owned(), |dy| dy.to_string()),
+                    since_publish
+                );
+            }
             // A re-anchor request (open, filter change, basket edit) advances the epoch so the
             // frontend drops whatever it is showing.
             if reanchor.swap(false, Ordering::AcqRel) {
@@ -1710,6 +1729,7 @@ where
             // for a minute -- the undead session of 2026-08-23.)
             let current_strip = source.strip_profile();
             let reading = current_strip.as_ref().ok();
+            let strip_error = current_strip.as_ref().err().copied();
             let frame_delta = match (&last_strip, reading) {
                 (Some(prev), Some(current)) => kiosk_scroll::estimate_dy(
                     prev,
@@ -1756,6 +1776,17 @@ where
                     unmeasured_looks = 0;
                     looks_blind += 1;
                     static_looks = 0;
+                    // The blinding reason is otherwise silent, and a stuck capture path
+                    // looks identical to an empty room from the outside. Log the reason
+                    // when it changes (plus the first of a streak); the heartbeat below
+                    // carries the volume.
+                    if strip_error != last_blind_reason {
+                        last_blind_reason = strip_error;
+                        log::debug!(
+                            "[DEBUG-kiosk] strip blind: {}",
+                            strip_error.unwrap_or("unknown capture failure")
+                        );
+                    }
                     emit_scroll(None);
                     std::thread::sleep(timing.motion_interval);
                     continue;
@@ -1793,6 +1824,7 @@ where
                 kiosk_scroll::label_offset(strip, at.strip_top, at.first_top, at.pitch, at.band)
                     .map(|located| (located.dy, at.pitch, located.bands))
             });
+            last_located_dy = located.as_ref().map(|located| located.0);
             let Some((dy, pitch, bands_present)) = located else {
                 // No label band anywhere in the pane: an animation frame, a capture that came
                 // back torn, or a grid the player has filtered down to nothing. None of those
@@ -1963,6 +1995,7 @@ where
                     looks_unmeasured = 0;
                     looks_still = 0;
                     looks_reads = 0;
+                    last_publish = Some(Instant::now());
                     publish(view);
                 }
                 Err(reason) => log::warn!("[DEBUG-kiosk] read failed: {reason}"),
