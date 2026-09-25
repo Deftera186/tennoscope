@@ -1603,13 +1603,19 @@ const KIOSK_FINE_LADDER_RUNGS: i32 = 2;
 /// count yet high in score, misphased panes the reverse.
 fn confident_cells(read: &Result<KioskRead, &'static str>) -> usize {
     match read {
-        Ok(frame) => frame
-            .cells
-            .iter()
-            .filter(|cell| cell.score >= KIOSK_CONFIDENT_SCORE)
-            .count(),
+        Ok(frame) => confident_frame_cells(frame),
         Err(_) => 0,
     }
+}
+
+/// Confident cells in one frame. Split out so probes can be judged without wrapping
+/// the frame in a `Result` first.
+fn confident_frame_cells(frame: &KioskRead) -> usize {
+    frame
+        .cells
+        .iter()
+        .filter(|cell| cell.score >= KIOSK_CONFIDENT_SCORE)
+        .count()
 }
 
 /// How many consecutive still looks before the screen counts as settled and the read runs. One
@@ -1662,6 +1668,20 @@ where
         let mut last_strip: Option<Vec<f32>> = None;
         let mut static_looks = 0_u32;
         let mut unmeasured_looks: u32 = 0;
+        // Basket quantities flicker frame to frame on static content (measured
+        // 4070<->470 totals on an unchanged 8-row basket): a quantity above 1 is only
+        // adopted after two consecutive identical reads of the same basket slot and
+        // name, otherwise the row publishes as 1. Keyed, so a reshuffled basket
+        // restarts its own streaks without clearing anyone else's.
+        let mut quantity_streaks: BTreeMap<(usize, String), (u32, u8)> = BTreeMap::new();
+        // Per-look verdict counters, flushed with each publish and at session end: the
+        // branches below are otherwise silent, which once hid a 48-second stretch with
+        // a single settle behind "no evidence".
+        let mut looks_motion = 0u64;
+        let mut looks_blind = 0u64;
+        let mut looks_unmeasured = 0u64;
+        let mut looks_still = 0u64;
+        let mut looks_reads = 0u64;
         // The last settle's proven correction to the located phase: content-proven, so it
         // rides the next settle directly instead of paying the ladder again. Retired the
         // moment it stops reading text.
@@ -1718,6 +1738,7 @@ where
                 // gone) and keeps the fade verdict.
                 None if reading.is_some() => {
                     unmeasured_looks = unmeasured_looks.saturating_add(1);
+                    looks_unmeasured += 1;
                     if unmeasured_looks < KIOSK_UNMEASURED_READ_LOOKS {
                         emit_scroll(None);
                         std::thread::sleep(timing.motion_interval);
@@ -1727,11 +1748,13 @@ where
                     // placement comes from the locator alone, and the emitted null keeps
                     // the frontend from treating this publish as a measured stillness.
                     emit_scroll(None);
+                    looks_unmeasured += 1;
                     unmeasured_fell_through = true;
                     0
                 }
                 None => {
                     unmeasured_looks = 0;
+                    looks_blind += 1;
                     static_looks = 0;
                     emit_scroll(None);
                     std::thread::sleep(timing.motion_interval);
@@ -1742,6 +1765,7 @@ where
             if frame_delta.abs() > 1 {
                 // Stream the frame's movement; the frontend accumulates the deltas. Deltas
                 // need no anchor and no range, so the chips follow a scroll of any length.
+                looks_motion += 1;
                 emit_scroll(Some(frame_delta));
                 static_looks = 0;
                 std::thread::sleep(timing.motion_interval);
@@ -1756,17 +1780,20 @@ where
             if !read_now {
                 static_looks = static_looks.saturating_add(1);
                 if static_looks < KIOSK_SETTLE_LOOKS {
+                    looks_still += 1;
                     std::thread::sleep(timing.motion_interval);
                     continue;
                 }
             }
+            looks_still += 1;
+            looks_reads += 1;
             static_looks = 0;
             let located = reading.and_then(|strip| {
                 let at = kiosk_geometry::label_anchors(strip.len());
                 kiosk_scroll::label_offset(strip, at.strip_top, at.first_top, at.pitch, at.band)
-                    .map(|dy| (dy, at.pitch))
+                    .map(|located| (located.dy, at.pitch, located.bands))
             });
-            let Some((dy, pitch)) = located else {
+            let Some((dy, pitch, bands_present)) = located else {
                 // No label band anywhere in the pane: an animation frame, a capture that came
                 // back torn, or a grid the player has filtered down to nothing. None of those
                 // is a closed kiosk, and none of them is worth publishing over a good view.
@@ -1785,42 +1812,56 @@ where
             // nothing at all, or a couple of lookalikes ("Corinth Prime Barrel" over a
             // Receiver) whose chips then sit half a band off their cards.
             //
-            // Content is the referee the fold cannot be, at both scales. Cell count alone
-            // cannot gate recovery: a sparse grid at the right phase is complete at two
-            // cells, and a misphased grid can pass any small floor with lookalikes. The
-            // separator that holds on live captures is conviction: true reads measure
-            // 0.94-1.00, misphased lookalikes top out at 0.76. So recovery fires only when
-            // nothing read clears KIOSK_CONFIDENT_SCORE, then asks in two tiers: whole
-            // pitches for the which-band error, then an eighth-pitch ladder around the
-            // tier-one winner for the midpoint drag. A probe that finally reads text with
-            // conviction wins immediately; if nothing reads confidently anywhere, the page
-            // with the most cells stands, as it did before. A correction that proved itself
-            // rides the next settle directly -- pane pollution does not move between two
-            // settles 400ms apart -- and one that stopped reading is retired in place.
+            // Content is the referee the fold cannot be, but the referee needs to know
+            // how much text to expect -- the fold already counted it. A sparse grid at
+            // the right phase is complete at two confident cells out of one rendered
+            // band; a populated grid that reads a single confident cell (measured 28
+            // settles straight on 2026-09-25) is misphased, not sparse. So recovery fires
+            // while confident cells lag rendered bands (capped at two, so a nearly-right
+            // page with one occluded row does not churn). True reads measure 0.94-1.00,
+            // misphased lookalikes top out at 0.76, so conviction -- not cell count --
+            // tells them apart.
+            //
+            // Recovery then asks in two tiers: whole pitches for the which-band error,
+            // then an eighth-pitch ladder around the tier-one winner for the midpoint
+            // drag. Every tier adopts by (confidence, cells): a confident read always
+            // beats lookalikes, and among lookalikes the widest read stands, as before.
+            // The ladder stops at the first rung that reads every rendered band -- that
+            // rung is on the text, further rungs only re-read it shifted. A correction
+            // that proved itself rides the next settle directly -- pane pollution does
+            // not move between two settles 400ms apart -- and one that stopped reading
+            // is retired in place.
+            let fullness = bands_present.min(2);
             let mut read_dy = dy + phase_correction;
             let mut read = source.read_kiosk(&candidates, read_dy);
             let mut read_confidence = confident_cells(&read);
-            if phase_correction != 0 && read_confidence == 0 {
+            if phase_correction != 0 && read_confidence < fullness {
                 phase_correction = 0;
                 read = source.read_kiosk(&candidates, dy);
                 read_dy = dy;
                 read_confidence = confident_cells(&read);
             }
-            if read.is_ok() && read_confidence == 0 {
-                let mut best_cells = read.as_ref().map_or(0, |frame| frame.cells.len());
+            // Best read so far, ordered by conviction first: (confident cells, all cells).
+            let mut best = (
+                read_confidence,
+                read.as_ref().map_or(0, |frame| frame.cells.len()),
+            );
+            if read.is_ok() && read_confidence < fullness {
                 for shifted in [read_dy - pitch, read_dy + pitch] {
                     match source.read_kiosk(&candidates, shifted) {
-                        Ok(frame) if frame.cells.len() > best_cells => {
-                            best_cells = frame.cells.len();
-                            read = Ok(frame);
-                            read_dy = shifted;
+                        Ok(frame) => {
+                            let probe = (confident_frame_cells(&frame), frame.cells.len());
+                            if probe > best {
+                                best = probe;
+                                read = Ok(frame);
+                                read_dy = shifted;
+                            }
                         }
-                        Ok(_) => {}
                         Err(_) => break,
                     }
                 }
                 read_confidence = confident_cells(&read);
-                if read_confidence == 0 {
+                if read_confidence < fullness {
                     // The winner still sits on the fold's midpoint; the text is within a
                     // couple of eighth-pitch rungs of it. The ladder's centre is fixed so
                     // a weak-but-wider probe cannot drag the probes off the pitch family.
@@ -1831,19 +1872,15 @@ where
                             let shifted = anchor + side * rung * step;
                             match source.read_kiosk(&candidates, shifted) {
                                 Ok(frame) => {
-                                    let probe_confidence = frame
-                                        .cells
-                                        .iter()
-                                        .filter(|cell| cell.score >= KIOSK_CONFIDENT_SCORE)
-                                        .count();
-                                    if probe_confidence >= 1 {
+                                    let probe_confidence = confident_frame_cells(&frame);
+                                    if probe_confidence >= fullness {
                                         read = Ok(frame);
                                         read_dy = shifted;
                                         read_confidence = probe_confidence;
                                         break 'fine;
                                     }
-                                    if frame.cells.len() > best_cells {
-                                        best_cells = frame.cells.len();
+                                    if (probe_confidence, frame.cells.len()) > best {
+                                        best = (probe_confidence, frame.cells.len());
                                         read = Ok(frame);
                                         read_dy = shifted;
                                     }
@@ -1867,10 +1904,29 @@ where
                     if gone.load(Ordering::Acquire) {
                         break;
                     }
-                    // A grid read that produced only lookalikes gets its cells stripped
-                    // before publish: shipping them was the 2026-09-25 bug (lookalike names
-                    // with real prices at wrong card corners). The basket is dy-independent
-                    // and stays it never reads through the suspect phase. An empty grid page
+                    // Basket quantities flicker frame to frame on static content: tesseract
+                    // alternates phantom digit strings ("720", "8040") that parse cleanly
+                    // and multiply straight into the total (measured 4070<->470 on an
+                    // unchanged 8-row basket). A quantity above 1 is only trusted after two
+                    // consecutive identical reads of the same slot and name; anything else
+                    // publishes as 1. Rows showing x1 adopt immediately, so the common case
+                    // never lags a settle.
+                    for row in &mut frame.basket {
+                        let key = (row.index, row.name.clone());
+                        let seen = quantity_streaks.get(&key).copied().unwrap_or((1, 0));
+                        if seen.0 == row.quantity {
+                            let streak = seen.1.saturating_add(1);
+                            quantity_streaks.insert(key, (row.quantity, streak));
+                            if row.quantity != 1 && streak < 2 {
+                                row.quantity = 1;
+                            }
+                        } else {
+                            quantity_streaks.insert(key, (row.quantity, 1));
+                            if row.quantity != 1 {
+                                row.quantity = 1;
+                            }
+                        }
+                    }
                     // stays empty, which is the truthful state.
                     if final_confidence == 0 && !frame.cells.is_empty() {
                         log::debug!(
@@ -1881,18 +1937,41 @@ where
                     }
                     let mut view = joiner(epoch, &frame);
                     view.scroll_dy = dy;
+                    let cell_detail: Vec<String> = frame
+                        .cells
+                        .iter()
+                        .map(|cell| format!("{}:{:.2}", cell.name, cell.score))
+                        .collect();
+                    let basket_detail: Vec<String> = frame
+                        .basket
+                        .iter()
+                        .map(|row| format!("{} x{}", row.name, row.quantity))
+                        .collect();
                     log::debug!(
-                        "[DEBUG-kiosk] publish epoch={epoch} cells={} confident={final_confidence} basket={} total={} dy={dy} correction={phase_correction}",
+                        "[DEBUG-kiosk] publish epoch={epoch} cells={} confident={final_confidence} basket={} total={} dy={dy} correction={phase_correction} looks=still:{looks_still}/motion:{looks_motion}/blind:{looks_blind}/unmeasured:{looks_unmeasured}/reads:{looks_reads}",
                         view.cells.len(),
                         view.basket.len(),
                         view.total_plat
                     );
+                    log::debug!(
+                        "[DEBUG-kiosk] publish detail cells=[{}] basket=[{}]",
+                        cell_detail.join(", "),
+                        basket_detail.join(", ")
+                    );
+                    looks_motion = 0;
+                    looks_blind = 0;
+                    looks_unmeasured = 0;
+                    looks_still = 0;
+                    looks_reads = 0;
                     publish(view);
                 }
                 Err(reason) => log::warn!("[DEBUG-kiosk] read failed: {reason}"),
             }
             std::thread::sleep(timing.interval);
         }
+        log::debug!(
+            "[DEBUG-kiosk] poller exit epoch={epoch} looks=still:{looks_still}/motion:{looks_motion}/blind:{looks_blind}/unmeasured:{looks_unmeasured}/reads:{looks_reads}",
+        );
     })
 }
 
@@ -2774,7 +2853,8 @@ mod tests {
             anchors.pitch,
             anchors.band,
         )
-        .expect("the calibration strip locates");
+        .expect("the calibration strip locates")
+        .dy;
         let source = ScriptedKiosk::new(vec![])
             .with_profiles(vec![Some(label_strip()); 6])
             .with_reads_by_dy(vec![(located + anchors.pitch, full_page)]);
@@ -2873,7 +2953,8 @@ mod tests {
             anchors.pitch,
             anchors.band,
         )
-        .expect("the calibration strip locates");
+        .expect("the calibration strip locates")
+        .dy;
         let step = anchors.pitch / 8;
         let source = ScriptedKiosk::new(vec![])
             .with_profiles(vec![Some(label_strip()); 6])
@@ -2895,6 +2976,119 @@ mod tests {
             located - step,
             "the published offset follows the fine-tuned phase"
         );
+    }
+
+    /// The 2026-09-25 live failure behind the gate: a populated grid that reads a single
+    /// confident cell, settle after settle. One lucky slot (or one confident lookalike)
+    /// must not certify the phase -- the fold saw three bands here, so one confident
+    /// cell is evidence of misphase, and the ladder must run until the page reads.
+    #[test]
+    fn a_lone_confident_cell_on_a_full_pane_still_recovers() {
+        let full_page = KioskRead {
+            cells: vec![
+                scripted_cell("Recovered row one"),
+                scripted_cell("Recovered row two"),
+                scripted_cell("Recovered row three"),
+                scripted_cell("Recovered row four"),
+                scripted_cell("Recovered row five"),
+            ],
+            basket: vec![],
+        };
+        let lone_page = KioskRead {
+            cells: vec![GridCell {
+                col: 0,
+                row: 0,
+                name: "lone lookalike-or-lucky-slot".to_owned(),
+                score: 0.90,
+            }],
+            basket: vec![],
+        };
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        let step = anchors.pitch / 8;
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 6])
+            .with_reads_by_dy(vec![(located, lone_page), (located - step, full_page)]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "a full pane reading one confident cell must still recover"
+        );
+        assert_eq!(published[0].cells.len(), 5);
+        assert_eq!(
+            published[0].scroll_dy,
+            located - step,
+            "the published offset follows the fine-tuned phase"
+        );
+    }
+
+    fn basket_page(quantities: &[(usize, &str, u32)]) -> KioskRead {
+        KioskRead {
+            cells: vec![],
+            basket: quantities
+                .iter()
+                .map(|(index, name, quantity)| BasketRow {
+                    index: *index,
+                    name: (*name).to_owned(),
+                    score: 0.99,
+                    quantity: *quantity,
+                })
+                .collect(),
+        }
+    }
+
+    /// Basket quantities flicker frame to frame on static content (measured 4070<->470
+    /// totals on an unchanged 8-row basket): a quantity above 1 is only trusted after two
+    /// consecutive identical reads, so phantom digit strings can never reach the total.
+    #[test]
+    fn a_flapping_quantity_never_reaches_the_total() {
+        let flap_a = basket_page(&[(0usize, "Ninkondi Prime Handle", 720u32)]);
+        let flap_b = basket_page(&[(0usize, "Ninkondi Prime Handle", 8040u32)]);
+        // Pops come off the back, so this alternates A,B,A,B... per read. Every settle
+        // burns up to 7 pops (located + pitch pair + ladder) before publishing once.
+        let source = ScriptedKiosk::new(vec![
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+        ])
+        .with_profiles(vec![Some(label_strip()); 4]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert_eq!(published.len(), 2, "two settles publish: {published:?}");
+        assert!(
+            published.iter().all(|view| view.total_plat <= 1),
+            "no phantom multiplier may reach the total: {published:?}"
+        );
+    }
+
+    /// A stable multi-stack is trusted on its second identical sighting: the first
+    /// publish conservatively shows x1, the next shows the proven count.
+    #[test]
+    fn a_stable_quantity_is_adopted_on_repeat() {
+        let steady = basket_page(&[(3usize, "Ninkondi Prime Handle", 4u32)]);
+        // Settle 1 burns 7 pops finding nothing better than the located read; settle 2
+        // spends its single remaining pop on the located read itself.
+        let source =
+            ScriptedKiosk::new(vec![Ok(steady); 8]).with_profiles(vec![Some(label_strip()); 4]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert_eq!(published.len(), 2, "two settles publish: {published:?}");
+        assert_eq!(published[0].total_plat, 1);
+        assert_eq!(published[1].total_plat, 4);
     }
 
     /// A misphased pane stays misphased the same way until the content moves: once a settle
@@ -2929,7 +3123,8 @@ mod tests {
             anchors.pitch,
             anchors.band,
         )
-        .expect("the calibration strip locates");
+        .expect("the calibration strip locates")
+        .dy;
         let step = anchors.pitch / 8;
         let asked: Arc<StdMutex<Vec<i32>>> = Arc::new(StdMutex::new(Vec::new()));
         let source = ScriptedKiosk::new(vec![])
@@ -2972,7 +3167,8 @@ mod tests {
             anchors.pitch,
             anchors.band,
         )
-        .expect("the calibration strip locates");
+        .expect("the calibration strip locates")
+        .dy;
         let asked: Arc<StdMutex<Vec<i32>>> = Arc::new(StdMutex::new(Vec::new()));
         let source = ScriptedKiosk::new(vec![])
             .with_profiles(vec![Some(label_strip()); 4])
@@ -3019,7 +3215,8 @@ mod tests {
             anchors.pitch,
             anchors.band,
         )
-        .expect("the calibration strip locates");
+        .expect("the calibration strip locates")
+        .dy;
         // First settle reads weak everywhere; second settle's correction retry at the same
         // located phase still reads weak, and the surviving ladder rung finds the true page.
         let step = anchors.pitch / 8;
@@ -3161,7 +3358,8 @@ mod tests {
             anchors.pitch,
             anchors.band,
         )
-        .expect("the polluted fold still answers a phase");
+        .expect("the polluted fold still answers a phase")
+        .dy;
         let naked = crate::kiosk_ocr::read_grid(&frame, &candidates, located);
         assert!(
             naked
