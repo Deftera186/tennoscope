@@ -1894,6 +1894,26 @@ where
                 }
                 read_confidence = confident_cells(&read);
                 if read_confidence < fullness {
+                    // Half-pitch probes: on a dim frame the fold can key the card-art
+                    // comb as loudly as the label comb -- text and art sit half a pitch
+                    // apart (measured 2026-09-25: the fold answered 148 rows off the
+                    // text on a 296-row pitch, and no other tier can reach that).
+                    for shifted in [read_dy - pitch / 2, read_dy + pitch / 2] {
+                        match source.read_kiosk(&candidates, shifted) {
+                            Ok(frame) => {
+                                let probe = (confident_frame_cells(&frame), frame.cells.len());
+                                if probe > best {
+                                    best = probe;
+                                    read = Ok(frame);
+                                    read_dy = shifted;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+                read_confidence = confident_cells(&read);
+                if read_confidence < fullness {
                     // The winner still sits on the fold's midpoint; the text is within a
                     // couple of eighth-pitch rungs of it. The ladder's centre is fixed so
                     // a weak-but-wider probe cannot drag the probes off the pitch family.
@@ -3087,8 +3107,27 @@ mod tests {
         let flap_a = basket_page(&[(0usize, "Ninkondi Prime Handle", 720u32)]);
         let flap_b = basket_page(&[(0usize, "Ninkondi Prime Handle", 8040u32)]);
         // Pops come off the back, so this alternates A,B,A,B... per read. Every settle
-        // burns up to 7 pops (located + pitch pair + ladder) before publishing once.
+        // burns up to 13 pops (located + pitch pair + half-pitch pair + ladder) before
+        // publishing once.
         let source = ScriptedKiosk::new(vec![
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
             Ok(flap_b.clone()),
             Ok(flap_a.clone()),
             Ok(flap_b.clone()),
@@ -3113,10 +3152,10 @@ mod tests {
     #[test]
     fn a_stable_quantity_is_adopted_on_repeat() {
         let steady = basket_page(&[(3usize, "Ninkondi Prime Handle", 4u32)]);
-        // Settle 1 burns 7 pops finding nothing better than the located read; settle 2
+        // Settle 1 burns 13 pops finding nothing better than the located read; settle 2
         // spends its single remaining pop on the located read itself.
         let source =
-            ScriptedKiosk::new(vec![Ok(steady); 8]).with_profiles(vec![Some(label_strip()); 4]);
+            ScriptedKiosk::new(vec![Ok(steady); 14]).with_profiles(vec![Some(label_strip()); 4]);
         let (_, _, published) = run_poller(source);
         let published = published.lock().expect("published");
         assert_eq!(published.len(), 2, "two settles publish: {published:?}");
@@ -3170,11 +3209,11 @@ mod tests {
         let asked = asked.lock().expect("read log");
         assert_eq!(
             asked.len(),
-            5,
-            "first settle pays the ladder ({located}, ±pitch, then -step wins and the ladder stops); the second settle reads once: {asked:?}"
+            7,
+            "first settle pays the ladder ({located}, ±pitch, ±half-pitch, then -step wins and the ladder stops); the second settle reads once: {asked:?}"
         );
         assert_eq!(
-            asked[4],
+            asked[6],
             located - step,
             "the second settle's first read is the corrected phase"
         );
@@ -3358,25 +3397,6 @@ mod tests {
         })
         .collect();
 
-        struct LiveFrame(image::DynamicImage);
-        impl KioskFrameSource for LiveFrame {
-            fn strip_profile(&mut self) -> Result<Vec<f32>, &'static str> {
-                let (x, y, w, h) = kiosk_geometry::grid_strip(self.0.width(), self.0.height());
-                Ok(kiosk_scroll::row_profiles(&self.0, x, y, w, h))
-            }
-
-            fn read_kiosk(
-                &mut self,
-                candidates: &[RewardCatalogEntry],
-                dy: i32,
-            ) -> Result<KioskRead, &'static str> {
-                Ok(KioskRead {
-                    cells: crate::kiosk_ocr::read_grid(&self.0, candidates, dy),
-                    basket: vec![],
-                })
-            }
-        }
-
         // The naked fold on this frame: still locked at its dragged midpoint. (The day's
         // publish showed exactly the lookalikes this read produces.)
         let strip = {
@@ -3435,6 +3455,94 @@ mod tests {
                 |cell| cell.name != "Corinth Prime Barrel" && cell.name != "Karyst Prime Blade"
             ),
             "a lookalike read must never survive recovery: {:?}",
+            view.cells
+        );
+    }
+
+    /// A full-width frame read through the production OCR: the strip locates via the
+    /// row profile, the read comes from `kiosk_ocr` itself. Both live-frame tests share
+    /// it; only the candidate lists differ.
+    struct LiveFrame(image::DynamicImage);
+    impl KioskFrameSource for LiveFrame {
+        fn strip_profile(&mut self) -> Result<Vec<f32>, &'static str> {
+            let (x, y, w, h) = kiosk_geometry::grid_strip(self.0.width(), self.0.height());
+            Ok(kiosk_scroll::row_profiles(&self.0, x, y, w, h))
+        }
+
+        fn read_kiosk(
+            &mut self,
+            candidates: &[RewardCatalogEntry],
+            dy: i32,
+        ) -> Result<KioskRead, &'static str> {
+            Ok(KioskRead {
+                cells: crate::kiosk_ocr::read_grid(&self.0, candidates, dy),
+                basket: vec![],
+            })
+        }
+    }
+
+    fn catalog_entries(names: &[&str]) -> Vec<RewardCatalogEntry> {
+        names
+            .iter()
+            .map(|name| RewardCatalogEntry {
+                name: (*name).to_owned(),
+                ducats: 45,
+            })
+            .collect()
+    }
+
+    /// End-to-end against the 2026-09-25 evening field frame that the poller failed on
+    /// for a whole visit (594 blind looks of 603, one publish): a still, focused,
+    /// fully populated kiosk whose capture never reaches the full-white calibration.
+    /// The locator must fold it, and the recovery ladder must land a phase that reads
+    /// the visible page -- whatever phase the fold itself names.
+    #[test]
+    fn the_dim_evening_field_frame_publishes_its_grid() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-dim-evening.png"
+        ))
+        .expect("field frame fixture");
+        let candidates = catalog_entries(&[
+            "Afentis Prime Blade",
+            "Afuris Prime Receiver",
+            "Alternox Prime Blueprint",
+            "Banshee Prime Chassis Blueprint",
+            "Galiban Prime Neuroptics Blueprint",
+            "Dual Kamas Prime Blade",
+            "Dual Zoren Prime Blade",
+            "Hystrix Prime Receiver",
+            "Kestrel Prime Grip",
+            "Lavos Prime Systems Blueprint",
+            "Ninkondi Prime Handle",
+            "Oberon Prime Neuroptics Blueprint",
+            "Okina Prime Blueprint",
+            "Pangolin Prime Blueprint",
+            "Perigale Prime Barrel",
+            "Phantasma Prime Barrel",
+            "Revenant Prime Blueprint",
+            "Scourge Prime Blueprint",
+        ]);
+
+        let (_, _, published) = run_poller_with(LiveFrame(frame), candidates);
+
+        let published = published.lock().expect("published");
+        let view = published.first().expect("the populated frame must publish");
+        assert!(
+            view.cells.len() >= 14,
+            "the visible page holds 18 labelled cards, got {} cells: {:?}",
+            view.cells.len(),
+            view.cells
+        );
+        assert!(
+            view.cells
+                .iter()
+                .any(|cell| cell.name == "Afuris Prime Receiver")
+                && view
+                    .cells
+                    .iter()
+                    .any(|cell| cell.name == "Kestrel Prime Grip"),
+            "the published page must carry the frame's true labels: {:?}",
             view.cells
         );
     }
