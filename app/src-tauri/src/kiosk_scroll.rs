@@ -270,22 +270,60 @@ pub struct LocatedLabels {
 /// at. Rows outside the requested band are not the tracker's business; the caller crops the
 /// geometry. Label glyphs are the whitest structure in the pane, so text rows spike in this
 /// profile while thumbnails and backgrounds stay near the floor.
+///
+/// "White" is the strip's own level, not a constant. The threshold is the 99.5th-percentile
+/// strip luma scaled by 0.98, clamped to 140..=225: a full-range capture pins the historical
+/// calibration (p99.5 = 255 -> 225), while a pipeline whose frames never reach full white
+/// still keys on its own text class. Measured on a 2026-09-25 evening capture whose
+/// open-kiosk strip topped out at luma 213: the calibrated threshold read every row as zero
+/// and the poller went blind for a whole visit. Below 140 no whiteness class survives and
+/// the strip is truthfully empty.
 pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec<f32> {
     let luma = image.to_luma8();
     let (width, height) = luma.dimensions();
     let w = w.min(width.saturating_sub(x));
     let h = h.min(height.saturating_sub(y));
+    let mut histogram = [0_u32; 256];
+    for row in 0..h {
+        for column in 0..w {
+            histogram[luma.get_pixel(x + column, y + row)[0] as usize] += 1;
+        }
+    }
+    let threshold = adaptive_white_threshold(&histogram, u64::from(w) * u64::from(h));
     let mut rows = vec![0.0_f32; h as usize];
     for row in 0..h {
         let mut sum = 0_u32;
         for column in 0..w {
-            if luma.get_pixel(x + column, y + row)[0] > 225 {
+            if luma.get_pixel(x + column, y + row)[0] > threshold {
                 sum += 1;
             }
         }
         rows[row as usize] = sum as f32;
     }
     rows
+}
+
+/// The luma a strip's whitest structure actually reaches, from its histogram: the
+/// 99.5th-percentile level scaled by 0.98, clamped into the calibration band. The
+/// percentile, not the maximum, so a handful of specular pixels cannot pin it; the
+/// 0.98, so antialiased fringe stays fringe.
+fn adaptive_white_threshold(histogram: &[u32; 256], pixels: u64) -> u8 {
+    const CALIBRATED: u32 = 225;
+    const DIM_FLOOR: u32 = 140;
+    if pixels == 0 {
+        return CALIBRATED as u8;
+    }
+    let tail = (pixels / 200).max(1) as u32;
+    let mut ceiling = 255_u8;
+    let mut seen = 0_u32;
+    for level in (0..=255_u8).rev() {
+        seen += histogram[level as usize];
+        if seen >= tail {
+            ceiling = level;
+            break;
+        }
+    }
+    (u32::from(ceiling) * 98 / 100).clamp(DIM_FLOOR, CALIBRATED) as u8
 }
 
 #[cfg(test)]
@@ -591,5 +629,66 @@ mod tests {
         assert_eq!(row_profiles(&dynamic, 0, 0, 2, 2), vec![2.0, 0.0]);
         // Out-of-band requests clip rather than panic.
         assert_eq!(row_profiles(&dynamic, 1, 1, 99, 99), vec![0.0]);
+    }
+
+    fn dimmed_fixture(dim: f32) -> DynamicImage {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-open.png"
+        ))
+        .expect("kiosk fixture");
+        let mut rgb = frame.to_rgb8();
+        for pixel in rgb.pixels_mut() {
+            pixel.0 = [
+                (pixel.0[0] as f32 * dim) as u8,
+                (pixel.0[1] as f32 * dim) as u8,
+                (pixel.0[2] as f32 * dim) as u8,
+            ];
+        }
+        DynamicImage::ImageRgb8(rgb)
+    }
+
+    fn locate(frame: &DynamicImage) -> Option<LocatedLabels> {
+        let (x, y, w, h) = crate::kiosk_geometry::grid_strip(frame.width(), frame.height());
+        let profile = row_profiles(frame, x, y, w, h);
+        let at = crate::kiosk_geometry::label_anchors(profile.len());
+        label_offset(&profile, at.strip_top, at.first_top, at.pitch, at.band)
+    }
+
+    /// The locator's phase must not depend on the capture pipeline's white ceiling:
+    /// the same grid dimmed to 85% or 70% (a 2026-09-25 KDE frame's labels topped
+    /// out at luma 206-213, where a full-range capture reads 255) must fold to the
+    /// identical answer, band count included.
+    #[test]
+    fn dimming_the_grid_does_not_move_the_fold() {
+        let undisputed = locate(&dimmed_fixture(1.0));
+        for dim in [0.85_f32, 0.7] {
+            assert_eq!(locate(&dimmed_fixture(dim)), undisputed, "dim={dim}");
+        }
+    }
+
+    /// Below the floor at which a dimmed pipeline keeps no whiteness class at all,
+    /// the profile is empty and a no-label verdict remains the truthful one.
+    #[test]
+    fn a_pipeline_too_dark_to_hold_white_still_locates_nothing() {
+        assert_eq!(locate(&dimmed_fixture(0.45)), None);
+    }
+
+    /// The field frame at the centre of the 2026-09-25 evening visit: a still,
+    /// focused, fully populated kiosk the poller went 594-of-603 looks blind on,
+    /// because nothing in its strip ever crossed the full-white calibration. The
+    /// fold must answer real frames like this one.
+    #[test]
+    fn the_dim_evening_field_frame_folds() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-dim-evening.png"
+        ))
+        .expect("field frame fixture");
+        let located = locate(&frame).expect("a full grid on screen must locate");
+        assert!(
+            located.bands >= 3,
+            "a four-row grid backs at least three bands, got {located:?}"
+        );
     }
 }
