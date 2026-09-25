@@ -33,13 +33,14 @@ GitHub release titles are `TennoScope v0.1.0`: the product name followed by the 
    cd app && pnpm check
    ```
 
-2. **Set the version in all four places**, then confirm with `./scripts/check-versions.sh` — CI
+2. **Set the version in all five places**, then confirm with `./scripts/check-versions.sh` — CI
    runs it too, so drift fails the build rather than shipping mislabelled bundles.
 
    - `Cargo.toml` — `[workspace.package] version`, which every crate inherits
    - `app/src-tauri/tauri.conf.json` — `version`
    - `app/package.json` — `version`
    - `packaging/arch/PKGBUILD` — `pkgver`
+   - `packaging/arch-bin/PKGBUILD` — `pkgver`
 
    Then `cargo update --workspace --offline`, so `Cargo.lock` carries the new version too. The
    release build runs `--locked` and fails on a lockfile that still names the old one.
@@ -71,14 +72,32 @@ GitHub release titles are `TennoScope v0.1.0`: the product name followed by the 
    of a published artifact, so this can only happen after step 6. Copy the ebuilds to the new
    version, regenerate the Manifests, run `pkgcheck scan`, and push.
 
+8. **Re-pin both Arch digests.** The `pkgver` bumps in step 2 leave the old
+   `sha256sums` behind, and neither digest exists until the tag is pushed and
+   the release workflow has attached its bundles — so this can only happen
+   after step 6. Refresh each recipe from its published artifact, then confirm
+   with `./scripts/check-arch-digests.sh` — CI runs it too, so drift fails the
+   build rather than shipping a `PKGBUILD` whose checksum does not match:
+
+   ```bash
+   cd packaging/arch && updpkgsums && cd ../..
+   cd packaging/arch-bin && updpkgsums && cd ../..
+   ./scripts/check-arch-digests.sh
+   ```
+
+   The source recipe pins the tag's `v${pkgver}.tar.gz` archive; the `-bin`
+   recipe pins `TennoScope_${pkgver}_amd64.deb` from the release. Commit the
+   refreshed `PKGBUILD`s on top of the release.
+
 ## Packaging
 
 The bundles the workflow attaches are built by `scripts/build-linux-bundles.sh`. Run by hand it
 gates on the test suite, clippy and `pnpm check` first; the release workflow passes `--skip-gates`
 because it refuses to start until CI has passed on that very commit. Either way the script asserts
 the AppImage still forces `GDK_BACKEND=x11` before anything is uploaded -- that check runs against
-the artifact itself and nothing else covers it. The Arch `PKGBUILD` and the overlay ebuilds fetch
-the tag's own archive, so they only work once the tag is pushed.
+the artifact itself and nothing else covers it. The source Arch `PKGBUILD` and the overlay ebuilds
+fetch the tag's own archive, so they only work once the tag is pushed; the `-bin` recipe fetches
+the release `.deb`, so it only works once the release workflow has attached it.
 
 ## Yanking
 

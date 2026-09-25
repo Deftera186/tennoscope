@@ -8,8 +8,9 @@ attached to each GitHub release. Beyond those:
 
 - **Gentoo** — packaged in the [`deftera`](https://github.com/Deftera186/deftera-overlay) overlay,
   which is in the official overlays database. See [gentoo.md](gentoo.md).
-- **Arch** — [`arch/PKGBUILD`](arch/PKGBUILD) builds from the release tarball. No AUR package is
-  published; see [arch.md](arch.md).
+- **Arch** — [`arch/PKGBUILD`](arch/PKGBUILD) builds from the release tarball, and
+  [`arch-bin/PKGBUILD`](arch-bin/PKGBUILD) repacks the release `.deb` for a fast
+  install with no toolchain. No AUR package is published; see [arch.md](arch.md).
 - **Fedora** — [`COPR`](https://copr.fedorainfracloud.org/coprs/deftera/tennoscope/) build;
   see [copr/README.md](copr/README.md).
 - **Debian/Ubuntu** — this project's APT repository, built from each release; see

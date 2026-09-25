@@ -1,0 +1,38 @@
+# Maintainer: Deftera186 <https://github.com/Deftera186/tennoscope/issues>
+pkgname=tennoscope-bin
+pkgver=0.12.0
+pkgrel=1
+pkgdesc='Local-first Linux Warframe collection and relic companion'
+arch=('x86_64')
+url='https://github.com/Deftera186/tennoscope'
+license=('GPL-3.0-only')
+provides=('tennoscope')
+conflicts=('tennoscope')
+# gtk3 and webkit2gtk-4.1 drag most of the rest in transitively, but the binary links these
+# directly (namcap flags them as "implicitly satisfied"), so name them rather than rely on
+# another package's dependency list not changing. libpipewire/libxcb/mesa/wayland are the
+# capture paths; xdg-utils is tauri-plugin-opener shelling out to xdg-open from Diagnostics.
+depends=('cairo' 'dbus' 'gdk-pixbuf2' 'glib2' 'gtk3' 'hicolor-icon-theme' 'libpipewire' 'libsoup3'
+         'libxcb' 'mesa' 'wayland' 'webkit2gtk-4.1' 'xdg-utils')
+# The relic overlay shells out to tesseract; the collection browser works without it. Wine
+# virtual-desktop child discovery shells out to xwininfo; ordinary window discovery stays
+# in-process.
+optdepends=(
+  'tesseract: read the reward card titles for the relic overlay'
+  'tesseract-data-eng: English data for reward card recognition'
+  'xorg-xwininfo: find Warframe inside a Wine virtual desktop'
+)
+# Binary repack of the release .deb: installs in seconds with no toolchain, for users who
+# just want to run it. Mirrors games-util/tennoscope-bin on Gentoo.
+source=("TennoScope_${pkgver}_amd64.deb::${url}/releases/download/v${pkgver}/TennoScope_${pkgver}_amd64.deb")
+sha256sums=('44ebe8ddf4cabd0c5905b102f26e3a331e482e94f800ca0fd520a209d796bd09')
+
+package() {
+  # No makedepends: bsdtar ships with pacman (libarchive), so unpacking the deb data
+  # archive needs no extra tool.
+  bsdtar -O -xf "${srcdir}/TennoScope_${pkgver}_amd64.deb" 'data.tar.*' | bsdtar -x -C "${pkgdir}"
+  # The deb ships its license under /usr/lib/TennoScope; point the Arch license path at it
+  # rather than installing a second copy.
+  install -d "${pkgdir}/usr/share/licenses/${pkgname}"
+  ln -s '/usr/lib/TennoScope/LICENSE' "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

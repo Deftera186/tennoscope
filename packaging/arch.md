@@ -1,8 +1,21 @@
-# Arch Linux package
+# Arch Linux packages
 
-[`arch/PKGBUILD`](arch/PKGBUILD) builds and installs a native package from the release tarball. It
-works on any Arch-based distribution — Arch, Manjaro, EndeavourOS, CachyOS — since it only needs
-`pacman` and `makepkg`. No AUR package or binary repository is published.
+Two recipes, both for any Arch-based distribution — Arch, Manjaro, EndeavourOS,
+CachyOS — since both only need `pacman` and `makepkg`. No AUR package or binary
+repository is published.
+
+[`arch-bin/PKGBUILD`](arch-bin/PKGBUILD) (`tennoscope-bin`) repacks the release
+`.deb` and installs in seconds with no toolchain. This is the recommended route
+for anyone who just wants to run it:
+
+```bash
+curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch-bin/PKGBUILD
+makepkg -si
+```
+
+[`arch/PKGBUILD`](arch/PKGBUILD) (`tennoscope`) builds the native package from
+the release tarball instead. It needs the full toolchain and compiles the whole
+Rust workspace, so it takes a while:
 
 ```bash
 sudo pacman -S --needed base-devel
@@ -10,8 +23,10 @@ curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/a
 makepkg -si
 ```
 
-`makepkg -s` installs the `makedepends` and `checkdepends` itself, so they are not listed above;
-`base-devel` is the one thing it assumes you already have.
+The two packages conflict (`provides`/`conflicts`), so install one or the other.
+`makepkg -s` installs the source recipe's `makedepends` and `checkdepends`
+itself, so they are not listed above; `base-devel` is the one thing it assumes
+you already have. The `-bin` recipe has no build-time dependencies at all.
 
 ## AUR helpers
 
@@ -27,22 +42,29 @@ paru -B .    # or: yay -B .
 a remote and fails in a bare directory holding only a downloaded `PKGBUILD`. `paru -B` and plain
 `makepkg -si` do not care. Prefer `makepkg -si` unless you specifically want a helper to track it.
 
-## The recipe
+## The recipes
 
-`source` points at the tag's GitHub archive, so `makepkg` fetches it. `sha256sums`
-carries the release tarball digest (pinned 2026-09-22 for `v0.11.0`; re-pin per
-release with `updpkgsums`). If you are repackaging a different commit, replace it
-with a fresh digest:
+The source recipe's `source` points at the tag's GitHub archive, so `makepkg`
+fetches it. Its `sha256sums` carries the release tarball digest (pinned for
+`v0.12.0`; re-pin per release with `updpkgsums`). If you are repackaging a
+different commit, replace it with a fresh digest:
 
-The recipe builds the locked Rust workspace and frontend, runs both test suites, and installs
+The source recipe builds the locked Rust workspace and frontend, runs both test suites, and installs
 `tennoscope`, its desktop entry, icon, GPLv3 license and third-party notices. Dependency resolution
 needs network access, so `makepkg` will not work in an offline chroot without vendored sources.
+
+The `-bin` recipe's `source` points at `TennoScope_${pkgver}_amd64.deb` on the
+GitHub release instead, and its `sha256sums` carries that `.deb`'s digest
+(pinned for `v0.12.0`; re-pin per release the same way). There is no
+`build()` or `check()` — `package()` unpacks the deb data archive with
+`bsdtar`, which ships with `pacman`, and links the Arch license path at the
+license the `.deb` already carries under `/usr/lib/TennoScope`.
 
 The relic overlay's toolchain is in `optdepends`, not `depends` — the collection browser runs
 without it. `check()` does need it, so `tesseract` is in `checkdepends`; skip
 that step with `makepkg --nocheck` if you would rather not pull it in to build.
 
-## Three things this recipe has to do that are not obvious
+## Three things the source recipe has to do that are not obvious
 
 None of them show up on a developer machine that already runs a desktop, which is why all three
 only surfaced in a clean container.
@@ -66,5 +88,5 @@ asserts every card reads at >= 0.9. `tesseract-data-eng` ships upstream's combin
 Arch. Skipped rather than loosened, because that floor is what proves the crop geometry everywhere
 else.
 
-Before any AUR submission: add a `.SRCINFO` (`makepkg --printsrcinfo`, needs an Arch
-box — the digest above is already literal).
+Before any AUR submission: add a `.SRCINFO` per recipe (`makepkg --printsrcinfo`
+in each directory, needs an Arch box).
