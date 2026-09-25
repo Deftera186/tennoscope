@@ -159,7 +159,7 @@ pub fn label_offset(
     first_label_top: i32,
     pitch: i32,
     band: i32,
-) -> Option<i32> {
+) -> Option<LocatedLabels> {
     if profile.is_empty() || pitch <= 0 || band <= 0 || band >= pitch {
         return None;
     }
@@ -238,11 +238,34 @@ pub fn label_offset(
         bands.push((top, score));
     }
     let best = bands.iter().map(|(_, score)| *score).fold(0.0, f32::max);
+    let present = bands
+        .iter()
+        .filter(|(_, score)| *score >= best * BAND_PRESENT_RATIO)
+        .count();
     bands
         .into_iter()
         .find(|(_, score)| *score >= best * BAND_PRESENT_RATIO)
-        .map(|(top, _)| top - first_label_top)
+        .map(|(top, _)| LocatedLabels {
+            dy: top - first_label_top,
+            bands: present,
+        })
 }
+
+/// What the locator found: the grid's offset plus how many label bands back it.
+///
+/// The band count is the poller's fullness signal. A sparse grid renders one band and
+/// reads one or two cells with conviction; a populated grid that reads the same is
+/// misphased, not sparse. Counting bands the fold itself scored keeps the referee on
+/// the same evidence the phase came from: bands at or above `BAND_PRESENT_RATIO` of the
+/// brightest band in the unfolded profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocatedLabels {
+    /// The topmost rendered band's offset from the calibration, in profile rows.
+    pub dy: i32,
+    /// How many bands the pane renders at the named phase.
+    pub bands: usize,
+}
+
 /// Near-white pixel count per row over columns `[x, x + w)` -- the strip the tracker looks
 /// at. Rows outside the requested band are not the tracker's business; the caller crops the
 /// geometry. Label glyphs are the whitest structure in the pane, so text rows spike in this
@@ -478,7 +501,7 @@ mod tests {
             // Glyph rows span band rows 6..37, so windows starting anywhere in -8..=6
             // contain them all; fifteen tied starts, midpoint -8+7 = -1.
             assert_eq!(
-                label_offset(&strip, 193, 343, PITCH, BAND),
+                label_offset(&strip, 193, 343, PITCH, BAND).map(|located| located.dy),
                 Some(anchor - 1)
             );
         }
@@ -490,7 +513,10 @@ mod tests {
     #[test]
     fn the_topmost_rendered_band_anchors_the_read() {
         let strip = pane(STRIP, -149, &[true, true, true, true]);
-        assert_eq!(label_offset(&strip, 193, 343, PITCH, BAND), Some(-150));
+        assert_eq!(
+            label_offset(&strip, 193, 343, PITCH, BAND).map(|located| located.dy),
+            Some(-150)
+        );
     }
 
     /// A phase whose first band is above the pane's clip edge: that band is not rendered, and
@@ -499,8 +525,25 @@ mod tests {
     fn a_band_the_pane_does_not_render_is_not_the_anchor() {
         let strip = pane(STRIP, -20, &[false, true, true, true]);
         assert_eq!(
-            label_offset(&strip, 193, 343, PITCH, BAND),
+            label_offset(&strip, 193, 343, PITCH, BAND).map(|located| located.dy),
             Some(-20 + PITCH - 1)
+        );
+    }
+
+    /// The locator also reports how many bands back its answer: the poller's fullness
+    /// signal for telling a sparse grid (one band, one or two true cells) from a
+    /// misphased one (several bands, nothing readable).
+    #[test]
+    fn the_locator_counts_the_bands_it_anchors_on() {
+        let full = pane(STRIP, 0, &[true, true, true]);
+        assert_eq!(
+            label_offset(&full, 193, 343, PITCH, BAND).map(|located| located.bands),
+            Some(3)
+        );
+        let sparse = pane(STRIP, 0, &[true, false, false]);
+        assert_eq!(
+            label_offset(&sparse, 193, 343, PITCH, BAND).map(|located| located.bands),
+            Some(1)
         );
     }
 
