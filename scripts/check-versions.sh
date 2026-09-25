@@ -1,5 +1,5 @@
 #!/bin/sh
-# The release version is written in four files that nothing else forces to agree. A mismatch is
+# The release version is written in five files that nothing else forces to agree. A mismatch is
 # not loud: tauri names the bundles from tauri.conf.json, so a stale package.json or PKGBUILD
 # produces artifacts that look right and are labelled wrong. This is the thing that notices.
 set -eu
@@ -12,16 +12,17 @@ workspace=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
 tauri=$(sed -n 's/.*"version": *"\(.*\)".*/\1/p' app/src-tauri/tauri.conf.json | head -1)
 package=$(sed -n 's/.*"version": *"\(.*\)".*/\1/p' app/package.json | head -1)
 pkgbuild=$(sed -n 's/^pkgver=\(.*\)$/\1/p' packaging/arch/PKGBUILD | head -1)
+bin_pkgbuild=$(sed -n 's/^pkgver=\(.*\)$/\1/p' packaging/arch-bin/PKGBUILD | head -1)
 
 for pair in "Cargo.toml:$workspace" "tauri.conf.json:$tauri" \
-  "app/package.json:$package" "PKGBUILD:$pkgbuild"; do
+  "app/package.json:$package" "PKGBUILD:$pkgbuild" "PKGBUILD-bin:$bin_pkgbuild"; do
   case "$pair" in
     *:) echo "no version found in ${pair%:}" >&2; exit 1 ;;
   esac
 done
 
-if [ "$workspace" = "$tauri" ] && [ "$workspace" = "$package" ] && [ "$workspace" = "$pkgbuild" ]; then
-  echo "version $workspace agrees across all four declarations"
+if [ "$workspace" = "$tauri" ] && [ "$workspace" = "$package" ] && [ "$workspace" = "$pkgbuild" ] && [ "$workspace" = "$bin_pkgbuild" ]; then
+  echo "version $workspace agrees across all five declarations"
   exit 0
 fi
 
@@ -30,4 +31,5 @@ echo "  Cargo.toml         $workspace" >&2
 echo "  tauri.conf.json    $tauri" >&2
 echo "  app/package.json   $package" >&2
 echo "  PKGBUILD           $pkgbuild" >&2
+echo "  PKGBUILD-bin       $bin_pkgbuild" >&2
 exit 1

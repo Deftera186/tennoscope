@@ -67,3 +67,41 @@ case "$actual" in
     exit 1
     ;;
 esac
+
+# The binary package ships the release .deb instead of compiling it. Sourcing it at top level
+# would clobber pkgname and build()/check()/package() from the source PKGBUILD above, so it
+# gets a subshell and only its metadata is asserted.
+(
+  # shellcheck source=/dev/null
+  source "$repo_root/packaging/arch-bin/PKGBUILD"
+  [[ $pkgname == tennoscope-bin ]] || {
+    printf 'arch-bin pkgname must be tennoscope-bin; got: %s\n' "$pkgname" >&2
+    exit 1
+  }
+  # Word match: tennoscope-bin itself contains tennoscope, which must not count.
+  case " ${provides[*]:-} " in
+    *' tennoscope '*) ;;
+    *)
+      printf 'arch-bin provides must contain tennoscope; got: %s\n' "${provides[*]:-}" >&2
+      exit 1
+      ;;
+  esac
+  case " ${conflicts[*]:-} " in
+    *' tennoscope '*) ;;
+    *)
+      printf 'arch-bin conflicts must contain tennoscope; got: %s\n' "${conflicts[*]:-}" >&2
+      exit 1
+      ;;
+  esac
+  case "${source[0]}" in
+    *"TennoScope_${pkgver}_amd64.deb") ;;
+    *)
+      printf 'arch-bin source must end TennoScope_%s_amd64.deb; got: %s\n' "$pkgver" "${source[*]}" >&2
+      exit 1
+      ;;
+  esac
+  [[ $(type -t package) == function ]] || {
+    printf 'arch-bin PKGBUILD must define package()\n' >&2
+    exit 1
+  }
+)

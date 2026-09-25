@@ -23,31 +23,33 @@ their lockfiles during the build.
 
 ## Arch, Manjaro, EndeavourOS, CachyOS
 
-Any Arch-based distribution with `pacman` and `makepkg`:
+Any Arch-based distribution with `pacman` and `makepkg`. The recommended route
+repacks the release `.deb`, so it needs no toolchain and installs in seconds:
+
+```bash
+curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch-bin/PKGBUILD && makepkg -si
+```
+
+To build from source instead — it compiles the full Rust workspace, so it takes
+a while — `base-devel` is all you need beforehand, since `makepkg -s` pulls the
+build dependencies itself:
 
 ```bash
 curl -O https://raw.githubusercontent.com/Deftera186/tennoscope/main/packaging/arch/PKGBUILD && makepkg -si
 ```
-
-`makepkg -s` pulls the build dependencies itself, so `base-devel` is all you need
-beforehand.
 
 On a Steam Deck, `makepkg -si` needs SteamOS's read-only root disabled, and a system
 update undoes the install; the [AppImage](#anything-else--appimage) is the
 low-maintenance route there.
 
 There is no AUR package yet, so `yay -S tennoscope` and `paru -S tennoscope` will not
-find it — AUR helpers install *from* the AUR, and the command above is the supported
-route. If you would rather your helper drive the build, point it at a directory holding
+find it — AUR helpers install *from* the AUR, and the commands above are the supported
+routes. If you would rather your helper drive the build, point it at a directory holding
 the `PKGBUILD`:
 
 ```bash
 paru -B .    # or: yay -B .
 ```
-
-Building from source takes a while: it compiles the full Rust workspace. The
-[AppImage](#anything-else--appimage) or the `.deb` via
-[`debtap`](https://wiki.archlinux.org/title/Debtap) is faster if you just want to run it.
 
 ## Debian, Ubuntu, Fedora
 
