@@ -1153,6 +1153,7 @@ pub(crate) fn run(
     let kiosk_spawn = |session: u64,
                        reanchor: &Arc<std::sync::atomic::AtomicBool>,
                        gone: &Arc<std::sync::atomic::AtomicBool>| {
+        let chips: ChipsState = Arc::new(std::sync::Mutex::new(None));
         let joiner = {
             let shared = Arc::clone(&shared);
             let cache = price_cache.clone();
@@ -1178,11 +1179,14 @@ pub(crate) fn run(
         let publish = {
             let app = app.clone();
             let first_publish = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let chips = Arc::clone(&chips);
             move |view: KioskView| {
                 let Some(kiosk) = app.try_state::<KioskState>() else {
                     return;
                 };
-                let _ = kiosk.set_if_current(session, view, || {
+                // The next capture must not see what this view paints: hand the source the
+                // published view so it masks the chips (only on the session that owns them).
+                if kiosk.set_if_current(session, view.clone(), || {
                     if first_publish.swap(false, Ordering::AcqRel) {
                         // On native Wayland the open log marker arrives before capture has located
                         // the game monitor. The first show is deliberately deferred; retry now that
@@ -1190,7 +1194,11 @@ pub(crate) fn run(
                         overlay_window::show_kiosk_overlay(&app);
                     }
                     emit_kiosk_update(&app, Some(session));
-                });
+                }) {
+                    if let Ok(mut stash) = chips.lock() {
+                        *stash = Some(view);
+                    }
+                }
             }
         };
         let emit_scroll = {
@@ -1218,7 +1226,10 @@ pub(crate) fn run(
             joiner,
             publish,
             emit_scroll,
-            ScreenKioskSource::default,
+            {
+                let chips = Arc::clone(&chips);
+                move || ScreenKioskSource::new().with_chips(chips)
+            },
         );
         log::debug!(
             "[DEBUG-kiosk] poller spawned with {} candidates",
@@ -1518,7 +1529,18 @@ pub trait KioskFrameSource {
 pub struct ScreenKioskSource {
     capture: reward_capture::GameCapture,
     recent: Option<(Instant, image::DynamicImage)>,
+    /// The last view the overlay is drawing right now, shared with the publish arm: its
+    /// chips are painted out of every new capture, because monitor-scoped capture rungs
+    /// (portal, KWin) frame our own window along with the game.
+    chips: ChipsState,
 }
+
+/// The chips the overlay currently shows, as the poller published them.
+///
+/// Source and publish arm share it: publish stores the view it pushed, the source masks
+/// its chips out of the next capture. Stale by at most one epoch, which the steering
+/// ladder absorbs: a chip that moved mid-scroll is re-masked at the next settle.
+pub type ChipsState = Arc<std::sync::Mutex<Option<KioskView>>>;
 
 impl Default for ScreenKioskSource {
     fn default() -> Self {
@@ -1531,11 +1553,27 @@ impl ScreenKioskSource {
         Self {
             capture: reward_capture::GameCapture::new(),
             recent: None,
+            chips: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Share the poller's chip state with this source.
+    pub fn with_chips(mut self, chips: ChipsState) -> Self {
+        self.chips = chips;
+        self
+    }
+
+    fn mask_chips(&self, frame: &mut image::DynamicImage) {
+        if let Ok(Some(view)) = self.chips.lock().as_deref() {
+            kiosk_view::mask_published_chips(frame, view);
         }
     }
 
     fn capture_frame(&mut self) -> Result<(image::DynamicImage, Vec<f32>), &'static str> {
-        let candidates = self.capture.capture_candidates()?;
+        let mut candidates = self.capture.capture_candidates()?;
+        for candidate in &mut candidates {
+            self.mask_chips(&mut candidate.image);
+        }
         let (selected, profile) = select_kiosk_strip(candidates)?;
         let frame = selected.image;
         self.recent = Some((Instant::now(), frame.clone()));
@@ -3397,10 +3435,13 @@ mod tests {
         })
         .collect();
 
-        // The naked fold on this frame: still locked at its dragged midpoint. (The day's
-        // publish showed exactly the lookalikes this read produces.)
+        // The tether this fixture used to carry: the hover card's bright title dragged the
+        // luma-fold midpoint 36 rows off the text, and the ladder below had to climb back.
+        // Under the glyph-edge profile every band votes equally (hovered or not), so the
+        // naked fold now answers the readable phase directly -- pinned at confident reads,
+        // so a regression back to a dragged fold fails loudly here instead of shipping.
         let strip = {
-            let mut probe = LiveFrame(frame.clone());
+            let (mut probe, _c) = LiveFrame::new(frame.clone());
             probe.strip_profile().expect("strip")
         };
         let anchors = kiosk_geometry::label_anchors(strip.len());
@@ -3414,14 +3455,17 @@ mod tests {
         .expect("the polluted fold still answers a phase")
         .dy;
         let naked = crate::kiosk_ocr::read_grid(&frame, &candidates, located);
+        let confident = naked
+            .iter()
+            .filter(|cell| cell.score >= crate::monitor::KIOSK_CONFIDENT_SCORE)
+            .count();
         assert!(
-            naked
-                .iter()
-                .all(|cell| cell.score < crate::monitor::KIOSK_CONFIDENT_SCORE),
-            "the fold's own answer must be visibly weak on this frame, else the test pins nothing: {naked:?}"
+            confident >= 6,
+            "the fold alone must read this pane confidently now: {naked:?}"
         );
 
-        let (_, _, published) = run_poller_with(LiveFrame(frame), candidates);
+        let (source, _chips) = LiveFrame::new(frame);
+        let (_, _, published) = run_poller_with(source, candidates);
 
         let published = published.lock().expect("published");
         let view = published.first().expect("polluted frame must publish");
@@ -3462,11 +3506,26 @@ mod tests {
     /// A full-width frame read through the production OCR: the strip locates via the
     /// row profile, the read comes from `kiosk_ocr` itself. Both live-frame tests share
     /// it; only the candidate lists differ.
-    struct LiveFrame(image::DynamicImage);
+    struct LiveFrame(image::DynamicImage, ChipsState);
+    impl LiveFrame {
+        fn new(frame: image::DynamicImage) -> (Self, ChipsState) {
+            let chips: ChipsState = Arc::new(StdMutex::new(None));
+            (Self(frame, Arc::clone(&chips)), chips)
+        }
+
+        fn masked(&self) -> image::DynamicImage {
+            let mut frame = self.0.clone();
+            if let Ok(Some(view)) = self.1.lock().as_deref() {
+                crate::kiosk_view::mask_published_chips(&mut frame, view);
+            }
+            frame
+        }
+    }
     impl KioskFrameSource for LiveFrame {
         fn strip_profile(&mut self) -> Result<Vec<f32>, &'static str> {
-            let (x, y, w, h) = kiosk_geometry::grid_strip(self.0.width(), self.0.height());
-            Ok(kiosk_scroll::row_profiles(&self.0, x, y, w, h))
+            let frame = self.masked();
+            let (x, y, w, h) = kiosk_geometry::grid_strip(frame.width(), frame.height());
+            Ok(kiosk_scroll::row_profiles(&frame, x, y, w, h))
         }
 
         fn read_kiosk(
@@ -3474,9 +3533,10 @@ mod tests {
             candidates: &[RewardCatalogEntry],
             dy: i32,
         ) -> Result<KioskRead, &'static str> {
+            let frame = self.masked();
             Ok(KioskRead {
-                cells: crate::kiosk_ocr::read_grid(&self.0, candidates, dy),
-                basket: vec![],
+                cells: crate::kiosk_ocr::read_grid(&frame, candidates, dy),
+                basket: crate::kiosk_ocr::read_basket(&frame, candidates),
             })
         }
     }
@@ -3489,6 +3549,123 @@ mod tests {
                 ducats: 45,
             })
             .collect()
+    }
+
+    /// End-to-end against the 2026-09-26 visit's frame: a fully populated kiosk whose first
+    /// two rows are selected, with the overlay's own chips baked into the capture (Wayland
+    /// monitor captures include our window). Before masking, that frame broke the visit in
+    /// four ways at once: the fold locked onto the chip rows (bands=2, only two priced rows),
+    /// ladder reads half-cut the labels below them (fuzzy lookalikes flipping the prices it
+    /// showed), the basket lane's digit whitelist parsed chip digits into phantom quantities
+    /// (a 10p blade publishing at 20), and the pane showed four basket rows the hard cap of
+    /// 8 never read. The whole loop -- mask, fold, read, publish -- must converge on the
+    /// true grid and hold it.
+    #[test]
+    fn the_selected_field_frame_publishes_the_whole_grid_and_stays_stable() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-selected-nig7.png"
+        ))
+        .expect("selected field frame fixture");
+        let candidates = catalog_entries(&[
+            "Afentis Prime Blade",
+            "Afuris Prime Receiver",
+            "Alternox Prime Blueprint",
+            "Banshee Prime Chassis Blueprint",
+            "Caliban Prime Neuroptics Blueprint",
+            "Dual Kamas Prime Blade",
+            "Dual Zoren Prime Blade",
+            "Hystrix Prime Receiver",
+            "Kestrel Prime Grip",
+            "Lavos Prime Systems Blueprint",
+            "Ninkondi Prime Handle",
+            "Oberon Prime Neuroptics Blueprint",
+            "Okina Prime Blueprint",
+            "Pangolin Prime Blueprint",
+            "Perigale Prime Barrel",
+            "Phantasma Prime Barrel",
+            "Revenant Prime Blueprint",
+            "Scourge Prime Blueprint",
+        ]);
+
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let (source, chips) = LiveFrame::new(frame);
+        {
+            let sink = Arc::clone(&published);
+            let mask_feed = Arc::clone(&chips);
+            let handle = spawn_kiosk_poller_with(
+                &reanchor,
+                &gone,
+                KioskPollerTiming {
+                    interval: Duration::from_millis(1),
+                    motion_interval: Duration::from_millis(1),
+                    lifetime: Duration::from_millis(400),
+                },
+                Arc::new(candidates),
+                |epoch, read| {
+                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                },
+                move |view| {
+                    // Publish arm mirrors production: the source masks the last view's chips.
+                    if let Ok(mut stash) = mask_feed.lock() {
+                        *stash = Some(view.clone());
+                    }
+                    sink.lock().expect("published").push(view);
+                },
+                |_| (),
+                move || source,
+            );
+            handle.join().expect("poller thread");
+        }
+
+        let published = published.lock().expect("published");
+        let last = published.last().expect("the populated frame must publish");
+        let rows: std::collections::BTreeSet<u32> =
+            last.cells.iter().map(|cell| cell.row).collect();
+        assert!(
+            last.cells.len() >= 14 && rows.contains(&0) && rows.contains(&1) && rows.contains(&2),
+            "all three fully rendered rows price: {:?}",
+            last.cells
+        );
+        for name in [
+            "Afuris Prime Receiver",
+            "Okina Prime Blueprint",
+            "Scourge Prime Blueprint",
+        ] {
+            assert!(
+                last.cells.iter().any(|cell| cell.name == name),
+                "the unselected rows' true names must publish: {name} in {:?}",
+                last.cells
+            );
+        }
+        // The basket shows twelve selected rows; the pane renders them all at 1440p.
+        assert_eq!(
+            last.basket.len(),
+            12,
+            "all twelve selected rows price: {:?}",
+            last.basket
+        );
+        // The stub prices every row at 1, so the total is the sum of declared quantities:
+        // every row is a single copy, and chip digits must no longer fabricate stacks.
+        assert_eq!(
+            last.total_plat, 12,
+            "twelve single copies, no phantom multipliers: {:?}",
+            last.basket
+        );
+        // And the visit holds still: the last publishes agree with each other.
+        let names_of = |view: &KioskView| {
+            view.cells
+                .iter()
+                .map(|c| c.name.clone())
+                .collect::<Vec<_>>()
+        };
+        let tail: Vec<Vec<String>> = published.iter().rev().take(3).map(names_of).collect();
+        assert!(
+            tail.windows(2).all(|pair| pair[0] == pair[1]),
+            "settled publishes converge instead of oscillating: {tail:?}"
+        );
     }
 
     /// End-to-end against the 2026-09-25 evening field frame that the poller failed on
@@ -3524,7 +3701,8 @@ mod tests {
             "Scourge Prime Blueprint",
         ]);
 
-        let (_, _, published) = run_poller_with(LiveFrame(frame), candidates);
+        let (source, _chips) = LiveFrame::new(frame);
+        let (_, _, published) = run_poller_with(source, candidates);
 
         let published = published.lock().expect("published");
         let view = published.first().expect("the populated frame must publish");

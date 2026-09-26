@@ -25,8 +25,11 @@ pub const GRID_COLS: usize = 6;
 /// Maximum card bands visible in the clipped pane while scrolling. Three fit at rest; a fourth
 /// enters through the bottom edge before the first leaves through the top.
 pub const GRID_ROWS: usize = 4;
-/// Basket rows the pane can show at once.
-pub const BASKET_ROWS: usize = 8;
+/// Basket rows the pane shows at once. The ducat kiosk renders up to a dozen rows before the
+/// TOTAL row, resolution-independently (fractional layout: row 12's baseline is 664.6px of
+/// the 1080 plane against TOTAL at 875). Measured in the field 2026-09-26: a 12-item visit at
+/// 1440p shows twelve rows at 51px pitch; the old cap of 8 left the last four unpriced.
+pub const BASKET_ROWS: usize = 12;
 
 /// Left edge of the basket pane at 1920x1080. Name OCR must not cross into grid column six.
 const BASKET_NAME_LEFT_1080P: f32 = 1256.0;
@@ -160,6 +163,92 @@ pub fn basket_row_pair(width: u32, height: u32, row: usize) -> Option<(f32, f32)
     Some((right, baseline))
 }
 
+/// The screen area one published grid chip occupies, in pixels: the chip's top-right corner
+/// sits on `tile_anchor(col, row)` and extends left. Capture rectangles of every monitor
+/// include our own overlay (portal captures the composited monitor), so the kiosk pipeline
+/// masks exactly these boxes out of a frame before profiles and OCR -- an unread chip cannot
+/// fold the locator onto the card-top row or feed digits to a quantity read, both measured
+/// on the 2026-09-26 field frame.
+///
+/// The box is the chip's own geometry grown by a few pixels of antialias fringe; text behind
+/// it is occluded on screen anyway, so nothing readable is masked out.
+pub fn grid_chip_mask(
+    width: u32,
+    height: u32,
+    col: usize,
+    row: usize,
+    dy: i32,
+) -> Option<(u32, u32, u32, u32)> {
+    let (right, top) = tile_anchor(width, height, col, row)?;
+    let scale = height as f32;
+    let top = top + dy as f32;
+    if top < ROW_TOPS_MIN_CLIP * scale || top > PANE_BOTTOM * scale {
+        return None;
+    }
+    Some(mask_box(right, top, 100.0, 34.0, scale, width, height))
+}
+
+/// The mask box for one basket row's chip ([icon][digits] right-aligned on the row's pair
+/// edge). Drawn even for an unpriced row (the em dash), so it is masked regardless.
+pub fn basket_chip_mask(width: u32, height: u32, row: usize) -> Option<(u32, u32, u32, u32)> {
+    let (right, baseline) = basket_row_pair(width, height, row)?;
+    let scale = height as f32;
+    // The chip's bottom edge sits on the baseline plus its descent; it grows upward.
+    let bottom = baseline + fx(PAIR_DESCENT_PX + 2.0) * scale;
+    Some(mask_box(
+        right,
+        bottom - fx(36.0) * scale,
+        112.0,
+        36.0,
+        scale,
+        width,
+        height,
+    ))
+}
+
+/// The basket TOTAL row's chip mask, same construction.
+pub fn total_chip_mask(width: u32, height: u32) -> (u32, u32, u32, u32) {
+    let (right, baseline) = total_row_pair(width, height);
+    let scale = height as f32;
+    let bottom = baseline + fx(PAIR_DESCENT_PX + 2.0) * scale;
+    mask_box(
+        right,
+        bottom - fx(40.0) * scale,
+        140.0,
+        40.0,
+        scale,
+        width,
+        height,
+    )
+}
+
+/// Digits' descender drop under a baseline, in 1080p design pixels (mirrors the overlay's).
+const PAIR_DESCENT_PX: f32 = 3.0;
+/// The grid pane's top clip as a height fraction: chips scrolled above it are not drawn.
+const ROW_TOPS_MIN_CLIP: f32 = fx(193.0);
+
+/// Clip `-- [right-w_1080*scale, top) x (w_1080, h_1080)*scale --` into the frame.
+fn mask_box(
+    right: f32,
+    top: f32,
+    w_1080: f32,
+    h_1080: f32,
+    scale: f32,
+    width: u32,
+    height: u32,
+) -> (u32, u32, u32, u32) {
+    let w = (fx(w_1080) * scale).round() as u32;
+    let h = (fx(h_1080) * scale).round() as u32;
+    let right = (right + fx(3.0) * scale).round().clamp(0.0, width as f32) as u32;
+    let top = (top - fx(3.0) * scale).round().clamp(0.0, height as f32) as u32;
+    (
+        right.saturating_sub(w).min(width),
+        top,
+        w.min(width),
+        h.min(height),
+    )
+}
+
 /// The TOTAL row pair's right edge and digit baseline, in pixels: `(right_x, baseline_y)`.
 pub fn total_row_pair(width: u32, height: u32) -> (f32, f32) {
     (
@@ -234,6 +323,49 @@ mod tests {
     /// numbers were measured off the capture structurally -- count-badge centres at
     /// (tile_left+20, tile_top+17.5) on a 207.5x222 grid, card borders at
     /// x=265.95+207.55k, ducat digit baselines -- and any drift here is a drifted overlay.
+    #[test]
+    fn chip_masks_cover_where_the_overlay_draws() {
+        // The grid chip's top-right corner is the tile anchor; the mask spans left of it.
+        let (x, y, w, h) = grid_chip_mask(1920, 1080, 0, 0, 0).expect("a visible tile masks");
+        let (ax, ay) = tile_anchor(1920, 1080, 0, 0).unwrap();
+        let right = (ax.round() as u32 + 3).min(1920);
+        assert_eq!(
+            x + w,
+            right,
+            "mask ends at the chip's right edge plus bleed"
+        );
+        assert!(
+            (ay as u32) < y + 6 && (ay as u32) > y,
+            "mask starts at the chip top"
+        );
+        assert!(
+            w >= 90 && h >= 25,
+            "mask covers icon + four digits: {x},{y},{w},{h}"
+        );
+        // A scrolled chip rides its row: the dy offset moves the mask with the publish.
+        let scrolled = grid_chip_mask(1920, 1080, 0, 0, 40).expect("scrolled chip masks");
+        assert_eq!(scrolled.1, y + 40);
+        // Chips scrolled past the pane's own clip edge are not drawn and not masked.
+        assert_eq!(grid_chip_mask(1920, 1080, 0, 0, 900), None);
+        // Absent tiles do not mask either.
+        assert_eq!(grid_chip_mask(1920, 1080, 6, 0, 0), None);
+
+        // Basket chips right-align on the row's pair edge, above its baseline.
+        let (bx, by, bw, bh) = basket_chip_mask(1920, 1080, 1).expect("row 1 masks");
+        let (right, baseline) = basket_row_pair(1920, 1080, 1).unwrap();
+        assert_eq!(bx + bw, (right.round() as u32 + 3).min(1920));
+        assert!(
+            (by + bh) as f32 > baseline - 5.0 && (by + bh) as f32 <= baseline + 8.0,
+            "basket mask sits on the chip band just above the baseline: {by}+{bh} vs {baseline}"
+        );
+        // Rows past the pane's dozen do not exist to mask.
+        assert_eq!(basket_chip_mask(1920, 1080, BASKET_ROWS), None);
+        // The TOTAL row masks outright.
+        let total = total_chip_mask(1920, 1080);
+        let (_tr, _tb) = total_row_pair(1920, 1080);
+        assert!(total.2 >= 120, "the total chip is the widest: {total:?}");
+    }
+
     #[test]
     fn the_1920x1080_calibration_reproduces_the_fixture() {
         assert_eq!(

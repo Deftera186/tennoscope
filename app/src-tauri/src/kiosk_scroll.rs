@@ -26,7 +26,7 @@
 //! searched half the strip and once crowned a false peak 80px away from the truth, this one
 //! refuses to answer rather than guess far.
 
-use image::DynamicImage;
+use image::{DynamicImage, GrayImage};
 
 /// How far the grid may move between two looks and still be found. A 60ms tick at a hard
 /// flick crosses ~120px; 180 leaves headroom without reaching the 222 row pitch where rows
@@ -266,56 +266,87 @@ pub struct LocatedLabels {
     pub bands: usize,
 }
 
-/// Near-white pixel count per row over columns `[x, x + w)` -- the strip the tracker looks
-/// at. Rows outside the requested band are not the tracker's business; the caller crops the
-/// geometry. Label glyphs are the whitest structure in the pane, so text rows spike in this
-/// profile while thumbnails and backgrounds stay near the floor.
+/// Glyph-edge count per row over columns `[x, x + w)` -- the strip the tracker looks at.
+/// Rows outside the requested band are not the tracker's business; the caller crops the
+/// geometry.
 ///
-/// "White" is the strip's own level, not a constant. The threshold is the 99.5th-percentile
-/// strip luma scaled by 0.98, clamped to 140..=225: a full-range capture pins the historical
-/// calibration (p99.5 = 255 -> 225), while a pipeline whose frames never reach full white
-/// still keys on its own text class. Measured on a 2026-09-25 evening capture whose
-/// open-kiosk strip topped out at luma 213: the calibrated threshold read every row as zero
-/// and the poller went blind for a whole visit. Below 140 no whiteness class survives and
-/// the strip is truthfully empty.
+/// The counted thing is text, not whiteness. A label row is hundreds of thin bright strokes
+/// on a dark field: pixels that exceed BOTH horizontal neighbours (three columns over) by a
+/// wide margin. Gradients, card art and gold trim are smooth along a row and hold almost no
+/// such maxima. Counting sharp maxima instead of threshold-crossing pixels is what lets the
+/// locator see every label class at once: on the 2026-09-26 field frame the SELECTED rows'
+/// labels render at luma 234 and the unselected rows' at 168, while card-art highlights reach
+/// 205 -- no luma threshold separates 168 text from 205 art, an absolute gate sees only the
+/// white class (the fold answered two bands on a three-row pane and the overlay priced only
+/// the rows the player had clicked), and a per-strip adaptive gate follows whichever class
+/// dominates. The edge contrast between glyph and field survives selection state, hovering
+/// and evening-dimmed pipelines alike (measured contrasts: 216/150/186 on the dim frame,
+/// still >= 100 at 0.7x dimming).
+///
+/// The absolute check shrinks to one presence floor: a strip whose brightest 0.5% cannot
+/// reach 140 holds no text class any OCR crop could read, so the profile is zero and the
+/// locator truthfully answers "no labels" (the 0.45x-dimmed pipeline stays `None`).
 pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec<f32> {
     let luma = image.to_luma8();
     let (width, height) = luma.dimensions();
     let w = w.min(width.saturating_sub(x));
     let h = h.min(height.saturating_sub(y));
+    let mut rows = vec![0.0_f32; h as usize];
+    if !holds_any_text_class(&luma, x, y, w, h) {
+        return rows;
+    }
+    let pixels = luma.as_raw();
+    let stride = width as usize;
+    let span = TEXT_EDGE_SPAN as usize;
+    for (row, slot) in rows.iter_mut().enumerate() {
+        let base = (y as usize + row) * stride;
+        let line = &pixels[base + x as usize..base + x as usize + w as usize];
+        let mut sum = 0_u32;
+        if line.len() <= 2 * span {
+            continue;
+        }
+        for column in span..line.len() - span {
+            let value = i32::from(line[column]);
+            if value > i32::from(line[column - span]) + TEXT_EDGE_DELTA
+                && value > i32::from(line[column + span]) + TEXT_EDGE_DELTA
+            {
+                sum += 1;
+            }
+        }
+        *slot = sum as f32;
+    }
+    rows
+}
+
+/// Rows vote a pixel into the profile when it outshines both neighbours this far away by
+/// [`TEXT_EDGE_DELTA`]: three columns is inside a glyph stroke at every supported density
+/// (a 1080p stroke is 2px, 1440p 3px) and past the reach of a smooth gradient's slope.
+const TEXT_EDGE_SPAN: u32 = 3;
+/// Measured contrast between label glyphs and their field: >= 104 across every captured
+/// frame class (full-range, evening-dimmed, unselected-gold). Half of that keeps sensor
+/// noise (<= 12 on these captures) out by a wide margin and admits dim pipelines.
+const TEXT_EDGE_DELTA: i32 = 60;
+
+/// Whether the strip's whitest structure reaches a level at which any text class can live:
+/// the 99.5th-percentile luma scaled by 0.98 against the calibrated 140 floor. Below it the
+/// frame is too dark to hold labels at all (measured on 2026-09-25's 0.45x evening dimming):
+/// no row may vote, so the fold sees a genuinely empty pane.
+fn holds_any_text_class(luma: &GrayImage, x: u32, y: u32, w: u32, h: u32) -> bool {
+    /// The floor the 99.5th-percentile ceiling must clear, scaled by the same 0.98 fringe
+    /// margin the white-gate calibration used.
+    const PRESENCE_FLOOR: u32 = 140;
+    if w == 0 || h == 0 {
+        return false;
+    }
     let mut histogram = [0_u32; 256];
     for row in 0..h {
         for column in 0..w {
             histogram[luma.get_pixel(x + column, y + row)[0] as usize] += 1;
         }
     }
-    let threshold = adaptive_white_threshold(&histogram, u64::from(w) * u64::from(h));
-    let mut rows = vec![0.0_f32; h as usize];
-    for row in 0..h {
-        let mut sum = 0_u32;
-        for column in 0..w {
-            if luma.get_pixel(x + column, y + row)[0] > threshold {
-                sum += 1;
-            }
-        }
-        rows[row as usize] = sum as f32;
-    }
-    rows
-}
-
-/// The luma a strip's whitest structure actually reaches, from its histogram: the
-/// 99.5th-percentile level scaled by 0.98, clamped into the calibration band. The
-/// percentile, not the maximum, so a handful of specular pixels cannot pin it; the
-/// 0.98, so antialiased fringe stays fringe.
-fn adaptive_white_threshold(histogram: &[u32; 256], pixels: u64) -> u8 {
-    const CALIBRATED: u32 = 225;
-    const DIM_FLOOR: u32 = 140;
-    if pixels == 0 {
-        return CALIBRATED as u8;
-    }
-    let tail = (pixels / 200).max(1) as u32;
-    let mut ceiling = 255_u8;
+    let tail = (u64::from(w) * u64::from(h) / 200).max(1) as u32;
     let mut seen = 0_u32;
+    let mut ceiling = 0_u8;
     for level in (0..=255_u8).rev() {
         seen += histogram[level as usize];
         if seen >= tail {
@@ -323,7 +354,7 @@ fn adaptive_white_threshold(histogram: &[u32; 256], pixels: u64) -> u8 {
             break;
         }
     }
-    (u32::from(ceiling) * 98 / 100).clamp(DIM_FLOOR, CALIBRATED) as u8
+    u32::from(ceiling) * 98 / 100 >= PRESENCE_FLOOR
 }
 
 #[cfg(test)]
@@ -618,17 +649,48 @@ mod tests {
     }
 
     #[test]
-    fn row_profiles_count_near_white_pixels_per_row() {
-        // 2x2 image: one all-white row, one mid-gray row.
-        let mut image = image::GrayImage::new(2, 2);
-        for x in 0..2 {
-            image.put_pixel(x, 0, image::Luma([240]));
-            image.put_pixel(x, 1, image::Luma([100]));
+    fn row_profiles_count_glyph_edges_not_brightness() {
+        // 24px rows: a glyph row (bright 2px strokes on a dark field, like label text), a
+        // smooth-gradient row (bright like card art but edgeless), a uniformly bright row
+        // (the old metric's idea of a label -- this metric's idea of nothing), and a dark
+        // glyph row whose contrast is real but whose ceiling is under the presence floor.
+        let mut image = image::GrayImage::new(32, 4);
+        for column in 0..32 {
+            image.put_pixel(
+                column,
+                0,
+                image::Luma([if column % 8 < 2 { 210 } else { 12 }]),
+            );
+            image.put_pixel(column, 1, image::Luma([(column as u8) * 6 + 40]));
+            image.put_pixel(column, 2, image::Luma([230]));
+            image.put_pixel(
+                column,
+                3,
+                image::Luma([if column % 8 < 2 { 72 } else { 8 }]),
+            );
         }
         let dynamic = DynamicImage::ImageLuma8(image);
-        assert_eq!(row_profiles(&dynamic, 0, 0, 2, 2), vec![2.0, 0.0]);
-        // Out-of-band requests clip rather than panic.
-        assert_eq!(row_profiles(&dynamic, 1, 1, 99, 99), vec![0.0]);
+        let profile = row_profiles(&dynamic, 0, 0, 32, 4);
+        assert!(profile[0] > 0.0, "strokes are text: {profile:?}");
+        assert_eq!(profile[1], 0.0, "a gradient carries no text edges");
+        assert_eq!(profile[2], 0.0, "uniform brightness is not text");
+        assert!(
+            profile[3] > 0.0,
+            "dim glyphs in a lit strip are still text: {profile:?}"
+        );
+        // A whole strip below the presence floor (its brightest 0.5% under 140) holds no
+        // readable text class: the profile stays zero and the locator answers nothing.
+        let dark = image::GrayImage::from_pixel(32, 4, image::Luma([90]));
+        assert_eq!(
+            row_profiles(&DynamicImage::ImageLuma8(dark), 0, 0, 32, 4),
+            vec![0.0; 4]
+        );
+        // Out-of-band requests clip rather than panic: a 1-row window over the gradient
+        // row, and a window squeezed against the far edge.
+        assert_eq!(row_profiles(&dynamic, 20, 1, 99, 1), vec![0.0]);
+        assert_eq!(row_profiles(&dynamic, 30, 3, 99, 99), vec![0.0]);
+        // A strip narrower than two edge spans cannot hold a glyph edge.
+        assert_eq!(row_profiles(&dynamic, 0, 0, 5, 4), vec![0.0; 4]);
     }
 
     fn dimmed_fixture(dim: f32) -> DynamicImage {
@@ -689,6 +751,32 @@ mod tests {
         assert!(
             located.bands >= 3,
             "a four-row grid backs at least three bands, got {located:?}"
+        );
+    }
+
+    /// The 2026-09-26 field frame: a fully populated kiosk whose first two rows are
+    /// SELECTED -- and rendered bright white (luma 234) -- while the unselected third row's
+    /// labels top out at 168 and its card art highlights at 205. No luma threshold separates
+    /// 168 text from 205 art: the white gate answered two bands on a three-row pane (the 594
+    /// blind looks' successor failure), and the overlay's own chips then fed the fold from
+    /// the card-top rows. The locator must find all three real label bands, on the text
+    /// (1440p glyph cores at y 461-508, so the named band top is 457+dy within 447..=461).
+    #[test]
+    fn the_selected_frame_folds_every_visible_band() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-selected-nig7.png"
+        ))
+        .expect("selected field frame fixture");
+        let located = locate(&frame).expect("a three-row pane must locate");
+        assert_eq!(
+            located.bands, 3,
+            "every rendered label band counts: {located:?}"
+        );
+        assert!(
+            (-10..=4).contains(&located.dy),
+            "the named band must contain the glyph cores (y 461-522), got dy {}",
+            located.dy
         );
     }
 }

@@ -168,19 +168,25 @@ pub fn build_view(
         })
         .collect();
 
-    let basket: Vec<BasketChip> = basket
+    // Chips carry the unit price -- the number a marketplace listing shows for one copy --
+    // so the basket row and the grid tile agree per name, whatever the stack size. Only the
+    // total multiplies: that is the one place "what is this basket worth" means the pile.
+    let basket_chips: Vec<BasketChip> = basket
         .iter()
         .map(|row| BasketChip {
             index: row.index as u32,
             name: row.name.clone(),
-            platinum: price(&row.name).and_then(|unit_price| unit_price.checked_mul(row.quantity)),
+            platinum: price(&row.name),
         })
         .collect();
 
-    let total_plat = basket
+    let total_plat = basket_chips
         .iter()
-        .filter_map(|chip| chip.platinum)
-        .map(u64::from)
+        .zip(basket)
+        .filter_map(|(chip, row)| {
+            chip.platinum
+                .map(|unit| u64::from(unit) * u64::from(row.quantity))
+        })
         .sum();
 
     KioskView {
@@ -188,8 +194,99 @@ pub fn build_view(
         epoch,
         scroll_dy: 0,
         cells,
-        basket,
+        basket: basket_chips,
         total_plat,
+    }
+}
+
+/// Paint every published chip out of a captured frame.
+///
+/// Monitor-scoped capture (the portal/KWin rungs every native Wayland session uses) frames
+/// the composite: our own overlay is in the picture. Chips sitting on the captured kiosk
+/// read straight back into the pipeline -- chip glyphs feed the label fold (the 2026-09-26
+/// frame's fold locked onto two rows of chips and never looked at the text again) and chip
+/// digits pass the basket quantity whitelist (`26p` read as `2k`, publishing a phantom x2).
+/// The overlay knows exactly where its chips are, so before any profile or OCR the pipeline
+/// overwrites exactly those boxes with the frame's own background.
+///
+/// Each box is filled with the median luma of its border ring: the label background the game
+/// drew behind the chip (measured 12-20 everywhere chips sit), which is inert to both the
+/// edge-count profile and the per-crop OCR normalisation. Nothing under a chip was captured
+/// anyway -- the chip occludes it on screen -- so masking loses no information about the
+/// game, only about ourselves.
+pub fn mask_published_chips(frame: &mut image::DynamicImage, view: &KioskView) {
+    let (width, height) = (frame.width(), frame.height());
+    let mut rects = Vec::with_capacity(view.cells.len() + view.basket.len() + 1);
+    for cell in &view.cells {
+        if let Some(rect) = crate::kiosk_geometry::grid_chip_mask(
+            width,
+            height,
+            cell.col as usize,
+            cell.row as usize,
+            view.scroll_dy,
+        ) {
+            rects.push(rect);
+        }
+    }
+    for row in &view.basket {
+        if let Some(rect) =
+            crate::kiosk_geometry::basket_chip_mask(width, height, row.index as usize)
+        {
+            rects.push(rect);
+        }
+    }
+    if !view.basket.is_empty() {
+        rects.push(crate::kiosk_geometry::total_chip_mask(width, height));
+    }
+    if rects.is_empty() {
+        return;
+    }
+    let mut rgb = frame.to_rgb8();
+    for (x, y, w, h) in rects {
+        paint_over(&mut rgb, x, y, w, h);
+    }
+    *frame = image::DynamicImage::ImageRgb8(rgb);
+}
+
+/// Fill `[x, y, w, h)` with the median luma of its one-pixel border ring, clamped to the
+/// image. A degenerate rect or one pasted clean off screen paints nothing.
+fn paint_over(image: &mut image::RgbImage, x: u32, y: u32, w: u32, h: u32) {
+    let (width, height) = image.dimensions();
+    let (x1, y1) = (x.min(width), y.min(height));
+    let (x2, y2) = (
+        (x.saturating_add(w)).min(width),
+        (y.saturating_add(h)).min(height),
+    );
+    if x2 - x1 < 3 || y2 - y1 < 3 {
+        return;
+    }
+    let mut ring = Vec::new();
+    let push = |px: u32, py: u32, ring: &mut Vec<u8>| {
+        if px < width && py < height {
+            let p = image.get_pixel(px, py).0;
+            ring.push(
+                ((299 * u32::from(p[0]) + 587 * u32::from(p[1]) + 114 * u32::from(p[2])) / 1000)
+                    as u8,
+            );
+        }
+    };
+    for px in x1.saturating_sub(1)..=(x2).min(width.saturating_sub(1)) {
+        push(px, y1.saturating_sub(1), &mut ring);
+        push(px, (y2).min(height.saturating_sub(1)), &mut ring);
+    }
+    for py in y1.saturating_sub(1)..=(y2).min(height.saturating_sub(1)) {
+        push(x1.saturating_sub(1), py, &mut ring);
+        push((x2).min(width.saturating_sub(1)), py, &mut ring);
+    }
+    if ring.is_empty() {
+        return;
+    }
+    ring.sort_unstable();
+    let fill = ring[ring.len() / 2];
+    for py in y1..y2 {
+        for px in x1..x2 {
+            image.put_pixel(px, py, image::Rgb([fill, fill, fill]));
+        }
     }
 }
 
@@ -245,8 +342,11 @@ mod tests {
         assert_eq!(view.total_plat, 26);
     }
 
+    /// The row chip is the unit price -- what one copy sells for and what the grid tile of
+    /// the same item shows -- while the total alone multiplies: a 7p barrel counted twice is
+    /// worth 14 but lists for 7.
     #[test]
-    fn basket_rows_price_every_selected_copy() {
+    fn basket_rows_show_the_unit_price_and_the_total_sums_copies() {
         let basket = [BasketRow {
             quantity: 2,
             ..basket_row(0, "Kompressa Prime Barrel")
@@ -255,7 +355,7 @@ mod tests {
             (name == "Kompressa Prime Barrel").then_some(7)
         });
 
-        assert_eq!(view.basket[0].platinum, Some(14));
+        assert_eq!(view.basket[0].platinum, Some(7));
         assert_eq!(view.total_plat, 14);
     }
 
