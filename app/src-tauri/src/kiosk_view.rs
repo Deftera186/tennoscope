@@ -43,6 +43,8 @@ pub struct KioskView {
     /// The grid's scroll offset from the calibration rows, in design pixels: the reads were
     /// taken with the label bands shifted by exactly this, so the chips belong this far from
     /// their unscrolled positions. The basket pane never scrolls and needs no offset.
+    /// Published in the overlay's design-pixel space (the capture-space measurement is
+    /// normalized at publication; see `kiosk_scroll::to_design_px`).
     pub scroll_dy: i32,
 }
 

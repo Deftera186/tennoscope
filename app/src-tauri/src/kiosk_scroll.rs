@@ -62,6 +62,19 @@ const BAND_PRESENT_RATIO: f32 = 0.35;
 /// core from fringe. Relative, not absolute, because row counts scale with capture width.
 const LOUD_ROW_FRACTION: f32 = 0.4;
 
+/// Convert a vertical offset measured in strip rows into the frontend's design pixels.
+/// The strip spans the grid pane (790 design px, `kiosk_geometry::GRID_STRIP_H_1080`) while
+/// the overlay styles offsets against `--h = 100vh/1080`; publishing strip pixels raw
+/// overshoots by the capture ratio on any panel above 1080p (measured 2026-09-26 on the
+/// 1440p field frame: a settled scroll phase of +144 strip px painted the chips +192 CSS
+/// px, half a row below their cards).
+pub fn to_design_px(dy: i32, strip_rows: usize) -> i32 {
+    if strip_rows == 0 {
+        return dy;
+    }
+    (dy as f64 * crate::kiosk_geometry::GRID_STRIP_H_1080 as f64 / strip_rows as f64).round() as i32
+}
+
 /// Normalized cross-correlation of two row profiles: the shift (in rows) that best explains
 /// `next` as `prev` moved vertically, if that shift is confident enough to name.
 ///
@@ -646,6 +659,21 @@ mod tests {
                 (state % 1000) as f32
             })
             .collect()
+    }
+
+    #[test]
+    fn to_design_px_rebases_caption_units_on_the_overlay() {
+        // A 1440p panel's strip is 1053 rows tall (the pane's 790 design px x 4/3): its
+        // 296-row pitch is the design's 222px pitch, and a raw handoff overshoots by a
+        // third (the 2026-09-26 half-row chip drift).
+        assert_eq!(to_design_px(296, 1053), 222);
+        assert_eq!(to_design_px(-192, 1053), -144);
+        // Identity at the calibration strip height, and a still grid stays still anywhere.
+        assert_eq!(to_design_px(-30, 790), -30);
+        assert_eq!(to_design_px(0, 900), 0);
+        // Rounding lands on the nearer pixel, and an unmeasured strip passes the value on.
+        assert_eq!(to_design_px(1, 1053), 1);
+        assert_eq!(to_design_px(57, 0), 57);
     }
 
     #[test]

@@ -56,6 +56,11 @@ const ROW_TOPS: [f32; GRID_ROWS] = [fx(199.0), fx(421.0), fx(643.0), fx(865.0)];
 /// mean luma drops 77 to 48 between y=982 and y=985, so 983 is where the pane ends. A label
 /// band that would land at y=1009 is never rendered -- the game clips before drawing it.
 const PANE_BOTTOM: f32 = fx(983.0);
+/// The strip's height in design pixels: `grid_strip`'s y extent (`193..983` at the
+/// calibration). Vertical offsets measured in the strip's own rows rebase onto this span
+/// for the overlay (`kiosk_scroll::to_design_px`).
+pub const GRID_STRIP_H_1080: i32 = 790;
+
 /// The grid's vertical period in design pixels: one row's card top to the next's
 /// (`ROW_TOPS` differences, 421-199 and 643-421). The scroll locator folds the pane's row
 /// profile over this, because a grid scrolled by any amount repeats itself on it.

@@ -1834,8 +1834,13 @@ where
             if frame_delta.abs() > 1 {
                 // Stream the frame's movement; the frontend accumulates the deltas. Deltas
                 // need no anchor and no range, so the chips follow a scroll of any length.
+                // The value arrives in strip pixels and crosses IPC as design pixels: the
+                // overlay multiplies it by 100vh/1080 (see kiosk_scroll::to_design_px).
                 looks_motion += 1;
-                emit_scroll(Some(frame_delta));
+                emit_scroll(Some(kiosk_scroll::to_design_px(
+                    frame_delta,
+                    reading.map_or(0, |strip| strip.len()),
+                )));
                 static_looks = 0;
                 std::thread::sleep(timing.motion_interval);
                 continue;
@@ -1857,6 +1862,7 @@ where
             looks_still += 1;
             looks_reads += 1;
             static_looks = 0;
+            let strip_rows = reading.map_or(0, |strip| strip.len());
             let located = reading.and_then(|strip| {
                 let at = kiosk_geometry::label_anchors(strip.len());
                 kiosk_scroll::label_offset(strip, at.strip_top, at.first_top, at.pitch, at.band)
@@ -2026,7 +2032,12 @@ where
                         frame.cells.clear();
                     }
                     let mut view = joiner(epoch, &frame);
-                    view.scroll_dy = dy;
+                    // The frontend styles this offset against 100vh/1080, so it must cross
+                    // IPC in design pixels; `dy` was measured in strip (capture) pixels. On
+                    // captures taller than 1080 the raw value overshoots the cards by the
+                    // ratio (the 2026-09-26 field frame's chips floated far below their
+                    // tiles -- 144 capture px became 192 on his 1440p panel).
+                    view.scroll_dy = kiosk_scroll::to_design_px(dy, strip_rows);
                     let cell_detail: Vec<String> = frame
                         .cells
                         .iter()
