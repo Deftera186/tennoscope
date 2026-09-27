@@ -447,6 +447,41 @@ mod tests {
 
     /// The live game basket has three occupied rows. A widened name crop crosses the pane
     /// boundary and can recognize adjacent grid text as a fourth, orphan-priced basket row.
+    /// The chip masks blank the pair column where the overlay draws, but the game's own
+    /// "2 X" stack marker is a name prefix far left of it: a masked frame must still read a
+    /// real stacked quantity. Measured on the live 1080p basket fixture 2026-09-27: the
+    /// mask band spans design-x 1632..1753, the marker sits against the name's leading edge
+    /// (design-x ~1080), nowhere near it.
+    #[test]
+    fn masking_the_published_chips_does_not_hide_a_stacked_quantity() {
+        let mut image = image::open(QUANTITY_LIVE_FIXTURE).unwrap();
+        let view = crate::kiosk_view::KioskView {
+            session: 0,
+            epoch: 0,
+            cells: vec![],
+            basket: (0..3)
+                .map(|index| crate::kiosk_view::BasketChip {
+                    index,
+                    name: format!("row {index}"),
+                    platinum: Some(10),
+                })
+                .collect(),
+            total_plat: 40,
+            scroll_dy: 0,
+        };
+        crate::kiosk_view::mask_published_chips(&mut image, &view, 0);
+        let rows = read_basket(&image, &candidates());
+        let stacked = rows
+            .iter()
+            .find(|row| row.name == "Kompressa Prime Barrel")
+            .unwrap_or_else(|| panic!("stacked basket row missing post-mask; got {rows:?}"));
+        assert_eq!(stacked.index, 2);
+        assert_eq!(
+            stacked.quantity, 2,
+            "the game's own stack marker survives the chip mask: {rows:?}"
+        );
+    }
+
     #[test]
     fn live_basket_does_not_match_adjacent_grid_text_as_a_fourth_row() {
         let image = image::open(QUANTITY_LIVE_FIXTURE).unwrap();

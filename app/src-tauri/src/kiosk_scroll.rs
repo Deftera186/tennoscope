@@ -676,6 +676,36 @@ mod tests {
         assert_eq!(to_design_px(57, 0), 57);
     }
 
+    /// Every real kiosk capture on record must clear the fold's gates. The constants behind
+    /// this test were measured gate-side 2026-09-27: the six frames hold contrast ratios
+    /// 3.3-4.8 against the gate's 3.0 and presence floors 199-250 against the gate's 140, so
+    /// a constant retune that erodes those margins fails loudly against the frames that
+    /// earned them.
+    #[test]
+    fn every_field_fixture_clears_the_fold_gates() {
+        for fixture in [
+            "kiosk-baseline.png",
+            "kiosk-dim-evening.png",
+            "kiosk-hover-polluted.png",
+            "kiosk-open.png",
+            "kiosk-quantity-game.png",
+            "kiosk-selected-nig7.png",
+        ] {
+            let frame = image::open(format!(
+                "{}/tests/fixtures/kiosk/{fixture}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("kiosk fixture");
+            let (x, y, w, h) = crate::kiosk_geometry::grid_strip(frame.width(), frame.height());
+            let strip = row_profiles(&frame, x, y, w, h);
+            let at = crate::kiosk_geometry::label_anchors(strip.len());
+            assert!(
+                label_offset(&strip, at.strip_top, at.first_top, at.pitch, at.band).is_some(),
+                "{fixture} must locate its label bands"
+            );
+        }
+    }
+
     #[test]
     fn row_profiles_count_glyph_edges_not_brightness() {
         // 24px rows: a glyph row (bright 2px strokes on a dark field, like label text), a

@@ -1195,15 +1195,15 @@ pub(crate) fn run(
                     }
                     emit_kiosk_update(&app, Some(session));
                 }) {
-                    if let Ok(mut stash) = chips.lock() {
-                        *stash = Some(view);
-                    }
+                    stash_publish(&chips, view);
                 }
             }
         };
         let emit_scroll = {
             let app = app.clone();
+            let chips = Arc::clone(&chips);
             move |verdict: Option<i32>| {
+                track_scroll_delta(&chips, verdict);
                 // Gate every side effect at the same session mutex as publication, then carry the
                 // identity across IPC so an event already queued for the webview cannot cross a
                 // close/reopen boundary.
@@ -1540,7 +1540,40 @@ pub struct ScreenKioskSource {
 /// Source and publish arm share it: publish stores the view it pushed, the source masks
 /// its chips out of the next capture. Stale by at most one epoch, which the steering
 /// ladder absorbs: a chip that moved mid-scroll is re-masked at the next settle.
-pub type ChipsState = Arc<std::sync::Mutex<Option<KioskView>>>;
+/// The overlay's drawn chips as the capture sees them: the last published view, plus where
+/// its grid chips sit *right now* in design pixels. Scroll deltas land between publishes, so
+/// the drawn position drifts off `view.scroll_dy` until the next settle re-anchors it; the
+/// mask must ride the same accumulation or the chips surface in the capture unmasked (this
+/// is the self-readback failure class arriving one scroll late).
+#[derive(Clone)]
+pub struct ChipMask {
+    pub view: KioskView,
+    /// Live grid-chip offset in design pixels: `view.scroll_dy` at publish, plus every
+    /// design-pixel delta emitted since (the deltas are measured from captures, so the
+    /// accumulation tracks what the frames actually contain).
+    pub mask_dy: i32,
+}
+
+/// Publish arm: a fresh view re-anchors the frontend outright, so the drawn offset restarts
+/// at the new epoch's own phase.
+fn stash_publish(chips: &ChipsState, view: KioskView) {
+    if let Ok(mut stash) = chips.lock() {
+        *stash = Some(ChipMask { view, mask_dy: 0 });
+    }
+}
+
+/// Scroll arm: streamed deltas ride the chips between publishes, so the mask rides with
+/// them. A null verdict fades the chips visually but the pixels were already captured --
+/// the mask stays put either way.
+fn track_scroll_delta(chips: &ChipsState, verdict: Option<i32>) {
+    if let Some(delta) = verdict {
+        if let Ok(Some(mask)) = chips.lock().as_deref_mut() {
+            mask.mask_dy = mask.mask_dy.saturating_add(delta);
+        }
+    }
+}
+
+pub type ChipsState = Arc<std::sync::Mutex<Option<ChipMask>>>;
 
 impl Default for ScreenKioskSource {
     fn default() -> Self {
@@ -1564,8 +1597,8 @@ impl ScreenKioskSource {
     }
 
     fn mask_chips(&self, frame: &mut image::DynamicImage) {
-        if let Ok(Some(view)) = self.chips.lock().as_deref() {
-            kiosk_view::mask_published_chips(frame, view);
+        if let Ok(Some(mask)) = self.chips.lock().as_deref() {
+            kiosk_view::mask_published_chips(frame, &mask.view, mask.mask_dy);
         }
     }
 
@@ -3526,8 +3559,8 @@ mod tests {
 
         fn masked(&self) -> image::DynamicImage {
             let mut frame = self.0.clone();
-            if let Ok(Some(view)) = self.1.lock().as_deref() {
-                crate::kiosk_view::mask_published_chips(&mut frame, view);
+            if let Ok(Some(mask)) = self.1.lock().as_deref() {
+                crate::kiosk_view::mask_published_chips(&mut frame, &mask.view, mask.mask_dy);
             }
             frame
         }
@@ -3620,9 +3653,7 @@ mod tests {
                 },
                 move |view| {
                     // Publish arm mirrors production: the source masks the last view's chips.
-                    if let Ok(mut stash) = mask_feed.lock() {
-                        *stash = Some(view.clone());
-                    }
+                    stash_publish(&mask_feed, view.clone());
                     sink.lock().expect("published").push(view);
                 },
                 |_| (),
@@ -3665,18 +3696,168 @@ mod tests {
             "twelve single copies, no phantom multipliers: {:?}",
             last.basket
         );
-        // And the visit holds still: the last publishes agree with each other.
-        let names_of = |view: &KioskView| {
+        // And the visit holds still: publishes never disagree once one has landed.
+        let states: Vec<Vec<String>> = published
+            .iter()
+            .map(|view| view.cells.iter().map(|c| c.name.clone()).collect())
+            .collect();
+        assert!(
+            states.windows(2).all(|pair| pair[0] == pair[1]),
+            "settled publishes converge instead of oscillating: {states:?}"
+        );
+        // The grid is pixel-exact unscrolled on this frame (tile borders measured at the
+        // calibration spot), so the published phase must sit within rounding of zero --
+        // this is the value that paints the chips onto their cards.
+        let dy = published.last().expect("last view").scroll_dy;
+        assert!(
+            dy.abs() <= 1,
+            "the unscrolled field frame publishes no scroll phase: dy={dy}"
+        );
+    }
+
+    /// A publish re-anchors the mask's chased offset; streamed deltas accumulate between
+    /// publishes (measured from captures, so they track what the next frame contains).
+    #[test]
+    fn the_chip_mask_rides_streamed_deltas_and_rebases_on_publish() {
+        let chips: ChipsState = Arc::new(StdMutex::new(None));
+        // Scrolling with nothing published touches nothing.
+        track_scroll_delta(&chips, Some(40));
+        assert!(chips.lock().expect("chips").is_none());
+
+        let publish = |dy| KioskView {
+            cells: vec![],
+            basket: vec![],
+            scroll_dy: dy,
+            ..KioskView::default()
+        };
+        stash_publish(&chips, publish(35));
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 0);
+        track_scroll_delta(&chips, Some(37));
+        track_scroll_delta(&chips, Some(3));
+        track_scroll_delta(&chips, None); // a faded look moves nothing
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 40);
+        stash_publish(&chips, publish(-12));
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 0);
+    }
+
+    /// Shift the pane's own content down inside the fixture -- the way the game draws a
+    /// scroll under the clipped pane -- and hand the loop the result.
+    fn scrolled_fixture(path: &str, dy: i64) -> image::DynamicImage {
+        use image::GenericImage;
+        let base = image::open(path).expect("kiosk fixture");
+        let mut canvas = base.clone();
+        let (x, y, w, h) = kiosk_geometry::grid_strip(base.width(), base.height());
+        let dy = u32::try_from(dy).expect("test shifts down");
+        // Anything pasted past the pane's clip edge leaves the strip and the label crops,
+        // so only fitting rows are copied.
+        let fits = h.min(base.height().saturating_sub(y + dy));
+        let cut = base.crop_imm(x, y, w, fits);
+        canvas
+            .copy_from(&cut, x, y + dy)
+            .expect("paste shifted pane");
+        canvas
+    }
+
+    /// The 1080p calibration fixture scrolled a third of a row: the fold must name +74, the
+    /// reads must find the same labels at the shifted bands, and the published phase -- the
+    /// value that paints chips onto cards -- must be that +74 and nothing else. At 1080p the
+    /// strip and design units coincide, so this is the deterministic identity case.
+    #[test]
+    fn a_scrolled_1080p_grid_prices_the_shifted_bands_at_the_true_phase() {
+        let frame = scrolled_fixture(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/kiosk/kiosk-open.png"
+            ),
+            74,
+        );
+        let candidates = catalog_entries(&[
+            "Titania Prime Systems Blueprint",
+            "Tiberon Prime Barrel",
+            "Atlas Prime Chassis Blueprint",
+        ]);
+        let (source, _chips) = LiveFrame::new(frame);
+        let (_, _, published) = run_poller_with(source, candidates);
+        let published = published.lock().expect("published");
+        let view = published.last().expect("a scrolled grid still publishes");
+        for (name, row) in [
+            ("Titania Prime Systems Blueprint", 0u32),
+            ("Tiberon Prime Barrel", 1),
+            ("Atlas Prime Chassis Blueprint", 2),
+        ] {
+            assert!(
+                view.cells
+                    .iter()
+                    .any(|cell| cell.col == 0 && cell.row == row && cell.name == name),
+                "row {row} must be {name} after a 74px scroll: {:?}",
+                view.cells
+            );
+        }
+        assert!(
+            (view.scroll_dy - 74).abs() <= 1,
+            "the publish names the scroll phase: dy={}",
+            view.scroll_dy
+        );
+    }
+
+    /// The same scroll one resolution up -- the 1440p field frame, pane content dragged by
+    /// 44 capture rows (33 design px). The strip space and the overlay space differ by 4/3
+    /// there, and the published phase must cross that gap: round(44 x 790/1053) = 33
+    /// (the field frame's own fold bias is -1, so accept +-2). The drag stays moderate on
+    /// purpose: the emulation cannot synthesize content entering the pane, and its leftover
+    /// sliver dilutes the fold's contrast (ratio 3.9 real -> 3.0 at a 99-row drag, measured
+    /// 2026-09-27); every real frame on disk holds ratio >= 3.3 against the gate's 3.0.
+    #[test]
+    fn the_scrolled_field_frame_publishes_the_phase_in_design_pixels() {
+        let frame = scrolled_fixture(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/kiosk/kiosk-selected-nig7.png"
+            ),
+            44,
+        );
+        let candidates = catalog_entries(&[
+            "Afentis Prime Blade",
+            "Afuris Prime Receiver",
+            "Alternox Prime Blueprint",
+            "Banshee Prime Chassis Blueprint",
+            "Caliban Prime Neuroptics Blueprint",
+            "Dual Kamas Prime Blade",
+            "Dual Zoren Prime Blade",
+            "Hystrix Prime Receiver",
+            "Kestrel Prime Grip",
+            "Lavos Prime Systems Blueprint",
+            "Ninkondi Prime Handle",
+            "Oberon Prime Neuroptics Blueprint",
+            "Okina Prime Blueprint",
+            "Pangolin Prime Blueprint",
+            "Perigale Prime Barrel",
+            "Phantasma Prime Barrel",
+            "Revenant Prime Blueprint",
+            "Scourge Prime Blueprint",
+        ]);
+        let (source, _chips) = LiveFrame::new(frame);
+        let (_, _, published) = run_poller_with(source, candidates);
+        let published = published.lock().expect("published");
+        let view = published
+            .last()
+            .expect("a scrolled field frame still publishes");
+        assert!(
             view.cells
                 .iter()
-                .map(|c| c.name.clone())
-                .collect::<Vec<_>>()
-        };
-        let tail: Vec<Vec<String>> = published.iter().rev().take(3).map(names_of).collect();
-        assert!(
-            tail.windows(2).all(|pair| pair[0] == pair[1]),
-            "settled publishes converge instead of oscillating: {tail:?}"
+                .any(|cell| cell.col == 0 && cell.row == 0 && cell.name == "Afentis Prime Blade"),
+            "the shifted pane's top row reads its true owner: {:?}",
+            view.cells
         );
+        assert!(
+            (view.scroll_dy - 33).abs() <= 2,
+            "strip px cross into design px at 1440p: dy={} (want ~33)",
+            view.scroll_dy
+        );
+        // The basket column lies outside the shifted pane copy: rows and single-copy
+        // quantities must survive the frame content sliding under them.
+        assert_eq!(view.basket.len(), 12, "basket rows: {:?}", view.basket);
+        assert_eq!(view.total_plat, 12, "no phantom stacks: {:?}", view.basket);
     }
 
     /// End-to-end against the 2026-09-25 evening field frame that the poller failed on

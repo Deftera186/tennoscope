@@ -186,7 +186,9 @@ pub fn grid_chip_mask(
 ) -> Option<(u32, u32, u32, u32)> {
     let (right, top) = tile_anchor(width, height, col, row)?;
     let scale = height as f32;
-    let top = top + dy as f32;
+    // `dy` arrives in the overlay's design pixels (the published scroll offset); tile_anchor
+    // works in capture pixels. Pane and frame scale together, so one height factor converts.
+    let top = top + dy as f32 / CAL * scale;
     if top < ROW_TOPS_MIN_CLIP * scale || top > PANE_BOTTOM * scale {
         return None;
     }
@@ -365,6 +367,14 @@ mod tests {
         );
         // Rows past the pane's dozen do not exist to mask.
         assert_eq!(basket_chip_mask(1920, 1080, BASKET_ROWS), None);
+        // A scrolled publish shifts masks by design pixels: at 1440p capture scale the
+        // +30-design-pixel anchor is +40 capture pixels (the 2026-09-27 audit: raw dy had
+        // the mask chasing the chips a third short on any scrolled grid).
+        let base = grid_chip_mask(2560, 1440, 0, 0, 0).unwrap();
+        let shifted = grid_chip_mask(2560, 1440, 0, 0, 30).unwrap();
+        assert_eq!(shifted.1 - base.1, 40, "design dy scales to capture px");
+        assert_eq!(shifted.0, base.0, "horizontal anchor is scroll-immune");
+
         // The TOTAL row masks outright.
         let total = total_chip_mask(1920, 1080);
         let (_tr, _tb) = total_row_pair(1920, 1080);

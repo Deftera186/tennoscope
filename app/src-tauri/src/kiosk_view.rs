@@ -216,7 +216,11 @@ pub fn build_view(
 /// edge-count profile and the per-crop OCR normalisation. Nothing under a chip was captured
 /// anyway -- the chip occludes it on screen -- so masking loses no information about the
 /// game, only about ourselves.
-pub fn mask_published_chips(frame: &mut image::DynamicImage, view: &KioskView) {
+/// `mask_dy` is where the chips actually sit in design pixels right now: the published
+/// phase plus any scroll deltas streamed since. Tiles must shift the same distance the
+/// frontend slides them, or the moment after a scroll the previous epoch's chips re-enter
+/// the capture above their masks (the self-readback failure class, one scroll earlier).
+pub fn mask_published_chips(frame: &mut image::DynamicImage, view: &KioskView, mask_dy: i32) {
     let (width, height) = (frame.width(), frame.height());
     let mut rects = Vec::with_capacity(view.cells.len() + view.basket.len() + 1);
     for cell in &view.cells {
@@ -225,7 +229,7 @@ pub fn mask_published_chips(frame: &mut image::DynamicImage, view: &KioskView) {
             height,
             cell.col as usize,
             cell.row as usize,
-            view.scroll_dy,
+            mask_dy,
         ) {
             rects.push(rect);
         }
@@ -370,6 +374,27 @@ mod tests {
 
         assert_eq!(view.basket[0].platinum, Some(7));
         assert_eq!(view.total_plat, 7);
+    }
+
+    /// "The grid and the kart disagree" (2026-09-26 field report): both lanes price by the
+    /// same name through the same table, so a card's corner chip is its basket row's chip,
+    /// and the marketplace's per-copy number is what both say.
+    #[test]
+    fn the_same_name_prices_identically_on_the_card_and_in_the_basket() {
+        let cells = [cell(0, 0, "Kompressa Prime Barrel")];
+        let mut stacked = basket_row(0, "Kompressa Prime Barrel");
+        stacked.quantity = 3;
+        let view = build_view(0, &cells, &[stacked], |name| match name {
+            "Kompressa Prime Barrel" => Some(18),
+            _ => None,
+        });
+        assert_eq!(view.cells[0].platinum, Some(18));
+        assert_eq!(
+            view.basket[0].platinum,
+            Some(18),
+            "the basket shows the unit price"
+        );
+        assert_eq!(view.total_plat, 54, "only the total multiplies copies");
     }
 
     #[test]
