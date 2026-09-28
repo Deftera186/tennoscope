@@ -65,9 +65,7 @@ const LOUD_ROW_FRACTION: f32 = 0.4;
 /// Convert a vertical offset measured in strip rows into the frontend's design pixels.
 /// The strip spans the grid pane (790 design px, `kiosk_geometry::GRID_STRIP_H_1080`) while
 /// the overlay styles offsets against `--h = 100vh/1080`; publishing strip pixels raw
-/// overshoots by the capture ratio on any panel above 1080p (measured 2026-09-26 on the
-/// 1440p field frame: a settled scroll phase of +144 strip px painted the chips +192 CSS
-/// px, half a row below their cards).
+/// overshoots by the capture ratio on any panel above 1080p.
 pub fn to_design_px(dy: i32, strip_rows: usize) -> i32 {
     if strip_rows == 0 {
         return dy;
@@ -286,19 +284,12 @@ pub struct LocatedLabels {
 /// The counted thing is text, not whiteness. A label row is hundreds of thin bright strokes
 /// on a dark field: pixels that exceed BOTH horizontal neighbours (three columns over) by a
 /// wide margin. Gradients, card art and gold trim are smooth along a row and hold almost no
-/// such maxima. Counting sharp maxima instead of threshold-crossing pixels is what lets the
-/// locator see every label class at once: on the 2026-09-26 field frame the SELECTED rows'
-/// labels render at luma 234 and the unselected rows' at 168, while card-art highlights reach
-/// 205 -- no luma threshold separates 168 text from 205 art, an absolute gate sees only the
-/// white class (the fold answered two bands on a three-row pane and the overlay priced only
-/// the rows the player had clicked), and a per-strip adaptive gate follows whichever class
-/// dominates. The edge contrast between glyph and field survives selection state, hovering
-/// and evening-dimmed pipelines alike (measured contrasts: 216/150/186 on the dim frame,
-/// still >= 100 at 0.7x dimming).
+/// such maxima. No luma threshold separates dim text from bright art, so the locator counts
+/// sharp edge maxima instead of threshold-crossing pixels and sees every label class at once.
 ///
 /// The absolute check shrinks to one presence floor: a strip whose brightest 0.5% cannot
 /// reach 140 holds no text class any OCR crop could read, so the profile is zero and the
-/// locator truthfully answers "no labels" (the 0.45x-dimmed pipeline stays `None`).
+/// locator truthfully answers "no labels".
 pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec<f32> {
     let luma = image.to_luma8();
     let (width, height) = luma.dimensions();
@@ -335,15 +326,14 @@ pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec
 /// [`TEXT_EDGE_DELTA`]: three columns is inside a glyph stroke at every supported density
 /// (a 1080p stroke is 2px, 1440p 3px) and past the reach of a smooth gradient's slope.
 const TEXT_EDGE_SPAN: u32 = 3;
-/// Measured contrast between label glyphs and their field: >= 104 across every captured
-/// frame class (full-range, evening-dimmed, unselected-gold). Half of that keeps sensor
-/// noise (<= 12 on these captures) out by a wide margin and admits dim pipelines.
+/// Glyph-to-field contrast floor: low enough to admit dim pipelines, high enough above
+/// sensor noise to keep it out by a wide margin.
 const TEXT_EDGE_DELTA: i32 = 60;
 
 /// Whether the strip's whitest structure reaches a level at which any text class can live:
 /// the 99.5th-percentile luma scaled by 0.98 against the calibrated 140 floor. Below it the
-/// frame is too dark to hold labels at all (measured on 2026-09-25's 0.45x evening dimming):
-/// no row may vote, so the fold sees a genuinely empty pane.
+/// frame is too dark to hold labels at all: no row may vote, so the fold sees a genuinely
+/// empty pane.
 fn holds_any_text_class(luma: &GrayImage, x: u32, y: u32, w: u32, h: u32) -> bool {
     /// The floor the 99.5th-percentile ceiling must clear, scaled by the same 0.98 fringe
     /// margin the white-gate calibration used.
@@ -664,8 +654,7 @@ mod tests {
     #[test]
     fn to_design_px_rebases_caption_units_on_the_overlay() {
         // A 1440p panel's strip is 1053 rows tall (the pane's 790 design px x 4/3): its
-        // 296-row pitch is the design's 222px pitch, and a raw handoff overshoots by a
-        // third (the 2026-09-26 half-row chip drift).
+        // 296-row pitch is the design's 222px pitch.
         assert_eq!(to_design_px(296, 1053), 222);
         assert_eq!(to_design_px(-192, 1053), -144);
         // Identity at the calibration strip height, and a still grid stays still anywhere.
@@ -676,11 +665,7 @@ mod tests {
         assert_eq!(to_design_px(57, 0), 57);
     }
 
-    /// Every real kiosk capture on record must clear the fold's gates. The constants behind
-    /// this test were measured gate-side 2026-09-27: the six frames hold contrast ratios
-    /// 3.3-4.8 against the gate's 3.0 and presence floors 199-250 against the gate's 140, so
-    /// a constant retune that erodes those margins fails loudly against the frames that
-    /// earned them.
+    /// Every real kiosk capture on record must clear the fold's gates.
     #[test]
     fn every_field_fixture_clears_the_fold_gates() {
         for fixture in [
@@ -689,7 +674,7 @@ mod tests {
             "kiosk-hover-polluted.png",
             "kiosk-open.png",
             "kiosk-quantity-game.png",
-            "kiosk-selected-nig7.png",
+            "kiosk-selected-chips-baked-1440p.png",
         ] {
             let frame = image::open(format!(
                 "{}/tests/fixtures/kiosk/{fixture}",
@@ -776,9 +761,8 @@ mod tests {
     }
 
     /// The locator's phase must not depend on the capture pipeline's white ceiling:
-    /// the same grid dimmed to 85% or 70% (a 2026-09-25 KDE frame's labels topped
-    /// out at luma 206-213, where a full-range capture reads 255) must fold to the
-    /// identical answer, band count included.
+    /// the same grid dimmed to 85% or 70% must fold to the identical answer, band
+    /// count included.
     #[test]
     fn dimming_the_grid_does_not_move_the_fold() {
         let undisputed = locate(&dimmed_fixture(1.0));
@@ -794,10 +778,7 @@ mod tests {
         assert_eq!(locate(&dimmed_fixture(0.45)), None);
     }
 
-    /// The field frame at the centre of the 2026-09-25 evening visit: a still,
-    /// focused, fully populated kiosk the poller went 594-of-603 looks blind on,
-    /// because nothing in its strip ever crossed the full-white calibration. The
-    /// fold must answer real frames like this one.
+    /// A still, focused, populated dim grid must still fold to 3+ bands.
     #[test]
     fn the_dim_evening_field_frame_folds() {
         let frame = image::open(concat!(
@@ -812,13 +793,7 @@ mod tests {
         );
     }
 
-    /// The 2026-09-26 field frame: a fully populated kiosk whose first two rows are
-    /// SELECTED -- and rendered bright white (luma 234) -- while the unselected third row's
-    /// labels top out at 168 and its card art highlights at 205. No luma threshold separates
-    /// 168 text from 205 art: the white gate answered two bands on a three-row pane (the 594
-    /// blind looks' successor failure), and the overlay's own chips then fed the fold from
-    /// the card-top rows. The locator must find all three real label bands, on the text
-    /// (1440p glyph cores at y 461-508, so the named band top is 457+dy within 447..=461).
+    /// All rendered bands count, and the named band holds the glyph cores.
     #[test]
     fn the_selected_frame_folds_every_visible_band() {
         let frame = image::open(concat!(

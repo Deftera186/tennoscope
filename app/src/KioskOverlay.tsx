@@ -131,10 +131,8 @@ export default function KioskOverlay() {
         if (fadeAtRead === fadeSeq.current) setFaded(false)
         // Every settled read measured where the grid sits right now, so its offset is
         // authoritative whenever nothing has moved since the read began -- not just when
-        // an anchor marks it. Adopting only anchors let each look's estimation error
-        // compound unrestrained, until the chips drifted clean off their cards mid-session
-        // (the misalignment of 2026-08-23: an unscrolled grid reported 8px off, and stayed
-        // 8px wrong all visit because nothing ever re-anchored).
+        // an anchor marks it. Adopting only anchors lets each look's estimation error
+        // compound unrestrained until the chips drift clean off their cards mid-session.
         if (sessionChanged || seqAtRead === scrollSeq.current) {
           setOffset(next.scroll_dy)
         }

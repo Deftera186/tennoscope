@@ -28,8 +28,7 @@ pub const GRID_ROWS: usize = 4;
 /// Basket rows the pane shows at once. Row `i`'s digits sit on baseline 243+38 1/3*i and
 /// the TOTAL row's digits sit on 875, so indexes 0..=15 fit (row 15's baseline is 818.0, its
 /// band ends at 823 against the TOTAL band's top at ~859); a seventeenth row would print
-/// into the TOTAL row itself. Measured in the field 2026-09-28: a 16-item visit at 1080p
-/// shows sixteen rows; the old cap of 12 left the last four unpriced.
+/// into the TOTAL row itself.
 pub const BASKET_ROWS: usize = 16;
 
 /// Left edge of the basket pane at 1920x1080. Name OCR must not cross into grid column six.
@@ -93,10 +92,8 @@ const BASKET_PITCH: f32 = fx(115.0 / 3.0);
 const ROW_PAIR_RIGHT: f32 = fcx(1750.0);
 
 /// Right edge of our `[icon][digits]` pair in the TOTAL row. The game's gold glyph slides
-/// left as its ducat count widens: measured 2026-09-28 on a 1080p visit totalling 1,255,
-/// the glyph spans x=1713..1730 while our chip's text ended at 1715 -- overlapping it.
-/// The old anchor (1717, "13px left of the glyph") only held for narrower totals, so the
-/// pair ends at 1700: ~13px clear of a five-digit total, still clear at six.
+/// left as its ducat count widens, so the pair ends at 1700: ~13px clear of a five-digit
+/// total, still clear at six.
 const TOTAL_PAIR_RIGHT: f32 = fcx(1700.0);
 const TOTAL_BASELINE: f32 = fx(875.0);
 
@@ -176,8 +173,7 @@ pub fn basket_row_pair(width: u32, height: u32, row: usize) -> Option<(f32, f32)
 /// sits on `tile_anchor(col, row)` and extends left. Capture rectangles of every monitor
 /// include our own overlay (portal captures the composited monitor), so the kiosk pipeline
 /// masks exactly these boxes out of a frame before profiles and OCR -- an unread chip cannot
-/// fold the locator onto the card-top row or feed digits to a quantity read, both measured
-/// on the 2026-09-26 field frame.
+/// fold the locator onto the card-top row or feed digits to a quantity read.
 ///
 /// The box is the chip's own geometry grown by a few pixels of antialias fringe; text behind
 /// it is occluded on screen anyway, so nothing readable is masked out.
@@ -369,11 +365,10 @@ mod tests {
             (by + bh) as f32 > baseline - 5.0 && (by + bh) as f32 <= baseline + 8.0,
             "basket mask sits on the chip band just above the baseline: {by}+{bh} vs {baseline}"
         );
-        // Rows past the pane's dozen do not exist to mask.
+        // Rows past BASKET_ROWS do not exist to mask.
         assert_eq!(basket_chip_mask(1920, 1080, BASKET_ROWS), None);
         // A scrolled publish shifts masks by design pixels: at 1440p capture scale the
-        // +30-design-pixel anchor is +40 capture pixels (the 2026-09-27 audit: raw dy had
-        // the mask chasing the chips a third short on any scrolled grid).
+        // +30-design-pixel anchor is +40 capture pixels.
         let base = grid_chip_mask(2560, 1440, 0, 0, 0).unwrap();
         let shifted = grid_chip_mask(2560, 1440, 0, 0, 30).unwrap();
         assert_eq!(shifted.1 - base.1, 40, "design dy scales to capture px");

@@ -1104,11 +1104,9 @@ impl RewardSession {
 ///
 /// A label that matched a built component (`Khora Prime Neuroptics`) falls back to its
 /// blueprint twin. The ducat kiosk only ever shows tradeable prime parts, so a built name on
-/// screen is a dropped-` Blueprint` misread -- seen live 2026-09-28, when a basket row matched
-/// the built entry and read `-` while the same item's grid tile priced 29p -- never an item
-/// the player could actually sell. This stays kiosk-scoped on purpose:
-/// `PriceTable::market_name` deliberately has no append-` Blueprint` rule, measured 25-for-25
-/// wrong in the collection, where a built frame is a real owned item rather than a misread.
+/// screen is a dropped-` Blueprint` misread, never an item the player could actually sell.
+/// This stays kiosk-scoped on purpose: `PriceTable::market_name` deliberately has no
+/// append-` Blueprint` rule, where a built frame is a real owned item rather than a misread.
 fn kiosk_unit_price(
     table: Option<&Arc<PriceTable>>,
     cache: &MarketPriceCache,
@@ -1578,8 +1576,8 @@ pub struct ScreenKioskSource {
 pub struct ChipMask {
     pub view: KioskView,
     /// Live grid-chip offset in design pixels: `view.scroll_dy` at publish, plus every
-    /// design-pixel delta emitted since (the deltas are measured from captures, so the
-    /// accumulation tracks what the frames actually contain).
+    /// design-pixel delta emitted since, so the accumulation tracks what the frames
+    /// actually contain.
     pub mask_dy: i32,
 }
 
@@ -1691,14 +1689,13 @@ impl KioskFrameSource for ScreenKioskSource {
     }
 }
 
-/// The match score that separates a true read from a lookalike. Clean reads of visible
-/// labels score 0.94 or better (the kiosk fixture pins 0.85 as the floor of healthy);
-/// lookalikes harvested from a misphased crop measured 0.60 to 0.76 (2026-09-25 frame).
+/// The match score that separates a true read from a lookalike. Clean reads score well
+/// clear of lookalikes, and the floor sits in that gap at 0.85.
 const KIOSK_CONFIDENT_SCORE: f32 = 0.85;
-
+///
 /// How far the fine ladder walks: two eighth-pitch rungs to either side of the coarse
-/// winner. The measured tie-run drag on the polluted pane was 36 rows of a 291 pitch --
-/// one rung -- and two keeps a margin for a drag three times that strong.
+/// winner. One rung covers the polluted pane's tie-run drag, and two keeps a margin
+/// for a drag ~2x that strong.
 const KIOSK_FINE_LADDER_RUNGS: i32 = 2;
 
 /// Confident cells a read holds: matches at or above [`KIOSK_CONFIDENT_SCORE`]. A failed
@@ -1771,23 +1768,19 @@ where
         let mut last_strip: Option<Vec<f32>> = None;
         let mut static_looks = 0_u32;
         let mut unmeasured_looks: u32 = 0;
-        // Basket quantities flicker frame to frame on static content (measured
-        // 4070<->470 totals on an unchanged 8-row basket): a quantity above 1 is only
-        // adopted after two consecutive identical reads of the same basket slot and
-        // name, otherwise the row publishes as 1. Keyed, so a reshuffled basket
+        // Basket quantities flicker frame to frame on static content: a quantity above 1
+        // is only adopted after two consecutive identical reads of the same basket slot
+        // and name, otherwise the row publishes as 1. Keyed, so a reshuffled basket
         // restarts its own streaks without clearing anyone else's.
         let mut quantity_streaks: BTreeMap<(usize, String), (u32, u8)> = BTreeMap::new();
-        // Per-look verdict counters, flushed with each publish and at session end: the
-        // branches below are otherwise silent, which once hid a 48-second stretch with
-        // a single settle behind "no evidence".
+        // Per-look verdict counters: the branches below are otherwise silent, so the
+        // counters flush on publish. The heartbeat logs one bounded debug line per 15 s
+        // so a visit that never settles still leaves motion-vs-blindness visible.
         let mut looks_motion = 0u64;
         let mut looks_blind = 0u64;
         let mut looks_unmeasured = 0u64;
         let mut looks_still = 0u64;
         let mut looks_reads = 0u64;
-        // Heartbeat + blind-reason tracking for the next diagnostic round: per-look
-        // verdicts are otherwise silent, which once hid a 48-second stretch with a
-        // single settle behind "no evidence". Both log at debug level, bounded.
         let mut last_heartbeat = Instant::now();
         let mut last_blind_reason: Option<&'static str> = None;
         let mut last_located_dy: Option<i32> = None;
@@ -1809,9 +1802,6 @@ where
             if gone.load(Ordering::Acquire) {
                 break;
             }
-            // Heartbeat: per-look verdicts only flush on publish today, so a visit that
-            // never settles leaves no trace at all. One line per 15 s bounds the volume
-            // while making motion-vs-blindness visible either way.
             if last_heartbeat.elapsed() >= Duration::from_secs(15) {
                 last_heartbeat = Instant::now();
                 let since_publish = last_publish.map_or(-1, |at| at.elapsed().as_secs() as i64);
@@ -1946,22 +1936,15 @@ where
             // different ways. A sparse pane (few populated rows after sales, a hover card
             // swallowing bands) can resolve the fold's tied run a whole pitch off: every
             // crop then lands between label bands. A polluted pane skews the tie-run
-            // midpoint by a fraction of a pitch (measured on the 2026-09-25 live capture:
-            // 36 profile-rows of the 291-row pitch -- the open hover card's bright title
-            // votes in the fold, and the pane's first label row was dimmed past the
-            // profile's white gate). Both end with the published page reading the gaps:
-            // nothing at all, or a couple of lookalikes ("Corinth Prime Barrel" over a
-            // Receiver) whose chips then sit half a band off their cards.
+            // midpoint by a fraction of a pitch: the open hover card's bright title votes
+            // in the fold. Both end with the published page reading the gaps: nothing at
+            // all, or lookalikes whose chips then sit half a band off their cards.
             //
             // Content is the referee the fold cannot be, but the referee needs to know
-            // how much text to expect -- the fold already counted it. A sparse grid at
-            // the right phase is complete at two confident cells out of one rendered
-            // band; a populated grid that reads a single confident cell (measured 28
-            // settles straight on 2026-09-25) is misphased, not sparse. So recovery fires
+            // how much text to expect -- the fold already counted it. So recovery fires
             // while confident cells lag rendered bands (capped at two, so a nearly-right
-            // page with one occluded row does not churn). True reads measure 0.94-1.00,
-            // misphased lookalikes top out at 0.76, so conviction -- not cell count --
-            // tells them apart.
+            // page with one occluded row does not churn): conviction, not cell count,
+            // tells a sparse-but-true page from a misphased one.
             //
             // Recovery then asks in two tiers: whole pitches for the which-band error,
             // then an eighth-pitch ladder around the tier-one winner for the midpoint
@@ -1969,9 +1952,8 @@ where
             // beats lookalikes, and among lookalikes the widest read stands, as before.
             // The ladder stops at the first rung that reads every rendered band -- that
             // rung is on the text, further rungs only re-read it shifted. A correction
-            // that proved itself rides the next settle directly -- pane pollution does
-            // not move between two settles 400ms apart -- and one that stopped reading
-            // is retired in place.
+            // that proved itself rides the next settle directly, and one that stopped
+            // reading is retired in place.
             let fullness = bands_present.min(2);
             let mut read_dy = dy + phase_correction;
             let mut read = source.read_kiosk(&candidates, read_dy);
@@ -2005,8 +1987,7 @@ where
                 if read_confidence < fullness {
                     // Half-pitch probes: on a dim frame the fold can key the card-art
                     // comb as loudly as the label comb -- text and art sit half a pitch
-                    // apart (measured 2026-09-25: the fold answered 148 rows off the
-                    // text on a 296-row pitch, and no other tier can reach that).
+                    // apart, and no other tier can reach that.
                     for shifted in [read_dy - pitch / 2, read_dy + pitch / 2] {
                         match source.read_kiosk(&candidates, shifted) {
                             Ok(frame) => {
@@ -2067,11 +2048,10 @@ where
                     }
                     // Basket quantities flicker frame to frame on static content: tesseract
                     // alternates phantom digit strings ("720", "8040") that parse cleanly
-                    // and multiply straight into the total (measured 4070<->470 on an
-                    // unchanged 8-row basket). A quantity above 1 is only trusted after two
-                    // consecutive identical reads of the same slot and name; anything else
-                    // publishes as 1. Rows showing x1 adopt immediately, so the common case
-                    // never lags a settle.
+                    // and multiply straight into the total. A quantity above 1 is only
+                    // trusted after two consecutive identical reads of the same slot and
+                    // name; anything else publishes as 1. Rows showing x1 adopt immediately,
+                    // so the common case never lags a settle.
                     for row in &mut frame.basket {
                         let key = (row.index, row.name.clone());
                         let seen = quantity_streaks.get(&key).copied().unwrap_or((1, 0));
@@ -2112,10 +2092,8 @@ where
                     }
                     let mut view = joiner(epoch, &frame);
                     // The frontend styles this offset against 100vh/1080, so it must cross
-                    // IPC in design pixels; `dy` was measured in strip (capture) pixels. On
-                    // captures taller than 1080 the raw value overshoots the cards by the
-                    // ratio (the 2026-09-26 field frame's chips floated far below their
-                    // tiles -- 144 capture px became 192 on his 1440p panel).
+                    // IPC in design pixels via `to_design_px`; `dy` was measured in strip
+                    // (capture) pixels, and the raw value overshoots on taller captures.
                     view.scroll_dy = kiosk_scroll::to_design_px(dy, strip_rows);
                     let cell_detail: Vec<String> = frame
                         .cells
@@ -3096,13 +3074,9 @@ mod tests {
         );
     }
 
-    /// The fold answers a phase by vote, and rows that are not label text can outvote it:
-    /// a hover card's bright title inside the strip, a top row dimmed past the profile's
-    /// white threshold. On the 2026-09-24 live frame its answer sat ~36 rows off the text --
-    /// a fraction of the 291-row pitch, so no whole-pitch retry could ever reach it, and the
-    /// published page was a couple of near-miss lookalikes (0.6-0.76 score) floating beside
-    /// their cards. Content referees again, on a finer ladder: while nothing reads with
-    /// conviction, step an eighth of a pitch to either side of the winner.
+    /// A fractionally misphased fold needs the fine ladder: whole-pitch retries cannot
+    /// reach the text, so step an eighth of a pitch to either side of the winner while
+    /// nothing reads with conviction.
     #[test]
     fn a_fractionally_misphased_locator_is_fine_tuned_by_content() {
         let full_page = KioskRead {
@@ -3159,10 +3133,9 @@ mod tests {
         );
     }
 
-    /// The 2026-09-25 live failure behind the gate: a populated grid that reads a single
-    /// confident cell, settle after settle. One lucky slot (or one confident lookalike)
-    /// must not certify the phase -- the fold saw three bands here, so one confident
-    /// cell is evidence of misphase, and the ladder must run until the page reads.
+    /// One lucky slot (or one confident lookalike) must not certify the phase -- one
+    /// confident cell against several rendered bands is evidence of misphase, and the
+    /// ladder must run until the page reads.
     #[test]
     fn a_lone_confident_cell_on_a_full_pane_still_recovers() {
         let full_page = KioskRead {
@@ -3283,9 +3256,8 @@ mod tests {
         }
     }
 
-    /// Basket quantities flicker frame to frame on static content (measured 4070<->470
-    /// totals on an unchanged 8-row basket): a quantity above 1 is only trusted after two
-    /// consecutive identical reads, so phantom digit strings can never reach the total.
+    /// A quantity above 1 is only trusted after two consecutive identical reads, so
+    /// phantom digit strings can never reach the total.
     #[test]
     fn a_flapping_quantity_never_reaches_the_total() {
         let flap_a = basket_page(&[(0usize, "Ninkondi Prime Handle", 720u32)]);
@@ -3444,9 +3416,9 @@ mod tests {
 
     /// When no probed phase reads with conviction, the page on screen is only lookalikes:
     /// names that half-match the crop's partial text. Publishing them puts real-looking
-    /// prices on the wrong cards (the 2026-09-25 report), which is strictly worse than
-    /// showing no chips -- so the publish strips the grid cells. The basket still publishes:
-    /// it does not share the phase, so the misphase never wrongs it.
+    /// prices on the wrong cards, which is strictly worse than showing no chips -- so the
+    /// publish strips the grid cells. The basket still publishes: it does not share the
+    /// phase, so the misphase never wrongs it.
     #[test]
     fn an_unproven_page_is_published_without_its_lookalike_cells() {
         let always_weak = |name: &str| GridCell {
@@ -3538,11 +3510,9 @@ mod tests {
         );
     }
 
-    /// End-to-end against the real polluted capture from the 2026-09-25 incident: an open
-    /// hover card's title text votes in the fold while the pane's top label row is dimmed
-    /// out of the profile's white gate, so the bare locator answers a midpoint that is 36
-    /// profile rows off the text (dy=266) and the read comes back as three lookalikes.
-    /// Recovery must land on a readable phase and keep the chips on their cards.
+    /// End-to-end against the polluted hover-card fixture: the hover title votes in the
+    /// fold while the top label row is dimmed out of the profile gate. Recovery must land
+    /// on a readable phase and keep the chips on their cards.
     #[test]
     fn the_polluted_live_frame_publishes_the_readable_phase() {
         let frame = image::open(concat!(
@@ -3550,8 +3520,7 @@ mod tests {
             "/tests/fixtures/kiosk/kiosk-hover-polluted.png"
         ))
         .expect("live polluted frame fixture");
-        // True labels on the frame, plus decoys that a misphased crop actually produced
-        // (the lookalikes the broken publish shipped on 2026-09-25).
+        // True labels on the frame, plus fixture decoys a misphased crop produces.
         let candidates: Vec<RewardCatalogEntry> = [
             "Corinth Prime Receiver",
             "Dual Zoren Prime Blueprint",
@@ -3581,11 +3550,8 @@ mod tests {
         })
         .collect();
 
-        // The tether this fixture used to carry: the hover card's bright title dragged the
-        // luma-fold midpoint 36 rows off the text, and the ladder below had to climb back.
-        // Under the glyph-edge profile every band votes equally (hovered or not), so the
-        // naked fold now answers the readable phase directly -- pinned at confident reads,
-        // so a regression back to a dragged fold fails loudly here instead of shipping.
+        // Regression pin: under the glyph-edge profile every band votes equally, so the
+        // naked fold answers the readable phase directly at confident reads.
         let strip = {
             let (mut probe, _c) = LiveFrame::new(frame.clone());
             probe.strip_profile().expect("strip")
@@ -3697,15 +3663,10 @@ mod tests {
             .collect()
     }
 
-    /// End-to-end against the 2026-09-26 visit's frame: a fully populated kiosk whose first
-    /// two rows are selected, with the overlay's own chips baked into the capture (Wayland
-    /// monitor captures include our window). Before masking, that frame broke the visit in
-    /// four ways at once: the fold locked onto the chip rows (bands=2, only two priced rows),
-    /// ladder reads half-cut the labels below them (fuzzy lookalikes flipping the prices it
-    /// showed), the basket lane's digit whitelist parsed chip digits into phantom quantities
-    /// (a 10p blade publishing at 20), and the pane showed four basket rows the hard cap of
-    /// 8 never read. The whole loop -- mask, fold, read, publish -- must converge on the
-    /// true grid and hold it.
+    /// End-to-end against the chips-baked selected fixture: a fully populated kiosk whose
+    /// first two rows are selected, with the overlay's own chips baked into the capture.
+    /// The whole loop -- mask, fold, read, publish -- must converge on the true grid and
+    /// hold it.
     #[test]
     fn the_selected_field_frame_publishes_the_whole_grid_and_stays_stable() {
         let frame = image::open(concat!(
@@ -3792,7 +3753,7 @@ mod tests {
             last.basket
         );
         // The stub prices every row at 1, so the total is the sum of declared quantities:
-        // every row is a single copy, and chip digits must no longer fabricate stacks.
+        // every row is a single copy, and chip digits must not fabricate stacks.
         assert_eq!(
             last.total_plat, 12,
             "twelve single copies, no phantom multipliers: {:?}",
@@ -3807,21 +3768,18 @@ mod tests {
             states.windows(2).all(|pair| pair[0] == pair[1]),
             "settled publishes converge instead of oscillating: {states:?}"
         );
-        // The grid is pixel-exact unscrolled on this frame (tile borders measured at the
-        // calibration spot), so the published phase must sit within rounding of zero --
-        // this is the value that paints the chips onto their cards.
+        // The frame is pixel-exact unscrolled, so the published phase must sit within
+        // rounding of zero -- this is the value that paints the chips onto their cards.
         let dy = published.last().expect("last view").scroll_dy;
         assert!(
             dy.abs() <= 1,
             "the unscrolled field frame publishes no scroll phase: dy={dy}"
         );
     }
-    /// End-to-end against the 2026-09-28 tester visit: a bright frame whose Link cards hang
-    /// white-hot art over their labels. Sparse-text segmentation let that art eat any glyphs
-    /// touching it -- `Afuris Prime Link` read as `Lf / rime Link` (0.60) and the neighbouring
-    /// `Akbolto Prime Link` as `Lf / Prime Link`, matching the wrong twin at 0.67. Label
-    /// slots now read as one ordered block, so both twins must publish under their true names
-    /// at conviction, and the visit must hold still.
+    /// End-to-end against the bright-art link-twins fixture: white-hot art hangs over the
+    /// labels and sparse-text segmentation lets it eat touching glyphs, swapping the twins.
+    /// Label slots read as one ordered block, so both twins must publish under their true
+    /// names at conviction, and the visit must hold still.
     #[test]
     fn the_bright_art_frame_reads_both_link_twins() {
         let frame = image::open(concat!(
@@ -3911,8 +3869,8 @@ mod tests {
             cells, expected,
             "every rendered label under its true name -- no twin swaps"
         );
-        // The twins are the discriminating pair: a sparse-text read collapses 3:1 onto 3:0's
-        // name, which would price the wrong item rather than merely miss one.
+        // The twins are the discriminating pair: a sparse-text read collapses one onto the
+        // other's name, which would price the wrong item rather than merely miss one.
         for name in ["Afuris Prime Link", "Akbolto Prime Link"] {
             assert_eq!(
                 last.cells.iter().filter(|c| c.name == name).count(),
@@ -3938,8 +3896,7 @@ mod tests {
             "settled publishes converge instead of oscillating: {states:?}"
         );
         // Both twins must read at conviction, not merely above the match floor: the
-        // recovery referee counts confident cells, and a 0.60 read would leave the row
-        // under-defended on the next visit.
+        // recovery referee counts confident cells.
         let frame = image::open(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/kiosk/kiosk-selected-prices-miss.png"
@@ -3968,11 +3925,11 @@ mod tests {
         }
     }
 
-    /// End-to-end against the 2026-09-28 dev visit: sixteen basket rows under a live
-    /// overlay whose own chips (real prices) are baked into the frame. The whole loop
-    /// must price all sixteen rows, converge the game's own 3 X stack marker through
-    /// the quantity streaks, and hold still. The lifetime covers three settles so the
-    /// streaks can confirm: the first publish reads pre-mask, the rest masked.
+    /// End-to-end against the sixteen-row fixture: sixteen basket rows under a live
+    /// overlay whose own chips are baked into the frame. The whole loop must price all
+    /// sixteen rows, converge the game's own 3 X stack marker through the quantity
+    /// streaks, and hold still. The lifetime covers three settles so the streaks can
+    /// confirm: the first publish reads pre-mask, the rest masked.
     #[test]
     fn the_sixteen_row_visit_publishes_all_rows_and_holds_still() {
         let frame = image::open(concat!(
@@ -4082,7 +4039,7 @@ mod tests {
     }
 
     /// A publish re-anchors the mask's chased offset; streamed deltas accumulate between
-    /// publishes (measured from captures, so they track what the next frame contains).
+    /// publishes so the mask tracks what the next frame contains.
     #[test]
     fn the_chip_mask_rides_streamed_deltas_and_rebases_on_publish() {
         let chips: ChipsState = Arc::new(StdMutex::new(None));
@@ -4166,13 +4123,10 @@ mod tests {
         );
     }
 
-    /// The same scroll one resolution up -- the 1440p field frame, pane content dragged by
-    /// 44 capture rows (33 design px). The strip space and the overlay space differ by 4/3
-    /// there, and the published phase must cross that gap: round(44 x 790/1053) = 33
-    /// (the field frame's own fold bias is -1, so accept +-2). The drag stays moderate on
-    /// purpose: the emulation cannot synthesize content entering the pane, and its leftover
-    /// sliver dilutes the fold's contrast (ratio 3.9 real -> 3.0 at a 99-row drag, measured
-    /// 2026-09-27); every real frame on disk holds ratio >= 3.3 against the gate's 3.0.
+    /// The same scroll one resolution up: the published phase must cross from strip px
+    /// into design px. The drag stays moderate on purpose: the emulation cannot
+    /// synthesize content entering the pane, and its leftover sliver dilutes the fold's
+    /// contrast.
     #[test]
     fn the_scrolled_field_frame_publishes_the_phase_in_design_pixels() {
         let frame = scrolled_fixture(
@@ -4226,11 +4180,9 @@ mod tests {
         assert_eq!(view.total_plat, 12, "no phantom stacks: {:?}", view.basket);
     }
 
-    /// End-to-end against the 2026-09-25 evening field frame that the poller failed on
-    /// for a whole visit (594 blind looks of 603, one publish): a still, focused,
-    /// fully populated kiosk whose capture never reaches the full-white calibration.
-    /// The locator must fold it, and the recovery ladder must land a phase that reads
-    /// the visible page -- whatever phase the fold itself names.
+    /// End-to-end against the dim evening fixture: a still, focused, fully populated
+    /// kiosk whose capture never reaches the full-white calibration. The locator must
+    /// fold it, and the recovery ladder must land a phase that reads the visible page.
     #[test]
     fn the_dim_evening_field_frame_publishes_its_grid() {
         let frame = image::open(concat!(
@@ -4535,9 +4487,9 @@ mod tests {
         );
     }
 
-    /// The 2026-09-28 dev visit's dash: the basket row matched `Khora Prime Neuroptics`
-    /// (built, untradeable, unpriced) while the same item's grid tile matched the blueprint
-    /// twin at 29p. The dump prices the twin; nothing prices the built part.
+    /// The twin-dash fixture: the basket row matched `Khora Prime Neuroptics` (built,
+    /// untradeable, unpriced) while the same item's grid tile matched the blueprint twin
+    /// at 29p. The dump prices the twin; nothing prices the built part.
     const KIOSK_TWIN_DUMP: &str = r#"{
         "Khora Prime Neuroptics Blueprint": [{"order_type":"sell","median":29.0,"volume":4}]
     }"#;

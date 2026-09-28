@@ -128,8 +128,7 @@ fn read_quantities(image: &DynamicImage, rows: &[(usize, SlotRead)]) -> Vec<u32>
 
 /// Read the optional `N X` stack marker anywhere inside the bounded basket-label band. The
 /// band is read in the full charset, like the name lane: letters stay letters, so unlike
-/// the old digit-whitelist lane a name initial can never become a count (`Aksomati` read
-/// as `4 k`, quantity 4, on a fully readable row in the 2026-09-28 dev visit). Only the
+/// the old digit-whitelist lane a name initial can never become a count. Only the
 /// game's own marker forms digit+X.
 fn read_quantity(image: &DynamicImage, index: usize) -> Option<u32> {
     let (x, y, width, height) = basket_quantity_rect(image.width(), image.height(), index)?;
@@ -147,8 +146,8 @@ fn read_quantity_crop(
         return None;
     }
     // Raw pixels, not the name lane's threshold pipeline: thresholding eats thin stack
-    // digits (`2 X` read as `? X` on the live basket fixture). Full charset, so letters
-    // stay letters and only the game's own marker forms digit+X.
+    // digits. Full charset, so letters stay letters and only the game's own marker
+    // forms digit+X.
     let crop = scratch_file();
     image.crop_imm(x, y, width, height).save(&crop).ok()?;
     let text = ocr_crop(&crop);
@@ -266,8 +265,8 @@ fn read_slot(
     let crop = scratch_file();
     prepared.save(&crop).ok()?;
     // Label slots read as one ordered block: the card art above the label is a large bright
-    // mass, and sparse-text segmentation lets it eat any glyphs touching it (the Link twins
-    // measured 2026-09-28). The basket quantity lane below deliberately stays on `ocr_crop`.
+    // mass, and sparse-text segmentation lets it eat any glyphs touching it. The basket
+    // quantity lane below deliberately stays on `ocr_crop`.
     let text = ocr_crop_block(&crop);
     let _ = std::fs::remove_file(&crop);
     let text = text.ok()?;
@@ -425,8 +424,8 @@ mod tests {
         assert_eq!(basket_quantity("Kompressa Prime Barrel"), 1);
         assert_eq!(basket_quantity("2 Kompressa Prime Barrel"), 1);
         assert_eq!(basket_quantity("2 Z Kompressa Prime Barrel"), 1);
-        // The 2026-09-28 dev visit: a name initial glued to a surviving letter is not a
-        // stack, and neither are ducat counts or chip prices.
+        // A name initial glued to a surviving letter is not a stack, and neither are
+        // ducat counts or chip prices.
         assert_eq!(basket_quantity("Aksomati Prime Barrel"), 1);
         assert_eq!(basket_quantity("Afuris Prime Link"), 1);
         assert_eq!(basket_quantity("Nekros Prime Systems Blueprint"), 1);
@@ -471,9 +470,7 @@ mod tests {
     /// boundary and can recognize adjacent grid text as a fourth, orphan-priced basket row.
     /// The chip masks blank the pair column where the overlay draws, but the game's own
     /// "2 X" stack marker is a name prefix far left of it: a masked frame must still read a
-    /// real stacked quantity. Measured on the live 1080p basket fixture 2026-09-27: the
-    /// mask band spans design-x 1632..1753, the marker sits against the name's leading edge
-    /// (design-x ~1080), nowhere near it.
+    /// real stacked quantity.
     #[test]
     fn masking_the_published_chips_does_not_hide_a_stacked_quantity() {
         let mut image = image::open(QUANTITY_LIVE_FIXTURE).unwrap();
@@ -509,9 +506,8 @@ mod tests {
         "/tests/fixtures/kiosk/kiosk-basket-16-dev.png"
     );
 
-    /// The 2026-09-28 dev visit showed sixteen basket rows; the hard cap of 12 priced
-    /// twelve and silently dropped the last four. The pane fits sixteen rows before the
-    /// TOTAL row (row 15's baseline is 818 against TOTAL at 875).
+    /// The pane fits sixteen rows before the TOTAL row (row 15's baseline is 818 against
+    /// TOTAL at 875).
     #[test]
     fn a_sixteen_row_live_basket_reads_through_its_last_row() {
         let image = image::open(BASKET16_DEV_FIXTURE).unwrap();

@@ -490,13 +490,8 @@ pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
 /// title bands are mostly empty room with a possible speck, and `psm 6` calls the speck the
 /// block. Kiosk label crops are the inverse: the label fills the bottom of the crop and the
 /// card art fills the top, and bright art is a large white mass, not a speck. Under `psm 11`
-/// that mass joins the segmentation and eats any glyphs touching it -- measured 2026-09-28
-/// on a live frame, `Afuris Prime Link` came back as `Lf / rime Link` (0.60) and the
-/// neighbouring `Akbolto Prime Link` as `Lf / Prime Link`, matching the wrong twin at 0.67.
-/// Under `psm 6` the same prepared crops read both names exactly, and every previously
-/// exact slot stays exact. Swept over the weak pair plus a healthy control in both modes
-/// before choosing; `psm 3` also reads them, but `6` is the narrower claim (one ordered
-/// block) for a one-label crop.
+/// that mass joins the segmentation and eats any glyphs touching it; `psm 6` makes the
+/// narrower claim (one ordered block) for a one-label crop.
 pub fn ocr_crop_block(image: &Path) -> Result<String, &'static str> {
     run_tesseract(image, "6", None)
 }

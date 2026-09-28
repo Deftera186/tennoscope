@@ -205,17 +205,13 @@ pub fn build_view(
 ///
 /// Monitor-scoped capture (the portal/KWin rungs every native Wayland session uses) frames
 /// the composite: our own overlay is in the picture. Chips sitting on the captured kiosk
-/// read straight back into the pipeline -- chip glyphs feed the label fold (the 2026-09-26
-/// frame's fold locked onto two rows of chips and never looked at the text again) and chip
-/// digits pass the basket quantity whitelist (`26p` read as `2k`, publishing a phantom x2).
-/// The overlay knows exactly where its chips are, so before any profile or OCR the pipeline
+/// read straight back into the pipeline, so before any profile or OCR the pipeline
 /// overwrites exactly those boxes with the frame's own background.
 ///
 /// Each box is filled with the median luma of its border ring: the label background the game
-/// drew behind the chip (measured 12-20 everywhere chips sit), which is inert to both the
-/// edge-count profile and the per-crop OCR normalisation. Nothing under a chip was captured
-/// anyway -- the chip occludes it on screen -- so masking loses no information about the
-/// game, only about ourselves.
+/// drew behind the chip, which is inert to both the edge-count profile and the per-crop OCR
+/// normalisation. Nothing under a chip was captured anyway -- the chip occludes it on screen
+/// -- so masking loses no information about the game, only about ourselves.
 /// `mask_dy` is where the chips actually sit in design pixels right now: the published
 /// phase plus any scroll deltas streamed since. Tiles must shift the same distance the
 /// frontend slides them, or the moment after a scroll the previous epoch's chips re-enter
@@ -376,9 +372,8 @@ mod tests {
         assert_eq!(view.total_plat, 7);
     }
 
-    /// "The grid and the kart disagree" (2026-09-26 field report): both lanes price by the
-    /// same name through the same table, so a card's corner chip is its basket row's chip,
-    /// and the marketplace's per-copy number is what both say.
+    /// Both lanes price by the same name through the same table, so a card's corner chip
+    /// is its basket row's chip, and the marketplace's per-copy number is what both say.
     #[test]
     fn the_same_name_prices_identically_on_the_card_and_in_the_basket() {
         let cells = [cell(0, 0, "Kompressa Prime Barrel")];

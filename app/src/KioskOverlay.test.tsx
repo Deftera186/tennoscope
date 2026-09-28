@@ -176,8 +176,7 @@ describe('kiosk overlay route', () => {
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 5 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(5 * var(--h)))' }))
     // The backend streams movement, not position: each verdict is how far the grid went since
-    // the last look, so the chips ride a scroll of any length by adding them up. (Assigning
-    // them absolutely left the chips 17px from home on a 300px scroll.)
+    // the last look, so the chips ride a scroll of any length by adding them up.
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 9 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(14 * var(--h)))' }))
     expect(basket).not.toHaveStyle({ transform: 'translateY(calc(14 * var(--h)))' })
