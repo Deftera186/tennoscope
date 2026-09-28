@@ -290,7 +290,9 @@ fn basket_quantity(text: &str) -> u32 {
                 j += 1;
             }
             let mut k = j;
-            while k < bytes.len() && bytes[k] == b' ' {
+            // Tesseract's band text wraps across lines, so the marker gap is any
+            // ASCII whitespace, not just spaces.
+            while k < bytes.len() && bytes[k].is_ascii_whitespace() {
                 k += 1;
             }
             if k < bytes.len() && matches!(bytes[k], b'X' | b'x' | b'K' | b'k') {
@@ -415,6 +417,10 @@ mod tests {
         assert_eq!(basket_quantity("2k Kompressa Prime Barrel"), 2);
         assert_eq!(basket_quantity("2XK"), 2);
         assert_eq!(basket_quantity("2 k Kompressa Prime Barrel"), 2);
+        // PSM-11 band text wraps mid-marker; the gap accepts any whitespace.
+        assert_eq!(basket_quantity("2\nX Kompressa Prime Barrel"), 2);
+        assert_eq!(basket_quantity("2\tX Kompressa Prime Barrel"), 2);
+        assert_eq!(basket_quantity("2 \n X Kompressa Prime Barrel"), 2);
         assert_eq!(basket_quantity("3XBraton Prime Receiver"), 3);
         // Full-charset text can carry junk before a real marker; the marker is still the
         // marker, and junk alone can no longer fabricate one (no whitelist mangling).
