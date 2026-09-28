@@ -2088,13 +2088,27 @@ where
                             }
                         }
                     }
-                    // stays empty, which is the truthful state.
+                    // Without conviction the grid stays empty, which is the truthful state.
                     if final_confidence == 0 && !frame.cells.is_empty() {
                         log::debug!(
                             "[DEBUG-kiosk] grid page suppressed on {} weak cells dy={dy} (basket kept)",
                             frame.cells.len()
                         );
                         frame.cells.clear();
+                    } else if final_confidence < fullness {
+                        // A mixed page reads true cells among lookalikes. Publishing the
+                        // lookalikes prices the wrong items, worse than no chips, so only
+                        // conviction rides a suspect page.
+                        let before = frame.cells.len();
+                        frame
+                            .cells
+                            .retain(|cell| cell.score >= KIOSK_CONFIDENT_SCORE);
+                        if frame.cells.len() != before {
+                            log::debug!(
+                                "[DEBUG-kiosk] grid page stripped to {} confident cells dy={dy} (basket kept)",
+                                frame.cells.len()
+                            );
+                        }
                     }
                     let mut view = joiner(epoch, &frame);
                     // The frontend styles this offset against 100vh/1080, so it must cross
@@ -3196,6 +3210,62 @@ mod tests {
             located - step,
             "the published offset follows the fine-tuned phase"
         );
+    }
+
+    /// A page mixing one confident cell with lookalikes on a full pane publishes only
+    /// conviction: the ladder keeps the widest read, but unproven cells must not ride it.
+    #[test]
+    fn a_mixed_page_publishes_only_its_confident_cell() {
+        let mixed_page = KioskRead {
+            cells: vec![
+                GridCell {
+                    col: 0,
+                    row: 0,
+                    name: "true cell".to_owned(),
+                    score: 0.95,
+                },
+                GridCell {
+                    col: 1,
+                    row: 0,
+                    name: "lookalike one".to_owned(),
+                    score: 0.70,
+                },
+                GridCell {
+                    col: 2,
+                    row: 0,
+                    name: "lookalike two".to_owned(),
+                    score: 0.70,
+                },
+                GridCell {
+                    col: 3,
+                    row: 0,
+                    name: "lookalike three".to_owned(),
+                    score: 0.70,
+                },
+            ],
+            basket: vec![],
+        };
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 6])
+            .with_reads_by_dy(vec![(located, mixed_page)]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "the mixed page must publish its confident cell"
+        );
+        assert_eq!(published[0].cells.len(), 1);
+        assert_eq!(published[0].cells[0].name, "true cell");
     }
 
     fn basket_page(quantities: &[(usize, &str, u32)]) -> KioskRead {
