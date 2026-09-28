@@ -1584,10 +1584,13 @@ pub struct ChipMask {
 }
 
 /// Publish arm: a fresh view re-anchors the frontend outright, so the drawn offset restarts
-/// at the new epoch's own phase.
+/// at the new epoch's own phase. The mask restarts there too: the frontend draws the chips
+/// at anchor plus scroll_dy, so masking at anchor plus zero would miss every chip on a
+/// scrolled grid and paint over innocent labels instead.
 fn stash_publish(chips: &ChipsState, view: KioskView) {
     if let Ok(mut stash) = chips.lock() {
-        *stash = Some(ChipMask { view, mask_dy: 0 });
+        let mask_dy = view.scroll_dy;
+        *stash = Some(ChipMask { view, mask_dy });
     }
 }
 
@@ -4024,13 +4027,13 @@ mod tests {
             ..KioskView::default()
         };
         stash_publish(&chips, publish(35));
-        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 0);
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 35);
         track_scroll_delta(&chips, Some(37));
         track_scroll_delta(&chips, Some(3));
         track_scroll_delta(&chips, None); // a faded look moves nothing
-        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 40);
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 75);
         stash_publish(&chips, publish(-12));
-        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 0);
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, -12);
     }
 
     /// Shift the pane's own content down inside the fixture -- the way the game draws a
