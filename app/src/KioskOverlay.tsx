@@ -99,6 +99,9 @@ export default function KioskOverlay() {
       sessionSeen.current = nextSession
       epochSeen.current = -1
       scrollSeq.current = 0
+      // A streak from the previous visit must not fade the new one: the first
+      // torn frame after opening would otherwise trip an inherited count.
+      nullStreak.current = 0
       setOffset(0)
       setFaded(false)
       setView(null)

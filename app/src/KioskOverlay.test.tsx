@@ -270,6 +270,35 @@ describe('kiosk overlay route', () => {
     events.listeners['kiosk-updated']?.({ payload: 7 })
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
     expect(grid).toHaveStyle({ transform: 'translateY(calc(-142 * var(--h)))' })
+    // The re-anchor carries the view, not just its offset: both chips repaint.
+    expect(screen.getAllByTestId('kiosk-grid-chip')).toHaveLength(2)
+    expect(screen.getByTitle('Titania Prime Systems Blueprint')).toHaveTextContent('30p')
+  })
+
+  it('does not carry an unreadable streak across visits', async () => {
+    render(<AppRoute pathname="/kiosk" />)
+    const strip = await screen.findByTestId('kiosk-strip')
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+
+    // Visit 7 ends faded after a run of unreadable looks.
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
+    await waitFor(() => expect(strip).toHaveClass('kiosk-faded'))
+
+    // The visit ends, and visit 8 opens with its first settled view still in
+    // flight: a torn frame landing in that gap must not trip the old streak.
+    backend.getKioskView.mockResolvedValueOnce(null)
+    events.listeners['kiosk-updated']?.({ payload: null })
+    const pending = deferred<KioskView>()
+    backend.getKioskView.mockReturnValue(pending.promise)
+    events.listeners['kiosk-updated']?.({ payload: 8 })
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
+    events.listeners['kiosk-scroll']?.({ payload: { session: 8, dy: null } })
+    await act(async () => {})
+    expect(strip).not.toHaveClass('kiosk-faded')
+    pending.resolve({ ...sampleView, session: 8, epoch: 5 })
+    await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
   })
 
   it('unfades when the same epoch republishes after an unreadable look', async () => {
