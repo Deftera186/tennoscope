@@ -484,9 +484,16 @@ pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
     run_tesseract(image, "11", None)
 }
 
-/// OCR one already-isolated text line, restricted to the supplied glyph set.
-pub(crate) fn ocr_crop_line(image: &Path, whitelist: &str) -> Result<String, &'static str> {
-    run_tesseract(image, "7", Some(whitelist))
+/// Kiosk label slots: `--psm 6`, one uniform block of text.
+///
+/// The deliberate counterpart to [`ocr_crop`]'s `psm 11`, not a contradiction of it. Reward
+/// title bands are mostly empty room with a possible speck, and `psm 6` calls the speck the
+/// block. Kiosk label crops are the inverse: the label fills the bottom of the crop and the
+/// card art fills the top, and bright art is a large white mass, not a speck. Under `psm 11`
+/// that mass joins the segmentation and eats any glyphs touching it; `psm 6` makes the
+/// narrower claim (one ordered block) for a one-label crop.
+pub fn ocr_crop_block(image: &Path) -> Result<String, &'static str> {
+    run_tesseract(image, "6", None)
 }
 
 fn run_tesseract(

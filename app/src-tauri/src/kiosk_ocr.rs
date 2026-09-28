@@ -17,7 +17,7 @@ use warframe_acquisition::RewardCatalogEntry;
 
 use crate::{
     kiosk_geometry::{basket_label_rect, basket_quantity_rect},
-    reward_ocr::{best_match, ocr_crop, ocr_crop_line, prepare_crop},
+    reward_ocr::{best_match, ocr_crop, ocr_crop_block, prepare_crop},
 };
 
 /// Below this a slot's read is treated as absent rather than published as a guess; same floor as
@@ -111,8 +111,8 @@ pub fn read_basket(image: &DynamicImage, candidates: &[RewardCatalogEntry]) -> V
         .collect()
 }
 
-/// Quantity OCR is independent per row. Keep its process launches bounded by the basket's fixed
-/// eight-row capacity instead of serially adding one Tesseract invocation per recognized row.
+/// Quantity OCR is independent per row. Keep its process launches bounded by the basket's
+/// sixteen-row capacity instead of serially adding one Tesseract invocation per row.
 fn read_quantities(image: &DynamicImage, rows: &[(usize, SlotRead)]) -> Vec<u32> {
     std::thread::scope(|scope| {
         let handles: Vec<_> = rows
@@ -126,9 +126,10 @@ fn read_quantities(image: &DynamicImage, rows: &[(usize, SlotRead)]) -> Vec<u32>
     })
 }
 
-/// Read the optional `N X` stack marker anywhere inside the bounded basket-label band. The band
-/// stops before the ducat column, and the quantity-only whitelist keeps item-name glyphs from
-/// becoming a second price-like number.
+/// Read the optional `N X` stack marker anywhere inside the bounded basket-label band. The
+/// band is read in the full charset, like the name lane: letters stay letters, so unlike
+/// the old digit-whitelist lane a name initial can never become a count. Only the
+/// game's own marker forms digit+X.
 fn read_quantity(image: &DynamicImage, index: usize) -> Option<u32> {
     let (x, y, width, height) = basket_quantity_rect(image.width(), image.height(), index)?;
     read_quantity_crop(image, x, y, width, height)
@@ -144,9 +145,12 @@ fn read_quantity_crop(
     if width == 0 || height == 0 || x + width > image.width() || y + height > image.height() {
         return None;
     }
+    // Raw pixels, not the name lane's threshold pipeline: thresholding eats thin stack
+    // digits. Full charset, so letters stay letters and only the game's own marker
+    // forms digit+X.
     let crop = scratch_file();
     image.crop_imm(x, y, width, height).save(&crop).ok()?;
-    let text = ocr_crop_line(&crop, "0123456789XxKk");
+    let text = ocr_crop(&crop);
     let _ = std::fs::remove_file(&crop);
     let text = text.ok()?;
     Some(basket_quantity(&text)).filter(|&quantity| quantity > 1)
@@ -260,43 +264,51 @@ fn read_slot(
     let prepared = prepare_crop(image, x, y, w, h);
     let crop = scratch_file();
     prepared.save(&crop).ok()?;
-    let text = ocr_crop(&crop);
+    // Label slots read as one ordered block: the card art above the label is a large bright
+    // mass, and sparse-text segmentation lets it eat any glyphs touching it. The basket
+    // quantity lane below deliberately stays on `ocr_crop`.
+    let text = ocr_crop_block(&crop);
     let _ = std::fs::remove_file(&crop);
     let text = text.ok()?;
     let (name, score) = best_match(&text, candidates)?;
     (score >= MATCH_FLOOR).then_some(SlotRead { name, score })
 }
 
-/// Split Warframe's optional basket stack prefix from the item text used for catalog matching.
-/// Besides `X`, accept Tesseract's observed `K` confusion and the exact leading `kxk` noise
-/// produced by Arch's English model; no later marker can turn an unstacked row into a stack.
+/// Split Warframe's optional basket stack prefix from full-charset band text. The band
+/// carries the marker glued to the item name, so the parse looks for digit+X anywhere in
+/// the text rather than trusting the first token (the old whitelist lane mangled name
+/// initials into counts). Besides `X`, Tesseract's observed `K` confusion is accepted
+/// either way. The trailing guard rejects a misread glued to lowercase (`4ksomati...`)
+/// while tolerating dropped spaces (`3XBraton`, `2XK`).
 fn basket_quantity(text: &str) -> u32 {
-    let mut words = text.split_whitespace();
-    let mut first = words.next();
-    if first.is_some_and(|word| word.eq_ignore_ascii_case("kxk")) {
-        first = words.next();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            let mut k = j;
+            // Tesseract's band text wraps across lines, so the marker gap is any
+            // ASCII whitespace, not just spaces.
+            while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            if k < bytes.len() && matches!(bytes[k], b'X' | b'x' | b'K' | b'k') {
+                let after = k + 1;
+                if after >= bytes.len() || !bytes[after].is_ascii_lowercase() {
+                    if let Ok(count) = text[i..j].parse::<u32>() {
+                        return count;
+                    }
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
     }
-    let Some(first) = first else {
-        return 1;
-    };
-
-    let digits = first.bytes().take_while(u8::is_ascii_digit).count();
-    let Ok(count) = first[..digits].parse::<u32>() else {
-        return 1;
-    };
-    let attached_separator = first
-        .as_bytes()
-        .get(digits)
-        .is_some_and(|separator| matches!(separator, b'X' | b'x' | b'K' | b'k'));
-    let separate_separator = words
-        .next()
-        .is_some_and(|word| word.eq_ignore_ascii_case("x") || word.eq_ignore_ascii_case("k"));
-
-    if attached_separator || separate_separator {
-        count
-    } else {
-        1
-    }
+    1
 }
 
 #[cfg(test)]
@@ -405,14 +417,29 @@ mod tests {
         assert_eq!(basket_quantity("2k Kompressa Prime Barrel"), 2);
         assert_eq!(basket_quantity("2XK"), 2);
         assert_eq!(basket_quantity("2 k Kompressa Prime Barrel"), 2);
-        // Arch's combined legacy+LSTM traineddata sees item-name strokes before the real marker;
-        // quantity OCR is whitelist-only, so the valid marker may follow that harmless noise.
+        // PSM-11 band text wraps mid-marker; the gap accepts any whitespace.
+        assert_eq!(basket_quantity("2\nX Kompressa Prime Barrel"), 2);
+        assert_eq!(basket_quantity("2\tX Kompressa Prime Barrel"), 2);
+        assert_eq!(basket_quantity("2 \n X Kompressa Prime Barrel"), 2);
+        assert_eq!(basket_quantity("3XBraton Prime Receiver"), 3);
+        // Full-charset text can carry junk before a real marker; the marker is still the
+        // marker, and junk alone can no longer fabricate one (no whitelist mangling).
         assert_eq!(basket_quantity("kxk 2XK"), 2);
-        assert_eq!(basket_quantity("xkx 2XK"), 1);
-        assert_eq!(basket_quantity("kxk xkx 2XK"), 1);
+        assert_eq!(basket_quantity("xkx 2XK"), 2);
+        assert_eq!(basket_quantity("kxk xkx 2XK"), 2);
         assert_eq!(basket_quantity("Kompressa Prime Barrel"), 1);
         assert_eq!(basket_quantity("2 Kompressa Prime Barrel"), 1);
         assert_eq!(basket_quantity("2 Z Kompressa Prime Barrel"), 1);
+        // A name initial glued to a surviving letter is not a stack, and neither are
+        // ducat counts or chip prices.
+        assert_eq!(basket_quantity("Aksomati Prime Barrel"), 1);
+        assert_eq!(basket_quantity("Afuris Prime Link"), 1);
+        assert_eq!(basket_quantity("Nekros Prime Systems Blueprint"), 1);
+        assert_eq!(basket_quantity("45"), 1);
+        assert_eq!(basket_quantity("100"), 1);
+        assert_eq!(basket_quantity("135"), 1);
+        assert_eq!(basket_quantity("30p"), 1);
+        assert_eq!(basket_quantity("4p"), 1);
     }
 
     #[test]
@@ -447,6 +474,93 @@ mod tests {
 
     /// The live game basket has three occupied rows. A widened name crop crosses the pane
     /// boundary and can recognize adjacent grid text as a fourth, orphan-priced basket row.
+    /// The chip masks blank the pair column where the overlay draws, but the game's own
+    /// "2 X" stack marker is a name prefix far left of it: a masked frame must still read a
+    /// real stacked quantity.
+    #[test]
+    fn masking_the_published_chips_does_not_hide_a_stacked_quantity() {
+        let mut image = image::open(QUANTITY_LIVE_FIXTURE).unwrap();
+        let view = crate::kiosk_view::KioskView {
+            session: 0,
+            epoch: 0,
+            cells: vec![],
+            basket: (0..3)
+                .map(|index| crate::kiosk_view::BasketChip {
+                    index,
+                    name: format!("row {index}"),
+                    platinum: Some(10),
+                })
+                .collect(),
+            total_plat: 40,
+            scroll_dy: 0,
+        };
+        crate::kiosk_view::mask_published_chips(&mut image, &view, 0);
+        let rows = read_basket(&image, &candidates());
+        let stacked = rows
+            .iter()
+            .find(|row| row.name == "Kompressa Prime Barrel")
+            .unwrap_or_else(|| panic!("stacked basket row missing post-mask; got {rows:?}"));
+        assert_eq!(stacked.index, 2);
+        assert_eq!(
+            stacked.quantity, 2,
+            "the game's own stack marker survives the chip mask: {rows:?}"
+        );
+    }
+
+    const BASKET16_DEV_FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/kiosk/kiosk-basket-16-dev.png"
+    );
+
+    /// The pane fits sixteen rows before the TOTAL row (row 15's baseline is 818 against
+    /// TOTAL at 875).
+    #[test]
+    fn a_sixteen_row_live_basket_reads_through_its_last_row() {
+        let image = image::open(BASKET16_DEV_FIXTURE).unwrap();
+        let names = [
+            "Afuris Prime Link",
+            "Atlas Prime Chassis Blueprint",
+            "Tiberon Prime Barrel",
+            "Vadarya Prime Blueprint",
+            "Nekros Prime Systems Blueprint",
+            "Panthera Prime Barrel",
+            "Titania Prime Systems Blueprint",
+            "Trumna Prime Barrel",
+            "Trumna Prime Receiver",
+            "Wisp Prime Chassis Blueprint",
+            "Fragor Prime Handle",
+            "Venato Prime Blade",
+            "Aksomati Prime Barrel",
+            "Alternox Prime Barrel",
+            "Akbronco Prime Link",
+            "Braton Prime Receiver",
+        ];
+        let candidates: Vec<RewardCatalogEntry> = names
+            .iter()
+            .map(|name| RewardCatalogEntry {
+                name: (*name).to_owned(),
+                ducats: 45,
+            })
+            .collect();
+        let rows = read_basket(&image, &candidates);
+        assert_eq!(rows.len(), 16, "all sixteen basket rows read: {rows:?}");
+        for (index, name) in names.iter().enumerate() {
+            let hit = rows
+                .iter()
+                .find(|row| row.index == index)
+                .unwrap_or_else(|| panic!("basket row {index} missing; got {rows:?}"));
+            assert_eq!(&hit.name, name, "basket row {index}");
+        }
+        for row in &rows {
+            let want = if row.index == 15 { 3 } else { 1 };
+            assert_eq!(
+                row.quantity, want,
+                "row {} ({}): no phantom stacks, real marker kept: {rows:?}",
+                row.index, row.name
+            );
+        }
+    }
+
     #[test]
     fn live_basket_does_not_match_adjacent_grid_text_as_a_fourth_row() {
         let image = image::open(QUANTITY_LIVE_FIXTURE).unwrap();

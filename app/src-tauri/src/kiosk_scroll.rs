@@ -26,7 +26,7 @@
 //! searched half the strip and once crowned a false peak 80px away from the truth, this one
 //! refuses to answer rather than guess far.
 
-use image::DynamicImage;
+use image::{DynamicImage, GrayImage};
 
 /// How far the grid may move between two looks and still be found. A 60ms tick at a hard
 /// flick crosses ~120px; 180 leaves headroom without reaching the 222 row pitch where rows
@@ -61,6 +61,17 @@ const BAND_PRESENT_RATIO: f32 = 0.35;
 /// band on live captures, anti-aliased fringes under 85, floor under 5; the fraction splits
 /// core from fringe. Relative, not absolute, because row counts scale with capture width.
 const LOUD_ROW_FRACTION: f32 = 0.4;
+
+/// Convert a vertical offset measured in strip rows into the frontend's design pixels.
+/// The strip spans the grid pane (790 design px, `kiosk_geometry::GRID_STRIP_H_1080`) while
+/// the overlay styles offsets against `--h = 100vh/1080`; publishing strip pixels raw
+/// overshoots by the capture ratio on any panel above 1080p.
+pub fn to_design_px(dy: i32, strip_rows: usize) -> i32 {
+    if strip_rows == 0 {
+        return dy;
+    }
+    (dy as f64 * crate::kiosk_geometry::GRID_STRIP_H_1080 as f64 / strip_rows as f64).round() as i32
+}
 
 /// Normalized cross-correlation of two row profiles: the shift (in rows) that best explains
 /// `next` as `prev` moved vertically, if that shift is confident enough to name.
@@ -159,7 +170,7 @@ pub fn label_offset(
     first_label_top: i32,
     pitch: i32,
     band: i32,
-) -> Option<i32> {
+) -> Option<LocatedLabels> {
     if profile.is_empty() || pitch <= 0 || band <= 0 || band >= pitch {
         return None;
     }
@@ -238,31 +249,115 @@ pub fn label_offset(
         bands.push((top, score));
     }
     let best = bands.iter().map(|(_, score)| *score).fold(0.0, f32::max);
+    let present = bands
+        .iter()
+        .filter(|(_, score)| *score >= best * BAND_PRESENT_RATIO)
+        .count();
     bands
         .into_iter()
         .find(|(_, score)| *score >= best * BAND_PRESENT_RATIO)
-        .map(|(top, _)| top - first_label_top)
+        .map(|(top, _)| LocatedLabels {
+            dy: top - first_label_top,
+            bands: present,
+        })
 }
-/// Near-white pixel count per row over columns `[x, x + w)` -- the strip the tracker looks
-/// at. Rows outside the requested band are not the tracker's business; the caller crops the
-/// geometry. Label glyphs are the whitest structure in the pane, so text rows spike in this
-/// profile while thumbnails and backgrounds stay near the floor.
+
+/// What the locator found: the grid's offset plus how many label bands back it.
+///
+/// The band count is the poller's fullness signal. A sparse grid renders one band and
+/// reads one or two cells with conviction; a populated grid that reads the same is
+/// misphased, not sparse. Counting bands the fold itself scored keeps the referee on
+/// the same evidence the phase came from: bands at or above `BAND_PRESENT_RATIO` of the
+/// brightest band in the unfolded profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocatedLabels {
+    /// The topmost rendered band's offset from the calibration, in profile rows.
+    pub dy: i32,
+    /// How many bands the pane renders at the named phase.
+    pub bands: usize,
+}
+
+/// Glyph-edge count per row over columns `[x, x + w)` -- the strip the tracker looks at.
+/// Rows outside the requested band are not the tracker's business; the caller crops the
+/// geometry.
+///
+/// The counted thing is text, not whiteness. A label row is hundreds of thin bright strokes
+/// on a dark field: pixels that exceed BOTH horizontal neighbours (three columns over) by a
+/// wide margin. Gradients, card art and gold trim are smooth along a row and hold almost no
+/// such maxima. No luma threshold separates dim text from bright art, so the locator counts
+/// sharp edge maxima instead of threshold-crossing pixels and sees every label class at once.
+///
+/// The absolute check shrinks to one presence floor: a strip whose brightest 0.5% cannot
+/// reach 140 holds no text class any OCR crop could read, so the profile is zero and the
+/// locator truthfully answers "no labels".
 pub fn row_profiles(image: &DynamicImage, x: u32, y: u32, w: u32, h: u32) -> Vec<f32> {
     let luma = image.to_luma8();
     let (width, height) = luma.dimensions();
     let w = w.min(width.saturating_sub(x));
     let h = h.min(height.saturating_sub(y));
     let mut rows = vec![0.0_f32; h as usize];
-    for row in 0..h {
+    if !holds_any_text_class(&luma, x, y, w, h) {
+        return rows;
+    }
+    let pixels = luma.as_raw();
+    let stride = width as usize;
+    let span = TEXT_EDGE_SPAN as usize;
+    for (row, slot) in rows.iter_mut().enumerate() {
+        let base = (y as usize + row) * stride;
+        let line = &pixels[base + x as usize..base + x as usize + w as usize];
         let mut sum = 0_u32;
-        for column in 0..w {
-            if luma.get_pixel(x + column, y + row)[0] > 225 {
+        if line.len() <= 2 * span {
+            continue;
+        }
+        for column in span..line.len() - span {
+            let value = i32::from(line[column]);
+            if value > i32::from(line[column - span]) + TEXT_EDGE_DELTA
+                && value > i32::from(line[column + span]) + TEXT_EDGE_DELTA
+            {
                 sum += 1;
             }
         }
-        rows[row as usize] = sum as f32;
+        *slot = sum as f32;
     }
     rows
+}
+
+/// Rows vote a pixel into the profile when it outshines both neighbours this far away by
+/// [`TEXT_EDGE_DELTA`]: three columns is inside a glyph stroke at every supported density
+/// (a 1080p stroke is 2px, 1440p 3px) and past the reach of a smooth gradient's slope.
+const TEXT_EDGE_SPAN: u32 = 3;
+/// Glyph-to-field contrast floor: low enough to admit dim pipelines, high enough above
+/// sensor noise to keep it out by a wide margin.
+const TEXT_EDGE_DELTA: i32 = 60;
+
+/// Whether the strip's whitest structure reaches a level at which any text class can live:
+/// the 99.5th-percentile luma scaled by 0.98 against the calibrated 140 floor. Below it the
+/// frame is too dark to hold labels at all: no row may vote, so the fold sees a genuinely
+/// empty pane.
+fn holds_any_text_class(luma: &GrayImage, x: u32, y: u32, w: u32, h: u32) -> bool {
+    /// The floor the 99.5th-percentile ceiling must clear, scaled by the same 0.98 fringe
+    /// margin the white-gate calibration used.
+    const PRESENCE_FLOOR: u32 = 140;
+    if w == 0 || h == 0 {
+        return false;
+    }
+    let mut histogram = [0_u32; 256];
+    for row in 0..h {
+        for column in 0..w {
+            histogram[luma.get_pixel(x + column, y + row)[0] as usize] += 1;
+        }
+    }
+    let tail = (u64::from(w) * u64::from(h) / 200).max(1) as u32;
+    let mut seen = 0_u32;
+    let mut ceiling = 0_u8;
+    for level in (0..=255_u8).rev() {
+        seen += histogram[level as usize];
+        if seen >= tail {
+            ceiling = level;
+            break;
+        }
+    }
+    u32::from(ceiling) * 98 / 100 >= PRESENCE_FLOOR
 }
 
 #[cfg(test)]
@@ -478,7 +573,7 @@ mod tests {
             // Glyph rows span band rows 6..37, so windows starting anywhere in -8..=6
             // contain them all; fifteen tied starts, midpoint -8+7 = -1.
             assert_eq!(
-                label_offset(&strip, 193, 343, PITCH, BAND),
+                label_offset(&strip, 193, 343, PITCH, BAND).map(|located| located.dy),
                 Some(anchor - 1)
             );
         }
@@ -490,7 +585,10 @@ mod tests {
     #[test]
     fn the_topmost_rendered_band_anchors_the_read() {
         let strip = pane(STRIP, -149, &[true, true, true, true]);
-        assert_eq!(label_offset(&strip, 193, 343, PITCH, BAND), Some(-150));
+        assert_eq!(
+            label_offset(&strip, 193, 343, PITCH, BAND).map(|located| located.dy),
+            Some(-150)
+        );
     }
 
     /// A phase whose first band is above the pane's clip edge: that band is not rendered, and
@@ -499,8 +597,25 @@ mod tests {
     fn a_band_the_pane_does_not_render_is_not_the_anchor() {
         let strip = pane(STRIP, -20, &[false, true, true, true]);
         assert_eq!(
-            label_offset(&strip, 193, 343, PITCH, BAND),
+            label_offset(&strip, 193, 343, PITCH, BAND).map(|located| located.dy),
             Some(-20 + PITCH - 1)
+        );
+    }
+
+    /// The locator also reports how many bands back its answer: the poller's fullness
+    /// signal for telling a sparse grid (one band, one or two true cells) from a
+    /// misphased one (several bands, nothing readable).
+    #[test]
+    fn the_locator_counts_the_bands_it_anchors_on() {
+        let full = pane(STRIP, 0, &[true, true, true]);
+        assert_eq!(
+            label_offset(&full, 193, 343, PITCH, BAND).map(|located| located.bands),
+            Some(3)
+        );
+        let sparse = pane(STRIP, 0, &[true, false, false]);
+        assert_eq!(
+            label_offset(&sparse, 193, 343, PITCH, BAND).map(|located| located.bands),
+            Some(1)
         );
     }
 
@@ -537,16 +652,164 @@ mod tests {
     }
 
     #[test]
-    fn row_profiles_count_near_white_pixels_per_row() {
-        // 2x2 image: one all-white row, one mid-gray row.
-        let mut image = image::GrayImage::new(2, 2);
-        for x in 0..2 {
-            image.put_pixel(x, 0, image::Luma([240]));
-            image.put_pixel(x, 1, image::Luma([100]));
+    fn to_design_px_rebases_caption_units_on_the_overlay() {
+        // A 1440p panel's strip is 1053 rows tall (the pane's 790 design px x 4/3): its
+        // 296-row pitch is the design's 222px pitch.
+        assert_eq!(to_design_px(296, 1053), 222);
+        assert_eq!(to_design_px(-192, 1053), -144);
+        // Identity at the calibration strip height, and a still grid stays still anywhere.
+        assert_eq!(to_design_px(-30, 790), -30);
+        assert_eq!(to_design_px(0, 900), 0);
+        // Rounding lands on the nearer pixel, and an unmeasured strip passes the value on.
+        assert_eq!(to_design_px(1, 1053), 1);
+        assert_eq!(to_design_px(57, 0), 57);
+    }
+
+    /// Every real kiosk capture on record must clear the fold's gates.
+    #[test]
+    fn every_field_fixture_clears_the_fold_gates() {
+        for fixture in [
+            "kiosk-baseline.png",
+            "kiosk-dim-evening.png",
+            "kiosk-hover-polluted.png",
+            "kiosk-open.png",
+            "kiosk-quantity-game.png",
+            "kiosk-selected-chips-baked-1440p.png",
+        ] {
+            let frame = image::open(format!(
+                "{}/tests/fixtures/kiosk/{fixture}",
+                env!("CARGO_MANIFEST_DIR")
+            ))
+            .expect("kiosk fixture");
+            let (x, y, w, h) = crate::kiosk_geometry::grid_strip(frame.width(), frame.height());
+            let strip = row_profiles(&frame, x, y, w, h);
+            let at = crate::kiosk_geometry::label_anchors(strip.len());
+            assert!(
+                label_offset(&strip, at.strip_top, at.first_top, at.pitch, at.band).is_some(),
+                "{fixture} must locate its label bands"
+            );
+        }
+    }
+
+    #[test]
+    fn row_profiles_count_glyph_edges_not_brightness() {
+        // 24px rows: a glyph row (bright 2px strokes on a dark field, like label text), a
+        // smooth-gradient row (bright like card art but edgeless), a uniformly bright row
+        // (the old metric's idea of a label -- this metric's idea of nothing), and a dark
+        // glyph row whose contrast is real but whose ceiling is under the presence floor.
+        let mut image = image::GrayImage::new(32, 4);
+        for column in 0..32 {
+            image.put_pixel(
+                column,
+                0,
+                image::Luma([if column % 8 < 2 { 210 } else { 12 }]),
+            );
+            image.put_pixel(column, 1, image::Luma([(column as u8) * 6 + 40]));
+            image.put_pixel(column, 2, image::Luma([230]));
+            image.put_pixel(
+                column,
+                3,
+                image::Luma([if column % 8 < 2 { 72 } else { 8 }]),
+            );
         }
         let dynamic = DynamicImage::ImageLuma8(image);
-        assert_eq!(row_profiles(&dynamic, 0, 0, 2, 2), vec![2.0, 0.0]);
-        // Out-of-band requests clip rather than panic.
-        assert_eq!(row_profiles(&dynamic, 1, 1, 99, 99), vec![0.0]);
+        let profile = row_profiles(&dynamic, 0, 0, 32, 4);
+        assert!(profile[0] > 0.0, "strokes are text: {profile:?}");
+        assert_eq!(profile[1], 0.0, "a gradient carries no text edges");
+        assert_eq!(profile[2], 0.0, "uniform brightness is not text");
+        assert!(
+            profile[3] > 0.0,
+            "dim glyphs in a lit strip are still text: {profile:?}"
+        );
+        // A whole strip below the presence floor (its brightest 0.5% under 140) holds no
+        // readable text class: the profile stays zero and the locator answers nothing.
+        let dark = image::GrayImage::from_pixel(32, 4, image::Luma([90]));
+        assert_eq!(
+            row_profiles(&DynamicImage::ImageLuma8(dark), 0, 0, 32, 4),
+            vec![0.0; 4]
+        );
+        // Out-of-band requests clip rather than panic: a 1-row window over the gradient
+        // row, and a window squeezed against the far edge.
+        assert_eq!(row_profiles(&dynamic, 20, 1, 99, 1), vec![0.0]);
+        assert_eq!(row_profiles(&dynamic, 30, 3, 99, 99), vec![0.0]);
+        // A strip narrower than two edge spans cannot hold a glyph edge.
+        assert_eq!(row_profiles(&dynamic, 0, 0, 5, 4), vec![0.0; 4]);
+    }
+
+    fn dimmed_fixture(dim: f32) -> DynamicImage {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-open.png"
+        ))
+        .expect("kiosk fixture");
+        let mut rgb = frame.to_rgb8();
+        for pixel in rgb.pixels_mut() {
+            pixel.0 = [
+                (pixel.0[0] as f32 * dim) as u8,
+                (pixel.0[1] as f32 * dim) as u8,
+                (pixel.0[2] as f32 * dim) as u8,
+            ];
+        }
+        DynamicImage::ImageRgb8(rgb)
+    }
+
+    fn locate(frame: &DynamicImage) -> Option<LocatedLabels> {
+        let (x, y, w, h) = crate::kiosk_geometry::grid_strip(frame.width(), frame.height());
+        let profile = row_profiles(frame, x, y, w, h);
+        let at = crate::kiosk_geometry::label_anchors(profile.len());
+        label_offset(&profile, at.strip_top, at.first_top, at.pitch, at.band)
+    }
+
+    /// The locator's phase must not depend on the capture pipeline's white ceiling:
+    /// the same grid dimmed to 85% or 70% must fold to the identical answer, band
+    /// count included.
+    #[test]
+    fn dimming_the_grid_does_not_move_the_fold() {
+        let undisputed = locate(&dimmed_fixture(1.0));
+        for dim in [0.85_f32, 0.7] {
+            assert_eq!(locate(&dimmed_fixture(dim)), undisputed, "dim={dim}");
+        }
+    }
+
+    /// Below the floor at which a dimmed pipeline keeps no whiteness class at all,
+    /// the profile is empty and a no-label verdict remains the truthful one.
+    #[test]
+    fn a_pipeline_too_dark_to_hold_white_still_locates_nothing() {
+        assert_eq!(locate(&dimmed_fixture(0.45)), None);
+    }
+
+    /// A still, focused, populated dim grid must still fold to 3+ bands.
+    #[test]
+    fn the_dim_evening_field_frame_folds() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-dim-evening.png"
+        ))
+        .expect("field frame fixture");
+        let located = locate(&frame).expect("a full grid on screen must locate");
+        assert!(
+            located.bands >= 3,
+            "a four-row grid backs at least three bands, got {located:?}"
+        );
+    }
+
+    /// All rendered bands count, and the named band holds the glyph cores.
+    #[test]
+    fn the_selected_frame_folds_every_visible_band() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-selected-chips-baked-1440p.png"
+        ))
+        .expect("selected field frame fixture");
+        let located = locate(&frame).expect("a three-row pane must locate");
+        assert_eq!(
+            located.bands, 3,
+            "every rendered label band counts: {located:?}"
+        );
+        assert!(
+            (-10..=4).contains(&located.dy),
+            "the named band must contain the glyph cores (y 461-522), got dy {}",
+            located.dy
+        );
     }
 }

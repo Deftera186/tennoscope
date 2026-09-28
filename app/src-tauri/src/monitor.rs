@@ -29,8 +29,8 @@ use warframe_acquisition::LinuxProc as ProcessObserver;
 use warframe_acquisition::WindowsProc as ProcessObserver;
 use warframe_acquisition::{
     AcquisitionError, CatalogCache, CatalogIndex, GameProcess, MarketPriceCache, MemoryReader,
-    ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry, RewardMemoryScanner,
-    WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp,
+    PriceTable, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry,
+    RewardMemoryScanner, WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
 
@@ -1099,6 +1099,40 @@ impl RewardSession {
     }
 }
 
+/// Price one kiosk label against the dump-then-live join both publishes share, so a grid tile
+/// and a basket row carrying the same name can never disagree.
+///
+/// A label that matched a built component (`Khora Prime Neuroptics`) falls back to its
+/// blueprint twin. The ducat kiosk only ever shows tradeable prime parts, so a built name on
+/// screen is a dropped-` Blueprint` misread, never an item the player could actually sell.
+/// This stays kiosk-scoped on purpose: `PriceTable::market_name` deliberately has no
+/// append-` Blueprint` rule, where a built frame is a real owned item rather than a misread.
+fn kiosk_unit_price(
+    table: Option<&Arc<PriceTable>>,
+    cache: &MarketPriceCache,
+    name: &str,
+) -> Option<u32> {
+    join_price(table, cache, name).or_else(|| {
+        if name.ends_with(" Blueprint") {
+            return None;
+        }
+        join_price(table, cache, &format!("{name} Blueprint"))
+    })
+}
+/// The dump's median of completed trades is the honest number for a sell-advice overlay: what
+/// copies actually went for. The live cache holds the lowest current ask, which a single joke
+/// listing can set arbitrarily high, so it only stands in where the dump has no price.
+fn join_price(
+    table: Option<&Arc<PriceTable>>,
+    cache: &MarketPriceCache,
+    name: &str,
+) -> Option<u32> {
+    table
+        .as_ref()
+        .and_then(|table| table.price_for(name))
+        .or_else(|| cache.get(name))
+}
+
 pub(crate) fn run(
     shared: SharedRuntime,
     app: AppHandle,
@@ -1153,6 +1187,7 @@ pub(crate) fn run(
     let kiosk_spawn = |session: u64,
                        reanchor: &Arc<std::sync::atomic::AtomicBool>,
                        gone: &Arc<std::sync::atomic::AtomicBool>| {
+        let chips: ChipsState = Arc::new(std::sync::Mutex::new(None));
         let joiner = {
             let shared = Arc::clone(&shared);
             let cache = price_cache.clone();
@@ -1164,20 +1199,21 @@ pub(crate) fn run(
                     .map(|runtime| runtime.core.collection_prices())
                     .unwrap_or_default();
                 kiosk_view::build_view(epoch, &frame.cells, &frame.basket, |name| {
-                    cache
-                        .get(name)
-                        .or_else(|| table.as_ref().and_then(|table| table.price_for(name)))
+                    kiosk_unit_price(table.as_ref(), &cache, name)
                 })
             }
         };
         let publish = {
             let app = app.clone();
             let first_publish = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let chips = Arc::clone(&chips);
             move |view: KioskView| {
                 let Some(kiosk) = app.try_state::<KioskState>() else {
                     return;
                 };
-                let _ = kiosk.set_if_current(session, view, || {
+                // The next capture must not see what this view paints: hand the source the
+                // published view so it masks the chips (only on the session that owns them).
+                if kiosk.set_if_current(session, view.clone(), || {
                     if first_publish.swap(false, Ordering::AcqRel) {
                         // On native Wayland the open log marker arrives before capture has located
                         // the game monitor. The first show is deliberately deferred; retry now that
@@ -1185,12 +1221,16 @@ pub(crate) fn run(
                         overlay_window::show_kiosk_overlay(&app);
                     }
                     emit_kiosk_update(&app, Some(session));
-                });
+                }) {
+                    stash_publish(&chips, view);
+                }
             }
         };
         let emit_scroll = {
             let app = app.clone();
+            let chips = Arc::clone(&chips);
             move |verdict: Option<i32>| {
+                track_scroll_delta(&chips, verdict);
                 // Gate every side effect at the same session mutex as publication, then carry the
                 // identity across IPC so an event already queued for the webview cannot cross a
                 // close/reopen boundary.
@@ -1213,7 +1253,10 @@ pub(crate) fn run(
             joiner,
             publish,
             emit_scroll,
-            ScreenKioskSource::default,
+            {
+                let chips = Arc::clone(&chips);
+                move || ScreenKioskSource::new().with_chips(chips)
+            },
         );
         log::debug!(
             "[DEBUG-kiosk] poller spawned with {} candidates",
@@ -1480,6 +1523,7 @@ impl KioskPollerTiming {
 }
 
 /// One whole poller attempt: what the screen said, per slot.
+#[derive(Clone, Default)]
 pub struct KioskRead {
     pub cells: Vec<GridCell>,
     pub basket: Vec<BasketRow>,
@@ -1512,7 +1556,54 @@ pub trait KioskFrameSource {
 pub struct ScreenKioskSource {
     capture: reward_capture::GameCapture,
     recent: Option<(Instant, image::DynamicImage)>,
+    /// The last view the overlay is drawing right now, shared with the publish arm: its
+    /// chips are painted out of every new capture, because monitor-scoped capture rungs
+    /// (portal, KWin) frame our own window along with the game.
+    chips: ChipsState,
 }
+
+/// The chips the overlay currently shows, as the poller published them.
+///
+/// Source and publish arm share it: publish stores the view it pushed, the source masks
+/// its chips out of the next capture. Stale by at most one epoch, which the steering
+/// ladder absorbs: a chip that moved mid-scroll is re-masked at the next settle.
+/// The overlay's drawn chips as the capture sees them: the last published view, plus where
+/// its grid chips sit *right now* in design pixels. Scroll deltas land between publishes, so
+/// the drawn position drifts off `view.scroll_dy` until the next settle re-anchors it; the
+/// mask must ride the same accumulation or the chips surface in the capture unmasked (this
+/// is the self-readback failure class arriving one scroll late).
+#[derive(Clone)]
+pub struct ChipMask {
+    pub view: KioskView,
+    /// Live grid-chip offset in design pixels: `view.scroll_dy` at publish, plus every
+    /// design-pixel delta emitted since, so the accumulation tracks what the frames
+    /// actually contain.
+    pub mask_dy: i32,
+}
+
+/// Publish arm: a fresh view re-anchors the frontend outright, so the drawn offset restarts
+/// at the new epoch's own phase. The mask restarts there too: the frontend draws the chips
+/// at anchor plus scroll_dy, so masking at anchor plus zero would miss every chip on a
+/// scrolled grid and paint over innocent labels instead.
+fn stash_publish(chips: &ChipsState, view: KioskView) {
+    if let Ok(mut stash) = chips.lock() {
+        let mask_dy = view.scroll_dy;
+        *stash = Some(ChipMask { view, mask_dy });
+    }
+}
+
+/// Scroll arm: streamed deltas ride the chips between publishes, so the mask rides with
+/// them. A null verdict fades the chips visually but the pixels were already captured --
+/// the mask stays put either way.
+fn track_scroll_delta(chips: &ChipsState, verdict: Option<i32>) {
+    if let Some(delta) = verdict {
+        if let Ok(Some(mask)) = chips.lock().as_deref_mut() {
+            mask.mask_dy = mask.mask_dy.saturating_add(delta);
+        }
+    }
+}
+
+pub type ChipsState = Arc<std::sync::Mutex<Option<ChipMask>>>;
 
 impl Default for ScreenKioskSource {
     fn default() -> Self {
@@ -1525,11 +1616,27 @@ impl ScreenKioskSource {
         Self {
             capture: reward_capture::GameCapture::new(),
             recent: None,
+            chips: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    /// Share the poller's chip state with this source.
+    pub fn with_chips(mut self, chips: ChipsState) -> Self {
+        self.chips = chips;
+        self
+    }
+
+    fn mask_chips(&self, frame: &mut image::DynamicImage) {
+        if let Ok(Some(mask)) = self.chips.lock().as_deref() {
+            kiosk_view::mask_published_chips(frame, &mask.view, mask.mask_dy);
         }
     }
 
     fn capture_frame(&mut self) -> Result<(image::DynamicImage, Vec<f32>), &'static str> {
-        let candidates = self.capture.capture_candidates()?;
+        let mut candidates = self.capture.capture_candidates()?;
+        for candidate in &mut candidates {
+            self.mask_chips(&mut candidate.image);
+        }
         let (selected, profile) = select_kiosk_strip(candidates)?;
         let frame = selected.image;
         self.recent = Some((Instant::now(), frame.clone()));
@@ -1582,9 +1689,43 @@ impl KioskFrameSource for ScreenKioskSource {
     }
 }
 
+/// The match score that separates a true read from a lookalike. Clean reads score well
+/// clear of lookalikes, and the floor sits in that gap at 0.85.
+const KIOSK_CONFIDENT_SCORE: f32 = 0.85;
+///
+/// How far the fine ladder walks: two eighth-pitch rungs to either side of the coarse
+/// winner. One rung covers the polluted pane's tie-run drag, and two keeps a margin
+/// for a drag ~2x that strong.
+const KIOSK_FINE_LADDER_RUNGS: i32 = 2;
+
+/// Confident cells a read holds: matches at or above [`KIOSK_CONFIDENT_SCORE`]. A failed
+/// read has none. This is the recovery referee -- sparse-but-true panes read weak in
+/// count yet high in score, misphased panes the reverse.
+fn confident_cells(read: &Result<KioskRead, &'static str>) -> usize {
+    match read {
+        Ok(frame) => confident_frame_cells(frame),
+        Err(_) => 0,
+    }
+}
+
+/// Confident cells in one frame. Split out so probes can be judged without wrapping
+/// the frame in a `Result` first.
+fn confident_frame_cells(frame: &KioskRead) -> usize {
+    frame
+        .cells
+        .iter()
+        .filter(|cell| cell.score >= KIOSK_CONFIDENT_SCORE)
+        .count()
+}
+
 /// How many consecutive still looks before the screen counts as settled and the read runs. One
 /// still look can be a flick's mid-detent hitch; two is a scroll that has actually stopped.
 const KIOSK_SETTLE_LOOKS: u32 = 2;
+/// How many consecutive unmeasurable-but-present looks the poller waits before reading anyway.
+/// In-place animation (hover-card renders, dialog pulses) defeats frame-to-frame correlation
+/// without moving the grid a pixel; the locator still names the bands, so a read after this
+/// many looks publishes anchored on the locator alone instead of never publishing at all.
+const KIOSK_UNMEASURED_READ_LOOKS: u32 = 3;
 
 /// The kiosk poller's body, with the screen and the join as parameters.
 ///
@@ -1626,6 +1767,32 @@ where
         let mut epoch = 0_u64;
         let mut last_strip: Option<Vec<f32>> = None;
         let mut static_looks = 0_u32;
+        let mut unmeasured_looks: u32 = 0;
+        // Basket quantities flicker frame to frame on static content: a quantity above 1
+        // is only adopted after two consecutive identical reads of the same basket slot
+        // and name, otherwise the row publishes as 1. Keyed, so a reshuffled basket
+        // restarts its own streaks without clearing anyone else's.
+        let mut quantity_streaks: BTreeMap<(usize, String), (u32, u8)> = BTreeMap::new();
+        // Per-look verdict counters: the branches below are otherwise silent, so the
+        // counters flush on publish. The heartbeat logs one bounded debug line per 15 s
+        // so a visit that never settles still leaves motion-vs-blindness visible.
+        let mut looks_motion = 0u64;
+        let mut looks_blind = 0u64;
+        let mut looks_unmeasured = 0u64;
+        let mut looks_still = 0u64;
+        let mut looks_reads = 0u64;
+        let mut last_heartbeat = Instant::now();
+        let mut last_blind_reason: Option<&'static str> = None;
+        let mut last_located_dy: Option<i32> = None;
+        let mut last_publish: Option<Instant> = None;
+        // The last settle's proven correction to the located phase: content-proven, so it
+        // rides the next settle directly instead of paying the ladder again. Retired the
+        // moment it stops reading text.
+        let mut phase_correction: i32 = 0;
+        // Set when an unmeasured run falls through to a locator-anchored read, cleared at the
+        // read so the normal two-look settle gate resumes afterwards.
+        let mut unmeasured_fell_through = false;
+
         let deadline = Instant::now() + timing.lifetime;
         // The top anchor is the LOCATOR's on purpose -- deriving it from the OCR crop's rect
         // coupled the two, and growing the crop to catch three-line labels dragged the locator's
@@ -1634,6 +1801,15 @@ where
             // The log said the screen went away (or the game did): stop looking at it.
             if gone.load(Ordering::Acquire) {
                 break;
+            }
+            if last_heartbeat.elapsed() >= Duration::from_secs(15) {
+                last_heartbeat = Instant::now();
+                let since_publish = last_publish.map_or(-1, |at| at.elapsed().as_secs() as i64);
+                log::debug!(
+                    "[DEBUG-kiosk] heartbeat epoch={epoch} looks=still:{looks_still}/motion:{looks_motion}/blind:{looks_blind}/unmeasured:{looks_unmeasured}/reads:{looks_reads} located={} last_publish={}s ago",
+                    last_located_dy.map_or("none".to_owned(), |dy| dy.to_string()),
+                    since_publish
+                );
             }
             // A re-anchor request (open, filter change, basket edit) advances the epoch so the
             // frontend drops whatever it is showing.
@@ -1646,6 +1822,7 @@ where
             // for a minute -- the undead session of 2026-08-23.)
             let current_strip = source.strip_profile();
             let reading = current_strip.as_ref().ok();
+            let strip_error = current_strip.as_ref().err().copied();
             let frame_delta = match (&last_strip, reading) {
                 (Some(prev), Some(current)) => kiosk_scroll::estimate_dy(
                     prev,
@@ -1659,36 +1836,95 @@ where
                 (_, None) => None,
             };
             last_strip = reading.cloned();
-            let Some(frame_delta) = frame_delta else {
-                // Blindness is not stillness. Fade stale chips and restart settling; otherwise
-                // two torn/flat looks can launch OCR against a displacement we never measured.
-                emit_scroll(None);
-                static_looks = 0;
-                std::thread::sleep(timing.motion_interval);
-                continue;
+            let frame_delta = match frame_delta {
+                Some(delta) => delta,
+                // Unmeasurable but the strip itself read: the pane is there and the
+                // locator below can still name its bands. What failed is only the
+                // frame-to-frame correlation, which in-place animation (a hover
+                // card's render, a dialog's pulse) breaks without moving the grid.
+                // Treating that as blindness faded the chips through any animated
+                // but still pane, so the overlay only ever appeared in rare truly
+                // static moments. Count these looks separately instead: a short run
+                // still reads -- the read re-anchors through the locator, so
+                // in-place animation cannot misalign its crops. A strip that did not
+                // even read is real blindness (a cinematic over the pane, the kiosk
+                // gone) and keeps the fade verdict.
+                None if reading.is_some() => {
+                    unmeasured_looks = unmeasured_looks.saturating_add(1);
+                    looks_unmeasured += 1;
+                    if unmeasured_looks < KIOSK_UNMEASURED_READ_LOOKS {
+                        emit_scroll(None);
+                        std::thread::sleep(timing.motion_interval);
+                        continue;
+                    }
+                    // Fall through to the locator read with no measured delta: the crop
+                    // placement comes from the locator alone, and the emitted null keeps
+                    // the frontend from treating this publish as a measured stillness.
+                    // The look was already counted on entry above.
+                    emit_scroll(None);
+                    unmeasured_fell_through = true;
+                    0
+                }
+                None => {
+                    unmeasured_looks = 0;
+                    looks_blind += 1;
+                    static_looks = 0;
+                    // The blinding reason is otherwise silent, and a stuck capture path
+                    // looks identical to an empty room from the outside. Log the reason
+                    // when it changes (plus the first of a streak); the heartbeat below
+                    // carries the volume.
+                    if strip_error != last_blind_reason {
+                        last_blind_reason = strip_error;
+                        log::debug!(
+                            "[DEBUG-kiosk] strip blind: {}",
+                            strip_error.unwrap_or("unknown capture failure")
+                        );
+                    }
+                    emit_scroll(None);
+                    std::thread::sleep(timing.motion_interval);
+                    continue;
+                }
             };
+            unmeasured_looks = 0;
             if frame_delta.abs() > 1 {
                 // Stream the frame's movement; the frontend accumulates the deltas. Deltas
                 // need no anchor and no range, so the chips follow a scroll of any length.
-                emit_scroll(Some(frame_delta));
+                // The value arrives in strip pixels and crosses IPC as design pixels: the
+                // overlay multiplies it by 100vh/1080 (see kiosk_scroll::to_design_px).
+                looks_motion += 1;
+                emit_scroll(Some(kiosk_scroll::to_design_px(
+                    frame_delta,
+                    reading.map_or(0, |strip| strip.len()),
+                )));
                 static_looks = 0;
                 std::thread::sleep(timing.motion_interval);
                 continue;
             }
             // Two readable, agreeing looks mean settled. The settled read locates itself -- the
             // grid's own label rows name the offset at any scroll position, so the crops land on
-            // the text instead of the gaps.
-            static_looks += 1;
-            if static_looks < KIOSK_SETTLE_LOOKS {
-                std::thread::sleep(timing.motion_interval);
-                continue;
+            // the text instead of the gaps. An unmeasured run that fell through above bypasses
+            // the two-look gate for this one read; the locator gates it on its own.
+            let read_now = unmeasured_fell_through;
+            unmeasured_fell_through = false;
+            if !read_now {
+                static_looks = static_looks.saturating_add(1);
+                if static_looks < KIOSK_SETTLE_LOOKS {
+                    looks_still += 1;
+                    std::thread::sleep(timing.motion_interval);
+                    continue;
+                }
             }
+            looks_still += 1;
+            looks_reads += 1;
             static_looks = 0;
+            let strip_rows = reading.map_or(0, |strip| strip.len());
             let located = reading.and_then(|strip| {
                 let at = kiosk_geometry::label_anchors(strip.len());
                 kiosk_scroll::label_offset(strip, at.strip_top, at.first_top, at.pitch, at.band)
+                    .map(|located| (located.dy, at.pitch, located.bands))
             });
-            let Some(dy) = located else {
+            last_located_dy = located.as_ref().map(|located| located.0);
+            let Some((dy, pitch, bands_present)) = located else {
                 // No label band anywhere in the pane: an animation frame, a capture that came
                 // back torn, or a grid the player has filtered down to nothing. None of those
                 // is a closed kiosk, and none of them is worth publishing over a good view.
@@ -1696,28 +1932,205 @@ where
                 std::thread::sleep(timing.interval);
                 continue;
             };
-            match source.read_kiosk(&candidates, dy) {
-                Ok(frame) => {
+            // The fold answers a phase, and a live pane can make that answer wrong in two
+            // different ways. A sparse pane (few populated rows after sales, a hover card
+            // swallowing bands) can resolve the fold's tied run a whole pitch off: every
+            // crop then lands between label bands. A polluted pane skews the tie-run
+            // midpoint by a fraction of a pitch: the open hover card's bright title votes
+            // in the fold. Both end with the published page reading the gaps: nothing at
+            // all, or lookalikes whose chips then sit half a band off their cards.
+            //
+            // Content is the referee the fold cannot be, but the referee needs to know
+            // how much text to expect -- the fold already counted it. So recovery fires
+            // while confident cells lag rendered bands (capped at two, so a nearly-right
+            // page with one occluded row does not churn): conviction, not cell count,
+            // tells a sparse-but-true page from a misphased one.
+            //
+            // Recovery then asks in two tiers: whole pitches for the which-band error,
+            // then an eighth-pitch ladder around the tier-one winner for the midpoint
+            // drag. Every tier adopts by (confidence, cells): a confident read always
+            // beats lookalikes, and among lookalikes the widest read stands, as before.
+            // The ladder stops at the first rung that reads every rendered band -- that
+            // rung is on the text, further rungs only re-read it shifted. A correction
+            // that proved itself rides the next settle directly, and one that stopped
+            // reading is retired in place.
+            let fullness = bands_present.min(2);
+            let mut read_dy = dy + phase_correction;
+            let mut read = source.read_kiosk(&candidates, read_dy);
+            let mut read_confidence = confident_cells(&read);
+            if phase_correction != 0 && read_confidence < fullness {
+                phase_correction = 0;
+                read = source.read_kiosk(&candidates, dy);
+                read_dy = dy;
+                read_confidence = confident_cells(&read);
+            }
+            // Best read so far, ordered by conviction first: (confident cells, all cells).
+            let mut best = (
+                read_confidence,
+                read.as_ref().map_or(0, |frame| frame.cells.len()),
+            );
+            if read.is_ok() && read_confidence < fullness {
+                for shifted in [read_dy - pitch, read_dy + pitch] {
+                    match source.read_kiosk(&candidates, shifted) {
+                        Ok(frame) => {
+                            let probe = (confident_frame_cells(&frame), frame.cells.len());
+                            if probe > best {
+                                best = probe;
+                                read = Ok(frame);
+                                read_dy = shifted;
+                            }
+                        }
+                        Err(_) => break,
+                    }
+                }
+                read_confidence = confident_cells(&read);
+                if read_confidence < fullness {
+                    // Half-pitch probes: on a dim frame the fold can key the card-art
+                    // comb as loudly as the label comb -- text and art sit half a pitch
+                    // apart, and no other tier can reach that.
+                    for shifted in [read_dy - pitch / 2, read_dy + pitch / 2] {
+                        match source.read_kiosk(&candidates, shifted) {
+                            Ok(frame) => {
+                                let probe = (confident_frame_cells(&frame), frame.cells.len());
+                                if probe > best {
+                                    best = probe;
+                                    read = Ok(frame);
+                                    read_dy = shifted;
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+                read_confidence = confident_cells(&read);
+                if read_confidence < fullness {
+                    // The winner still sits on the fold's midpoint; the text is within a
+                    // couple of eighth-pitch rungs of it. The ladder's centre is fixed so
+                    // a weak-but-wider probe cannot drag the probes off the pitch family.
+                    let anchor = read_dy;
+                    let step = (pitch / 8).max(1);
+                    'fine: for rung in 1..=KIOSK_FINE_LADDER_RUNGS {
+                        for side in [-1_i32, 1] {
+                            let shifted = anchor + side * rung * step;
+                            match source.read_kiosk(&candidates, shifted) {
+                                Ok(frame) => {
+                                    let probe_confidence = confident_frame_cells(&frame);
+                                    if probe_confidence >= fullness {
+                                        read = Ok(frame);
+                                        read_dy = shifted;
+                                        read_confidence = probe_confidence;
+                                        break 'fine;
+                                    }
+                                    if (probe_confidence, frame.cells.len()) > best {
+                                        best = (probe_confidence, frame.cells.len());
+                                        read = Ok(frame);
+                                        read_dy = shifted;
+                                    }
+                                }
+                                Err(_) => break 'fine,
+                            }
+                        }
+                    }
+                }
+                if read_confidence > 0 {
+                    phase_correction = read_dy - dy;
+                }
+            }
+            let dy = read_dy;
+            let final_confidence = confident_cells(&read);
+            match read {
+                Ok(mut frame) => {
                     // A read costs the better part of a second of OCR. A close that landed
                     // while it ran means this frame describes a screen that is already gone,
                     // and publishing it would refill the state the teardown just cleared.
                     if gone.load(Ordering::Acquire) {
                         break;
                     }
+                    // Basket quantities flicker frame to frame on static content: tesseract
+                    // alternates phantom digit strings ("720", "8040") that parse cleanly
+                    // and multiply straight into the total. A quantity above 1 is only
+                    // trusted after two consecutive identical reads of the same slot and
+                    // name; anything else publishes as 1. Rows showing x1 adopt immediately,
+                    // so the common case never lags a settle.
+                    for row in &mut frame.basket {
+                        let key = (row.index, row.name.clone());
+                        let seen = quantity_streaks.get(&key).copied().unwrap_or((1, 0));
+                        if seen.0 == row.quantity {
+                            let streak = seen.1.saturating_add(1);
+                            quantity_streaks.insert(key, (row.quantity, streak));
+                            if row.quantity != 1 && streak < 2 {
+                                row.quantity = 1;
+                            }
+                        } else {
+                            quantity_streaks.insert(key, (row.quantity, 1));
+                            if row.quantity != 1 {
+                                row.quantity = 1;
+                            }
+                        }
+                    }
+                    // Without conviction the grid stays empty, which is the truthful state.
+                    if final_confidence == 0 && !frame.cells.is_empty() {
+                        log::debug!(
+                            "[DEBUG-kiosk] grid page suppressed on {} weak cells dy={dy} (basket kept)",
+                            frame.cells.len()
+                        );
+                        frame.cells.clear();
+                    } else if final_confidence < fullness {
+                        // A mixed page reads true cells among lookalikes. Publishing the
+                        // lookalikes prices the wrong items, worse than no chips, so only
+                        // conviction rides a suspect page.
+                        let before = frame.cells.len();
+                        frame
+                            .cells
+                            .retain(|cell| cell.score >= KIOSK_CONFIDENT_SCORE);
+                        if frame.cells.len() != before {
+                            log::debug!(
+                                "[DEBUG-kiosk] grid page stripped to {} confident cells dy={dy} (basket kept)",
+                                frame.cells.len()
+                            );
+                        }
+                    }
                     let mut view = joiner(epoch, &frame);
-                    view.scroll_dy = dy;
+                    // The frontend styles this offset against 100vh/1080, so it must cross
+                    // IPC in design pixels via `to_design_px`; `dy` was measured in strip
+                    // (capture) pixels, and the raw value overshoots on taller captures.
+                    view.scroll_dy = kiosk_scroll::to_design_px(dy, strip_rows);
+                    let cell_detail: Vec<String> = frame
+                        .cells
+                        .iter()
+                        .map(|cell| format!("{}:{:.2}", cell.name, cell.score))
+                        .collect();
+                    let basket_detail: Vec<String> = frame
+                        .basket
+                        .iter()
+                        .map(|row| format!("{} x{}", row.name, row.quantity))
+                        .collect();
                     log::debug!(
-                        "[DEBUG-kiosk] publish epoch={epoch} cells={} basket={} total={} dy={dy}",
+                        "[DEBUG-kiosk] publish epoch={epoch} cells={} confident={final_confidence} basket={} total={} dy={dy} correction={phase_correction} looks=still:{looks_still}/motion:{looks_motion}/blind:{looks_blind}/unmeasured:{looks_unmeasured}/reads:{looks_reads}",
                         view.cells.len(),
                         view.basket.len(),
                         view.total_plat
                     );
+                    log::debug!(
+                        "[DEBUG-kiosk] publish detail cells=[{}] basket=[{}]",
+                        cell_detail.join(", "),
+                        basket_detail.join(", ")
+                    );
+                    looks_motion = 0;
+                    looks_blind = 0;
+                    looks_unmeasured = 0;
+                    looks_still = 0;
+                    looks_reads = 0;
+                    last_publish = Some(Instant::now());
                     publish(view);
                 }
                 Err(reason) => log::warn!("[DEBUG-kiosk] read failed: {reason}"),
             }
             std::thread::sleep(timing.interval);
         }
+        log::debug!(
+            "[DEBUG-kiosk] poller exit epoch={epoch} looks=still:{looks_still}/motion:{looks_motion}/blind:{looks_blind}/unmeasured:{looks_unmeasured}/reads:{looks_reads}",
+        );
     })
 }
 
@@ -2246,6 +2659,13 @@ mod tests {
         profiles: StdMutex<Vec<Option<Vec<f32>>>>,
         /// Set as a read begins: the log's close line landing while OCR is still running.
         closes_mid_read: Option<Arc<AtomicBool>>,
+        /// When set, `read_kiosk` answers from this per-dy map instead of popping `looks`:
+        /// the read at the map's key returns its value, any other dy returns an empty page.
+        /// For pinning the poller's phase-retry against content.
+        reads_by_dy: Option<StdMutex<std::collections::HashMap<i32, KioskRead>>>,
+        /// Every dy a read was requested for, in order; lets a test count what the retry
+        /// ladders probe rather than inferring it from outcomes.
+        read_log: Option<Arc<StdMutex<Vec<i32>>>>,
     }
 
     impl ScriptedKiosk {
@@ -2254,6 +2674,8 @@ mod tests {
                 looks: StdMutex::new(looks),
                 profiles: StdMutex::new(vec![None]),
                 closes_mid_read: None,
+                reads_by_dy: None,
+                read_log: None,
             }
         }
 
@@ -2262,8 +2684,18 @@ mod tests {
             self
         }
 
+        fn recorder_reads(mut self, log: &Arc<StdMutex<Vec<i32>>>) -> Self {
+            self.read_log = Some(Arc::clone(log));
+            self
+        }
+
         fn closing_mid_read(mut self, gone: &Arc<AtomicBool>) -> Self {
             self.closes_mid_read = Some(Arc::clone(gone));
+            self
+        }
+
+        fn with_reads_by_dy(mut self, reads: Vec<(i32, KioskRead)>) -> Self {
+            self.reads_by_dy = Some(StdMutex::new(reads.into_iter().collect()));
             self
         }
     }
@@ -2272,10 +2704,24 @@ mod tests {
         fn read_kiosk(
             &mut self,
             _candidates: &[RewardCatalogEntry],
-            _dy: i32,
+            dy: i32,
         ) -> Result<KioskRead, &'static str> {
+            if let Some(log) = &self.read_log {
+                log.lock().expect("read log").push(dy);
+            }
             if let Some(gone) = &self.closes_mid_read {
                 gone.store(true, Ordering::Release);
+            }
+            if let Some(reads) = &self.reads_by_dy {
+                // A dy-keyed script answers the mapped dy and an empty page otherwise, so a
+                // test can stand in for a misphased locator: one dy holds the grid, the
+                // neighbours read blank.
+                return Ok(reads
+                    .lock()
+                    .expect("reads by dy")
+                    .get(&dy)
+                    .cloned()
+                    .unwrap_or_default());
             }
             // An exhausted script is a vanished screen: the read fails instead of a panic
             // inside the poller thread. It is NOT a close -- only the log ends a session.
@@ -2363,13 +2809,17 @@ mod tests {
         rows
     }
 
-    fn run_poller_with(
-        source: ScriptedKiosk,
+    fn run_poller_with<S>(
+        source: S,
+        candidates: Vec<RewardCatalogEntry>,
     ) -> (
         Arc<AtomicBool>,
         Arc<AtomicBool>,
         Arc<StdMutex<Vec<KioskView>>>,
-    ) {
+    )
+    where
+        S: KioskFrameSource + Send + 'static,
+    {
         let reanchor = Arc::new(AtomicBool::new(false));
         let gone = Arc::new(AtomicBool::new(false));
         let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
@@ -2384,7 +2834,7 @@ mod tests {
                 motion_interval: Duration::from_millis(1),
                 lifetime: Duration::from_millis(400),
             },
-            Arc::new(Vec::new()),
+            Arc::new(candidates),
             |epoch, read| {
                 // Price everything so the join keeps the scripted cells visible.
                 crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
@@ -2397,14 +2847,17 @@ mod tests {
         (reanchor, gone, published)
     }
 
-    fn run_poller(
-        source: ScriptedKiosk,
+    fn run_poller<S>(
+        source: S,
     ) -> (
         Arc<AtomicBool>,
         Arc<AtomicBool>,
         Arc<StdMutex<Vec<KioskView>>>,
-    ) {
-        run_poller_with(source)
+    )
+    where
+        S: KioskFrameSource + Send + 'static,
+    {
+        run_poller_with(source, Vec::new())
     }
 
     #[test]
@@ -2529,6 +2982,1257 @@ mod tests {
             "the narrowed grid published on the fresh anchor"
         );
         assert_eq!(published[0].cells.len(), 1);
+    }
+    /// A sparse pane can resolve the locator's fold one whole pitch off, and the crops
+    /// then land between label bands: the located read sees nothing, while the
+    /// dy-independent basket reads fine underneath. Content is the referee: the located
+    /// read scores no confident match, the neighbouring phases are tried, and whichever
+    /// reads the grid with conviction wins -- and the published offset follows it.
+    #[test]
+    fn a_misphased_locator_recovers_by_reading_neighbouring_phases() {
+        // The strip's true phase is 0, so the locator names dy=0; the grid's text, though,
+        // sits one pitch down (the fold misphased), so only dy=+222 reads cells.
+        let full_page = KioskRead {
+            cells: vec![
+                scripted_cell("Recovered row one"),
+                scripted_cell("Recovered row two"),
+                scripted_cell("Recovered row three"),
+                scripted_cell("Recovered row four"),
+                scripted_cell("Recovered row five"),
+            ],
+            basket: vec![],
+        };
+        // The locator's answer carries its plateau slack, so key the recovery phase on
+        // whatever it actually names for this strip rather than assuming 0.
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 6])
+            .with_reads_by_dy(vec![(located + anchors.pitch, full_page)]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "the poller publishes once the content names the phase"
+        );
+        assert_eq!(published[0].cells.len(), 5);
+        assert_eq!(
+            published[0].scroll_dy,
+            located + anchors.pitch,
+            "the published offset follows the phase the text was found at"
+        );
+    }
+
+    /// An animated-but-present pane defeats frame-to-frame correlation without moving
+    /// the grid: hover-card renders, dialog pulses. Those looks are unmeasurable, not
+    /// blind -- the strip read and the locator can still name the bands -- so after a
+    /// short run the poller reads anyway, anchored on the locator.
+    #[test]
+    fn an_unmeasurable_but_present_strip_publishes_after_a_run() {
+        // The same locatable strip with a large hover-card block rendered into it: the
+        // block's uniform brightness drowns the frame-to-frame correlation (the estimate
+        // answers None), exactly as an in-place animation does, while the label bands
+        // stay intact for the locator.
+        let hover_block = |with: bool| {
+            let mut strip = label_strip();
+            if with {
+                for row in strip.iter_mut().take(500).skip(300) {
+                    *row = 100.0;
+                }
+            }
+            strip
+        };
+        // Pops come off the back: alternate absent/block looks, unmeasurable every pair.
+        let source = ScriptedKiosk::new(vec![
+            Ok(KioskRead {
+                cells: vec![scripted_cell("Animated hover row")],
+                basket: vec![],
+            }),
+            Err("script exhausted"),
+        ])
+        .with_profiles(vec![
+            Some(hover_block(false)),
+            Some(hover_block(true)),
+            Some(hover_block(false)),
+            Some(hover_block(true)),
+            Some(hover_block(false)),
+            Some(hover_block(true)),
+        ]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "an unmeasurable-but-present strip still publishes anchored on the locator"
+        );
+    }
+
+    /// A fractionally misphased fold needs the fine ladder: whole-pitch retries cannot
+    /// reach the text, so step an eighth of a pitch to either side of the winner while
+    /// nothing reads with conviction.
+    #[test]
+    fn a_fractionally_misphased_locator_is_fine_tuned_by_content() {
+        let full_page = KioskRead {
+            cells: vec![
+                scripted_cell("Fine-tuned row one"),
+                scripted_cell("Fine-tuned row two"),
+                scripted_cell("Fine-tuned row three"),
+                scripted_cell("Fine-tuned row four"),
+                scripted_cell("Fine-tuned row five"),
+            ],
+            basket: vec![],
+        };
+        let weak_page = KioskRead {
+            cells: (0..3)
+                .map(|i| GridCell {
+                    col: 0,
+                    row: 0,
+                    name: format!("near-miss lookalike {i}"),
+                    score: 0.70,
+                })
+                .collect(),
+            basket: vec![],
+        };
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        let step = anchors.pitch / 8;
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 6])
+            .with_reads_by_dy(vec![
+                (located, weak_page),
+                // Whole-pitch neighbours hold nothing, as they must: they share the
+                // misphase. The text lives one fine step away.
+                (located - step, full_page),
+            ]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "the fine ladder publishes the read the text was found at"
+        );
+        assert_eq!(published[0].cells.len(), 5);
+        assert_eq!(
+            published[0].scroll_dy,
+            located - step,
+            "the published offset follows the fine-tuned phase"
+        );
+    }
+
+    /// One lucky slot (or one confident lookalike) must not certify the phase -- one
+    /// confident cell against several rendered bands is evidence of misphase, and the
+    /// ladder must run until the page reads.
+    #[test]
+    fn a_lone_confident_cell_on_a_full_pane_still_recovers() {
+        let full_page = KioskRead {
+            cells: vec![
+                scripted_cell("Recovered row one"),
+                scripted_cell("Recovered row two"),
+                scripted_cell("Recovered row three"),
+                scripted_cell("Recovered row four"),
+                scripted_cell("Recovered row five"),
+            ],
+            basket: vec![],
+        };
+        let lone_page = KioskRead {
+            cells: vec![GridCell {
+                col: 0,
+                row: 0,
+                name: "lone lookalike-or-lucky-slot".to_owned(),
+                score: 0.90,
+            }],
+            basket: vec![],
+        };
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        let step = anchors.pitch / 8;
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 6])
+            .with_reads_by_dy(vec![(located, lone_page), (located - step, full_page)]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "a full pane reading one confident cell must still recover"
+        );
+        assert_eq!(published[0].cells.len(), 5);
+        assert_eq!(
+            published[0].scroll_dy,
+            located - step,
+            "the published offset follows the fine-tuned phase"
+        );
+    }
+
+    /// A page mixing one confident cell with lookalikes on a full pane publishes only
+    /// conviction: the ladder keeps the widest read, but unproven cells must not ride it.
+    #[test]
+    fn a_mixed_page_publishes_only_its_confident_cell() {
+        let mixed_page = KioskRead {
+            cells: vec![
+                GridCell {
+                    col: 0,
+                    row: 0,
+                    name: "true cell".to_owned(),
+                    score: 0.95,
+                },
+                GridCell {
+                    col: 1,
+                    row: 0,
+                    name: "lookalike one".to_owned(),
+                    score: 0.70,
+                },
+                GridCell {
+                    col: 2,
+                    row: 0,
+                    name: "lookalike two".to_owned(),
+                    score: 0.70,
+                },
+                GridCell {
+                    col: 3,
+                    row: 0,
+                    name: "lookalike three".to_owned(),
+                    score: 0.70,
+                },
+            ],
+            basket: vec![],
+        };
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 6])
+            .with_reads_by_dy(vec![(located, mixed_page)]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "the mixed page must publish its confident cell"
+        );
+        assert_eq!(published[0].cells.len(), 1);
+        assert_eq!(published[0].cells[0].name, "true cell");
+    }
+
+    fn basket_page(quantities: &[(usize, &str, u32)]) -> KioskRead {
+        KioskRead {
+            cells: vec![],
+            basket: quantities
+                .iter()
+                .map(|(index, name, quantity)| BasketRow {
+                    index: *index,
+                    name: (*name).to_owned(),
+                    score: 0.99,
+                    quantity: *quantity,
+                })
+                .collect(),
+        }
+    }
+
+    /// A quantity above 1 is only trusted after two consecutive identical reads, so
+    /// phantom digit strings can never reach the total.
+    #[test]
+    fn a_flapping_quantity_never_reaches_the_total() {
+        let flap_a = basket_page(&[(0usize, "Ninkondi Prime Handle", 720u32)]);
+        let flap_b = basket_page(&[(0usize, "Ninkondi Prime Handle", 8040u32)]);
+        // Pops come off the back, so this alternates A,B,A,B... per read. Every settle
+        // burns up to 13 pops (located + pitch pair + half-pitch pair + ladder) before
+        // publishing once.
+        let source = ScriptedKiosk::new(vec![
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+            Ok(flap_b.clone()),
+            Ok(flap_a.clone()),
+        ])
+        .with_profiles(vec![Some(label_strip()); 4]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert_eq!(published.len(), 2, "two settles publish: {published:?}");
+        assert!(
+            published.iter().all(|view| view.total_plat <= 1),
+            "no phantom multiplier may reach the total: {published:?}"
+        );
+    }
+
+    /// A stable multi-stack is trusted on its second identical sighting: the first
+    /// publish conservatively shows x1, the next shows the proven count.
+    #[test]
+    fn a_stable_quantity_is_adopted_on_repeat() {
+        let steady = basket_page(&[(3usize, "Ninkondi Prime Handle", 4u32)]);
+        // Settle 1 burns 13 pops finding nothing better than the located read; settle 2
+        // spends its single remaining pop on the located read itself.
+        let source =
+            ScriptedKiosk::new(vec![Ok(steady); 14]).with_profiles(vec![Some(label_strip()); 4]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert_eq!(published.len(), 2, "two settles publish: {published:?}");
+        assert_eq!(published[0].total_plat, 1);
+        assert_eq!(published[1].total_plat, 4);
+    }
+
+    /// A misphased pane stays misphased the same way until the content moves: once a settle
+    /// has paid the ladder for a correction, the next settle must not pay it again. The first
+    /// read tries the corrected phase directly, and the publish cadence keeps its shape.
+    #[test]
+    fn a_proven_phase_correction_is_reused_while_it_keeps_reading() {
+        let full_page = KioskRead {
+            cells: vec![
+                scripted_cell("Corrected row one"),
+                scripted_cell("Corrected row two"),
+                scripted_cell("Corrected row three"),
+                scripted_cell("Corrected row four"),
+                scripted_cell("Corrected row five"),
+            ],
+            basket: vec![],
+        };
+        let weak_page = KioskRead {
+            cells: vec![GridCell {
+                col: 0,
+                row: 0,
+                name: "near-miss lookalike".to_owned(),
+                score: 0.70,
+            }],
+            basket: vec![],
+        };
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        let step = anchors.pitch / 8;
+        let asked: Arc<StdMutex<Vec<i32>>> = Arc::new(StdMutex::new(Vec::new()));
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 4])
+            .with_reads_by_dy(vec![(located, weak_page), (located - step, full_page)])
+            .recorder_reads(&asked);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert_eq!(published.len(), 2, "two settles, two publishes");
+        let asked = asked.lock().expect("read log");
+        assert_eq!(
+            asked.len(),
+            7,
+            "first settle pays the ladder ({located}, ±pitch, ±half-pitch, then -step wins and the ladder stops); the second settle reads once: {asked:?}"
+        );
+        assert_eq!(
+            asked[6],
+            located - step,
+            "the second settle's first read is the corrected phase"
+        );
+    }
+
+    /// Two genuine items on an otherwise empty page read with conviction at the right phase;
+    /// that is a healthy sparse pane, never a misphase. No pitch probes, no fine ladder:
+    /// every settle is one read.
+    #[test]
+    fn a_sparse_confident_read_skips_recovery_probes() {
+        let page = KioskRead {
+            cells: vec![
+                scripted_cell("Sparse item one"),
+                scripted_cell("Sparse item two"),
+            ],
+            basket: vec![],
+        };
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        let asked: Arc<StdMutex<Vec<i32>>> = Arc::new(StdMutex::new(Vec::new()));
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 4])
+            .with_reads_by_dy(vec![(located, page)])
+            .recorder_reads(&asked);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert_eq!(published.len(), 2, "two settles, two publishes");
+        assert_eq!(published[0].cells.len(), 2);
+        let asked = asked.lock().expect("read log");
+        assert_eq!(
+            asked.as_slice(),
+            &[located, located],
+            "each settle is exactly one read, at the located phase: {asked:?}"
+        );
+    }
+
+    /// When no probed phase reads with conviction, the page on screen is only lookalikes:
+    /// names that half-match the crop's partial text. Publishing them puts real-looking
+    /// prices on the wrong cards, which is strictly worse than showing no chips -- so the
+    /// publish strips the grid cells. The basket still publishes: it does not share the
+    /// phase, so the misphase never wrongs it.
+    #[test]
+    fn an_unproven_page_is_published_without_its_lookalike_cells() {
+        let always_weak = |name: &str| GridCell {
+            col: 0,
+            row: 0,
+            name: name.to_owned(),
+            score: 0.70,
+        };
+        let weak_page = KioskRead {
+            cells: vec![always_weak("lookalike A"), always_weak("lookalike B")],
+            basket: vec![],
+        };
+        let good_page = KioskRead {
+            cells: vec![scripted_cell("True Label")],
+            basket: vec![],
+        };
+        let anchors = kiosk_geometry::label_anchors(label_strip().len());
+        let located = kiosk_scroll::label_offset(
+            &label_strip(),
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the calibration strip locates")
+        .dy;
+        // First settle reads weak everywhere; second settle's correction retry at the same
+        // located phase still reads weak, and the surviving ladder rung finds the true page.
+        let step = anchors.pitch / 8;
+        let source = ScriptedKiosk::new(vec![])
+            .with_profiles(vec![Some(label_strip()); 4])
+            .with_reads_by_dy(vec![
+                (located, weak_page.clone()),
+                (located - step, weak_page),
+                (located + step, good_page),
+            ]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            published
+                .first()
+                .is_some_and(|view| view.cells.iter().all(|cell| cell.name == "True Label")),
+            "the first publish must already be the proven page: {published:?}"
+        );
+        assert!(
+            published.iter().all(|view| view
+                .cells
+                .iter()
+                .all(|cell| cell.name != "lookalike A" && cell.name != "lookalike B")),
+            "no publish may ever contain a lookalike cell"
+        );
+    }
+
+    /// The total-failure tail of that contract: when no rung of any tier ever reads a
+    /// confident cell (a pane too degraded to read at all), the publish still happens --
+    /// an empty grid keeps the basket's prices visible -- but its cell list is empty,
+    /// never garbage.
+    #[test]
+    fn a_never_confident_read_publishes_with_no_cells() {
+        let weak_page = KioskRead {
+            cells: vec![GridCell {
+                col: 0,
+                row: 0,
+                name: "lookalike C".to_owned(),
+                score: 0.70,
+            }],
+            basket: vec![BasketRow {
+                index: 0,
+                name: "Ninkondi Prime Handle".to_owned(),
+                score: 0.99,
+                quantity: 4,
+            }],
+        };
+        let source =
+            ScriptedKiosk::new(vec![Ok(weak_page)]).with_profiles(vec![Some(label_strip()); 4]);
+        let (_, _, published) = run_poller(source);
+        let published = published.lock().expect("published");
+        assert!(
+            !published.is_empty(),
+            "a readable pane with an unreadable grid still publishes its basket"
+        );
+        assert!(
+            published.iter().all(|view| view.cells.is_empty()),
+            "no publish may carry the weak cells: {published:?}"
+        );
+        assert!(
+            published.iter().all(|view| view.basket.len() == 1),
+            "the basket read is dy-independent and must survive: {published:?}"
+        );
+    }
+
+    /// End-to-end against the polluted hover-card fixture: the hover title votes in the
+    /// fold while the top label row is dimmed out of the profile gate. Recovery must land
+    /// on a readable phase and keep the chips on their cards.
+    #[test]
+    fn the_polluted_live_frame_publishes_the_readable_phase() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-hover-polluted.png"
+        ))
+        .expect("live polluted frame fixture");
+        // True labels on the frame, plus fixture decoys a misphased crop produces.
+        let candidates: Vec<RewardCatalogEntry> = [
+            "Corinth Prime Receiver",
+            "Dual Zoren Prime Blueprint",
+            "Epitaph Prime Barrel",
+            "Equinox Prime Neuroptics Blueprint",
+            "Equinox Prime Blueprint",
+            "Euphona Prime Barrel",
+            "Frost Prime Systems Blueprint",
+            "Fulmin Prime Blueprint",
+            "Grendel Prime Chassis Blueprint",
+            "Guandao Prime Blueprint",
+            "Harrow Prime Blueprint",
+            "Hydroid Prime Blueprint",
+            "Karyst Prime Handle",
+            "Kavasa Prime Kubrow Collar Blueprint",
+            "Nekros Prime Blueprint",
+            "Nekros Prime Neuroptics Blueprint",
+            "Lex Prime Blueprint",
+            "Corinth Prime Barrel",
+            "Grendel Prime Systems",
+            "Karyst Prime Blade",
+        ]
+        .into_iter()
+        .map(|name| RewardCatalogEntry {
+            name: name.to_owned(),
+            ducats: 45,
+        })
+        .collect();
+
+        // Regression pin: under the glyph-edge profile every band votes equally, so the
+        // naked fold answers the readable phase directly at confident reads.
+        let strip = {
+            let (mut probe, _c) = LiveFrame::new(frame.clone());
+            probe.strip_profile().expect("strip")
+        };
+        let anchors = kiosk_geometry::label_anchors(strip.len());
+        let located = kiosk_scroll::label_offset(
+            &strip,
+            anchors.strip_top,
+            anchors.first_top,
+            anchors.pitch,
+            anchors.band,
+        )
+        .expect("the polluted fold still answers a phase")
+        .dy;
+        let naked = crate::kiosk_ocr::read_grid(&frame, &candidates, located);
+        let confident = naked
+            .iter()
+            .filter(|cell| cell.score >= crate::monitor::KIOSK_CONFIDENT_SCORE)
+            .count();
+        assert!(
+            confident >= 6,
+            "the fold alone must read this pane confidently now: {naked:?}"
+        );
+
+        let (source, _chips) = LiveFrame::new(frame);
+        let (_, _, published) = run_poller_with(source, candidates);
+
+        let published = published.lock().expect("published");
+        let view = published.first().expect("polluted frame must publish");
+        eprintln!(
+            "published dy={} located={located} cells={} {:?}",
+            view.scroll_dy,
+            view.cells.len(),
+            view.cells
+                .iter()
+                .map(|cell| (cell.name.as_str(), cell.col, cell.row))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            view.cells.len() >= 10,
+            "the corrected phase must read the visible page, got {} cells",
+            view.cells.len()
+        );
+        assert!(
+            view.cells
+                .iter()
+                .any(|cell| cell.name == "Karyst Prime Handle")
+                && view
+                    .cells
+                    .iter()
+                    .any(|cell| cell.name == "Frost Prime Systems Blueprint"),
+            "the published page must carry the true labels, not lookalikes: {:?}",
+            view.cells
+        );
+        assert!(
+            view.cells.iter().all(
+                |cell| cell.name != "Corinth Prime Barrel" && cell.name != "Karyst Prime Blade"
+            ),
+            "a lookalike read must never survive recovery: {:?}",
+            view.cells
+        );
+    }
+
+    /// A full-width frame read through the production OCR: the strip locates via the
+    /// row profile, the read comes from `kiosk_ocr` itself. Both live-frame tests share
+    /// it; only the candidate lists differ.
+    struct LiveFrame(image::DynamicImage, ChipsState);
+    impl LiveFrame {
+        fn new(frame: image::DynamicImage) -> (Self, ChipsState) {
+            let chips: ChipsState = Arc::new(StdMutex::new(None));
+            (Self(frame, Arc::clone(&chips)), chips)
+        }
+
+        fn masked(&self) -> image::DynamicImage {
+            let mut frame = self.0.clone();
+            if let Ok(Some(mask)) = self.1.lock().as_deref() {
+                crate::kiosk_view::mask_published_chips(&mut frame, &mask.view, mask.mask_dy);
+            }
+            frame
+        }
+    }
+    impl KioskFrameSource for LiveFrame {
+        fn strip_profile(&mut self) -> Result<Vec<f32>, &'static str> {
+            let frame = self.masked();
+            let (x, y, w, h) = kiosk_geometry::grid_strip(frame.width(), frame.height());
+            Ok(kiosk_scroll::row_profiles(&frame, x, y, w, h))
+        }
+
+        fn read_kiosk(
+            &mut self,
+            candidates: &[RewardCatalogEntry],
+            dy: i32,
+        ) -> Result<KioskRead, &'static str> {
+            let frame = self.masked();
+            Ok(KioskRead {
+                cells: crate::kiosk_ocr::read_grid(&frame, candidates, dy),
+                basket: crate::kiosk_ocr::read_basket(&frame, candidates),
+            })
+        }
+    }
+
+    fn catalog_entries(names: &[&str]) -> Vec<RewardCatalogEntry> {
+        names
+            .iter()
+            .map(|name| RewardCatalogEntry {
+                name: (*name).to_owned(),
+                ducats: 45,
+            })
+            .collect()
+    }
+
+    /// End-to-end against the chips-baked selected fixture: a fully populated kiosk whose
+    /// first two rows are selected, with the overlay's own chips baked into the capture.
+    /// The whole loop -- mask, fold, read, publish -- must converge on the true grid and
+    /// hold it.
+    #[test]
+    fn the_selected_field_frame_publishes_the_whole_grid_and_stays_stable() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-selected-chips-baked-1440p.png"
+        ))
+        .expect("selected field frame fixture");
+        let candidates = catalog_entries(&[
+            "Afentis Prime Blade",
+            "Afuris Prime Receiver",
+            "Alternox Prime Blueprint",
+            "Banshee Prime Chassis Blueprint",
+            "Caliban Prime Neuroptics Blueprint",
+            "Dual Kamas Prime Blade",
+            "Dual Zoren Prime Blade",
+            "Hystrix Prime Receiver",
+            "Kestrel Prime Grip",
+            "Lavos Prime Systems Blueprint",
+            "Ninkondi Prime Handle",
+            "Oberon Prime Neuroptics Blueprint",
+            "Okina Prime Blueprint",
+            "Pangolin Prime Blueprint",
+            "Perigale Prime Barrel",
+            "Phantasma Prime Barrel",
+            "Revenant Prime Blueprint",
+            "Scourge Prime Blueprint",
+        ]);
+
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let (source, chips) = LiveFrame::new(frame);
+        {
+            let sink = Arc::clone(&published);
+            let mask_feed = Arc::clone(&chips);
+            let handle = spawn_kiosk_poller_with(
+                &reanchor,
+                &gone,
+                KioskPollerTiming {
+                    interval: Duration::from_millis(1),
+                    motion_interval: Duration::from_millis(1),
+                    lifetime: Duration::from_millis(400),
+                },
+                Arc::new(candidates),
+                |epoch, read| {
+                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                },
+                move |view| {
+                    // Publish arm mirrors production: the source masks the last view's chips.
+                    stash_publish(&mask_feed, view.clone());
+                    sink.lock().expect("published").push(view);
+                },
+                |_| (),
+                move || source,
+            );
+            handle.join().expect("poller thread");
+        }
+
+        let published = published.lock().expect("published");
+        let last = published.last().expect("the populated frame must publish");
+        let rows: std::collections::BTreeSet<u32> =
+            last.cells.iter().map(|cell| cell.row).collect();
+        assert!(
+            last.cells.len() >= 14 && rows.contains(&0) && rows.contains(&1) && rows.contains(&2),
+            "all three fully rendered rows price: {:?}",
+            last.cells
+        );
+        for name in [
+            "Afuris Prime Receiver",
+            "Okina Prime Blueprint",
+            "Scourge Prime Blueprint",
+        ] {
+            assert!(
+                last.cells.iter().any(|cell| cell.name == name),
+                "the unselected rows' true names must publish: {name} in {:?}",
+                last.cells
+            );
+        }
+        // The basket shows twelve selected rows; the pane renders them all at 1440p.
+        assert_eq!(
+            last.basket.len(),
+            12,
+            "all twelve selected rows price: {:?}",
+            last.basket
+        );
+        // The stub prices every row at 1, so the total is the sum of declared quantities:
+        // every row is a single copy, and chip digits must not fabricate stacks.
+        assert_eq!(
+            last.total_plat, 12,
+            "twelve single copies, no phantom multipliers: {:?}",
+            last.basket
+        );
+        // And the visit holds still: publishes never disagree once one has landed.
+        let states: Vec<Vec<String>> = published
+            .iter()
+            .map(|view| view.cells.iter().map(|c| c.name.clone()).collect())
+            .collect();
+        assert!(
+            states.windows(2).all(|pair| pair[0] == pair[1]),
+            "settled publishes converge instead of oscillating: {states:?}"
+        );
+        // The frame is pixel-exact unscrolled, so the published phase must sit within
+        // rounding of zero -- this is the value that paints the chips onto their cards.
+        let dy = published.last().expect("last view").scroll_dy;
+        assert!(
+            dy.abs() <= 1,
+            "the unscrolled field frame publishes no scroll phase: dy={dy}"
+        );
+    }
+    /// End-to-end against the bright-art link-twins fixture: white-hot art hangs over the
+    /// labels and sparse-text segmentation lets it eat touching glyphs, swapping the twins.
+    /// Label slots read as one ordered block, so both twins must publish under their true
+    /// names at conviction, and the visit must hold still.
+    #[test]
+    fn the_bright_art_frame_reads_both_link_twins() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-bright-art-link-twins-1440p.png"
+        ))
+        .expect("bright-art field frame fixture");
+        let candidates = catalog_entries(&[
+            "Afentis Prime Barrel",
+            "Afentis Prime Blade",
+            "Afuris Prime Barrel",
+            "Afuris Prime Link",
+            "Afuris Prime Receiver",
+            "Afuris Prime Blueprint",
+            "Akarius Prime Barrel",
+            "Akarius Prime Link",
+            "Akbolto Prime Barrel",
+            "Akbolto Prime Link",
+            "Akmagnus Prime Blueprint",
+            "Aksomati Prime Receiver",
+            "Alternox Prime Barrel",
+            "Alternox Prime Receiver",
+            "Alternox Prime Blueprint",
+            "Ash Prime Blueprint",
+            "Astilla Prime Blueprint",
+            "Banshee Prime Chassis Blueprint",
+        ]);
+
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let (source, chips) = LiveFrame::new(frame);
+        {
+            let sink = Arc::clone(&published);
+            let mask_feed = Arc::clone(&chips);
+            let handle = spawn_kiosk_poller_with(
+                &reanchor,
+                &gone,
+                KioskPollerTiming {
+                    interval: Duration::from_millis(1),
+                    motion_interval: Duration::from_millis(1),
+                    lifetime: Duration::from_millis(1500),
+                },
+                Arc::new(candidates),
+                |epoch, read| {
+                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                },
+                move |view| {
+                    stash_publish(&mask_feed, view.clone());
+                    sink.lock().expect("published").push(view);
+                },
+                |_| (),
+                move || source,
+            );
+            handle.join().expect("poller thread");
+        }
+
+        let published = published.lock().expect("published");
+        let last = published.last().expect("the bright frame must publish");
+        let mut cells: Vec<String> = last
+            .cells
+            .iter()
+            .map(|c| format!("{}:{}:{}", c.col, c.row, c.name))
+            .collect();
+        cells.sort();
+        let expected = [
+            "0:0:Afentis Prime Barrel",
+            "0:1:Akarius Prime Barrel",
+            "0:2:Alternox Prime Barrel",
+            "1:0:Afentis Prime Blade",
+            "1:1:Akarius Prime Link",
+            "1:2:Alternox Prime Receiver",
+            "2:0:Afuris Prime Barrel",
+            "2:1:Akbolto Prime Barrel",
+            "2:2:Alternox Prime Blueprint",
+            "3:0:Afuris Prime Link",
+            "3:1:Akbolto Prime Link",
+            "3:2:Ash Prime Blueprint",
+            "4:0:Afuris Prime Receiver",
+            "4:1:Akmagnus Prime Blueprint",
+            "4:2:Astilla Prime Blueprint",
+            "5:0:Afuris Prime Blueprint",
+            "5:1:Aksomati Prime Receiver",
+            "5:2:Banshee Prime Chassis Blueprint",
+        ];
+        assert_eq!(
+            cells, expected,
+            "every rendered label under its true name -- no twin swaps"
+        );
+        // The twins are the discriminating pair: a sparse-text read collapses one onto the
+        // other's name, which would price the wrong item rather than merely miss one.
+        for name in ["Afuris Prime Link", "Akbolto Prime Link"] {
+            assert_eq!(
+                last.cells.iter().filter(|c| c.name == name).count(),
+                1,
+                "each twin publishes exactly once: {name} in {cells:?}"
+            );
+        }
+        // And the visit holds still: publishes never disagree once one has landed.
+        let states: Vec<Vec<String>> = published
+            .iter()
+            .map(|view| {
+                let mut names: Vec<String> = view
+                    .cells
+                    .iter()
+                    .map(|c| format!("{}:{}:{}", c.col, c.row, c.name))
+                    .collect();
+                names.sort();
+                names
+            })
+            .collect();
+        assert!(
+            states.windows(2).all(|pair| pair[0] == pair[1]),
+            "settled publishes converge instead of oscillating: {states:?}"
+        );
+        // Both twins must read at conviction, not merely above the match floor: the
+        // recovery referee counts confident cells.
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-bright-art-link-twins-1440p.png"
+        ))
+        .expect("bright-art field frame fixture");
+        let direct = crate::kiosk_ocr::read_grid(
+            &frame,
+            &catalog_entries(&[
+                "Afuris Prime Link",
+                "Akbolto Prime Link",
+                "Ash Prime Blueprint",
+            ]),
+            0,
+        );
+        for (col, row, name) in [(3, 0, "Afuris Prime Link"), (3, 1, "Akbolto Prime Link")] {
+            let hit = direct
+                .iter()
+                .find(|c| c.col == col && c.row == row)
+                .unwrap_or_else(|| panic!("twin slot ({col},{row}) must read: {direct:?}"));
+            assert_eq!(hit.name, name, "twin slot ({col},{row}) true name");
+            assert!(
+                hit.score >= 0.85,
+                "twin slot ({col},{row}) at conviction: {}",
+                hit.score
+            );
+        }
+    }
+
+    /// End-to-end against the sixteen-row fixture: sixteen basket rows under a live
+    /// overlay whose own chips are baked into the frame. The whole loop must price all
+    /// sixteen rows, converge the game's own 3 X stack marker through the quantity
+    /// streaks, and hold still. The lifetime covers three settles so the streaks can
+    /// confirm: the first publish reads pre-mask, the rest masked.
+    #[test]
+    fn the_sixteen_row_visit_publishes_all_rows_and_holds_still() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-basket-16-dev.png"
+        ))
+        .expect("sixteen-row field frame fixture");
+        let candidates = catalog_entries(&[
+            "Afuris Prime Link",
+            "Akbronco Prime Link",
+            "Aksomati Prime Barrel",
+            "Alternox Prime Barrel",
+            "Atlas Prime Chassis Blueprint",
+            "Braton Prime Receiver",
+            "Fragor Prime Handle",
+            "Fulmin Prime Receiver",
+            "Hystrix Prime Receiver",
+            "Khora Prime Neuroptics Blueprint",
+            "Kompressa Prime Barrel",
+            "Kronen Prime Blade",
+            "Nagantaka Prime Blueprint",
+            "Nekros Prime Systems Blueprint",
+            "Panthera Prime Barrel",
+            "Styanax Prime Neuroptics Blueprint",
+            "Tiberon Prime Barrel",
+            "Titania Prime Systems Blueprint",
+            "Trumna Prime Barrel",
+            "Trumna Prime Receiver",
+            "Vadarya Prime Blueprint",
+            "Venato Prime Blade",
+            "Wisp Prime Chassis Blueprint",
+        ]);
+
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let (source, chips) = LiveFrame::new(frame);
+        {
+            let sink = Arc::clone(&published);
+            let mask_feed = Arc::clone(&chips);
+            let handle = spawn_kiosk_poller_with(
+                &reanchor,
+                &gone,
+                KioskPollerTiming {
+                    interval: Duration::from_millis(1),
+                    motion_interval: Duration::from_millis(1),
+                    lifetime: Duration::from_millis(4000),
+                },
+                Arc::new(candidates),
+                |epoch, read| {
+                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                },
+                move |view| {
+                    // Publish arm mirrors production: the source masks the last view's chips.
+                    stash_publish(&mask_feed, view.clone());
+                    sink.lock().expect("published").push(view);
+                },
+                |_| (),
+                move || source,
+            );
+            handle.join().expect("poller thread");
+        }
+
+        let published = published.lock().expect("published");
+        assert!(!published.is_empty(), "the sixteen-row frame must publish");
+        // The quantity streaks confirm a stack on its second identical read, so the
+        // first publish legitimately totals fifteen singles plus one unconfirmed
+        // stack (16); every later publish must show the confirmed total (18). Either
+        // way no other total is reachable: the full-charset quantity lane finds no
+        // digit+X in chip prices, ducat counts, or name initials. Counting publishes
+        // is scheduling, but these values are not: same pixels, same reads.
+        for (n, view) in published.iter().enumerate() {
+            assert_eq!(
+                view.basket.len(),
+                16,
+                "all sixteen basket rows price: {:?}",
+                view.basket
+            );
+            let want = if n == 0 { 16 } else { 18 };
+            assert_eq!(
+                view.total_plat, want,
+                "publish {n}: fifteen singles plus the stack: {:?}",
+                view.basket
+            );
+        }
+        let last = published.last().expect("last view");
+        let stacked = last
+            .basket
+            .iter()
+            .find(|row| row.name == "Braton Prime Receiver")
+            .expect("the stacked row publishes");
+        assert!(
+            stacked.platinum == Some(1),
+            "the stacked row carries the unit price: {stacked:?}"
+        );
+        let names_of = |view: &KioskView| {
+            view.basket
+                .iter()
+                .map(|row| row.name.clone())
+                .collect::<Vec<_>>()
+        };
+        let tail: Vec<Vec<String>> = published.iter().rev().take(2).map(names_of).collect();
+        assert!(
+            tail.windows(2).all(|pair| pair[0] == pair[1]),
+            "settled publishes converge instead of oscillating: {tail:?}"
+        );
+    }
+
+    /// A publish re-anchors the mask's chased offset; streamed deltas accumulate between
+    /// publishes so the mask tracks what the next frame contains.
+    #[test]
+    fn the_chip_mask_rides_streamed_deltas_and_rebases_on_publish() {
+        let chips: ChipsState = Arc::new(StdMutex::new(None));
+        // Scrolling with nothing published touches nothing.
+        track_scroll_delta(&chips, Some(40));
+        assert!(chips.lock().expect("chips").is_none());
+
+        let publish = |dy| KioskView {
+            cells: vec![],
+            basket: vec![],
+            scroll_dy: dy,
+            ..KioskView::default()
+        };
+        stash_publish(&chips, publish(35));
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 35);
+        track_scroll_delta(&chips, Some(37));
+        track_scroll_delta(&chips, Some(3));
+        track_scroll_delta(&chips, None); // a faded look moves nothing
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, 75);
+        stash_publish(&chips, publish(-12));
+        assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, -12);
+    }
+
+    /// Shift the pane's own content down inside the fixture -- the way the game draws a
+    /// scroll under the clipped pane -- and hand the loop the result.
+    fn scrolled_fixture(path: &str, dy: i64) -> image::DynamicImage {
+        use image::GenericImage;
+        let base = image::open(path).expect("kiosk fixture");
+        let mut canvas = base.clone();
+        let (x, y, w, h) = kiosk_geometry::grid_strip(base.width(), base.height());
+        let dy = u32::try_from(dy).expect("test shifts down");
+        // Anything pasted past the pane's clip edge leaves the strip and the label crops,
+        // so only fitting rows are copied.
+        let fits = h.min(base.height().saturating_sub(y + dy));
+        let cut = base.crop_imm(x, y, w, fits);
+        canvas
+            .copy_from(&cut, x, y + dy)
+            .expect("paste shifted pane");
+        canvas
+    }
+
+    /// The 1080p calibration fixture scrolled a third of a row: the fold must name +74, the
+    /// reads must find the same labels at the shifted bands, and the published phase -- the
+    /// value that paints chips onto cards -- must be that +74 and nothing else. At 1080p the
+    /// strip and design units coincide, so this is the deterministic identity case.
+    #[test]
+    fn a_scrolled_1080p_grid_prices_the_shifted_bands_at_the_true_phase() {
+        let frame = scrolled_fixture(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/kiosk/kiosk-open.png"
+            ),
+            74,
+        );
+        let candidates = catalog_entries(&[
+            "Titania Prime Systems Blueprint",
+            "Tiberon Prime Barrel",
+            "Atlas Prime Chassis Blueprint",
+        ]);
+        let (source, _chips) = LiveFrame::new(frame);
+        let (_, _, published) = run_poller_with(source, candidates);
+        let published = published.lock().expect("published");
+        let view = published.last().expect("a scrolled grid still publishes");
+        for (name, row) in [
+            ("Titania Prime Systems Blueprint", 0u32),
+            ("Tiberon Prime Barrel", 1),
+            ("Atlas Prime Chassis Blueprint", 2),
+        ] {
+            assert!(
+                view.cells
+                    .iter()
+                    .any(|cell| cell.col == 0 && cell.row == row && cell.name == name),
+                "row {row} must be {name} after a 74px scroll: {:?}",
+                view.cells
+            );
+        }
+        assert!(
+            (view.scroll_dy - 74).abs() <= 1,
+            "the publish names the scroll phase: dy={}",
+            view.scroll_dy
+        );
+    }
+
+    /// The same scroll one resolution up: the published phase must cross from strip px
+    /// into design px. The drag stays moderate on purpose: the emulation cannot
+    /// synthesize content entering the pane, and its leftover sliver dilutes the fold's
+    /// contrast.
+    #[test]
+    fn the_scrolled_field_frame_publishes_the_phase_in_design_pixels() {
+        let frame = scrolled_fixture(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/kiosk/kiosk-selected-chips-baked-1440p.png"
+            ),
+            44,
+        );
+        let candidates = catalog_entries(&[
+            "Afentis Prime Blade",
+            "Afuris Prime Receiver",
+            "Alternox Prime Blueprint",
+            "Banshee Prime Chassis Blueprint",
+            "Caliban Prime Neuroptics Blueprint",
+            "Dual Kamas Prime Blade",
+            "Dual Zoren Prime Blade",
+            "Hystrix Prime Receiver",
+            "Kestrel Prime Grip",
+            "Lavos Prime Systems Blueprint",
+            "Ninkondi Prime Handle",
+            "Oberon Prime Neuroptics Blueprint",
+            "Okina Prime Blueprint",
+            "Pangolin Prime Blueprint",
+            "Perigale Prime Barrel",
+            "Phantasma Prime Barrel",
+            "Revenant Prime Blueprint",
+            "Scourge Prime Blueprint",
+        ]);
+        let (source, _chips) = LiveFrame::new(frame);
+        let (_, _, published) = run_poller_with(source, candidates);
+        let published = published.lock().expect("published");
+        let view = published
+            .last()
+            .expect("a scrolled field frame still publishes");
+        assert!(
+            view.cells
+                .iter()
+                .any(|cell| cell.col == 0 && cell.row == 0 && cell.name == "Afentis Prime Blade"),
+            "the shifted pane's top row reads its true owner: {:?}",
+            view.cells
+        );
+        assert!(
+            (view.scroll_dy - 33).abs() <= 2,
+            "strip px cross into design px at 1440p: dy={} (want ~33)",
+            view.scroll_dy
+        );
+        // The basket column lies outside the shifted pane copy: rows and single-copy
+        // quantities must survive the frame content sliding under them.
+        assert_eq!(view.basket.len(), 12, "basket rows: {:?}", view.basket);
+        assert_eq!(view.total_plat, 12, "no phantom stacks: {:?}", view.basket);
+    }
+
+    /// End-to-end against the dim evening fixture: a still, focused, fully populated
+    /// kiosk whose capture never reaches the full-white calibration. The locator must
+    /// fold it, and the recovery ladder must land a phase that reads the visible page.
+    #[test]
+    fn the_dim_evening_field_frame_publishes_its_grid() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-dim-evening.png"
+        ))
+        .expect("field frame fixture");
+        let candidates = catalog_entries(&[
+            "Afentis Prime Blade",
+            "Afuris Prime Receiver",
+            "Alternox Prime Blueprint",
+            "Banshee Prime Chassis Blueprint",
+            "Galiban Prime Neuroptics Blueprint",
+            "Dual Kamas Prime Blade",
+            "Dual Zoren Prime Blade",
+            "Hystrix Prime Receiver",
+            "Kestrel Prime Grip",
+            "Lavos Prime Systems Blueprint",
+            "Ninkondi Prime Handle",
+            "Oberon Prime Neuroptics Blueprint",
+            "Okina Prime Blueprint",
+            "Pangolin Prime Blueprint",
+            "Perigale Prime Barrel",
+            "Phantasma Prime Barrel",
+            "Revenant Prime Blueprint",
+            "Scourge Prime Blueprint",
+        ]);
+
+        let (source, _chips) = LiveFrame::new(frame);
+        let (_, _, published) = run_poller_with(source, candidates);
+
+        let published = published.lock().expect("published");
+        let view = published.first().expect("the populated frame must publish");
+        assert!(
+            view.cells.len() >= 14,
+            "the visible page holds 18 labelled cards, got {} cells: {:?}",
+            view.cells.len(),
+            view.cells
+        );
+        assert!(
+            view.cells
+                .iter()
+                .any(|cell| cell.name == "Afuris Prime Receiver")
+                && view
+                    .cells
+                    .iter()
+                    .any(|cell| cell.name == "Kestrel Prime Grip"),
+            "the published page must carry the frame's true labels: {:?}",
+            view.cells
+        );
     }
 
     /// Motion streams frame-to-frame deltas -- not offsets against some anchor -- and the
@@ -2780,6 +4484,69 @@ mod tests {
         assert!(
             !published.get(),
             "a retired monitor must not publish a delayed price fetch"
+        );
+    }
+
+    /// The twin-dash fixture: the basket row matched `Khora Prime Neuroptics` (built,
+    /// untradeable, unpriced) while the same item's grid tile matched the blueprint twin
+    /// at 29p. The dump prices the twin; nothing prices the built part.
+    const KIOSK_TWIN_DUMP: &str = r#"{
+        "Khora Prime Neuroptics Blueprint": [{"order_type":"sell","median":29.0,"volume":4}]
+    }"#;
+
+    fn kiosk_twin_table() -> Arc<PriceTable> {
+        Arc::new(
+            PriceTable::from_dump_json(KIOSK_TWIN_DUMP.as_bytes(), "2026-09-27")
+                .expect("fixture parses"),
+        )
+    }
+
+    #[test]
+    fn a_built_component_label_falls_back_to_its_blueprint_twin() {
+        let table = kiosk_twin_table();
+        let cache = MarketPriceCache::new();
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Khora Prime Neuroptics"),
+            Some(29),
+            "the kiosk never shows an untradeable built part: the twin is the item on screen"
+        );
+    }
+
+    #[test]
+    fn kiosk_pricing_keeps_the_exact_join_first() {
+        let table = kiosk_twin_table();
+        let cache = MarketPriceCache::new();
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Khora Prime Neuroptics Blueprint"),
+            Some(29),
+            "the twin the dump prices directly"
+        );
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Nobody Prime Nothing"),
+            None,
+            "no twin invented for a name nobody sells"
+        );
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Trumna Prime Barrel"),
+            None,
+            "a built part with no blueprint twin stays a dash"
+        );
+        assert_eq!(
+            kiosk_unit_price(None, &cache, "Khora Prime Neuroptics Blueprint"),
+            None,
+            "a blueprint name never falls back the other way"
+        );
+    }
+
+    #[test]
+    fn a_live_price_for_the_exact_name_beats_the_blueprint_twin() {
+        let table = kiosk_twin_table();
+        let cache = MarketPriceCache::new();
+        cache.insert("Khora Prime Neuroptics", 7);
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Khora Prime Neuroptics"),
+            Some(7),
+            "the fallback only fires where the exact join is silent"
         );
     }
 }
