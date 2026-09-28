@@ -32,3 +32,6 @@ app/src-tauri/vendor/tesseract/*
 
 # Implementation plans are working notes, not part of the published history.
 docs/superpowers/plans/
+
+# Staged CI artifact downloads for tester handover; never committed.
+artifacts/
