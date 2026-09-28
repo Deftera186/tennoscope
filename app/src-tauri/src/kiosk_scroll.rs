@@ -798,7 +798,7 @@ mod tests {
     fn the_selected_frame_folds_every_visible_band() {
         let frame = image::open(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/kiosk/kiosk-selected-nig7.png"
+            "/tests/fixtures/kiosk/kiosk-selected-chips-baked-1440p.png"
         ))
         .expect("selected field frame fixture");
         let located = locate(&frame).expect("a three-row pane must locate");

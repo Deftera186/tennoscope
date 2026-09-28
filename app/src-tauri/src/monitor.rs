@@ -3671,7 +3671,7 @@ mod tests {
     fn the_selected_field_frame_publishes_the_whole_grid_and_stays_stable() {
         let frame = image::open(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/kiosk/kiosk-selected-nig7.png"
+            "/tests/fixtures/kiosk/kiosk-selected-chips-baked-1440p.png"
         ))
         .expect("selected field frame fixture");
         let candidates = catalog_entries(&[
@@ -3784,7 +3784,7 @@ mod tests {
     fn the_bright_art_frame_reads_both_link_twins() {
         let frame = image::open(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/kiosk/kiosk-selected-prices-miss.png"
+            "/tests/fixtures/kiosk/kiosk-bright-art-link-twins-1440p.png"
         ))
         .expect("bright-art field frame fixture");
         let candidates = catalog_entries(&[
@@ -3899,7 +3899,7 @@ mod tests {
         // recovery referee counts confident cells.
         let frame = image::open(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/kiosk/kiosk-selected-prices-miss.png"
+            "/tests/fixtures/kiosk/kiosk-bright-art-link-twins-1440p.png"
         ))
         .expect("bright-art field frame fixture");
         let direct = crate::kiosk_ocr::read_grid(
@@ -4132,7 +4132,7 @@ mod tests {
         let frame = scrolled_fixture(
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/kiosk/kiosk-selected-nig7.png"
+                "/tests/fixtures/kiosk/kiosk-selected-chips-baked-1440p.png"
             ),
             44,
         );
