@@ -1870,8 +1870,8 @@ where
                     // Fall through to the locator read with no measured delta: the crop
                     // placement comes from the locator alone, and the emitted null keeps
                     // the frontend from treating this publish as a measured stillness.
+                    // The look was already counted on entry above.
                     emit_scroll(None);
-                    looks_unmeasured += 1;
                     unmeasured_fell_through = true;
                     0
                 }
