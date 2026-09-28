@@ -3715,6 +3715,119 @@ mod tests {
         );
     }
 
+    /// End-to-end against the 2026-09-28 dev visit: sixteen basket rows under a live
+    /// overlay whose own chips (real prices) are baked into the frame. The whole loop
+    /// must price all sixteen rows, converge the game's own 3 X stack marker through
+    /// the quantity streaks, and hold still. The lifetime covers three settles so the
+    /// streaks can confirm: the first publish reads pre-mask, the rest masked.
+    #[test]
+    fn the_sixteen_row_visit_publishes_all_rows_and_holds_still() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-basket-16-dev.png"
+        ))
+        .expect("sixteen-row field frame fixture");
+        let candidates = catalog_entries(&[
+            "Afuris Prime Link",
+            "Akbronco Prime Link",
+            "Aksomati Prime Barrel",
+            "Alternox Prime Barrel",
+            "Atlas Prime Chassis Blueprint",
+            "Braton Prime Receiver",
+            "Fragor Prime Handle",
+            "Fulmin Prime Receiver",
+            "Hystrix Prime Receiver",
+            "Khora Prime Neuroptics Blueprint",
+            "Kompressa Prime Barrel",
+            "Kronen Prime Blade",
+            "Nagantaka Prime Blueprint",
+            "Nekros Prime Systems Blueprint",
+            "Panthera Prime Barrel",
+            "Styanax Prime Neuroptics Blueprint",
+            "Tiberon Prime Barrel",
+            "Titania Prime Systems Blueprint",
+            "Trumna Prime Barrel",
+            "Trumna Prime Receiver",
+            "Vadarya Prime Blueprint",
+            "Venato Prime Blade",
+            "Wisp Prime Chassis Blueprint",
+        ]);
+
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let (source, chips) = LiveFrame::new(frame);
+        {
+            let sink = Arc::clone(&published);
+            let mask_feed = Arc::clone(&chips);
+            let handle = spawn_kiosk_poller_with(
+                &reanchor,
+                &gone,
+                KioskPollerTiming {
+                    interval: Duration::from_millis(1),
+                    motion_interval: Duration::from_millis(1),
+                    lifetime: Duration::from_millis(4000),
+                },
+                Arc::new(candidates),
+                |epoch, read| {
+                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                },
+                move |view| {
+                    // Publish arm mirrors production: the source masks the last view's chips.
+                    stash_publish(&mask_feed, view.clone());
+                    sink.lock().expect("published").push(view);
+                },
+                |_| (),
+                move || source,
+            );
+            handle.join().expect("poller thread");
+        }
+
+        let published = published.lock().expect("published");
+        assert!(!published.is_empty(), "the sixteen-row frame must publish");
+        // The quantity streaks confirm a stack on its second identical read, so the
+        // first publish legitimately totals fifteen singles plus one unconfirmed
+        // stack (16); every later publish must show the confirmed total (18). Either
+        // way no other total is reachable: the full-charset quantity lane finds no
+        // digit+X in chip prices, ducat counts, or name initials. Counting publishes
+        // is scheduling, but these values are not: same pixels, same reads.
+        for (n, view) in published.iter().enumerate() {
+            assert_eq!(
+                view.basket.len(),
+                16,
+                "all sixteen basket rows price: {:?}",
+                view.basket
+            );
+            let want = if n == 0 { 16 } else { 18 };
+            assert_eq!(
+                view.total_plat, want,
+                "publish {n}: fifteen singles plus the stack: {:?}",
+                view.basket
+            );
+        }
+        let last = published.last().expect("last view");
+        let stacked = last
+            .basket
+            .iter()
+            .find(|row| row.name == "Braton Prime Receiver")
+            .expect("the stacked row publishes");
+        assert!(
+            stacked.platinum == Some(1),
+            "the stacked row carries the unit price: {stacked:?}"
+        );
+        let names_of = |view: &KioskView| {
+            view.basket
+                .iter()
+                .map(|row| row.name.clone())
+                .collect::<Vec<_>>()
+        };
+        let tail: Vec<Vec<String>> = published.iter().rev().take(2).map(names_of).collect();
+        assert!(
+            tail.windows(2).all(|pair| pair[0] == pair[1]),
+            "settled publishes converge instead of oscillating: {tail:?}"
+        );
+    }
+
     /// A publish re-anchors the mask's chased offset; streamed deltas accumulate between
     /// publishes (measured from captures, so they track what the next frame contains).
     #[test]

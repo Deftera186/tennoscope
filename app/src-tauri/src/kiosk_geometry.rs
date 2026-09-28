@@ -25,11 +25,12 @@ pub const GRID_COLS: usize = 6;
 /// Maximum card bands visible in the clipped pane while scrolling. Three fit at rest; a fourth
 /// enters through the bottom edge before the first leaves through the top.
 pub const GRID_ROWS: usize = 4;
-/// Basket rows the pane shows at once. The ducat kiosk renders up to a dozen rows before the
-/// TOTAL row, resolution-independently (fractional layout: row 12's baseline is 664.6px of
-/// the 1080 plane against TOTAL at 875). Measured in the field 2026-09-26: a 12-item visit at
-/// 1440p shows twelve rows at 51px pitch; the old cap of 8 left the last four unpriced.
-pub const BASKET_ROWS: usize = 12;
+/// Basket rows the pane shows at once. Row `i`'s digits sit on baseline 243+38 1/3*i and
+/// the TOTAL row's digits sit on 875, so indexes 0..=15 fit (row 15's baseline is 818.0, its
+/// band ends at 823 against the TOTAL band's top at ~859); a seventeenth row would print
+/// into the TOTAL row itself. Measured in the field 2026-09-28: a 16-item visit at 1080p
+/// shows sixteen rows; the old cap of 12 left the last four unpriced.
+pub const BASKET_ROWS: usize = 16;
 
 /// Left edge of the basket pane at 1920x1080. Name OCR must not cross into grid column six.
 const BASKET_NAME_LEFT_1080P: f32 = 1256.0;
@@ -91,9 +92,12 @@ const BASKET_PITCH: f32 = fx(115.0 / 3.0);
 /// earliest digit (the pane border sits at x~1814, so a left anchor there overflows).
 const ROW_PAIR_RIGHT: f32 = fcx(1750.0);
 
-/// Right edge of our `[icon][digits]` pair in the TOTAL row (13px left of the gold glyph,
-/// whose body starts at x~1730).
-const TOTAL_PAIR_RIGHT: f32 = fcx(1717.0);
+/// Right edge of our `[icon][digits]` pair in the TOTAL row. The game's gold glyph slides
+/// left as its ducat count widens: measured 2026-09-28 on a 1080p visit totalling 1,255,
+/// the glyph spans x=1713..1730 while our chip's text ended at 1715 -- overlapping it.
+/// The old anchor (1717, "13px left of the glyph") only held for narrower totals, so the
+/// pair ends at 1700: ~13px clear of a five-digit total, still clear at six.
+const TOTAL_PAIR_RIGHT: f32 = fcx(1700.0);
 const TOTAL_BASELINE: f32 = fx(875.0);
 
 /// Overlay digit/icon sizes, matching the game's own (see spec).
@@ -426,7 +430,12 @@ mod tests {
         let (_, sixth) = basket_row_pair(1920, 1080, 6).unwrap();
         assert_eq!(sixth.round(), 473.0);
         let (right, base) = total_row_pair(1920, 1080);
-        assert_eq!((right.round(), base.round()), (1717.0, 875.0));
+        assert_eq!((right.round(), base.round()), (1700.0, 875.0));
+        // Row 15 is the last that fits: its digits sit at 818, its band ends at 823,
+        // and the TOTAL band starts at ~859.
+        let (_, fifteenth) = basket_row_pair(1920, 1080, 15).unwrap();
+        assert_eq!(fifteenth.round(), 818.0);
+        assert_eq!(basket_row_pair(1920, 1080, BASKET_ROWS), None);
     }
 
     /// Height fractions keep every pitch proportional on a smaller 16:9 window.

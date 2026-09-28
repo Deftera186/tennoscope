@@ -484,11 +484,6 @@ pub fn ocr_crop(image: &Path) -> Result<String, &'static str> {
     run_tesseract(image, "11", None)
 }
 
-/// OCR one already-isolated text line, restricted to the supplied glyph set.
-pub(crate) fn ocr_crop_line(image: &Path, whitelist: &str) -> Result<String, &'static str> {
-    run_tesseract(image, "7", Some(whitelist))
-}
-
 fn run_tesseract(
     image: &Path,
     page_segmentation_mode: &str,

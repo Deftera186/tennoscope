@@ -31,7 +31,7 @@ const ROW_PAIR_RIGHT = fcx(1750)
 const BASKET_FIRST_BASELINE = fx(243)
 const BASKET_PITCH = fx(115 / 3)
 
-const TOTAL_PAIR_RIGHT = fcx(1717)
+const TOTAL_PAIR_RIGHT = fcx(1700)
 const TOTAL_BASELINE = fx(875)
 
 /** Design pixels -> CSS calc against `--h`, for a `left` anchored at the window centre. An
