@@ -29,8 +29,8 @@ use warframe_acquisition::LinuxProc as ProcessObserver;
 use warframe_acquisition::WindowsProc as ProcessObserver;
 use warframe_acquisition::{
     AcquisitionError, CatalogCache, CatalogIndex, GameProcess, MarketPriceCache, MemoryReader,
-    ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry, RewardMemoryScanner,
-    WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp,
+    PriceTable, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry,
+    RewardMemoryScanner, WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
 
@@ -1099,6 +1099,42 @@ impl RewardSession {
     }
 }
 
+/// Price one kiosk label against the dump-then-live join both publishes share, so a grid tile
+/// and a basket row carrying the same name can never disagree.
+///
+/// A label that matched a built component (`Khora Prime Neuroptics`) falls back to its
+/// blueprint twin. The ducat kiosk only ever shows tradeable prime parts, so a built name on
+/// screen is a dropped-` Blueprint` misread -- seen live 2026-09-28, when a basket row matched
+/// the built entry and read `-` while the same item's grid tile priced 29p -- never an item
+/// the player could actually sell. This stays kiosk-scoped on purpose:
+/// `PriceTable::market_name` deliberately has no append-` Blueprint` rule, measured 25-for-25
+/// wrong in the collection, where a built frame is a real owned item rather than a misread.
+fn kiosk_unit_price(
+    table: Option<&Arc<PriceTable>>,
+    cache: &MarketPriceCache,
+    name: &str,
+) -> Option<u32> {
+    join_price(table, cache, name).or_else(|| {
+        if name.ends_with(" Blueprint") {
+            return None;
+        }
+        join_price(table, cache, &format!("{name} Blueprint"))
+    })
+}
+/// The dump's median of completed trades is the honest number for a sell-advice overlay: what
+/// copies actually went for. The live cache holds the lowest current ask, which a single joke
+/// listing can set arbitrarily high, so it only stands in where the dump has no price.
+fn join_price(
+    table: Option<&Arc<PriceTable>>,
+    cache: &MarketPriceCache,
+    name: &str,
+) -> Option<u32> {
+    table
+        .as_ref()
+        .and_then(|table| table.price_for(name))
+        .or_else(|| cache.get(name))
+}
+
 pub(crate) fn run(
     shared: SharedRuntime,
     app: AppHandle,
@@ -1165,14 +1201,7 @@ pub(crate) fn run(
                     .map(|runtime| runtime.core.collection_prices())
                     .unwrap_or_default();
                 kiosk_view::build_view(epoch, &frame.cells, &frame.basket, |name| {
-                    // The dump's median of completed trades is the honest number for a
-                    // sell-advice overlay: what copies actually went for. The live cache
-                    // holds the lowest current ask, which a single joke listing can set
-                    // arbitrarily high, so it only stands in where the dump has no price.
-                    table
-                        .as_ref()
-                        .and_then(|table| table.price_for(name))
-                        .or_else(|| cache.get(name))
+                    kiosk_unit_price(table.as_ref(), &cache, name)
                 })
             }
         };
@@ -4279,6 +4308,69 @@ mod tests {
         assert!(
             !published.get(),
             "a retired monitor must not publish a delayed price fetch"
+        );
+    }
+
+    /// The 2026-09-28 dev visit's dash: the basket row matched `Khora Prime Neuroptics`
+    /// (built, untradeable, unpriced) while the same item's grid tile matched the blueprint
+    /// twin at 29p. The dump prices the twin; nothing prices the built part.
+    const KIOSK_TWIN_DUMP: &str = r#"{
+        "Khora Prime Neuroptics Blueprint": [{"order_type":"sell","median":29.0,"volume":4}]
+    }"#;
+
+    fn kiosk_twin_table() -> Arc<PriceTable> {
+        Arc::new(
+            PriceTable::from_dump_json(KIOSK_TWIN_DUMP.as_bytes(), "2026-09-27")
+                .expect("fixture parses"),
+        )
+    }
+
+    #[test]
+    fn a_built_component_label_falls_back_to_its_blueprint_twin() {
+        let table = kiosk_twin_table();
+        let cache = MarketPriceCache::new();
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Khora Prime Neuroptics"),
+            Some(29),
+            "the kiosk never shows an untradeable built part: the twin is the item on screen"
+        );
+    }
+
+    #[test]
+    fn kiosk_pricing_keeps_the_exact_join_first() {
+        let table = kiosk_twin_table();
+        let cache = MarketPriceCache::new();
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Khora Prime Neuroptics Blueprint"),
+            Some(29),
+            "the twin the dump prices directly"
+        );
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Nobody Prime Nothing"),
+            None,
+            "no twin invented for a name nobody sells"
+        );
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Trumna Prime Barrel"),
+            None,
+            "a built part with no blueprint twin stays a dash"
+        );
+        assert_eq!(
+            kiosk_unit_price(None, &cache, "Khora Prime Neuroptics Blueprint"),
+            None,
+            "a blueprint name never falls back the other way"
+        );
+    }
+
+    #[test]
+    fn a_live_price_for_the_exact_name_beats_the_blueprint_twin() {
+        let table = kiosk_twin_table();
+        let cache = MarketPriceCache::new();
+        cache.insert("Khora Prime Neuroptics", 7);
+        assert_eq!(
+            kiosk_unit_price(Some(&table), &cache, "Khora Prime Neuroptics"),
+            Some(7),
+            "the fallback only fires where the exact join is silent"
         );
     }
 }
