@@ -17,7 +17,7 @@ use warframe_acquisition::RewardCatalogEntry;
 
 use crate::{
     kiosk_geometry::{basket_label_rect, basket_quantity_rect},
-    reward_ocr::{best_match, ocr_crop, prepare_crop},
+    reward_ocr::{best_match, ocr_crop, ocr_crop_block, prepare_crop},
 };
 
 /// Below this a slot's read is treated as absent rather than published as a guess; same floor as
@@ -265,7 +265,10 @@ fn read_slot(
     let prepared = prepare_crop(image, x, y, w, h);
     let crop = scratch_file();
     prepared.save(&crop).ok()?;
-    let text = ocr_crop(&crop);
+    // Label slots read as one ordered block: the card art above the label is a large bright
+    // mass, and sparse-text segmentation lets it eat any glyphs touching it (the Link twins
+    // measured 2026-09-28). The basket quantity lane below deliberately stays on `ocr_crop`.
+    let text = ocr_crop_block(&crop);
     let _ = std::fs::remove_file(&crop);
     let text = text.ok()?;
     let (name, score) = best_match(&text, candidates)?;

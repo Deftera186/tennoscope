@@ -3743,6 +3743,157 @@ mod tests {
             "the unscrolled field frame publishes no scroll phase: dy={dy}"
         );
     }
+    /// End-to-end against the 2026-09-28 tester visit: a bright frame whose Link cards hang
+    /// white-hot art over their labels. Sparse-text segmentation let that art eat any glyphs
+    /// touching it -- `Afuris Prime Link` read as `Lf / rime Link` (0.60) and the neighbouring
+    /// `Akbolto Prime Link` as `Lf / Prime Link`, matching the wrong twin at 0.67. Label
+    /// slots now read as one ordered block, so both twins must publish under their true names
+    /// at conviction, and the visit must hold still.
+    #[test]
+    fn the_bright_art_frame_reads_both_link_twins() {
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-selected-prices-miss.png"
+        ))
+        .expect("bright-art field frame fixture");
+        let candidates = catalog_entries(&[
+            "Afentis Prime Barrel",
+            "Afentis Prime Blade",
+            "Afuris Prime Barrel",
+            "Afuris Prime Link",
+            "Afuris Prime Receiver",
+            "Afuris Prime Blueprint",
+            "Akarius Prime Barrel",
+            "Akarius Prime Link",
+            "Akbolto Prime Barrel",
+            "Akbolto Prime Link",
+            "Akmagnus Prime Blueprint",
+            "Aksomati Prime Receiver",
+            "Alternox Prime Barrel",
+            "Alternox Prime Receiver",
+            "Alternox Prime Blueprint",
+            "Ash Prime Blueprint",
+            "Astilla Prime Blueprint",
+            "Banshee Prime Chassis Blueprint",
+        ]);
+
+        let reanchor = Arc::new(AtomicBool::new(false));
+        let gone = Arc::new(AtomicBool::new(false));
+        let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
+        let (source, chips) = LiveFrame::new(frame);
+        {
+            let sink = Arc::clone(&published);
+            let mask_feed = Arc::clone(&chips);
+            let handle = spawn_kiosk_poller_with(
+                &reanchor,
+                &gone,
+                KioskPollerTiming {
+                    interval: Duration::from_millis(1),
+                    motion_interval: Duration::from_millis(1),
+                    lifetime: Duration::from_millis(1500),
+                },
+                Arc::new(candidates),
+                |epoch, read| {
+                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                },
+                move |view| {
+                    stash_publish(&mask_feed, view.clone());
+                    sink.lock().expect("published").push(view);
+                },
+                |_| (),
+                move || source,
+            );
+            handle.join().expect("poller thread");
+        }
+
+        let published = published.lock().expect("published");
+        let last = published.last().expect("the bright frame must publish");
+        let mut cells: Vec<String> = last
+            .cells
+            .iter()
+            .map(|c| format!("{}:{}:{}", c.col, c.row, c.name))
+            .collect();
+        cells.sort();
+        let expected = [
+            "0:0:Afentis Prime Barrel",
+            "0:1:Akarius Prime Barrel",
+            "0:2:Alternox Prime Barrel",
+            "1:0:Afentis Prime Blade",
+            "1:1:Akarius Prime Link",
+            "1:2:Alternox Prime Receiver",
+            "2:0:Afuris Prime Barrel",
+            "2:1:Akbolto Prime Barrel",
+            "2:2:Alternox Prime Blueprint",
+            "3:0:Afuris Prime Link",
+            "3:1:Akbolto Prime Link",
+            "3:2:Ash Prime Blueprint",
+            "4:0:Afuris Prime Receiver",
+            "4:1:Akmagnus Prime Blueprint",
+            "4:2:Astilla Prime Blueprint",
+            "5:0:Afuris Prime Blueprint",
+            "5:1:Aksomati Prime Receiver",
+            "5:2:Banshee Prime Chassis Blueprint",
+        ];
+        assert_eq!(
+            cells, expected,
+            "every rendered label under its true name -- no twin swaps"
+        );
+        // The twins are the discriminating pair: a sparse-text read collapses 3:1 onto 3:0's
+        // name, which would price the wrong item rather than merely miss one.
+        for name in ["Afuris Prime Link", "Akbolto Prime Link"] {
+            assert_eq!(
+                last.cells.iter().filter(|c| c.name == name).count(),
+                1,
+                "each twin publishes exactly once: {name} in {cells:?}"
+            );
+        }
+        // And the visit holds still: publishes never disagree once one has landed.
+        let states: Vec<Vec<String>> = published
+            .iter()
+            .map(|view| {
+                let mut names: Vec<String> = view
+                    .cells
+                    .iter()
+                    .map(|c| format!("{}:{}:{}", c.col, c.row, c.name))
+                    .collect();
+                names.sort();
+                names
+            })
+            .collect();
+        assert!(
+            states.windows(2).all(|pair| pair[0] == pair[1]),
+            "settled publishes converge instead of oscillating: {states:?}"
+        );
+        // Both twins must read at conviction, not merely above the match floor: the
+        // recovery referee counts confident cells, and a 0.60 read would leave the row
+        // under-defended on the next visit.
+        let frame = image::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/kiosk/kiosk-selected-prices-miss.png"
+        ))
+        .expect("bright-art field frame fixture");
+        let direct = crate::kiosk_ocr::read_grid(
+            &frame,
+            &catalog_entries(&[
+                "Afuris Prime Link",
+                "Akbolto Prime Link",
+                "Ash Prime Blueprint",
+            ]),
+            0,
+        );
+        for (col, row, name) in [(3, 0, "Afuris Prime Link"), (3, 1, "Akbolto Prime Link")] {
+            let hit = direct
+                .iter()
+                .find(|c| c.col == col && c.row == row)
+                .unwrap_or_else(|| panic!("twin slot ({col},{row}) must read: {direct:?}"));
+            assert_eq!(hit.name, name, "twin slot ({col},{row}) true name");
+            assert!(
+                hit.score >= 0.85,
+                "twin slot ({col},{row}) at conviction: {}",
+                hit.score
+            );
+        }
+    }
 
     /// End-to-end against the 2026-09-28 dev visit: sixteen basket rows under a live
     /// overlay whose own chips (real prices) are baked into the frame. The whole loop
