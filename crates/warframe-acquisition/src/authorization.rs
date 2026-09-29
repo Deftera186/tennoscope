@@ -59,6 +59,7 @@ impl AuthorizationScanner {
         let mut read_buffer = Zeroizing::new(vec![0_u8; self.chunk_size]);
         let mut fallback = Vec::with_capacity(regions.len());
         let mut preferred_remaining = policy.preferred_bytes;
+        let mut skipped_bytes = 0_u64;
 
         for region in regions {
             let preferred = region.scan_priority() == RegionScanPriority::WritableAnonymous
@@ -68,7 +69,7 @@ impl AuthorizationScanner {
                 continue;
             }
             let scan_len = region.len().min(preferred_remaining);
-            scan_range(
+            let (_, skipped) = scan_range(
                 memory,
                 process,
                 ScanRange::new(region, 0, scan_len),
@@ -76,9 +77,16 @@ impl AuthorizationScanner {
                 &mut candidates,
                 self.chunk_size,
             )?;
+            skipped_bytes += skipped;
             preferred_remaining -= scan_len;
             if scan_len < region.len() {
-                fallback.push(ScanRange::new(region, scan_len, region.len() - scan_len));
+                // The head and the tail scan as separate ranges, so the tail starts overlap-early.
+                let tail_start = scan_len.saturating_sub(CANDIDATE_OVERLAP);
+                fallback.push(ScanRange::new(
+                    region,
+                    tail_start,
+                    region.len() - tail_start,
+                ));
             }
         }
 
@@ -93,7 +101,7 @@ impl AuthorizationScanner {
             .into_iter()
             .map(FallbackCursor::new)
             .collect::<VecDeque<_>>();
-        let mut sampled = self.drain_fallback(
+        let (mut sampled, skipped) = self.drain_fallback(
             memory,
             process,
             &mut fallback,
@@ -102,15 +110,23 @@ impl AuthorizationScanner {
             policy,
             policy.fallback_bytes,
         )?;
+        skipped_bytes += skipped;
 
         // A budget is a guess about where the credential sits, and on a small-memory machine the
         // guess misses: the same session read fine once and then reported "not found" on the retry
         // because the sampler simply never looked at the page holding it. Nothing found at all is
         // not evidence of absence, so spend the rest of the address space rather than report a
         // conclusion we did not earn. A found-but-ambiguous result is a real answer and stops here.
+        let budgeted = Coverage {
+            complete: fallback.is_empty(),
+            skipped_bytes,
+        };
+        let mut coverage = budgeted;
+        candidates.url.collapse_stale_nonces();
+        candidates.login.collapse_stale_nonces();
         let exhaustive = candidates.is_empty();
         if exhaustive {
-            sampled += self.drain_fallback(
+            let (extra, extra_skipped) = self.drain_fallback(
                 memory,
                 process,
                 &mut fallback,
@@ -119,23 +135,85 @@ impl AuthorizationScanner {
                 policy,
                 usize::MAX,
             )?;
+            sampled += extra;
+            skipped_bytes += extra_skipped;
+            coverage = Coverage {
+                complete: fallback.is_empty(),
+                skipped_bytes,
+            };
+        } else if distinct_pair_count(&candidates) == 1
+            && !candidates.url.overflowed
+            && !candidates.login.overflowed
+            && (!budgeted.complete || budgeted.skipped_bytes != 0)
+        {
+            // Disjoint samples can straddle a copy so neither side parses whole; re-scan the
+            // whole regions holding the lone pair before calling it unconfirmed.
+            let mut locations = Vec::new();
+            for set in [&candidates.url, &candidates.login] {
+                for candidate in &set.candidates {
+                    locations.extend_from_slice(&candidate.locations);
+                }
+            }
+            let mut rescanned = Vec::new();
+            for region in memory.readable_regions(process)? {
+                let holds = locations.iter().any(|location| {
+                    *location >= region.start()
+                        && *location < region.start().saturating_add(region.len() as u64)
+                });
+                if holds && !rescanned.contains(&region) {
+                    rescanned.push(region);
+                    let (read, rescan_skipped) = scan_range(
+                        memory,
+                        process,
+                        ScanRange::whole(region),
+                        &mut read_buffer,
+                        &mut candidates,
+                        self.chunk_size,
+                    )?;
+                    sampled += read;
+                    skipped_bytes += rescan_skipped;
+                }
+            }
+            // The rescan can add a newer nonce for the same account, so collapse before deciding.
+            candidates.url.collapse_stale_nonces();
+            candidates.login.collapse_stale_nonces();
+            if let Some(decisive) = confident_or_agreed(&mut candidates) {
+                trace_candidates(region_count, sampled, exhaustive, &candidates);
+                return decisive;
+            }
+            let (extra, extra_skipped) = self.drain_fallback(
+                memory,
+                process,
+                &mut fallback,
+                &mut read_buffer,
+                &mut candidates,
+                policy,
+                usize::MAX,
+            )?;
+            sampled += extra;
+            skipped_bytes += extra_skipped;
+            coverage = Coverage {
+                complete: fallback.is_empty(),
+                skipped_bytes,
+            };
         }
 
-        trace_scan(&format!(
-            "[authorization] regions={region_count} sampled_bytes={sampled} exhaustive={exhaustive} url={} login={}",
-            candidates.url.candidates.len(),
-            candidates.login.candidates.len(),
-        ));
-        let selected = select_candidate(candidates);
+        trace_candidates(region_count, sampled, exhaustive, &candidates);
+        let (url_pairs, url_max_copies, url_overflowed, login_pairs, login_overflowed) =
+            candidate_counts(&candidates);
+        let selected = select_with_coverage(candidates, coverage);
         if let Err(error) = &selected {
-            log::warn!("authorization scan: {error}");
+            log::warn!(
+                "authorization scan: {error} url_pairs={url_pairs} url_max_copies={url_max_copies} url_overflowed={url_overflowed} login_pairs={login_pairs} login_overflowed={login_overflowed}"
+            );
         }
         selected
     }
 
     /// Sample fallback ranges round-robin until `budget` bytes are read or every cursor is spent.
     ///
-    /// Returns the bytes actually read, which is less than the budget once the cursors run dry.
+    /// Returns the bytes actually read and the bytes skipped unreadable, both less than the
+    /// budget once the cursors run dry.
     #[allow(clippy::too_many_arguments)]
     fn drain_fallback(
         &self,
@@ -146,8 +224,10 @@ impl AuthorizationScanner {
         candidates: &mut CandidateAccumulator,
         policy: ScanPolicy,
         budget: usize,
-    ) -> Result<usize, AcquisitionError> {
+    ) -> Result<(usize, u64), AcquisitionError> {
         let mut remaining = budget;
+        let mut read_total = 0_usize;
+        let mut skipped_total = 0_u64;
         while remaining > 0 {
             let Some(mut cursor) = fallback.pop_front() else {
                 break;
@@ -156,26 +236,33 @@ impl AuthorizationScanner {
             else {
                 continue;
             };
+            // Non-zero samples start overlap-early so no credential falls in a blind seam.
+            let overlap_start = sample_offset.saturating_sub(CANDIDATE_OVERLAP);
+            let prefix = sample_offset - overlap_start;
             let sample_len = policy
                 .fallback_sample_bytes
-                .min(cursor.range.len - sample_offset)
-                .min(remaining);
-            scan_range(
+                .saturating_add(prefix)
+                .min(cursor.range.len - overlap_start)
+                .min(remaining.saturating_add(prefix));
+            let (read, skipped) = scan_range(
                 memory,
                 process,
                 ScanRange::new(
                     cursor.range.region,
-                    cursor.range.offset + sample_offset,
+                    cursor.range.offset + overlap_start,
                     sample_len,
                 ),
                 read_buffer,
                 candidates,
                 self.chunk_size,
             )?;
-            remaining -= sample_len;
+            read_total += read;
+            skipped_total += skipped;
+            // The seam overlap rides along free so a budgeted tail sample still reaches the range end.
+            remaining = remaining.saturating_sub(read.saturating_sub(prefix));
             fallback.push_back(cursor);
         }
-        Ok(budget - remaining)
+        Ok((read_total, skipped_total))
     }
 }
 
@@ -268,8 +355,9 @@ fn scan_range(
     read_buffer: &mut Zeroizing<Vec<u8>>,
     candidates: &mut CandidateAccumulator,
     chunk_size: usize,
-) -> Result<(), AcquisitionError> {
+) -> Result<(usize, u64), AcquisitionError> {
     let mut consumed = 0_usize;
+    let mut skipped = 0_u64;
     let mut overlap = Zeroizing::new(Vec::with_capacity(CANDIDATE_OVERLAP));
     while consumed < range.len {
         let requested = chunk_size.min(range.len - consumed);
@@ -284,6 +372,7 @@ fn scan_range(
             .ok_or(AcquisitionError::MemoryReadFailed { pid: process.pid() })?;
         let read = memory.read_at(process, address, &mut read_buffer[..requested])?;
         if read == 0 {
+            skipped += (range.len - consumed) as u64;
             break;
         }
 
@@ -301,7 +390,7 @@ fn scan_range(
         overlap.extend_from_slice(&window[window.len() - keep..]);
         consumed += read;
     }
-    Ok(())
+    Ok((consumed, skipped))
 }
 
 #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
@@ -317,7 +406,7 @@ struct Candidate {
 }
 
 #[derive(Default)]
-struct CandidateAccumulator {
+pub(crate) struct CandidateAccumulator {
     login: CandidateSet,
     url: CandidateSet,
 }
@@ -331,6 +420,7 @@ struct CandidateSet {
 struct CountedCandidate {
     authorization: InventoryAuthorization,
     locations: Vec<u64>,
+    sightings: usize,
 }
 
 impl CandidateSet {
@@ -368,13 +458,7 @@ impl CandidateSet {
             index += 1;
             keep
         });
-        // The dropped copies were part of what made the survivor look unconvincing. Overflow only
-        // ever recorded "there were more distinct pairs than we keep", so once a single credential
-        // for a single account is left it no longer stands in the way of trusting it -- but with
-        // two accounts still in hand it is exactly the signal that should keep refusing.
-        if self.candidates.len() == 1 {
-            self.overflowed = false;
-        }
+        // Overflow records pairs the accumulator never kept, so it still refuses below.
     }
 }
 
@@ -396,15 +480,17 @@ impl CandidateAccumulator {
             existing.authorization.account_id() == candidate.authorization.account_id()
                 && existing.authorization.nonce() == candidate.authorization.nonce()
         }) {
-            if existing.locations.len() < MAX_LOCATIONS_PER_CANDIDATE
-                && !existing.locations.contains(&candidate.location)
-            {
-                existing.locations.push(candidate.location);
+            if !existing.locations.contains(&candidate.location) {
+                existing.sightings = existing.sightings.saturating_add(1);
+                if existing.locations.len() < MAX_LOCATIONS_PER_CANDIDATE {
+                    existing.locations.push(candidate.location);
+                }
             }
         } else if set.candidates.len() < MAX_DISTINCT_CANDIDATES_PER_RANK {
             set.candidates.push(CountedCandidate {
                 authorization: candidate.authorization,
                 locations: vec![candidate.location],
+                sightings: 1,
             });
         } else {
             set.overflowed = true;
@@ -415,18 +501,19 @@ impl CandidateAccumulator {
         if self.url.overflowed {
             return None;
         }
+        // Locations cap out, so the unbounded sightings elect instead of tying at the cap.
         let highest = self
             .url
             .candidates
             .iter()
-            .map(|candidate| candidate.locations.len())
+            .map(|candidate| candidate.sightings)
             .max()?;
         if highest < CONFIDENT_URL_COPIES
             || self
                 .url
                 .candidates
                 .iter()
-                .filter(|candidate| candidate.locations.len() == highest)
+                .filter(|candidate| candidate.sightings == highest)
                 .count()
                 != 1
         {
@@ -436,7 +523,7 @@ impl CandidateAccumulator {
             .url
             .candidates
             .iter()
-            .position(|candidate| candidate.locations.len() == highest)
+            .position(|candidate| candidate.sightings == highest)
             .expect("unique maximum exists");
         Some(self.url.candidates.swap_remove(index).authorization)
     }
@@ -551,24 +638,160 @@ fn push_candidate(
     });
 }
 
-fn select_candidate(
+#[derive(Clone, Copy)]
+pub(crate) struct Coverage {
+    pub complete: bool,
+    pub skipped_bytes: u64,
+}
+
+impl Coverage {
+    #[cfg(test)]
+    pub(crate) fn complete() -> Self {
+        Self {
+            complete: true,
+            skipped_bytes: 0,
+        }
+    }
+}
+
+enum Agreement {
+    None,
+    Single(InventoryAuthorization),
+    Multiple,
+}
+
+fn agreement(candidates: &CandidateAccumulator) -> Agreement {
+    if candidates.url.overflowed || candidates.login.overflowed {
+        return Agreement::None;
+    }
+    let mut agreed: Option<&CountedCandidate> = None;
+    for url in &candidates.url.candidates {
+        let shared = candidates.login.candidates.iter().any(|login| {
+            login.authorization.account_id() == url.authorization.account_id()
+                && login.authorization.nonce() == url.authorization.nonce()
+        });
+        if shared {
+            if agreed.is_some() {
+                return Agreement::Multiple;
+            }
+            agreed = Some(url);
+        }
+    }
+    match agreed {
+        None => Agreement::None,
+        Some(candidate) => Agreement::Single(InventoryAuthorization::from_zeroizing(
+            Zeroizing::new(candidate.authorization.account_id().to_owned()),
+            Zeroizing::new(candidate.authorization.nonce().to_owned()),
+        )),
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn cross_rank_agreement(
+    candidates: &CandidateAccumulator,
+) -> Option<InventoryAuthorization> {
+    match agreement(candidates) {
+        Agreement::Single(authorization) => Some(authorization),
+        Agreement::None | Agreement::Multiple => None,
+    }
+}
+
+fn distinct_pair_count(candidates: &CandidateAccumulator) -> usize {
+    let mut count = candidates.url.candidates.len();
+    for login in &candidates.login.candidates {
+        let shared = candidates.url.candidates.iter().any(|url| {
+            url.authorization.account_id() == login.authorization.account_id()
+                && url.authorization.nonce() == login.authorization.nonce()
+        });
+        if !shared {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn confident_or_agreed(
+    candidates: &mut CandidateAccumulator,
+) -> Option<Result<InventoryAuthorization, AcquisitionError>> {
+    let agreed = agreement(candidates);
+    if matches!(agreed, Agreement::Multiple) {
+        return Some(Err(AcquisitionError::AuthorizationAmbiguous));
+    }
+    if let Some(authorization) = candidates.take_confident_url() {
+        if let Agreement::Single(single) = &agreed {
+            if single.account_id() != authorization.account_id()
+                || single.nonce() != authorization.nonce()
+            {
+                return Some(Err(AcquisitionError::AuthorizationAmbiguous));
+            }
+        }
+        let conflict = candidates.login.candidates.iter().any(|candidate| {
+            candidate.authorization.account_id() == authorization.account_id()
+                && candidate.authorization.nonce() != authorization.nonce()
+        });
+        if conflict {
+            return Some(Err(AcquisitionError::AuthorizationAmbiguous));
+        }
+        if candidates.login.overflowed {
+            return Some(Err(AcquisitionError::AuthorizationAmbiguous));
+        }
+        return Some(Ok(authorization));
+    }
+    match agreed {
+        Agreement::Single(authorization) => Some(Ok(authorization)),
+        Agreement::None | Agreement::Multiple => None,
+    }
+}
+
+pub(crate) fn select_with_coverage(
     mut candidates: CandidateAccumulator,
+    coverage: Coverage,
 ) -> Result<InventoryAuthorization, AcquisitionError> {
     candidates.url.collapse_stale_nonces();
     candidates.login.collapse_stale_nonces();
-    if let Some(authorization) = candidates.take_confident_url() {
-        return Ok(authorization);
+    if let Some(decisive) = confident_or_agreed(&mut candidates) {
+        return decisive;
     }
-    if candidates.url.overflowed || !candidates.url.candidates.is_empty() {
+    if candidates.url.overflowed || candidates.url.candidates.len() > 1 {
         return Err(AcquisitionError::AuthorizationAmbiguous);
+    }
+    if let Some(candidate) = candidates.url.candidates.pop() {
+        if !candidates.login.candidates.is_empty() {
+            return Err(AcquisitionError::AuthorizationAmbiguous);
+        }
+        if candidates.login.overflowed {
+            return Err(AcquisitionError::AuthorizationAmbiguous);
+        }
+        return if coverage.complete && coverage.skipped_bytes == 0 {
+            Ok(candidate.authorization)
+        } else {
+            Err(AcquisitionError::AuthorizationUnconfirmed)
+        };
     }
     if candidates.login.overflowed || candidates.login.candidates.len() > 1 {
         return Err(AcquisitionError::AuthorizationAmbiguous);
     }
     if let Some(candidate) = candidates.login.candidates.pop() {
-        return Ok(candidate.authorization);
+        if !candidates.url.candidates.is_empty() {
+            return Err(AcquisitionError::AuthorizationAmbiguous);
+        }
+        if candidates.url.overflowed {
+            return Err(AcquisitionError::AuthorizationAmbiguous);
+        }
+        return if coverage.complete && coverage.skipped_bytes == 0 {
+            Ok(candidate.authorization)
+        } else {
+            Err(AcquisitionError::AuthorizationUnconfirmed)
+        };
     }
     Err(AcquisitionError::AuthorizationNotFound)
+}
+
+#[cfg(test)]
+fn select_candidate(
+    candidates: CandidateAccumulator,
+) -> Result<InventoryAuthorization, AcquisitionError> {
+    select_with_coverage(candidates, Coverage::complete())
 }
 
 fn find_all<'a>(bytes: &'a [u8], needle: &'a [u8]) -> impl Iterator<Item = usize> + 'a {
@@ -631,6 +854,35 @@ fn is_value_terminator(byte: u8) -> bool {
 /// Counts only: how much was looked at and how many distinct pairs were seen, never their bytes.
 fn trace_scan(line: &str) {
     log::debug!("{line}");
+}
+fn candidate_counts(candidates: &CandidateAccumulator) -> (usize, usize, bool, usize, bool) {
+    let url_max_copies = candidates
+        .url
+        .candidates
+        .iter()
+        .map(|candidate| candidate.locations.len())
+        .max()
+        .unwrap_or(0);
+    (
+        candidates.url.candidates.len(),
+        url_max_copies,
+        candidates.url.overflowed,
+        candidates.login.candidates.len(),
+        candidates.login.overflowed,
+    )
+}
+
+fn trace_candidates(
+    region_count: usize,
+    sampled: usize,
+    exhaustive: bool,
+    candidates: &CandidateAccumulator,
+) {
+    let (url_pairs, url_max_copies, url_overflowed, login_pairs, login_overflowed) =
+        candidate_counts(candidates);
+    trace_scan(&format!(
+        "[authorization] regions={region_count} sampled_bytes={sampled} exhaustive={exhaustive} url_pairs={url_pairs} url_max_copies={url_max_copies} url_overflowed={url_overflowed} login_pairs={login_pairs} login_overflowed={login_overflowed}"
+    ));
 }
 
 fn wipe_bytes(bytes: &mut [u8]) {
@@ -1033,5 +1285,502 @@ mod tests {
                 )
                 .is_ok()
         );
+    }
+
+    fn login_bytes(account: &str, nonce: &str) -> Vec<u8> {
+        format!(r#"{{"id":"{account}","Nonce":{nonce}}}"#).into_bytes()
+    }
+
+    fn url_bytes(account: &str, nonce: &str) -> Vec<u8> {
+        format!(r#"?accountId={account}&nonce={nonce}&ct=synthetic"#).into_bytes()
+    }
+
+    fn record_pair(
+        candidates: &mut CandidateAccumulator,
+        rank: CandidateRank,
+        account: &str,
+        nonce: &str,
+        location: u64,
+    ) {
+        candidates.record(Candidate {
+            rank,
+            authorization: InventoryAuthorization::from_zeroizing(
+                Zeroizing::new(account.to_owned()),
+                Zeroizing::new(nonce.to_owned()),
+            ),
+            location,
+        });
+    }
+
+    #[test]
+    fn agreement_finds_the_pair_present_in_both_ranks() {
+        let mut candidates = CandidateAccumulator::default();
+        collect_candidates_at(
+            &url_bytes(CURRENT_ACCOUNT, "123456789012345678"),
+            0,
+            &mut candidates,
+        );
+        collect_candidates_at(
+            &login_bytes(CURRENT_ACCOUNT, "123456789012345678"),
+            4096,
+            &mut candidates,
+        );
+
+        let agreed = super::cross_rank_agreement(&candidates).unwrap();
+        assert_eq!(agreed.account_id(), CURRENT_ACCOUNT);
+        assert_eq!(agreed.nonce(), "123456789012345678");
+    }
+
+    #[test]
+    fn agreement_rejects_same_account_with_different_nonces() {
+        let mut candidates = CandidateAccumulator::default();
+        collect_candidates_at(
+            &url_bytes(CURRENT_ACCOUNT, "123456789012345678"),
+            0,
+            &mut candidates,
+        );
+        collect_candidates_at(
+            &login_bytes(CURRENT_ACCOUNT, "987654321012345678"),
+            4096,
+            &mut candidates,
+        );
+
+        assert!(super::cross_rank_agreement(&candidates).is_none());
+    }
+
+    #[test]
+    fn agreement_rejects_different_accounts() {
+        let mut candidates = CandidateAccumulator::default();
+        collect_candidates_at(
+            &url_bytes(CURRENT_ACCOUNT, "123456789012345678"),
+            0,
+            &mut candidates,
+        );
+        collect_candidates_at(
+            &login_bytes("ffeeddccbbaa998877665544", "123456789012345678"),
+            4096,
+            &mut candidates,
+        );
+
+        assert!(super::cross_rank_agreement(&candidates).is_none());
+    }
+
+    #[test]
+    fn covered_single_url_copy_selects() {
+        let mut candidates = CandidateAccumulator::default();
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            0,
+        );
+
+        let selected =
+            super::select_with_coverage(candidates, super::Coverage::complete()).unwrap();
+        assert_eq!(selected.account_id(), CURRENT_ACCOUNT);
+        assert_eq!(selected.nonce(), "123456789012345678");
+    }
+
+    #[test]
+    fn covered_two_copy_singleton_selects() {
+        let mut candidates = CandidateAccumulator::default();
+        for location in [0, 1] {
+            record_pair(
+                &mut candidates,
+                CandidateRank::UrlEncoded,
+                CURRENT_ACCOUNT,
+                "123456789012345678",
+                location,
+            );
+        }
+
+        let selected =
+            super::select_with_coverage(candidates, super::Coverage::complete()).unwrap();
+        assert_eq!(selected.account_id(), CURRENT_ACCOUNT);
+    }
+
+    #[test]
+    fn truncated_singleton_stays_unconfirmed() {
+        // A partial scan cannot promote a lone pair.
+        let mut candidates = CandidateAccumulator::default();
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            0,
+        );
+
+        assert!(matches!(
+            super::select_with_coverage(
+                candidates,
+                super::Coverage {
+                    complete: false,
+                    skipped_bytes: 0
+                },
+            ),
+            Err(AcquisitionError::AuthorizationUnconfirmed)
+        ));
+    }
+
+    #[test]
+    fn skipped_bytes_keep_singleton_unconfirmed() {
+        let mut candidates = CandidateAccumulator::default();
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            0,
+        );
+
+        assert!(matches!(
+            super::select_with_coverage(
+                candidates,
+                super::Coverage {
+                    complete: true,
+                    skipped_bytes: 1024
+                },
+            ),
+            Err(AcquisitionError::AuthorizationUnconfirmed)
+        ));
+    }
+
+    #[test]
+    fn covered_two_accounts_stay_ambiguous() {
+        let mut candidates = CandidateAccumulator::default();
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            0,
+        );
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            "ffeeddccbbaa998877665544",
+            "123456789012345678",
+            1,
+        );
+
+        assert!(matches!(
+            super::select_with_coverage(candidates, super::Coverage::complete()),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
+    }
+
+    #[test]
+    fn overflowed_candidates_stay_ambiguous() {
+        let mut candidates = CandidateAccumulator::default();
+        for index in 0..9_u64 {
+            record_pair(
+                &mut candidates,
+                CandidateRank::UrlEncoded,
+                &format!("{index:024x}"),
+                &format!("{}", index + 100_000),
+                index,
+            );
+        }
+
+        assert!(matches!(
+            super::select_with_coverage(candidates, super::Coverage::complete()),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
+    }
+
+    #[test]
+    fn covered_empty_scan_is_not_found() {
+        assert!(matches!(
+            super::select_with_coverage(
+                CandidateAccumulator::default(),
+                super::Coverage::complete()
+            ),
+            Err(AcquisitionError::AuthorizationNotFound)
+        ));
+    }
+
+    #[test]
+    fn stale_mix_resolves_to_the_login_confirmed_nonce() {
+        let mut candidates = CandidateAccumulator::default();
+        for location in [0, 1] {
+            record_pair(
+                &mut candidates,
+                CandidateRank::UrlEncoded,
+                CURRENT_ACCOUNT,
+                "123456789012345670",
+                location,
+            );
+        }
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            2,
+        );
+        record_pair(
+            &mut candidates,
+            CandidateRank::LoginResponse,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            4096,
+        );
+
+        let selected =
+            super::select_with_coverage(candidates, super::Coverage::complete()).unwrap();
+        assert_eq!(selected.account_id(), CURRENT_ACCOUNT);
+        assert_eq!(selected.nonce(), "123456789012345678");
+    }
+
+    fn single_region_policy(fallback_bytes: usize) -> ScanPolicy {
+        ScanPolicy {
+            preferred_bytes: 4096,
+            fallback_bytes,
+            max_preferred_region_bytes: 4096,
+            fallback_sample_bytes: 4096,
+        }
+    }
+
+    fn file_backed_memory(bytes: Vec<u8>) -> TierMemory {
+        TierMemory {
+            regions: vec![(
+                ReadableRegion::classified(0x1000, bytes.len(), RegionScanPriority::FileBacked),
+                bytes,
+            )],
+        }
+    }
+
+    #[test]
+    fn rescan_conflict_collapses_to_newer_nonce() {
+        let stale = url_bytes(CURRENT_ACCOUNT, "123456789012345670");
+        let current = url_bytes(CURRENT_ACCOUNT, "123456789012345678");
+        let mut bytes = vec![0_u8; 12_288];
+        for (offset, copy) in [(0, &stale), (256, &stale), (512, &stale), (8192, &current)] {
+            bytes[offset..offset + copy.len()].copy_from_slice(copy);
+        }
+        let authorization = super::AuthorizationScanner::new(4096)
+            .scan_with_policy(
+                &file_backed_memory(bytes),
+                &GameProcess::new(7),
+                single_region_policy(4096),
+            )
+            .unwrap();
+        assert_eq!(authorization.account_id(), CURRENT_ACCOUNT);
+        assert_eq!(authorization.nonce(), "123456789012345678");
+    }
+
+    #[test]
+    fn nine_same_account_overflow_refuses() {
+        let mut candidates = CandidateAccumulator::default();
+        for index in 0..9_u64 {
+            record_pair(
+                &mut candidates,
+                CandidateRank::UrlEncoded,
+                CURRENT_ACCOUNT,
+                &format!("{}", 100_000 + index),
+                index,
+            );
+        }
+        assert!(candidates.url.overflowed);
+        assert!(matches!(
+            super::select_with_coverage(candidates, super::Coverage::complete()),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
+    }
+
+    #[test]
+    fn recomputed_coverage_promotes_lone_pair() {
+        let single = url_bytes(CURRENT_ACCOUNT, "123456789012345678");
+        let mut bytes = vec![0_u8; 8192];
+        bytes[..single.len()].copy_from_slice(&single);
+        let selected = super::AuthorizationScanner::new(4096)
+            .scan_with_policy(
+                &file_backed_memory(bytes),
+                &GameProcess::new(7),
+                single_region_policy(4096),
+            )
+            .unwrap();
+        assert_eq!(selected.account_id(), CURRENT_ACCOUNT);
+        assert_eq!(selected.nonce(), "123456789012345678");
+    }
+
+    #[test]
+    fn skipped_singleton_stays_unconfirmed() {
+        let mut candidates = CandidateAccumulator::default();
+        record_pair(
+            &mut candidates,
+            CandidateRank::LoginResponse,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            0,
+        );
+        assert!(matches!(
+            super::select_with_coverage(
+                candidates,
+                super::Coverage {
+                    complete: true,
+                    skipped_bytes: 1
+                },
+            ),
+            Err(AcquisitionError::AuthorizationUnconfirmed)
+        ));
+    }
+
+    #[test]
+    fn sightings_elect_twenty_over_sixteen() {
+        let mut candidates = CandidateAccumulator::default();
+        for location in 0..20_u64 {
+            record_pair(
+                &mut candidates,
+                CandidateRank::UrlEncoded,
+                CURRENT_ACCOUNT,
+                "123456789012345678",
+                location,
+            );
+        }
+        for location in 0..16_u64 {
+            record_pair(
+                &mut candidates,
+                CandidateRank::UrlEncoded,
+                "ffeeddccbbaa998877665544",
+                "123456789012345678",
+                1000 + location,
+            );
+        }
+        let selected =
+            super::select_with_coverage(candidates, super::Coverage::complete()).unwrap();
+        assert_eq!(selected.account_id(), CURRENT_ACCOUNT);
+    }
+
+    #[test]
+    fn same_account_cross_rank_singleton_contradiction_refuses() {
+        let mut candidates = CandidateAccumulator::default();
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            0,
+        );
+        record_pair(
+            &mut candidates,
+            CandidateRank::LoginResponse,
+            CURRENT_ACCOUNT,
+            "987654321012345678",
+            4096,
+        );
+        assert!(matches!(
+            super::select_with_coverage(candidates, super::Coverage::complete()),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
+    }
+
+    #[test]
+    fn cross_rank_different_accounts_still_select() {
+        let mut candidates = CandidateAccumulator::default();
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            0,
+        );
+        record_pair(
+            &mut candidates,
+            CandidateRank::LoginResponse,
+            "ffeeddccbbaa998877665544",
+            "123456789012345678",
+            4096,
+        );
+        assert!(matches!(
+            super::select_with_coverage(candidates, super::Coverage::complete()),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
+    }
+
+    #[test]
+    fn confident_url_yielding_to_a_different_agreed_pair_refuses() {
+        let mut candidates = CandidateAccumulator::default();
+        for location in 0..3_u64 {
+            record_pair(
+                &mut candidates,
+                CandidateRank::UrlEncoded,
+                CURRENT_ACCOUNT,
+                "123456789012345678",
+                location,
+            );
+        }
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            "ffeeddccbbaa998877665544",
+            "987654321012345678",
+            3,
+        );
+        record_pair(
+            &mut candidates,
+            CandidateRank::LoginResponse,
+            "ffeeddccbbaa998877665544",
+            "987654321012345678",
+            4096,
+        );
+        assert!(matches!(
+            super::select_with_coverage(candidates, super::Coverage::complete()),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
+    }
+
+    #[test]
+    fn url_singleton_with_login_overflow_refuses() {
+        let mut candidates = CandidateAccumulator::default();
+        record_pair(
+            &mut candidates,
+            CandidateRank::UrlEncoded,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            0,
+        );
+        for index in 0..9_u64 {
+            record_pair(
+                &mut candidates,
+                CandidateRank::LoginResponse,
+                &format!("{index:024x}"),
+                &format!("{}", index + 100_000),
+                4096 + index,
+            );
+        }
+        assert!(candidates.login.overflowed);
+        assert!(matches!(
+            super::select_with_coverage(candidates, super::Coverage::complete()),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
+    }
+
+    #[test]
+    fn login_singleton_with_url_overflow_refuses() {
+        let mut candidates = CandidateAccumulator::default();
+        for index in 0..9_u64 {
+            record_pair(
+                &mut candidates,
+                CandidateRank::UrlEncoded,
+                &format!("{index:024x}"),
+                &format!("{}", index + 100_000),
+                index,
+            );
+        }
+        record_pair(
+            &mut candidates,
+            CandidateRank::LoginResponse,
+            CURRENT_ACCOUNT,
+            "123456789012345678",
+            4096,
+        );
+        assert!(candidates.url.overflowed);
+        assert!(matches!(
+            super::select_with_coverage(candidates, super::Coverage::complete()),
+            Err(AcquisitionError::AuthorizationAmbiguous)
+        ));
     }
 }

@@ -345,6 +345,7 @@ pub enum AcquisitionError {
     ProcessExited { pid: u32 },
     AuthorizationNotFound,
     AuthorizationAmbiguous,
+    AuthorizationUnconfirmed,
     InventoryRequestFailed,
     InventoryResponseTooLarge,
     SnapshotInvalid,
@@ -382,6 +383,8 @@ impl fmt::Display for AcquisitionError {
             Self::AuthorizationAmbiguous => {
                 formatter.write_str("multiple inventory authorizations were found")
             }
+            Self::AuthorizationUnconfirmed => formatter
+                .write_str("inventory authorization could not be confirmed from a partial scan"),
             Self::InventoryRequestFailed => formatter.write_str("inventory request failed"),
             Self::InventoryResponseTooLarge => {
                 formatter.write_str("inventory response exceeded the size limit")
@@ -423,6 +426,7 @@ pub enum AcquisitionDiagnostic {
     MemoryReadFailed,
     AuthorizationNotFound,
     AuthorizationAmbiguous,
+    AuthorizationUnconfirmed,
     InventoryRequestFailed,
     InventoryResponseTooLarge,
     SnapshotInvalid,
@@ -439,6 +443,9 @@ impl fmt::Display for AcquisitionDiagnostic {
             Self::MemoryReadFailed => "Warframe memory could not be read",
             Self::AuthorizationNotFound => "inventory authorization was not found",
             Self::AuthorizationAmbiguous => "multiple inventory authorizations were found",
+            Self::AuthorizationUnconfirmed => {
+                "inventory authorization could not be confirmed from a partial scan"
+            }
             Self::InventoryRequestFailed => "inventory request failed",
             Self::InventoryResponseTooLarge => "inventory response exceeded the size limit",
             Self::SnapshotInvalid => "inventory snapshot was invalid",
@@ -476,7 +483,8 @@ impl StageHealth {
             | AcquisitionDiagnostic::MemoryReadFailed => {
                 (AcquisitionStage::MemoryPermission, StageState::Failed)
             }
-            AcquisitionDiagnostic::AuthorizationNotFound => (
+            AcquisitionDiagnostic::AuthorizationNotFound
+            | AcquisitionDiagnostic::AuthorizationUnconfirmed => (
                 AcquisitionStage::AuthorizationDiscovery,
                 StageState::Degraded,
             ),

@@ -84,6 +84,9 @@ impl AcquisitionFailure {
             }
             AcquisitionError::MemoryReadFailed { .. } => AcquisitionDiagnostic::MemoryReadFailed,
             AcquisitionError::AuthorizationNotFound => AcquisitionDiagnostic::AuthorizationNotFound,
+            AcquisitionError::AuthorizationUnconfirmed => {
+                AcquisitionDiagnostic::AuthorizationUnconfirmed
+            }
             AcquisitionError::AuthorizationAmbiguous => {
                 AcquisitionDiagnostic::AuthorizationAmbiguous
             }

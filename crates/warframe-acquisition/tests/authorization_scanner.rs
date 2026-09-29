@@ -473,3 +473,327 @@ fn fallback_samples_a_giant_anonymous_region() {
 
     assert!(memory.reads.into_inner().unwrap().contains(&0x6000));
 }
+
+#[test]
+fn single_url_copy_resolves_without_three_sightings() {
+    let rendered = scan(URL_FIXTURE, 31, 7).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+    assert!(!rendered.contains("00112233445566778899aabb"));
+    assert!(!rendered.contains("123456789012345678"));
+}
+
+#[test]
+fn two_matching_url_copies_agree() {
+    let rendered = scan([URL_FIXTURE, URL_FIXTURE].concat(), 37, 17).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+    assert!(!rendered.contains("00112233445566778899aabb"));
+    assert!(!rendered.contains("123456789012345678"));
+}
+
+const MIB: usize = 1024 * 1024;
+
+struct SparsePlacements {
+    base: u64,
+    len: usize,
+    placements: Vec<(usize, Vec<u8>)>,
+}
+
+impl MemoryReader for SparsePlacements {
+    fn readable_regions(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        Ok(vec![ReadableRegion::classified(
+            self.base,
+            self.len,
+            RegionScanPriority::WritableAnonymous,
+        )])
+    }
+
+    fn read_at(
+        &self,
+        _process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        let read_start = usize::try_from(address - self.base).unwrap();
+        buffer.fill(0);
+        for (offset, bytes) in &self.placements {
+            let candidate_end = *offset + bytes.len();
+            let overlap_start = read_start.max(*offset);
+            let overlap_end = (read_start + buffer.len()).min(candidate_end);
+            if overlap_start < overlap_end {
+                let source = overlap_start - *offset;
+                let destination = overlap_start - read_start;
+                let len = overlap_end - overlap_start;
+                buffer[destination..destination + len]
+                    .copy_from_slice(&bytes[source..source + len]);
+            }
+        }
+        Ok(buffer.len())
+    }
+}
+
+fn scan_sparse(memory: &SparsePlacements) -> Result<String, AcquisitionError> {
+    AuthorizationScanner::new(1024 * 1024)
+        .scan(memory, &GameProcess::new(7))
+        .map(|authorization| format!("{authorization:?}"))
+}
+
+#[test]
+fn wine_bloat_undercount() {
+    // Budgeted 4MiB samples cover [0, 56M), [98M, 102M) and [196M, 200M); only the first copy is sampled.
+    let memory = SparsePlacements {
+        base: 0x10_0000,
+        len: 200 * MIB,
+        placements: vec![
+            (MIB + 64, URL_FIXTURE.to_vec()),
+            (150 * MIB, URL_FIXTURE.to_vec()),
+            (150 * MIB + 512, URL_FIXTURE.to_vec()),
+        ],
+    };
+
+    let rendered = scan_sparse(&memory).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+    assert!(!rendered.contains("00112233445566778899aabb"));
+    assert!(!rendered.contains("123456789012345678"));
+}
+
+#[test]
+fn seam_straddle() {
+    // The middle copy straddles the 4MiB sample edge, so neither adjacent sample sees it whole.
+    let memory = SparsePlacements {
+        base: 0x10_0000,
+        len: 200 * MIB,
+        placements: vec![
+            (MIB + 64, URL_FIXTURE.to_vec()),
+            (4 * MIB - 20, URL_FIXTURE.to_vec()),
+            (10 * MIB + 64, URL_FIXTURE.to_vec()),
+        ],
+    };
+
+    let rendered = scan_sparse(&memory).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+    assert!(!rendered.contains("00112233445566778899aabb"));
+    assert!(!rendered.contains("123456789012345678"));
+}
+
+#[test]
+fn skipped_singleton_stays_unconfirmed() {
+    // Pages around 100MiB report zero bytes, so the lone pair never earns trust.
+    let memory = GappyPlacements {
+        base: 0x10_0000,
+        len: 512 * MIB,
+        placements: vec![(MIB + 64, URL_FIXTURE.to_vec())],
+        gap_start: 100 * MIB,
+        gap_len: 10 * MIB,
+    };
+
+    assert_eq!(
+        scan_reader(&memory).unwrap_err(),
+        AcquisitionError::AuthorizationUnconfirmed
+    );
+}
+
+#[test]
+fn full_drain_promotes_lone_pair_to_ok() {
+    // The 512MiB region drains fully with nothing skipped, so one login pair is enough.
+    let memory = SparsePlacements {
+        base: 0x10_0000,
+        len: 512 * MIB,
+        placements: vec![(MIB + 64, LOGIN_FIXTURE.to_vec())],
+    };
+
+    let rendered = scan_sparse(&memory).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+    assert!(!rendered.contains("aabbccddeeff001122334455"));
+    assert!(!rendered.contains("987654321012345678"));
+}
+
+struct GappyPlacements {
+    base: u64,
+    len: usize,
+    placements: Vec<(usize, Vec<u8>)>,
+    gap_start: usize,
+    gap_len: usize,
+}
+
+impl MemoryReader for GappyPlacements {
+    fn readable_regions(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        Ok(vec![ReadableRegion::classified(
+            self.base,
+            self.len,
+            RegionScanPriority::WritableAnonymous,
+        )])
+    }
+
+    fn read_at(
+        &self,
+        _process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        let read_start = usize::try_from(address - self.base).unwrap();
+        let gap_end = self.gap_start + self.gap_len;
+        // Unreadable pages end the range with zero bytes, counting the rest as skipped.
+        if read_start < gap_end && read_start + buffer.len() > self.gap_start {
+            return Ok(0);
+        }
+        buffer.fill(0);
+        for (offset, bytes) in &self.placements {
+            let candidate_end = *offset + bytes.len();
+            let overlap_start = read_start.max(*offset);
+            let overlap_end = (read_start + buffer.len()).min(candidate_end);
+            if overlap_start < overlap_end {
+                let source = overlap_start - *offset;
+                let destination = overlap_start - read_start;
+                let len = overlap_end - overlap_start;
+                buffer[destination..destination + len]
+                    .copy_from_slice(&bytes[source..source + len]);
+            }
+        }
+        Ok(buffer.len())
+    }
+}
+
+struct Segment {
+    base: u64,
+    priority: RegionScanPriority,
+    len: usize,
+    placements: Vec<(usize, Vec<u8>)>,
+}
+
+struct SegmentedSparse {
+    segments: Vec<Segment>,
+}
+
+impl MemoryReader for SegmentedSparse {
+    fn readable_regions(
+        &self,
+        _process: &GameProcess,
+    ) -> Result<Vec<ReadableRegion>, AcquisitionError> {
+        Ok(self
+            .segments
+            .iter()
+            .map(|segment| ReadableRegion::classified(segment.base, segment.len, segment.priority))
+            .collect())
+    }
+
+    fn read_at(
+        &self,
+        _process: &GameProcess,
+        address: u64,
+        buffer: &mut [u8],
+    ) -> Result<usize, AcquisitionError> {
+        let segment = self
+            .segments
+            .iter()
+            .find(|segment| {
+                address >= segment.base
+                    && address < segment.base + u64::try_from(segment.len).unwrap()
+            })
+            .unwrap();
+        let read_start = usize::try_from(address - segment.base).unwrap();
+        buffer.fill(0);
+        for (offset, bytes) in &segment.placements {
+            let candidate_end = *offset + bytes.len();
+            let overlap_start = read_start.max(*offset);
+            let overlap_end = (read_start + buffer.len()).min(candidate_end);
+            if overlap_start < overlap_end {
+                let source = overlap_start - *offset;
+                let destination = overlap_start - read_start;
+                let len = overlap_end - overlap_start;
+                buffer[destination..destination + len]
+                    .copy_from_slice(&bytes[source..source + len]);
+            }
+        }
+        Ok(buffer.len())
+    }
+}
+
+fn scan_reader(memory: &dyn MemoryReader) -> Result<String, AcquisitionError> {
+    AuthorizationScanner::new(1024 * 1024)
+        .scan(memory, &GameProcess::new(7))
+        .map(|authorization| format!("{authorization:?}"))
+}
+
+const FRESHER_URL: &[u8] =
+    b"?accountId=00112233445566778899aabb&nonce=223456789012345678&ct=synthetic";
+
+#[test]
+fn fallback_sample_seam_copy_found() {
+    // The copy straddles the first 4MiB sample edge, so only an overlapped seam sees it whole.
+    let memory = SegmentedSparse {
+        segments: vec![Segment {
+            base: 0x10_0000,
+            priority: RegionScanPriority::FileBacked,
+            len: 12 * MIB,
+            placements: vec![(4 * MIB - 20, URL_FIXTURE.to_vec())],
+        }],
+    };
+
+    let rendered = scan_reader(&memory).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+    assert!(!rendered.contains("00112233445566778899aabb"));
+    assert!(!rendered.contains("123456789012345678"));
+}
+
+#[test]
+fn tier_split_seam_copy_found() {
+    // The 152MiB preferred budget runs out mid-credential inside the second region.
+    let memory = SegmentedSparse {
+        segments: vec![
+            Segment {
+                base: 0x10_0000,
+                priority: RegionScanPriority::WritableAnonymous,
+                len: 128 * MIB,
+                placements: Vec::new(),
+            },
+            Segment {
+                base: (0x10_0000 + 128 * MIB) as u64,
+                priority: RegionScanPriority::WritableAnonymous,
+                len: 128 * MIB,
+                placements: vec![(24 * MIB - 20, URL_FIXTURE.to_vec())],
+            },
+        ],
+    };
+
+    let rendered = scan_reader(&memory).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+    assert!(!rendered.contains("00112233445566778899aabb"));
+    assert!(!rendered.contains("123456789012345678"));
+}
+
+#[test]
+fn rescan_conflict_collapses_to_unconfirmed() {
+    // Three stale copies sit in budget while the live nonce for that account sits outside it.
+    let memory = SparsePlacements {
+        base: 0x10_0000,
+        len: 512 * MIB,
+        placements: vec![
+            (MIB + 64, URL_FIXTURE.to_vec()),
+            (MIB + 2048, URL_FIXTURE.to_vec()),
+            (MIB + 4096, URL_FIXTURE.to_vec()),
+            (100 * MIB, FRESHER_URL.to_vec()),
+        ],
+    };
+
+    // Rescan finds the fresher pair, collapse keeps the newest, and the full
+    // drain completes clean, so the lone live pair resolves to Ok (newest wins).
+    let rendered = scan_sparse(&memory).unwrap();
+
+    assert_eq!(rendered.matches("[REDACTED]").count(), 2);
+    assert!(!rendered.contains("00112233445566778899aabb"));
+    assert!(!rendered.contains("123456789012345678"));
+    assert!(!rendered.contains("223456789012345678"));
+}

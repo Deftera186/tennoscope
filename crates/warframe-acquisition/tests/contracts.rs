@@ -44,6 +44,7 @@ fn all_public_errors_and_diagnostics_are_secret_free() {
         AcquisitionError::ProcessExited { pid: 42 },
         AcquisitionError::AuthorizationNotFound,
         AcquisitionError::AuthorizationAmbiguous,
+        AcquisitionError::AuthorizationUnconfirmed,
         AcquisitionError::InventoryRequestFailed,
         AcquisitionError::InventoryResponseTooLarge,
         AcquisitionError::SnapshotInvalid,
@@ -58,6 +59,7 @@ fn all_public_errors_and_diagnostics_are_secret_free() {
         AcquisitionDiagnostic::MemoryReadFailed,
         AcquisitionDiagnostic::AuthorizationNotFound,
         AcquisitionDiagnostic::AuthorizationAmbiguous,
+        AcquisitionDiagnostic::AuthorizationUnconfirmed,
         AcquisitionDiagnostic::InventoryRequestFailed,
         AcquisitionDiagnostic::InventoryResponseTooLarge,
         AcquisitionDiagnostic::SnapshotInvalid,
@@ -119,6 +121,19 @@ fn diagnostic_selects_its_canonical_stage_and_state() {
     assert_eq!(
         health.diagnostic(),
         AcquisitionDiagnostic::MemoryPermissionDenied
+    );
+}
+
+#[test]
+fn unconfirmed_authorization_is_degraded_discovery() {
+    let health =
+        StageHealth::for_diagnostic(AcquisitionDiagnostic::AuthorizationUnconfirmed).unwrap();
+
+    assert_eq!(health.stage(), AcquisitionStage::AuthorizationDiscovery);
+    assert_eq!(health.state(), StageState::Degraded);
+    assert_eq!(
+        health.diagnostic(),
+        AcquisitionDiagnostic::AuthorizationUnconfirmed
     );
 }
 
