@@ -36,11 +36,22 @@ pkgver=$arch_ver
 tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/tennoscope-arch-digests.XXXXXX")
 trap 'rm -rf "$tmp_dir"' EXIT HUP INT TERM
 
-# Same flags ci.yml uses for its downloads. The tarball stays fail-closed: the tag exists by
-# the time any CI run for its version happens, so a download failure here is never a missing
-# asset and set -e aborts the run.
-curl --fail --location --retry 3 --output "$tmp_dir/source.tar.gz" \
-  "https://github.com/Deftera186/tennoscope/archive/refs/tags/v${pkgver}.tar.gz"
+# Same flags ci.yml uses for its downloads. A pre-release tag (`v0.12.1-rc1`) carries a
+# suffix the manifests cannot hold, so its release-prep commit names the base version
+# (`pkgver=0.12.1`) whose tag does not exist yet. The source tarball then 404s exactly
+# like an unpublished .deb, and failing here would deadlock the release gate that must
+# go green to build anything. Capture the code the same way as the .deb below: a 404
+# defers to the double-404 check, anything else fails carrying both exits.
+tarball_status=0
+tarball_http_code=000
+tarball_http_code=$(curl --fail --location --retry 3 --output "$tmp_dir/source.tar.gz" \
+  -w '%{http_code}' \
+  "https://github.com/Deftera186/tennoscope/archive/refs/tags/v${pkgver}.tar.gz") || tarball_status=$?
+tarball_name="v${pkgver}.tar.gz"
+if [ "$tarball_status" -ne 0 ] && [ "$tarball_http_code" != "404" ]; then
+  echo "could not download $tarball_name (curl exit $tarball_status, HTTP $tarball_http_code)" >&2
+  exit 1
+fi
 # The .deb is different: the release workflow gates the Linux/Windows builds (which attach
 # the .deb) on this job succeeding, so the .deb's presence is the publish signal that tells
 # an in-flight release apart from a wrong pin. On a new-version release commit the shas are
@@ -70,6 +81,14 @@ elif [ "$deb_http_code" = "404" ]; then
 else
   echo "could not download $deb_name (curl exit $deb_status, HTTP $deb_http_code)" >&2
   exit 1
+fi
+# Neither the tag tarball nor the .deb exists: the base version is named only by an
+# unbuilt pre-release tag, so there is nothing to pin against yet. Warn through like
+# the stable in-flight window below; the re-pin still lands per RELEASING step 8.
+if [ "$tarball_status" -ne 0 ] && [ "$deb_skipped" -eq 1 ]; then
+  echo "warning: $tarball_name and $deb_name are both unpublished (HTTP 404)," >&2
+  echo "  pre-release window for v$pkgver: nothing to verify pins against yet" >&2
+  exit 0
 fi
 
 tarball_actual=$(sha256sum "$tmp_dir/source.tar.gz" | cut -d' ' -f1)
