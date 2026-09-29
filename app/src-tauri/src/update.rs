@@ -87,16 +87,15 @@ pub fn classify(
 ) -> (InstallKind, bool) {
     if os == "linux" {
         if appimage.is_some() {
-            // current_exe under an AppImage lives inside its mount
-            // (/tmp/.mount_*; $TMPDIR custom roots fall back to Unknown, which
-            // is the safe direction). Without that corroboration a stray
-            // $APPIMAGE on a system/dev binary must not promote it to Appimage.
-            let under_mount = exe.starts_with("/tmp/")
-                && exe.components().any(|c| {
-                    c.as_os_str()
-                        .to_str()
-                        .is_some_and(|s| s.starts_with(".mount_"))
-                });
+            // AppImage runtime mounts at $TMPDIR/.mount_*, not just /tmp.
+            // Mount corroboration stops stray $APPIMAGE promoting system/dev
+            // binaries; depth keeps lookalikes (e.g. ~/.mount_backup/<bin>) Unknown.
+            let under_mount = exe.ancestors().skip(2).any(|ancestor| {
+                ancestor
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(".mount_"))
+            });
             if under_mount {
                 return (InstallKind::Appimage, writable);
             }
@@ -499,6 +498,22 @@ mod tests {
             &[],
         );
         assert_eq!(kind, InstallKind::Unknown);
+    }
+
+    #[test]
+    fn tmpdir_mount_corroborates_appimage() {
+        // Type2 runtime mounts at $TMPDIR/.mount_* when TMPDIR is set
+        // (proven: /home/deftera/.cache/tmp/.mount_TennoS.../usr/bin/tennoscope).
+        // Hardcoding /tmp/ misclassifies those runs as Unknown, hiding Download.
+        let (kind, up) = classify(
+            Path::new("/home/u/.cache/tmp/.mount_TennoSAopOHb/usr/bin/tennoscope"),
+            Some(Path::new("/home/u/TennoScope.AppImage")),
+            true,
+            "linux",
+            &[],
+        );
+        assert_eq!(kind, InstallKind::Appimage);
+        assert!(up);
     }
 
     #[test]

@@ -411,6 +411,31 @@ function App() {
     if (next === 'orders') void ordersRefresh()
   }
 
+  // The masthead mark deep-links to the Updates section, not just Settings:
+  // opening the page alone leaves the section below the fold on long settings.
+  const updatesFocusPending = useRef(false)
+  function openUpdates(): void {
+    if (page === 'settings') {
+      requestUpdatesFocus()
+      return
+    }
+    updatesFocusPending.current = true
+    openPage('settings')
+  }
+  function requestUpdatesFocus(): void {
+    // Let Settings commit first; the section exists only after the page swap.
+    setTimeout(() => {
+      document.getElementById('updates-setting')?.scrollIntoView({ block: 'start' })
+      document.getElementById('updates-title')?.focus({ preventScroll: true })
+    }, 0)
+  }
+  useEffect(() => {
+    if (page === 'settings' && updatesFocusPending.current) {
+      updatesFocusPending.current = false
+      requestUpdatesFocus()
+    }
+  }, [page])
+
   if (setupStatus === null && !error) return <main className="holding"><div className="streak" aria-hidden="true"/><p className="register-line">Starting TennoScope…</p></main>
   if (!setupStatus?.setup_complete) return <SetupScreen selected={selectedMode} busy={modeBusy} error={modeError ?? error} onSelect={setSelectedMode} onContinue={() => { void changeAccessMode(selectedMode) }}/>
 
@@ -457,7 +482,7 @@ function App() {
               <small>{effectiveMode === 'companion' ? 'Using saved and reference data' : view?.health.game_reader.message ?? 'Connecting to local backend'}</small>
             </span>
           </div>
-          <UpdateMark onOpen={() => openPage('settings')}/>
+          <UpdateMark onOpen={openUpdates}/>
           {view && <span className="date-letter" title={freshness.detail}>{freshness.label}<span className="sr-only">, {freshness.detail}</span></span>}
           <button type="button" className="stamp" onClick={refresh} disabled={busy || modeBusy || setupStatus?.access_mode !== 'full'} aria-describedby={setupStatus?.access_mode !== 'full' ? 'inventory-access-note' : undefined}>
             <Mark name="refresh" className="punch-glyph"/><span>{busy ? 'Refreshing…' : 'Refresh inventory'}</span>

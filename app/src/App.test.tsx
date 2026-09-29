@@ -1392,4 +1392,22 @@ describe('MVP desktop interface', () => {
       expect(windowApi.closeWindow).toHaveBeenCalledOnce()
     })
   })
+
+  it('sends the masthead update mark to the Settings updates section', async () => {
+    backend.getVersionInfo.mockResolvedValue({ version: '0.11.0', channel: 'stable', kind: 'appimage', writable: true, updatable: true, manager: null, manager_command: null })
+    backend.updateCheck.mockResolvedValue({ kind: 'appimage', updatable: true, update: { version: '0.12.0', current_version: '0.11.0', notes: null, date: '2026-09-22T00:00:00Z', feed: 'stable' } })
+    const originalScroll = window.HTMLElement.prototype.scrollIntoView
+    const scrollSpy = vi.fn()
+    window.HTMLElement.prototype.scrollIntoView = scrollSpy as unknown as typeof window.HTMLElement.prototype.scrollIntoView
+    try {
+      render(<App />)
+      const mark = await screen.findByRole('button', { name: /Update available.*Open Settings updates/ })
+      await userEvent.click(mark)
+      await waitFor(() => expect(document.getElementById('updates-setting')).not.toBeNull())
+      await waitFor(() => expect(scrollSpy).toHaveBeenCalled())
+      await waitFor(() => expect(document.getElementById('updates-title')).toHaveFocus())
+    } finally {
+      window.HTMLElement.prototype.scrollIntoView = originalScroll
+    }
+  })
 })

@@ -11,16 +11,19 @@ import {
 } from './backend'
 import {
   clearSnooze,
+  clearUpdateOffered,
   dismissedCount,
   dismissVersion,
   readUpdateAutoCheck,
   readUpdateLastCheck,
   readUpdateLastSurfaced,
+  readUpdateOffered,
   readUpdatePrerelease,
   snoozedUntil,
   snoozeVersion,
   writeUpdateLastCheck,
   writeUpdateLastSurfaced,
+  writeUpdateOffered,
 } from './settings'
 
 export type UpdatePhase =
@@ -71,15 +74,22 @@ function feed(): string {
 
 /** An offered version the UI should stay quiet about on this check. Manual
  *  checks bypass snooze and surface-dedupe (the user is asking again) but
- *  never strike; only a twice-dismissed version stays silent everywhere. */
-function suppressed(version: string, date: string | null, manual: boolean): boolean {
+ *  never strike; only a twice-dismissed version stays silent everywhere.
+ *  The surfaced-date rule dedupes only the self-offer (offered equals
+ *  installed): an undismissed newer version re-offers every launch so the
+ *  masthead stays until dismissed, installed, or superseded. */
+function sameVersion(a: string, b: string): boolean {
+  const clean = (value: string): string => value.trim().replace(/^v/i, '').split('+')[0] ?? ''
+  return clean(a) === clean(b)
+}
+function suppressed(version: string, date: string | null, manual: boolean, installed: string | null): boolean {
   if (dismissedCount(version) >= 2) return true
   if (manual) return false
   const snoozed = snoozedUntil(version)
   if (snoozed && Date.now() < snoozed) return true
   // An expired snooze re-arms the nudge once: the user asked to be reminded.
   if (snoozed) return false
-  if (date && date === readUpdateLastSurfaced()) return true
+  if (date && installed && sameVersion(version, installed) && date === readUpdateLastSurfaced()) return true
   return false
 }
 
@@ -114,12 +124,18 @@ async function runCheck(manual: boolean): Promise<void> {
       const result: CheckResult = await updateCheck(feed())
       const at = Date.now()
       writeUpdateLastCheck(at)
+      // The check knows the install kind first-hand; keep the boot-time info
+      // honest when it loaded (or failed) earlier without extra IPC.
+      if (snapshot.info && (snapshot.info.kind !== result.kind || snapshot.info.updatable !== result.updatable)) {
+        set({ info: { ...snapshot.info, kind: result.kind, updatable: result.updatable } })
+      }
       const update = result.update
       if (!update) {
+        clearUpdateOffered()
         set({ phase: 'current', available: null, lastCheck: at, note: null })
         return
       }
-      if (suppressed(update.version, update.date, manual)) {
+      if (suppressed(update.version, update.date, manual, snapshot.info?.version ?? null)) {
         set({ phase: 'suppressed', available: update, lastCheck: at, note: null })
         return
       }
@@ -129,6 +145,7 @@ async function runCheck(manual: boolean): Promise<void> {
       // strike, so the re-offer must not clear it first.
       if (manual && snoozedUntil(update.version)) clearSnooze(update.version)
       if (update.date) writeUpdateLastSurfaced(update.date)
+      writeUpdateOffered(update)
       set({ phase: 'offered', available: update, lastCheck: at })
     } catch {
       set({
@@ -161,14 +178,32 @@ export function useUpdateStore(): UpdateSnapshot {
   return useSyncExternalStore(subscribe, () => snapshot, () => snapshot)
 }
 
-/** Daily auto-check. Runs once per mount; CI-light by contact, not by timer. */
+/** Daily auto-check. Runs once per mount; CI-light by contact, not by timer.
+ *  A persisted offer restores immediately so the masthead stays across
+ *  restarts until dismissed, installed, or superseded — the daily throttle
+ *  would otherwise hide it until the next network check. */
 export function bootUpdateChecks(): void {
   if (booted) return
   booted = true
   void (async () => {
     try {
       const info = await getVersionInfo()
-      set({ info, phase: 'idle' })
+      const stored = readUpdateOffered()
+      if (stored && stored.version && stored.feed) {
+        const installedChanged = stored.current_version !== info.version
+        const alreadyInstalled = sameVersion(stored.version, info.version)
+        const twiceDismissed = dismissedCount(stored.version) >= 2
+        const snooze = snoozedUntil(stored.version)
+        const stillSnoozed = snooze !== null && Date.now() < snooze
+        if (!installedChanged && !alreadyInstalled && !twiceDismissed && !stillSnoozed) {
+          set({ info, phase: 'offered', available: stored, lastCheck: readUpdateLastCheck() })
+        } else {
+          set({ info, phase: 'idle' })
+          if (installedChanged || alreadyInstalled) clearUpdateOffered()
+        }
+      } else {
+        set({ info, phase: 'idle' })
+      }
     } catch {
       set({ phase: 'idle', note: 'Could not read the installed version. Press Check now to try again.' })
       return

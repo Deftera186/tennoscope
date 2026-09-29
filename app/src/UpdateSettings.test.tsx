@@ -103,6 +103,38 @@ describe('UpdatesSetting', () => {
     await waitFor(() => expect(backend.updateCheck).toHaveBeenLastCalledWith('stable'))
   })
 
+  it('re-offers an undismissed version with the same pub_date instead of suppressing', async () => {
+    // The masthead must stay after reopen unless dismissed: an already-surfaced
+    // date alone must not silence an undismissed offer.
+    localStorage.setItem('tennoscope.update-last-surfaced', update.date)
+    backend.getVersionInfo.mockResolvedValue(portable)
+    backend.updateCheck.mockResolvedValue({ kind: 'appimage', updatable: true, update })
+    render(<UpdatesSetting observesGame={false} />)
+    bootUpdateChecks()
+    expect(await screen.findByRole('button', { name: 'Download update' })).toBeInTheDocument()
+  })
+
+  it('restores a persisted offer on boot so the masthead stays after reopen', async () => {
+    // Daily throttle skips the network check; the stored offer keeps the UI.
+    localStorage.setItem('tennoscope.update-last-check', new Date().toISOString())
+    localStorage.setItem('tennoscope.update-offered', JSON.stringify(update))
+    backend.getVersionInfo.mockResolvedValue(portable)
+    backend.updateCheck.mockResolvedValue({ kind: 'appimage', updatable: true, update })
+    render(<UpdatesSetting observesGame={false} />)
+    bootUpdateChecks()
+    expect(await screen.findByRole('button', { name: 'Download update' })).toBeInTheDocument()
+    expect(backend.updateCheck).not.toHaveBeenCalled()
+  })
+
+  it('exposes the Updates section as a deep-link target for the masthead mark', async () => {
+    backend.getVersionInfo.mockResolvedValue(portable)
+    backend.updateCheck.mockResolvedValue({ kind: 'appimage', updatable: true, update })
+    const { container } = render(<UpdatesSetting observesGame={false} />)
+    bootUpdateChecks()
+    await screen.findByRole('button', { name: 'Download update' })
+    expect(container.querySelector('#updates-setting')).not.toBeNull()
+  })
+
   it('pauses reminders for twice-dismissed versions instead of calling them latest', async () => {
     localStorage.setItem('tennoscope.update-dismissed', JSON.stringify({ '0.12.0': 2 }))
     backend.getVersionInfo.mockResolvedValue(portable)

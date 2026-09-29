@@ -12,8 +12,8 @@ import { checkForUpdatesNow, dismissOffered, downloadUpdate, isMeteredConnection
 export function UpdateMark({ onOpen }: { onOpen: () => void }) {
   const notice = useUpdateNotice()
   return <>
-    <span className="sr-only" role="status">{notice ? (notice.downloaded ? `Update ready: ${notice.version}. Open Settings to restart.` : `Update available: ${notice.version}. Open Settings to review it.`) : ''}</span>
-    {notice && <button type="button" className="update-mark" onClick={onOpen} aria-label={notice.downloaded ? `Update ready: ${notice.version}. Open Settings to restart.` : `Update available: ${notice.version}. Open Settings to review it.`}>
+    <span className="sr-only" role="status">{notice ? (notice.downloaded ? `Update ready: ${notice.version}. Open Settings updates to restart.` : `Update available: ${notice.version}. Open Settings updates to review it.`) : ''}</span>
+    {notice && <button type="button" className="update-mark" onClick={onOpen} aria-label={notice.downloaded ? `Update ready: ${notice.version}. Open Settings updates to restart.` : `Update available: ${notice.version}. Open Settings updates to review it.`}>
       <span className="update-dot" aria-hidden="true"/>
       <span className="update-text" aria-hidden="true">{notice.downloaded ? `Update ready: ${notice.version}` : `Update available: ${notice.version}`}</span>
     </button>}
@@ -73,9 +73,9 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
     }
   }
 
-  return <div className="setting">
+  return <div className="setting" id="updates-setting">
     <div>
-      <h3>Updates</h3>
+      <h3 id="updates-title" tabIndex={-1}>Updates</h3>
       <p className="prose">TennoScope checks for new versions daily. Downloads start only when you press Download. Nothing installs itself.</p>
       <label className="check-row">
         <input

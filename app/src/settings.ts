@@ -227,3 +227,60 @@ export function clearSnooze(version: string): void {
     // An uncleared snooze simply suppresses one more round.
   }
 }
+
+/**
+ * Last offered update, so the masthead stays across restarts until dismissed,
+ * installed, or superseded. The daily throttle skips the network check on
+ * reopen; without this the button would vanish until the next check.
+ */
+const OFFERED_KEY = 'tennoscope.update-offered'
+
+export interface PersistedOffer {
+  version: string
+  current_version: string
+  notes: string | null
+  date: string | null
+  feed: string
+}
+
+export function readUpdateOffered(): PersistedOffer | null {
+  try {
+    const raw = localStorage.getItem(OFFERED_KEY)
+    if (!raw) return null
+    const parsed: unknown = JSON.parse(raw)
+    if (
+      parsed && typeof parsed === 'object' &&
+      typeof (parsed as Record<string, unknown>).version === 'string' &&
+      typeof (parsed as Record<string, unknown>).current_version === 'string' &&
+      typeof (parsed as Record<string, unknown>).feed === 'string'
+    ) {
+      const record = parsed as Record<string, unknown>
+      return {
+        version: record.version as string,
+        current_version: record.current_version as string,
+        notes: typeof record.notes === 'string' ? record.notes : null,
+        date: typeof record.date === 'string' ? record.date : null,
+        feed: record.feed as string,
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+export function writeUpdateOffered(offer: PersistedOffer): void {
+  try {
+    localStorage.setItem(OFFERED_KEY, JSON.stringify(offer))
+  } catch {
+    // A stamp that cannot be saved simply means "check again next launch".
+  }
+}
+
+export function clearUpdateOffered(): void {
+  try {
+    localStorage.removeItem(OFFERED_KEY)
+  } catch {
+    // Removing is best-effort; a stale offer re-checks into place.
+  }
+}
