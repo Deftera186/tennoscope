@@ -12,7 +12,25 @@ declares stability. Releases through `0.11.0` treated any user-visible behaviour
 minor; from here on a fix that restores intended behaviour is a patch even when the user can
 see the difference.
 
-## [Unreleased]
+## [0.12.1-rc1] - 2026-09-29
+
+### Fixed
+
+- **Ducat kiosk prices agree with each other and hold still.** Grid tiles and
+  basket rows share one price join, so the same part can never show two
+  numbers, and prices come from the median of completed trades instead of the
+  lowest live ask, which a single listing could swing to absurd heights.
+  Built-part labels price at their blueprint twin.
+- **The kiosk overlay keeps its prices while scrolling and on dim pipelines.**
+  The chip mask rides streamed scroll offsets, the brightness gate follows the
+  strip instead of a fixed white, and captured frames mask out
+  already-published chips before recognition, so scrolled grids keep their
+  prices instead of blanking or misattaching them. Sparse panes re-phase
+  instead of staying blank.
+- **Proton sessions no longer fail as "multiple inventory authorizations".**
+  A lone credential is confirmed with a wider scan instead of refused, and a
+  truncated partial scan reports a retryable state rather than an error.
+
 
 ## [0.12.0] - 2026-09-24
 
@@ -626,7 +644,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.12.1-rc1...HEAD
+[0.12.1-rc1]: https://github.com/Deftera186/tennoscope/compare/v0.12.0...v0.12.1-rc1
 [0.12.0]: https://github.com/Deftera186/tennoscope/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Deftera186/tennoscope/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/Deftera186/tennoscope/compare/v0.9.1...v0.10.0
