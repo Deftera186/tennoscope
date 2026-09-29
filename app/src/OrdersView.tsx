@@ -369,7 +369,7 @@ function NewListing({ items, orders, listable, busy, onSell, onUpdate }: {
             </li>)}
           </ul>
           : <p className="pick-empty">Nothing sellable here matches that. Sets, part-ranked copies and star-set Ayatan sculptures cannot be listed from TennoScope.</p>)}
-        {matches.length > shown.length && <p className="pick-more">{matches.length - shown.length} more match — keep typing to narrow it.</p>}
+        {matches.length > shown.length && <p className="pick-more">{matches.length - shown.length} more match. Keep typing to narrow it.</p>}
       </>}
   </div>
 }
@@ -440,7 +440,7 @@ function LinkForms({ onSignIn, onLinkToken, busy }: {
           <li>Go to <b>Application</b> (Chrome) or <b>Storage</b> (Firefox), then <b>Cookies → warframe.market</b>.</li>
           <li>Copy the value of the cookie named <b>JWT</b>.</li>
         </ol>
-        <p>Treat that value like a password: anyone holding it can post and delete orders on your account. TennoScope stores it in your system keyring where one is available, and in its local database file otherwise — the Status panel says which you got.</p>
+        <p>Treat that value like a password: anyone holding it can post and delete orders on your account. TennoScope stores it in your system keyring where one is available, and in its local database file otherwise. The Status panel says which you got.</p>
       </details>
       <form onSubmit={event => { event.preventDefault(); void onLinkToken(token) }}>
         <label className="dial-slot">

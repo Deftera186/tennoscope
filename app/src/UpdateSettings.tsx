@@ -12,10 +12,10 @@ import { checkForUpdatesNow, dismissOffered, downloadUpdate, isMeteredConnection
 export function UpdateMark({ onOpen }: { onOpen: () => void }) {
   const notice = useUpdateNotice()
   return <>
-    <span className="sr-only" role="status">{notice ? (notice.downloaded ? `Update ready — ${notice.version}. Open Settings to restart.` : `Update available — ${notice.version}. Open Settings to review it.`) : ''}</span>
-    {notice && <button type="button" className="update-mark" onClick={onOpen} aria-label={notice.downloaded ? `Update ready — ${notice.version}. Open Settings to restart.` : `Update available — ${notice.version}. Open Settings to review it.`}>
+    <span className="sr-only" role="status">{notice ? (notice.downloaded ? `Update ready: ${notice.version}. Open Settings to restart.` : `Update available: ${notice.version}. Open Settings to review it.`) : ''}</span>
+    {notice && <button type="button" className="update-mark" onClick={onOpen} aria-label={notice.downloaded ? `Update ready: ${notice.version}. Open Settings to restart.` : `Update available: ${notice.version}. Open Settings to review it.`}>
       <span className="update-dot" aria-hidden="true"/>
-      <span className="update-text" aria-hidden="true">{notice.downloaded ? `Update ready — ${notice.version}` : `Update available — ${notice.version}`}</span>
+      <span className="update-text" aria-hidden="true">{notice.downloaded ? `Update ready: ${notice.version}` : `Update available: ${notice.version}`}</span>
     </button>}
   </>
 }
@@ -66,17 +66,17 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
     try {
       await writeText(command)
       setCopied(true)
-      setCopyNote('Copied — paste it into a terminal.')
+      setCopyNote('Copied, paste it into a terminal.')
     } catch {
       setCopied(false)
-      setCopyNote('Copy failed — select the command text by hand.')
+      setCopyNote('Copy failed, select the command text by hand.')
     }
   }
 
   return <div className="setting">
     <div>
       <h3>Updates</h3>
-      <p className="prose">TennoScope checks for new versions daily. Downloads start only when you press Download — nothing installs itself.</p>
+      <p className="prose">TennoScope checks for new versions daily. Downloads start only when you press Download. Nothing installs itself.</p>
       <label className="check-row">
         <input
           type="checkbox"
@@ -112,17 +112,17 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
     <button type="button" className="stamp" onClick={() => act(() => void checkForUpdatesNow())} disabled={busy}>Check now</button>
     <p ref={statusRef} tabIndex={-1} className="band-note capture-status" role="status" aria-live="polite" aria-atomic="true">
       {store.phase === 'checking' && 'Checking for updates…'}
-      {store.phase === 'current' && info && `You are on ${info.version} — the latest version. ${lastChecked}`}
+      {store.phase === 'current' && info && `You are on ${info.version}, the latest version. ${lastChecked}`}
       {store.phase === 'idle' && info && (store.note ?? `You are on ${info.version}. ${lastChecked}`)}
       {store.phase === 'idle' && !info && (store.note ?? 'Update checks are unavailable while the backend is down. Press Check now to try again.')}
       {store.phase === 'failed' && store.note}
-      {store.phase === 'offered' && actionable && `${actionable.version} is available — actions below.`}
-      {store.phase === 'ready' && actionable && `${actionable.version} is downloaded — restart to finish.`}
+      {store.phase === 'offered' && actionable && `${actionable.version} is available: actions below.`}
+      {store.phase === 'ready' && actionable && `${actionable.version} is downloaded: restart to finish.`}
       {store.phase === 'suppressed' && actionable && dismissedCount(actionable.version) >= 2
         && `You dismissed ${actionable.version} twice, so automatic reminders stay off until the next version.`}
       {store.phase === 'suppressed' && actionable && dismissedCount(actionable.version) < 2
-        && `${actionable.version} is available, actions below.`}
-      {store.phase === 'downloading' && actionable && `Downloading ${actionable.version} — progress below.`}
+        && `${actionable.version} is available: actions below.`}
+      {store.phase === 'downloading' && actionable && `Downloading ${actionable.version}: progress below.`}
     </p>
     {store.phase === 'downloading' && <>
       <progress className="update-progress" max={store.total ?? undefined} value={store.total == null ? undefined : (store.downloaded ?? undefined)} aria-label={`Downloading ${actionable?.version ?? 'update'}`} aria-valuetext={actionable ? (percent === null ? 'Download starting' : `Download ${percent} percent${store.total ? `, ${((store.downloaded ?? 0) / 1048576).toFixed(1)} of ${(store.total / 1048576).toFixed(1)} megabytes` : ''}`) : undefined}/>
@@ -133,7 +133,7 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
       <p className="prose">{actionable.version} is available. Press Download to fetch it, then restart to finish.</p>
       {metered && <p className="prohibition-note">You are on a metered connection. Press Download only when ready.</p>}
       <button type="button" className="stamp" onClick={() => act(() => void downloadUpdate())} disabled={busy}>Download update</button>
-      <button type="button" className="stamp" onClick={() => act(() => dismissOffered())}>Not now — remind me in 7 days</button>
+      <button type="button" className="stamp" onClick={() => act(() => dismissOffered())}>Not now, remind me in 7 days</button>
       <button type="button" className="stamp" onClick={() => void openUrl(releaseTagUrl(actionable.version))}>Open release page</button>
     </div>}
     {store.phase === 'offered' && actionable && !updatable && <div className="update-actions">
@@ -149,12 +149,12 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
         <p className="sr-only" role="status">{copyNote ?? ''}</p>
       </>}
       <button type="button" className="stamp" onClick={() => void openUrl(releaseTagUrl(actionable.version))}>Open release page</button>
-      <button type="button" className="stamp" onClick={() => act(() => dismissOffered())}>Not now — remind me in 7 days</button>
+      <button type="button" className="stamp" onClick={() => act(() => dismissOffered())}>Not now, remind me in 7 days</button>
     </div>}
     {store.phase === 'suppressed' && actionable && <div className="update-actions">
       {actionable && dismissedCount(actionable.version) >= 2
         ? <p className="prose">You dismissed {actionable.version} twice, so automatic reminders stay off until the next version. Press Open release page to get it.</p>
-        : <p className="prose">{actionable.version} is available. Reminders are paused — press Check now to see it again.</p>}
+        : <p className="prose">{actionable.version} is available. Reminders are paused. Press Check now to see it again.</p>}
       <button type="button" className="stamp" onClick={() => void openUrl(releaseTagUrl(actionable.version))}>Open release page</button>
     </div>}
     {store.phase === 'failed' && actionable && updatable && <div className="update-actions">
@@ -174,12 +174,12 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
       <button type="button" className="stamp" onClick={() => void openUrl(releaseTagUrl(actionable.version))}>Open release page</button>
     </div>}
     {store.phase === 'ready' && actionable && !deferred && <div className="update-actions">
-      <p className="prose">{actionable.version} is downloaded. Restart TennoScope to finish — your settings stay as they are.{observesGame && ' Restart hides the reward overlay until relaunch.'}</p>
+      <p className="prose">{actionable.version} is downloaded. Restart TennoScope to finish. Your settings stay as they are.{observesGame && ' Restart hides the reward overlay until relaunch.'}</p>
       <button type="button" className="stamp" onClick={() => act(() => void restartToUpdate())}>Restart now</button>
       <button type="button" className="stamp" onClick={() => act(() => setDeferred(true))}>Later</button>
     </div>}
     {store.phase === 'ready' && actionable && deferred && <div className="update-actions">
-      <p className="prose">{actionable.version} is downloaded and stays downloaded until you restart. Restart TennoScope to finish — your settings stay as they are.{observesGame && ' Restart hides the reward overlay until relaunch.'}</p>
+      <p className="prose">{actionable.version} is downloaded and stays downloaded until you restart. Restart TennoScope to finish. Your settings stay as they are.{observesGame && ' Restart hides the reward overlay until relaunch.'}</p>
       <button type="button" className="stamp" onClick={() => act(() => void restartToUpdate())}>Restart now</button>
     </div>}
   </div>

@@ -105,7 +105,7 @@ async function runCheck(manual: boolean): Promise<void> {
   try {
     if (!navigator.onLine) {
       set(manual
-        ? { phase: 'failed', note: 'Could not check — you are offline. Reconnect, then press Check now.' }
+        ? { phase: 'failed', note: 'Could not check. You are offline. Reconnect, then press Check now.' }
         : { phase: snapshot.info ? snapshot.phase : 'idle' })
       return
     }
@@ -229,7 +229,7 @@ export async function downloadUpdate(): Promise<void> {
         downloaded: null,
         total: null,
         note: /signature/i.test(message)
-          ? 'Update blocked — the signature check failed. Nothing was installed. Try again from Check now, or get this version from the release page.'
+          ? 'Update blocked: the signature check failed. Nothing was installed. Try again from Check now, or get this version from the release page.'
           : 'The download stopped before finishing. Press Retry download to try again.',
       })
     }
@@ -267,7 +267,7 @@ export function dismissOffered(): void {
     snoozeVersion(available.version)
     // The idle row would otherwise give no acknowledgment that the reminder
     // was armed; the next check clears this note when it reports.
-    set({ phase: 'idle', available: null, note: `Noted — ${available.version} will remind you in 7 days.` })
+    set({ phase: 'idle', available: null, note: `Noted, ${available.version} will remind you in 7 days.` })
     return
   }
   set({ phase: 'idle', available: null, note: null })

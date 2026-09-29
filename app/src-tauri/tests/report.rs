@@ -401,7 +401,7 @@ fn assemble_report_text_puts_the_environment_between_title_and_diagnostics() {
 
     assert_eq!(
         lines.first(),
-        Some(&"TennoScope 0.5.0 (stable) — linux/x86_64 — 2026-08-05 14:12:33 UTC"),
+        Some(&"TennoScope 0.5.0 (stable), linux/x86_64, 2026-08-05 14:12:33 UTC"),
         "header was:\n{text}"
     );
     assert_eq!(lines.get(1), Some(&""), "header was:\n{text}");
@@ -434,10 +434,10 @@ fn assemble_report_text_renders_human_readable_rows_only() {
     )
     .expect("text builds");
     let _ = std::fs::remove_dir_all(&log_dir);
-    assert!(text.contains("Game reader: degraded — Warframe is not running"));
-    assert!(text.contains("EE.log: degraded — Waiting for Warframe"));
-    assert!(text.contains("Catalog: ready — Catalog ready"));
-    assert!(text.contains("Market account: idle — Not linked"));
+    assert!(text.contains("Game reader: degraded, Warframe is not running"));
+    assert!(text.contains("EE.log: degraded, Waiting for Warframe"));
+    assert!(text.contains("Catalog: ready, Catalog ready"));
+    assert!(text.contains("Market account: idle, Not linked"));
     assert!(!text.contains("game_reader"), "raw keys must not appear");
     assert!(
         !text.contains("last_success"),
@@ -462,7 +462,7 @@ fn assemble_report_text_lists_only_broken_acquisition_stages() {
     )
     .expect("text builds");
     std::fs::remove_dir_all(&log_dir).unwrap();
-    assert!(text.contains("schema_validation: failed — Inventory snapshot was invalid"));
+    assert!(text.contains("schema_validation: failed, Inventory snapshot was invalid"));
     assert!(
         !text.contains("memory_permission"),
         "ready stages stay out of the report"

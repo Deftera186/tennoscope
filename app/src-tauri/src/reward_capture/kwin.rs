@@ -346,7 +346,7 @@ pub fn logical_rect(
     })
 }
 
-// --- Transport -------------------------------------------------------------------------------
+// Transport
 
 const SCREENSHOT2_SERVICE: &str = "org.kde.KWin.ScreenShot2";
 const SCREENSHOT2_PATH: &str = "/org/kde/KWin/ScreenShot2";

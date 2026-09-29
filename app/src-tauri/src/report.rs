@@ -162,7 +162,7 @@ pub fn environment_line(
     backend: Option<&str>,
 ) -> String {
     format!(
-        "Display: {} session — {} — rect_source={} — frame_backend={}\n",
+        "Display: {} session, {}, rect_source={}, frame_backend={}\n",
         session.label(),
         desktop.unwrap_or("unknown desktop"),
         rect_source.unwrap_or("unknown"),
@@ -184,7 +184,7 @@ pub fn assemble_report_text(
         .or_else(|| std::env::var_os("USERNAME"))
         .and_then(|user| user.into_string().ok());
     let mut text = format!(
-        "TennoScope {} ({}) — {} — {}\n\n",
+        "TennoScope {} ({}), {}, {}\n\n",
         meta.version, meta.profile, meta.os_arch, meta.timestamp
     );
     let (rect_source, frame_backend) = crate::reward_capture::last_capture_sources();
@@ -211,11 +211,11 @@ pub fn assemble_report_text(
         EeLogState::NotRequested => {}
         EeLogState::Included => {
             text.push_str("\nNotes\n");
-            text.push_str("EE.log is included in the report folder (sanitized — IPs and email addresses have been redacted). You can attach it to a GitHub issue.\n");
+            text.push_str("EE.log is included in the report folder (sanitized, IPs and email addresses have been redacted). You can attach it to a GitHub issue.\n");
         }
         EeLogState::CopyFailed => {
             text.push_str("\nNotes\n");
-            text.push_str("EE.log was requested but could not be copied (the game usually keeps it locked) — it is not in this report.\n");
+            text.push_str("EE.log was requested but could not be copied (the game usually keeps it locked). It is not in this report.\n");
         }
     }
     Ok(sanitize(
@@ -254,7 +254,7 @@ fn diagnostics_rows(health_json: &str) -> Result<String, String> {
             .and_then(Value::as_str)
             .unwrap_or("unknown");
         let message = row.get("message").and_then(Value::as_str).unwrap_or("");
-        rows.push_str(&format!("{label}: {state} — {message}\n"));
+        rows.push_str(&format!("{label}: {state}, {message}\n"));
     }
     let stages: Vec<String> = health
         .get("acquisition_stages")
@@ -272,7 +272,7 @@ fn diagnostics_rows(health_json: &str) -> Result<String, String> {
                         .and_then(Value::as_str)
                         .unwrap_or("stage");
                     let message = stage.get("message").and_then(Value::as_str).unwrap_or("");
-                    Some(format!("{name}: {state} — {message}"))
+                    Some(format!("{name}: {state}, {message}"))
                 })
                 .collect()
         })

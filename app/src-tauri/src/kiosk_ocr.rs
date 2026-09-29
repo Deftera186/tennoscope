@@ -24,7 +24,6 @@ use crate::{
 /// the reward reader.
 pub const MATCH_FLOOR: f32 = 0.6;
 
-/// One recognized grid tile: its slot, the catalog name it matched, and how well.
 #[derive(Clone, Debug)]
 pub struct GridCell {
     pub col: usize,
@@ -33,7 +32,6 @@ pub struct GridCell {
     pub score: f32,
 }
 
-/// One recognized basket row, including Warframe's optional stack count.
 #[derive(Clone, Debug)]
 pub struct BasketRow {
     pub index: usize,
@@ -187,7 +185,6 @@ where
     }
     let rect = &rect;
     std::thread::scope(|scope| {
-        // Round-robin the slots across workers, then weave the results back into order.
         let per_worker: Vec<Vec<usize>> = (0..workers)
             .map(|w| (w..slots.len()).step_by(workers).collect())
             .collect::<Vec<_>>();
@@ -206,7 +203,6 @@ where
                 })
             })
             .collect();
-        // Join first (all workers done), then reorder against the owned index lists.
         let mut reads: Vec<Option<SlotRead>> =
             std::iter::repeat_with(|| None).take(slots.len()).collect();
         let chunk_results: Vec<Vec<Option<SlotRead>>> = handles

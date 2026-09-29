@@ -518,7 +518,7 @@ mod tests {
         );
     }
 
-    // --- the locator ---
+    // Locator
 
     const PITCH: i32 = 222;
     const BAND: i32 = 46;

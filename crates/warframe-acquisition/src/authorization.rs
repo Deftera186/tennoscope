@@ -80,7 +80,6 @@ impl AuthorizationScanner {
             skipped_bytes += skipped;
             preferred_remaining -= scan_len;
             if scan_len < region.len() {
-                // The head and the tail scan as separate ranges, so the tail starts overlap-early.
                 let tail_start = scan_len.saturating_sub(CANDIDATE_OVERLAP);
                 fallback.push(ScanRange::new(
                     region,

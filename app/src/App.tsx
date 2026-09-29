@@ -453,12 +453,12 @@ function App() {
           <div className={`assay-state ${effectiveMode === 'companion' ? 'idle' : liveState}`}>
             <span className="state-mark" aria-hidden="true"/>
             <span className="assay-state-text">
-              <strong role="status">{effectiveMode === 'companion' ? 'Companion mode' : liveState === 'ready' ? 'Watching Warframe' : liveState === 'idle' ? 'Idle' : liveState === 'failed' ? 'Attention — reader failed' : 'Attention needed'}</strong>
+              <strong role="status">{effectiveMode === 'companion' ? 'Companion mode' : liveState === 'ready' ? 'Watching Warframe' : liveState === 'idle' ? 'Idle' : liveState === 'failed' ? 'Attention: reader failed' : 'Attention needed'}</strong>
               <small>{effectiveMode === 'companion' ? 'Using saved and reference data' : view?.health.game_reader.message ?? 'Connecting to local backend'}</small>
             </span>
           </div>
           <UpdateMark onOpen={() => openPage('settings')}/>
-          {view && <span className="date-letter" title={freshness.detail}>{freshness.label}<span className="sr-only"> — {freshness.detail}</span></span>}
+          {view && <span className="date-letter" title={freshness.detail}>{freshness.label}<span className="sr-only">, {freshness.detail}</span></span>}
           <button type="button" className="stamp" onClick={refresh} disabled={busy || modeBusy || setupStatus?.access_mode !== 'full'} aria-describedby={setupStatus?.access_mode !== 'full' ? 'inventory-access-note' : undefined}>
             <Mark name="refresh" className="punch-glyph"/><span>{busy ? 'Refreshing…' : 'Refresh inventory'}</span>
           </button>
@@ -890,14 +890,14 @@ function ReportBlock({ health, alwaysVisible }: { health: AppView['health']; alw
         <span className={`state-mark ${broken ? 'failed' : 'ready'}`} aria-hidden="true"/>
         <h2 className="report-title">Report a problem</h2>
         <p className="prose">{broken
-          ? 'Strike a record of what failed. Review it before it leaves this machine — nothing is sent anywhere.'
-          : 'Something not working right? Bundle your diagnostics and open an issue — nothing leaves this machine without you sending it.'}</p>
+          ? 'Strike a record of what failed. Review it before it leaves this machine. Nothing is sent anywhere.'
+          : 'Something not working right? Bundle your diagnostics and open an issue. Nothing leaves this machine without you sending it.'}</p>
       </div>
       <div className="report-actions">
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(openIssue, () => 'OPENED THE ISSUE FORM IN YOUR BROWSER.')}>Open an issue</button>
-        <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(copyReport, () => 'COPIED — PASTE IT INTO THE DIAGNOSTICS FIELD OF THE ISSUE FORM.')}>Copy diagnostics</button>
+        <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(copyReport, () => 'COPIED. PASTE IT INTO THE DIAGNOSTICS FIELD OF THE ISSUE FORM.')}>Copy diagnostics</button>
         <button type="button" className="stamp" disabled={status.kind === 'busy'} onClick={() => void run(saveReport, result =>
-          `SAVED TO ${result?.folder_path ?? '…'}${result?.ee_log_included ? ' — EE.LOG INCLUDED (SANITIZED) — SAFE TO ATTACH TO THE ISSUE.' : ''}`,
+          `SAVED TO ${result?.folder_path ?? '…'}${result?.ee_log_included ? '. EE.LOG INCLUDED (SANITIZED). SAFE TO ATTACH TO THE ISSUE.' : ''}`,
         )}>Save logs</button>
       </div>
       {status.kind === 'done' && <p className="report-status" role="status">{status.message}</p>}
@@ -986,7 +986,7 @@ function SettingsPage({ view, priceFloor, effectiveMode, selectedMode, modeBusy,
       <div className="setting">
         <div>
           <h3>Collection price floor</h3>
-          <p className="prose">Stacks worth less than this per copy are left out of the sellable figure, and out of it alone — the market-rate total always counts everything. What the market completes is measured; whether a 3&nbsp;platinum mod is worth an evening of arranging the trade by hand is yours to say.</p>
+          <p className="prose">Stacks worth less than this per copy are left out of the sellable figure, and out of it alone: the market-rate total always counts everything. What the market completes is measured; whether a 3&nbsp;platinum mod is worth an evening of arranging the trade by hand is yours to say.</p>
         </div>
         <div className="dial">
           <label className="dial-slot">

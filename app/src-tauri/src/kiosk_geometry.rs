@@ -20,7 +20,6 @@
 //! mirrors of these, not a second measurement.
 #![allow(dead_code)]
 
-/// Grid columns across the kiosk.
 pub const GRID_COLS: usize = 6;
 /// Maximum card bands visible in the clipped pane while scrolling. Three fit at rest; a fourth
 /// enters through the bottom edge before the first leaves through the top.

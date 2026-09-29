@@ -1,33 +1,25 @@
-/* ============================================================================
-   TENNOSCOPE — THE ASSAY REGISTER
-   ----------------------------------------------------------------------------
-   THESIS: This is an assay office, not a dashboard. The product appraises
-   things, so the interface is the apparatus of appraisal: a touchstone slab,
-   marks struck into it, a ruled register of certified readings. It refuses the
-   arrangement this category always ships — the dark neon dashboard of glass
-   cards, glowing status dots and an icon sidebar — which is exactly what stood
-   here before and is the anti-reference.
-
-   OWN-WORLD: Basalt touchstone ground under engraved hairlines. Two metals
-   carry every value: platinum (#e8ebef) for platinum, gold (#d8b04a) for the
-   ducat. Marks are condensed grotesque caps at display scale; every label is
-   tracked monospace. Badges are house-shaped hallmark cartouches, never pills.
-   Radius 0. No glow, no float, no blur outside the overlay plate.
-
-   STORY: The player sees that this thing weighs and certifies. Two metals,
-   appraised at equal weight, because the best card by plat is often not the
-   best by ducats. Numbers it does not know are struck as a dash, never guessed.
-
-   FIRST VIEWPORT: Office mark struck top-left over the assay state and the
-   refresh stamp; a row of hallmark cartouches beneath it is the navigation.
-   Below, a field of clear touchstone, then the page mark at ~5rem with its
-   tracked register line, then the certificate band.
-
-   FORM: Assay office / hallmark certificate. Candidate 4 of 7 on the grounded
-   list; assigned by concept-seed key f8e3e6c3, scope direction, mode operate.
-   ========================================================================== */
-
-/* ---------------------------------------------------------------- primitives */
+/* TENNOSCOPE: THE ASSAY REGISTER */
+/* THESIS: This is an assay office, not a dashboard. The product appraises */
+/* things, so the interface is the apparatus of appraisal: a touchstone slab, */
+/* marks struck into it, a ruled register of certified readings. It refuses the */
+/* arrangement this category always ships, the dark neon dashboard of glass */
+/* cards, glowing status dots and an icon sidebar, which is exactly what stood */
+/* here before and is the anti-reference. */
+/* OWN-WORLD: Basalt touchstone ground under engraved hairlines. Two metals */
+/* carry every value: platinum (#e8ebef) for platinum, gold (#d8b04a) for the */
+/* ducat. Marks are condensed grotesque caps at display scale; every label is */
+/* tracked monospace. Badges are house-shaped hallmark cartouches, never pills. */
+/* Radius 0. No glow, no float, no blur outside the overlay plate. */
+/* STORY: The player sees that this thing weighs and certifies. Two metals, */
+/* appraised at equal weight, because the best card by plat is often not the */
+/* best by ducats. Numbers it does not know are struck as a dash, never guessed. */
+/* FIRST VIEWPORT: Office mark struck top-left over the assay state and the */
+/* refresh stamp; a row of hallmark cartouches beneath it is the navigation. */
+/* Below, a field of clear touchstone, then the page mark at ~5rem with its */
+/* tracked register line, then the certificate band. */
+/* FORM: Assay office / hallmark certificate. Candidate 4 of 7 on the grounded */
+/* list; assigned by concept-seed key f8e3e6c3, scope direction, mode operate. */
+/* Primitives */
 
 .mark {
   margin: 0;

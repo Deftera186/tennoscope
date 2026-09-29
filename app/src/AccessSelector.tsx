@@ -66,7 +66,7 @@ export function AccessSelector({ value, onChange, effectiveMode = null, onConfir
 
     <article className={`access-detail${pending && !isFirstRun ? ' review' : ''}`} role="region" aria-label={reviewingUpgrade ? 'New observation to grant' : reviewingDowngrade ? 'Observation to retire' : `What ${selected.name} adds`} aria-live="polite">
       {pending && !isFirstRun ? <header className="access-detail-head">
-        <p className="access-eyebrow">Proposed — not yet effective</p>
+        <p className="access-eyebrow">Proposed. Not yet effective.</p>
         <h3>{selected.name}</h3>
       </header> : <div className="access-detail-body">
         <section className="access-observation">
@@ -91,7 +91,7 @@ export function AccessSelector({ value, onChange, effectiveMode = null, onConfir
     </article>
 
     <section className="access-always-off" aria-label="Always prohibited">
-      <h3>Always prohibited — at every level</h3>
+      <h3>Always prohibited, at every level</h3>
       <ul>{ALWAYS_OFF.map(item => <li key={item}>{item}</li>)}</ul>
     </section>
   </div>
