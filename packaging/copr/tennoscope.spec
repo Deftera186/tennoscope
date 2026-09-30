@@ -1,4 +1,8 @@
 Name:           tennoscope
+# Pinned to the newest stable tag, not the workspace version. v0.12.1 was
+# never tagged, so Source0 has no tarball to fetch, and v0.12.1-rc1 sorts
+# above 0.12.0 (rpm.vercmp), which would make dnf serve a release candidate
+# as the newest build in a channel documented as the stable install path.
 Version:        0.12.0
 Release:        1%{?dist}
 Summary:        Local-first Warframe collection and relic companion
@@ -38,11 +42,15 @@ Requires:       xdg-utils
 # The relic overlay shells out to tesseract; the collection browser works
 # without it, so this stays a recommendation, not a requirement.
 Recommends:     tesseract
+# Wine's virtual-desktop mode nests the game where the normal window search
+# cannot see it, so the X11 path walks an xwininfo tree instead. Only that
+# mode reaches for it, so it stays a recommendation, not a requirement.
+Recommends:     xwininfo
 
 %description
 TennoScope reads a running Warframe process without modifying it and keeps a
-local copy of your collection. When a relic cracks it recognises the four
-rewards on screen and prices them in platinum and ducats from warframe.market,
+local copy of your collection. When a relic cracks it recognises the rewards
+on screen and prices them in platinum and ducats from warframe.market,
 counting only sellers who are online. No account, no telemetry, no Overwolf.
 %prep
 # Explicit extraction (not %%autosetup -a): a silently skipped -a flag once
@@ -96,5 +104,7 @@ pnpm --dir app check
 %{_datadir}/doc/%{name}/THIRD_PARTY_NOTICES.md
 
 %changelog
+* Wed Sep 30 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.12.0-1
+- Track the newest stable tag, v0.12.0
 * Tue Sep 22 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.11.0-1
 - Initial COPR recipe

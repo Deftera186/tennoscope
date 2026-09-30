@@ -86,7 +86,8 @@
         ],
         "recommends": [
           "tesseract-ocr",
-          "tesseract-ocr-eng"
+          "tesseract-ocr-eng",
+          "x11-utils"
         ]
       },
       "rpm": {
@@ -95,7 +96,8 @@
           "pipewire-libs"
         ],
         "recommends": [
-          "/usr/bin/tesseract"
+          "/usr/bin/tesseract",
+          "/usr/bin/xwininfo"
         ]
       }
     },
