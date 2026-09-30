@@ -12,7 +12,7 @@
   --rule: #2a2d33;
   --rule-bright: #3c4048;
   /* Control boundaries need 3:1 under WCAG 1.4.11; the sheet's own hairlines do not. */
-  --rule-control: #5c616b;
+  --rule-control: #6b7079;
 
   /* The two metals, plus the failed assay. */
   --platinum: #e8ebef;
