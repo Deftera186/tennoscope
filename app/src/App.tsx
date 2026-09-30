@@ -479,7 +479,7 @@ function App() {
             <span className="state-mark" aria-hidden="true"/>
             <span className="assay-state-text">
               <strong role="status">{effectiveMode === 'companion' ? 'Companion mode' : liveState === 'ready' ? 'Watching Warframe' : liveState === 'idle' ? 'Idle' : liveState === 'failed' ? 'Attention: reader failed' : 'Attention needed'}</strong>
-              <small>{effectiveMode === 'companion' ? 'Using saved and reference data' : view?.health.game_reader.message ?? 'Connecting to local backend'}</small>
+              <small title={effectiveMode === 'companion' ? 'Using saved and reference data' : view?.health.game_reader.message ?? 'Connecting to local backend'}>{effectiveMode === 'companion' ? 'Using saved and reference data' : view?.health.game_reader.message ?? 'Connecting to local backend'}</small>
             </span>
           </div>
           <UpdateMark onOpen={openUpdates}/>
@@ -874,7 +874,7 @@ function AssayRow({ label, health }: { label: string; health: BackendHealth | { 
     <span className="state-mark" aria-hidden="true"/>
     <div>
       <h3>{label}</h3>
-      <p>{health.message}</p>
+      <p title={health.message}>{health.message}</p>
       {/* Rows record their success time in whatever form their own source keeps: most write Unix
           seconds, the price table an ISO date. Printed raw, one row reads
           "Last success: 1785492000". The relative reading is the useful one here; the exact stamp

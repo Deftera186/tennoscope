@@ -150,7 +150,7 @@ function OrderRow({ entry, items, busy, onRemove, onLowerTo, onSell, onUpdate }:
     <span className="line-value">{value === null
       ? <em>{uncountedReason(entry.order)}</em>
       : <>{value}<MetalMark metal="plat" alt=" platinum" className="line-metal"/></>}</span>
-    <span className="line-claim">{label}</span>
+    <span className="line-claim" title={label ?? undefined}>{label}</span>
     <span className="line-fix">
       {/* The count is read out here rather than inside the handler: a narrowing on a property
           does not survive into a closure, so `entry.status.owned` there is not the overshoot's. */}
