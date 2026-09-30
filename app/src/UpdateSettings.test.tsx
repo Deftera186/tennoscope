@@ -57,6 +57,73 @@ describe('UpdatesSetting', () => {
     expect(await screen.findByRole('button', { name: 'Download update' })).toBeInTheDocument()
   })
 
+  // An automatic check with no network says it could not check. It must not also throw away an
+  // offer that was already standing: the masthead mark, the Download control and Not-now all hang
+  // off that phase, and an offline check is no evidence the offer is stale.
+  it('keeps a standing offer when the automatic check finds no network', async () => {
+    const online = navigator.onLine
+    // A stale last-check is what lets the automatic check reach runCheck at all.
+    localStorage.setItem('tennoscope.update-last-check', new Date(0).toISOString())
+    localStorage.setItem('tennoscope.update-offered', JSON.stringify(update))
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+    try {
+      backend.getVersionInfo.mockResolvedValue(portable)
+      backend.updateCheck.mockResolvedValue({ kind: 'appimage', updatable: true, update })
+      render(<UpdatesSetting observesGame={false} />)
+      bootUpdateChecks()
+      expect(await screen.findByRole('button', { name: 'Download update' })).toBeInTheDocument()
+      expect(backend.updateCheck).not.toHaveBeenCalled()
+      // Still an offer, not a download failure, and the row says out loud that the check did not
+      // run. Silently keeping the offer is the same defect as silently losing it.
+      expect(screen.getByRole('button', { name: 'Download update' })).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: 'Retry download' })).not.toBeInTheDocument()
+      await waitFor(() => expect(screen.getAllByRole('status').some(
+        node => node.textContent?.match(/is available.*offline/i))).toBe(true))
+    } finally {
+      Object.defineProperty(navigator, 'onLine', { value: online, configurable: true })
+    }
+  })
+
+
+    // A version refused twice stays refused. The online path deliberately withholds the download
+    // control for it, so the offline path must not offer it as a failed download either.
+    it('keeps a twice-dismissed version dismissed when offline', async () => {
+      const online = navigator.onLine
+      localStorage.setItem('tennoscope.update-dismissed', JSON.stringify({ [update.version]: 2 }))
+      backend.getVersionInfo.mockResolvedValue(portable)
+      backend.updateCheck.mockResolvedValue({ kind: 'appimage', updatable: true, update })
+      try {
+        render(<UpdatesSetting observesGame={false} />)
+        bootUpdateChecks()
+        await screen.findByRole('button', { name: 'Check now' })
+        Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+        await userEvent.click(screen.getByRole('button', { name: 'Check now' }))
+        await waitFor(() => expect(screen.getAllByRole('status').some(
+          node => node.textContent?.match(/offline/i))).toBe(true))
+        expect(screen.queryByRole('button', { name: 'Download update' })).not.toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Retry download' })).not.toBeInTheDocument()
+      } finally {
+        Object.defineProperty(navigator, 'onLine', { value: online, configurable: true })
+      }
+    })
+
+  // The other half of the same branch: with nothing to keep, the row must admit the check did not
+  // happen rather than reporting a last-checked time for one that never ran.
+  it('says the check did not run when offline with nothing standing', async () => {
+    const online = navigator.onLine
+    Object.defineProperty(navigator, 'onLine', { value: false, configurable: true })
+    try {
+      backend.getVersionInfo.mockResolvedValue(portable)
+      render(<UpdatesSetting observesGame={false} />)
+      bootUpdateChecks()
+      await waitFor(() => expect(screen.getAllByRole('status').some(
+        node => node.textContent?.match(/offline/i))).toBe(true))
+      expect(backend.updateCheck).not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(navigator, 'onLine', { value: online, configurable: true })
+    }
+  })
+
   it('renders the nudge card with a copyable command on system installs', async () => {
     backend.getVersionInfo.mockResolvedValue(system)
     backend.updateCheck.mockResolvedValue({ kind: 'system_linux', updatable: false, update })

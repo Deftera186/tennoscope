@@ -111,17 +111,20 @@ export function UpdatesSetting({ observesGame }: { observesGame: boolean }) {
     </div>
     <button type="button" className="stamp" onClick={() => act(() => void checkForUpdatesNow())} disabled={busy}>Check now</button>
     <p ref={statusRef} tabIndex={-1} className="band-note capture-status" role="status" aria-live="polite" aria-atomic="true">
+      {store.phase === 'loading' && 'Reading the installed version…'}
       {store.phase === 'checking' && 'Checking for updates…'}
       {store.phase === 'current' && info && `You are on ${info.version}, the latest version. ${lastChecked}`}
       {store.phase === 'idle' && info && (store.note ?? `You are on ${info.version}. ${lastChecked}`)}
       {store.phase === 'idle' && !info && (store.note ?? 'Update checks are unavailable while the backend is down. Press Check now to try again.')}
       {store.phase === 'failed' && store.note}
-      {store.phase === 'offered' && actionable && `${actionable.version} is available: actions below.`}
-      {store.phase === 'ready' && actionable && `${actionable.version} is downloaded: restart to finish.`}
+      {/* The offline note rides with a standing offer. Without this the store holds a note that
+          nothing renders, and pressing Check now with no network answers the press with silence. */}
+      {store.phase === 'offered' && actionable && `${actionable.version} is available: actions below.${store.note ? ` ${store.note}` : ''}`}
+      {store.phase === 'ready' && actionable && `${actionable.version} is downloaded: restart to finish.${store.note ? ` ${store.note}` : ''}`}
       {store.phase === 'suppressed' && actionable && dismissedCount(actionable.version) >= 2
-        && `You dismissed ${actionable.version} twice, so automatic reminders stay off until the next version.`}
+        && `You dismissed ${actionable.version} twice, so automatic reminders stay off until the next version.${store.note ? ` ${store.note}` : ''}`}
       {store.phase === 'suppressed' && actionable && dismissedCount(actionable.version) < 2
-        && `${actionable.version} is available: actions below.`}
+        && `${actionable.version} is available: actions below.${store.note ? ` ${store.note}` : ''}`}
       {store.phase === 'downloading' && actionable && `Downloading ${actionable.version}: progress below.`}
     </p>
     {store.phase === 'downloading' && <>

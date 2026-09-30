@@ -107,6 +107,10 @@ export function isMeteredConnection(): boolean {
 
 let checking = false
 
+// One sentence for both callers, so the manual and automatic paths cannot drift into saying
+// different things about the same failure.
+const OFFLINE_NOTE = 'Could not check. You are offline. Reconnect, then press Check now.'
+
 async function runCheck(manual: boolean): Promise<void> {
   // A download in flight owns the phase: a concurrent check would wipe its
   // progress and let the stale download resolve over the newer result.
@@ -114,9 +118,16 @@ async function runCheck(manual: boolean): Promise<void> {
   checking = true
   try {
     if (!navigator.onLine) {
-      set(manual
-        ? { phase: 'failed', note: 'Could not check. You are offline. Reconnect, then press Check now.' }
-        : { phase: snapshot.info ? snapshot.phase : 'idle' })
+      // An automatic check with no network used to restore the previous phase in silence, so a
+      // store that had not been read in over a day went on reporting a last-checked time for a
+      // check that never ran. It now says so. Any phase that is standing on an offer already made
+      // keeps it, because an offline check is no evidence the offer is stale, and dropping it would
+      // take the masthead mark and its actions with it. 'suppressed' is in that set: a version the
+      // player refused twice stays refused, and the online path deliberately withholds the
+      // download control for it, so the offline path must not hand it over as a failed download.
+      const standing = snapshot.phase === 'offered' || snapshot.phase === 'ready'
+        || snapshot.phase === 'suppressed'
+      set(standing ? { note: OFFLINE_NOTE } : { phase: 'failed', note: OFFLINE_NOTE })
       return
     }
     set({ phase: 'checking', note: null, downloaded: null, total: null })
