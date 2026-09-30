@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { CollectionItem, MarketOrder } from './backend'
 
 /**
@@ -34,6 +34,12 @@ export function SellForm({ item, listing, busy, onSell, onUpdate, onDone }: {
   onUpdate: UpdateHandler
   onDone: () => void
 }) {
+  // Two collection cards, or two docket rows, can hold an open form at once, and their bounds
+  // differ. A fixed id would be duplicated in the document and aria-describedby would resolve to
+  // whichever copy came first, so the second form would announce the first one's limit.
+  const uid = useId()
+  const priceProblemId = `${uid}-price-problem`
+  const countProblemId = `${uid}-count-problem`
   const [platinum, setPlatinum] = useState(String(listing?.platinum ?? item.platinum ?? 1))
   const [quantity, setQuantity] = useState(String(listing?.quantity ?? 1))
   const [visible, setVisible] = useState(true)
@@ -41,9 +47,18 @@ export function SellForm({ item, listing, busy, onSell, onUpdate, onDone }: {
   const price = Number(platinum)
   const count = Number(quantity)
   // The market's own bounds, and this device's: offering to sell more than the collection holds is
-  // the mirror of the flag the orders screen exists to raise.
-  const valid = Number.isInteger(price) && price >= 1 && price <= 900_000
-    && Number.isInteger(count) && count >= 1 && count <= Math.max(item.quantity, 1)
+  // the mirror of the flag the orders screen exists to raise. The button stays disabled either way.
+  // What was missing was the sentence naming which bound you crossed, so it is derived per field
+  // rather than concatenated, and referenced from the offending input rather than the button, which
+  // is not focusable while it is disabled. Not an alert: the sentence re-renders on every keystroke
+  // and an assertive region would speak every character.
+  const priceProblem = !Number.isInteger(price) || price < 1 || price > 900_000
+    ? 'Platinum must be a whole number of 1 to 900,000.'
+    : null
+  const countProblem = !Number.isInteger(count) || count < 1 || count > Math.max(item.quantity, 1)
+    ? `Quantity must be a whole number of 1 to ${Math.max(item.quantity, 1)}.`
+    : null
+  const valid = priceProblem === null && countProblem === null
 
   return <form
     className="sell-form"
@@ -61,11 +76,13 @@ export function SellForm({ item, listing, busy, onSell, onUpdate, onDone }: {
   >
     <label className="dial-slot">
       <span>Platinum</span>
-      <input type="number" min={1} max={900000} aria-label="Platinum" value={platinum} onChange={event => setPlatinum(event.target.value)} disabled={busy} />
+      <input type="number" min={1} max={900000} aria-label="Platinum" value={platinum} onChange={event => setPlatinum(event.target.value)} disabled={busy} aria-invalid={priceProblem !== null} aria-describedby={priceProblem !== null ? priceProblemId : undefined} />
+      {priceProblem !== null && <span className="band-note" id={priceProblemId}>{priceProblem}</span>}
     </label>
     <label className="dial-slot">
       <span>Quantity</span>
-      <input type="number" min={1} max={Math.max(item.quantity, 1)} aria-label="Quantity" value={quantity} onChange={event => setQuantity(event.target.value)} disabled={busy} />
+      <input type="number" min={1} max={Math.max(item.quantity, 1)} aria-label="Quantity" value={quantity} onChange={event => setQuantity(event.target.value)} disabled={busy} aria-invalid={countProblem !== null} aria-describedby={countProblem !== null ? countProblemId : undefined} />
+      {countProblem !== null && <span className="band-note" id={countProblemId}>{countProblem}</span>}
     </label>
     {/* Hidden is offered rather than assumed either way: a hidden listing is a real way to hold a
         price ready without showing it, and warframe.market's own default of hidden is not what
