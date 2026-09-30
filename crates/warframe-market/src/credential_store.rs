@@ -2,7 +2,7 @@
 //!
 //! Two backends, because neither alone covers the machines this runs on. The OS keyring is the
 //! right place for a credential, and a Linux session without a running secret service is ordinary
-//! rather than exceptional -- so a keyring-only design would simply not work on a large share of
+//! rather than exceptional, so a keyring-only design would simply not work on a large share of
 //! the target platform, and a database-only one would be weaker than necessary everywhere else.
 #![forbid(unsafe_code)]
 
@@ -45,7 +45,7 @@ impl KeyringStore {
     /// A keyring store, if this machine has a working keyring.
     ///
     /// Probed by reading, not merely by constructing an entry. Constructing one succeeds against a
-    /// keyring that cannot actually answer -- a locked collection is the ordinary case, since a
+    /// keyring that cannot actually answer. A locked collection is the ordinary case, since a
     /// session started without the login keyring unlocked has one. That store then reports itself
     /// as the backing, every `load` fails, and the screen says the account is unlinked while
     /// insisting the credential is held in the keyring. The token is not gone; it is unreachable,
@@ -169,7 +169,7 @@ pub fn open_credential_store(database: PathBuf) -> Box<dyn CredentialStore + Sen
 /// deleting itself.
 ///
 /// So a miss on the keyring falls through to the database before concluding there is no account,
-/// and anything found there is promoted -- read once from the weaker store, written to the
+/// and anything found there is promoted: read once from the weaker store, written to the
 /// stronger, and cleared from the weaker so the credential is not left in two places.
 struct FallbackReadStore {
     primary: KeyringStore,

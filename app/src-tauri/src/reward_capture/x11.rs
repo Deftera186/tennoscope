@@ -1,7 +1,7 @@
 //! The X11 capture path: xcap over `_NET_CLIENT_LIST_STACKING`, with an `xwininfo` tree walk
 //! behind it for Wine's virtual-desktop mode.
 //!
-//! Unchanged in behaviour from when this lived in `reward_ocr` -- it is the path that works today
+//! Unchanged in behaviour from when this lived in `reward_ocr`; it is the path that works today
 //! for an X11 session and for an XWayland game on a Wayland session.
 
 #[cfg(target_os = "linux")]
@@ -22,7 +22,7 @@ use super::{GameFrameSource, MonitorFrame};
 use crate::overlay_window::WindowRect;
 
 /// The game's window title. Warframe titles its window the same on every platform and under every
-/// launcher, which its window *class* does not do -- that is `steam_app_230410` under Steam and
+/// launcher, which its window *class* does not do. That is `steam_app_230410` under Steam and
 /// `warframe.x64.exe` under bare Wine.
 pub const WINDOW_TITLE: &str = "Warframe";
 
@@ -126,7 +126,7 @@ impl GameFrameSource for X11Capture {
         let width = monitor.width().map_err(|_| "could not read the monitor")?;
         let height = monitor.height().map_err(|_| "could not read the monitor")?;
         // The whole monitor, then cropped by the caller: xcap's `capture_region` ignores which
-        // monitor it was asked for (measured on a two-output desktop -- both outputs returned
+        // monitor it was asked for (measured on a two-output desktop, where both outputs returned
         // the first one's pixels). Windows uses DXGI and cannot enter this implementation.
         let image = monitor
             .capture_image()
@@ -341,7 +341,7 @@ fn xwininfo_error_reason(kind: std::io::ErrorKind) -> &'static str {
 /// `0x1400003 "Warframe": ("Warframe" "steam_app_230410")  1920x1080+1920+0  +1920+0`
 ///
 /// The absolute position is in X root coordinates, which for an XWayland client is the
-/// compositor's own output layout -- a window on a second monitor reports that monitor's offset --
+/// compositor's own output layout. A window on a second monitor reports that monitor's offset,
 /// so the rectangle can be handed straight to the overlay.
 ///
 /// Wine spawns several 1x1 helper windows that share the game's title, and in virtual-desktop mode

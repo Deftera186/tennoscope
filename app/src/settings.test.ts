@@ -30,7 +30,7 @@ describe('price floor', () => {
   })
 
   // A webview with storage disabled throws on access. The preference is a display choice, so
-  // losing it at the end of the session is the correct failure -- refusing to draw the app is not.
+  // losing it at the end of the session is the correct failure. Refusing to draw the app is not.
   it('still runs where storage is refused', () => {
     const denied = vi.spyOn(localStorage, 'getItem').mockImplementation(() => { throw new Error('denied') })
     const deniedWrite = vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw new Error('denied') })

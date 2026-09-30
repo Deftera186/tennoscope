@@ -90,7 +90,7 @@ describe('order ordering', () => {
 describe('the collection badge', () => {
   // The regression this whole join exists for: an order's `item_id` is warframe.market's opaque id
   // and a collection row is a `/Lotus/` path, and a badge that compared the two matched nothing,
-  // ever -- which is how a successful sell used to leave the card it was pressed on unchanged.
+  // ever, which is how a successful sell used to leave the card it was pressed on unchanged.
   // The row the backend resolves is the only id the two namespaces share.
   it('finds a visible sell order through the row it names, not the market id it carries', () => {
     const orders = [entry('a', { state: 'ok' }, { item_id: '54a73e65e779893a797fff33', platinum: 24 }, '/Lotus/Thing')]
@@ -126,7 +126,7 @@ describe('what the listed badge says', () => {
     expect(listedLabel(entry('a', { state: 'ok' }, { platinum: 12, quantity: 5 }).order, 5)).toBe('listed 5 @ 12p')
   })
 
-  it('never divides a listing against a holding smaller than itself — the orders screen carries that claim', () => {
+  it('never divides a listing against a holding smaller than itself: the orders screen carries that claim', () => {
     expect(listedLabel(entry('a', { state: 'overshoot', owned: 5 }, { platinum: 12, quantity: 7 }).order, 5)).toBe('listed 7 @ 12p')
   })
 })
@@ -164,7 +164,7 @@ describe('what can be listed', () => {
   })
 
   it('offers the row, not the card: an unranked stack is not a maxed copy', () => {
-    // The backend names rows because the rows are what differ -- rank 0 and the ceiling are two
+    // The backend names rows because the rows are what differ. Rank 0 and the ceiling are two
     // listings, and conflating them here would offer one for the other.
     expect(isListable(held('/Lotus/Upgrades/serration'), ['/Lotus/Upgrades/serration#10'])).toBe(false)
   })

@@ -27,7 +27,7 @@ export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefres
   }
 
   // Only the relative reading is shown here, and an unfetched order list is not a missing inventory
-  // snapshot -- so this says what actually has not happened yet.
+  // snapshot, so this says what actually has not happened yet.
   const fetched = account.fetched_at ? stampReading(account.fetched_at) : null
   const freshness = fetched ? `Fetched ${fetched.relative}` : 'Orders have not been fetched yet'
   const needsRelink = account.link === 'needs_relink'
@@ -107,7 +107,7 @@ export function OrdersView({ account, onSignIn, onLinkToken, onSignOut, onRefres
 
 /**
  * One order, as a ledger line rather than a collection card. An order has no art to show and its
- * figures are read down a column -- price against price, quantity against quantity -- so the
+ * figures are read down a column (price against price, quantity against quantity), so the
  * columns are fixed and the fix button sits in a reserved slot that stays empty on the rows that
  * need nothing. A row whose button appeared and vanished would shift the rows beneath it.
  *
@@ -188,7 +188,7 @@ function OrderRow({ entry, items, busy, onRemove, onLowerTo, onSell, onUpdate }:
  *
  * A flagged row's removal is the repair the row is asking for and goes on one press. An ordinary
  * row's is a change of mind about something that is currently selling, and only that one can be a
- * misclick -- so it asks again, in place. A modal for this would be a heavier interruption than
+ * misclick, so it asks again, in place. A modal for this would be a heavier interruption than
  * the action deserves, and would take the pointer away from the row it belongs to.
  */
 function RemoveControl({ entry, busy, onRemove }: {
@@ -221,7 +221,7 @@ function RemoveControl({ entry, busy, onRemove }: {
  *
  * Automatic is not a fifth choice beside them. It is how the choice is *made*, so it sits on its
  * own line as a toggle, and the status it settles on is marked in the same row a hand-picked one
- * would be -- the player still reads their status in one place either way.
+ * would be; the player still reads their status in one place either way.
  *
  * The row marks what was asked for, so a press registers on the press. What the server has
  * actually committed is a separate claim, made in the note below: the socket takes a moment to
@@ -286,7 +286,7 @@ function statusWord(status: Presence | null): string {
  *
  * The picker is over the same collection the cards are drawn from and the same listable set the
  * backend authorises against, so an item that cannot be sold from a card cannot be sold from here
- * either -- the refusal lives in one place, on the backend, and neither surface offers what it
+ * either. The refusal lives in one place, on the backend, and neither surface offers what it
  * would refuse.
  *
  * A row that is already listed opens the form as an edit of that listing, for the same reason the
@@ -294,7 +294,7 @@ function statusWord(status: Presence | null): string {
  * existing one would be refused by the market after the request.
  *
  * Typed rather than picked from a list. A collection runs to a couple of thousand items, and no
- * one scrolls a list that long to find the one they already have a name for -- so the field takes
+ * one scrolls a list that long to find the one they already have a name for, so the field takes
  * the name and the register answers with the few that match.
  */
 function NewListing({ items, orders, listable, busy, onSell, onUpdate }: {
@@ -384,7 +384,7 @@ function UnlinkedPanel({ onSignIn, onLinkToken, busy, error }: {
     <div className="mark-head">
       <h1 id="orders-title" className="mark">Market orders</h1>
       <p className="prose">
-        Linking a warframe.market account is entirely optional. TennoScope itself has no accounts of its own --
+        Linking a warframe.market account is entirely optional. TennoScope itself has no accounts of its own:
         this connects to warframe.market directly, and order data (listings, quantities, prices) leaves this
         device to check it against warframe.market's servers.
       </p>
@@ -397,7 +397,7 @@ function UnlinkedPanel({ onSignIn, onLinkToken, busy, error }: {
 }
 
 /**
- * The two ways back in, of equal standing wherever they appear -- the unlinked screen, and the
+ * The two ways back in, of equal standing wherever they appear: the unlinked screen, and the
  * needs_relink screen where a refused credential leaves the player with no obvious next click.
  * Extracted so a re-link is not a second, drifting copy of these two forms.
  */

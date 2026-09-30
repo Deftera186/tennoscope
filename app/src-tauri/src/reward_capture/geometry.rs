@@ -9,11 +9,11 @@
 //! The whole monitor is captured and cropped here rather than through `capture_region`, because
 //! `capture_region` ignored which monitor it was asked. Measured on a two-output XWayland desktop
 //! with xcap 0.9.8: `HDMI-A-1` at origin (0,0) and `HDMI-A-2` at (1920,0), and
-//! `capture_region(0, 0, 1920, 1080)` returned byte-identical frames for both -- both of them
-//! `HDMI-A-1`'s pixels. So a game on any monitor but the first read the first monitor's pixels,
-//! every card missed the relic pool, and the overlay never appeared while the log showed a poller
-//! running normally -- precisely the 2026-08-20 report, where the four cards were sitting on the
-//! second monitor and read as `WOH DIGeil` and similar.
+//! `capture_region(0, 0, 1920, 1080)` returned byte-identical frames for both. Both of them
+//! were `HDMI-A-1`'s pixels, so a game on any monitor but the first read the first monitor's
+//! pixels, every card missed the relic pool, and the overlay never appeared while the log
+//! showed a poller running normally: precisely the 2026-08-20 report, where the four cards were
+//! sitting on the second monitor and read as `WOH DIGeil` and similar.
 //!
 //! Capturing the monitor rather than the window is also what avoids a stale frame: xcap's
 //! `Window::capture_image` returns one for game windows on Windows (xcap#131), and a reward screen
@@ -24,8 +24,8 @@ use crate::overlay_window::WindowRect;
 /// The part of the game window that is actually on this monitor.
 ///
 /// `capture_region` rejects a region that reaches past the monitor rather than clipping it, so a
-/// game in windowed mode sitting even one pixel off the edge -- which is ordinary, the title bar
-/// gets dragged -- makes every capture fail with "could not capture the game window". Clamping the
+/// game in windowed mode sitting even one pixel off the edge, which is ordinary because the title bar
+/// gets dragged, makes every capture fail with "could not capture the game window". Clamping the
 /// offset alone is worse than failing: the region would then be captured from the wrong place and
 /// the reward crops would silently read the pixels next to the cards.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,7 +87,7 @@ pub(crate) fn window_frame_from_monitor(
     // A scaled display hands back the framebuffer's pixels, not the logical ones asked for: X and
     // the window manager speak in logical units, the compositor captures physical ones. The crop
     // below is in logical units, so an unscaled frame would have it read the wrong place entirely
-    // -- and the paste after it clips rather than scales, so an oversized piece becomes a magnified
+    // and the paste after it clips rather than scales, so an oversized piece becomes a magnified
     // corner and every card reads blank, which is exactly how a working reader looks from outside.
     // Resampling the whole monitor to its logical size first is what makes the fractions mean the
     // same thing on a scaled desktop as on an unscaled one.
@@ -108,7 +108,7 @@ pub(crate) fn window_frame_from_monitor(
         &resampled
     };
     // Crop here rather than asking `capture_region` for the piece, because it hands back the first
-    // monitor's pixels whatever monitor it belongs to -- see the module note above.
+    // monitor's pixels whatever monitor it belongs to; see the module note above.
     let captured =
         image::imageops::crop_imm(whole, visible.x, visible.y, visible.width, visible.height)
             .to_image();
@@ -143,7 +143,7 @@ mod tests {
     /// first screen's pixels, every card missed the relic pool, `poll failed: reward card text did
     /// not match the relic pool` repeated for the whole three minutes of the fissure, and no
     /// overlay ever appeared. Reading the report's own screenshot confirmed it: the left half read
-    /// as `WOH DIGeil`, the right half -- where the game was -- read all four cards exactly.
+    /// as `WOH DIGeil`, the right half, where the game was, read all four cards exactly.
     ///
     /// Asserting on the tag is what pins it. A frame built from the handed-in capture carries that
     /// capture's tag; one that quietly sampled another screen carries the other's.
@@ -174,7 +174,7 @@ mod tests {
         );
 
         // The other screen's capture is the same shape and the same call, and must never be what a
-        // game on the second monitor reads -- that is the whole of the bug.
+        // game on the second monitor reads. That is the whole of the bug.
         let first = monitor(1920, 1080, 40);
         let wrong = window_frame_from_monitor(&first, 1920, 1080, rect, visible);
         assert_ne!(
@@ -236,8 +236,8 @@ mod tests {
     }
 
     /// `capture_region` rejects an out-of-bounds region rather than clipping it, so a game window
-    /// hanging off the edge of the monitor -- ordinary in windowed mode, and the shape a second
-    /// monitor produces at every capture -- failed the whole read. The clip is what keeps that a
+    /// hanging off the edge of the monitor, ordinary in windowed mode and the shape a second
+    /// monitor produces at every capture, failed the whole read. The clip is what keeps that a
     /// partial frame instead of no frame.
     #[test]
     fn a_window_hanging_off_the_monitor_is_clipped_rather_than_refused() {

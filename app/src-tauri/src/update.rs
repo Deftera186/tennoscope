@@ -42,7 +42,7 @@ pub struct VersionInfo {
     pub writable: bool,
     pub updatable: bool,
     /// Present only when the manager and its exact command are known. Anything
-    /// else gets the release-page fallback — never an invented command.
+    /// else gets the release-page fallback, never an invented command.
     pub manager: Option<String>,
     pub manager_command: Option<String>,
 }
@@ -276,7 +276,7 @@ pub async fn update_check(app: AppHandle, feed: String) -> Result<CheckResult, S
 
 /// Offer-version gate for the install path: the frontend passes back the
 /// version it showed, and the fresh check must still offer exactly that.
-/// Semver comparison throughout — never string equality — so build metadata
+/// Semver comparison throughout, never string equality, so build metadata
 /// and a leading `v` never count as a mismatch.
 fn version_matches(found: &semver::Version, expected: &str) -> bool {
     let expected = expected.trim();

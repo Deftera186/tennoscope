@@ -118,7 +118,7 @@ fn parses_canonical_items_and_prime_parent_components() {
     assert!(kdrive.masterable());
 
     // A mod is named after what it fits and filed with it. Both of these paths are read by a
-    // branch below the mod one -- the augment as a Powersuit, the precept as a pet -- so the only
+    // branch below the mod one (the augment as a Powersuit, the precept as a pet), so the only
     // thing keeping them out of Frame and Companion is that "Mods" is tested first.
     for path in [
         "/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod",
@@ -344,7 +344,7 @@ fn prime_warframe_component_records_resolve_inventory_blueprint_paths() {
 /// The reward screen offers "Lavos Prime Chassis Blueprint"; the catalog names the component that
 /// blueprint builds. Comparing the two spellings with `==` priced every Warframe part on the reward
 /// screen at zero ducats and reported it as not owned, while weapon parts, which are spelled the
-/// same either way, were right -- which is what made it look like a market problem rather than a
+/// same either way, were right, which is what made it look like a market problem rather than a
 /// naming one.
 #[test]
 fn warframe_part_blueprints_find_their_ducat_value() {
@@ -375,9 +375,9 @@ fn warframe_part_blueprints_find_their_ducat_value() {
 }
 
 /// The kiosk reads the game's own labels and joins prices against warframe.market's, and both
-/// spell a prime Frame's tradable part by its blueprint -- "Styanax Prime Neuroptics Blueprint".
+/// spell a prime Frame's tradable part by its blueprint: "Styanax Prime Neuroptics Blueprint".
 /// The component loop named it after the part the blueprint builds, so the kiosk's closed-set
-/// match landed on the nearest shorter name ("Styanax Prime Neuroptics" -- a different item) and
+/// match landed on the nearest shorter name ("Styanax Prime Neuroptics", a different item) and
 /// the price join, keyed by the market spelling, found nothing: the tile went unpriced while its
 /// basket row showed a dash (2026-08-24). Weapon parts are built items in both vocabularies and
 /// keep their bare names.
@@ -436,7 +436,7 @@ fn builds_a_ducat_table_keyed_by_catalog_path() {
     assert_eq!(table.get("/Lotus/Nothing/At/All"), None);
 }
 
-/// Zero ducats is a published value, not an absence -- Forma Blueprint carries it. But a card that
+/// Zero ducats is a published value, not an absence. Forma Blueprint carries it. But a card that
 /// reads ⛁ 0 says nothing its silence does not, and the collection's ducat total must not grow a
 /// column of zeroes, so zero stays out of the table and absence is the only reading it gets.
 #[test]

@@ -3,7 +3,7 @@
 //! first-hand. A bug that only shows against the real server is a bug this tool exists for.
 //!
 //! It signs in with the credential the app already holds, walks statuses online, invisible,
-//! in-game, and online again on one connection, and closes -- so the app must be closed while
+//! in-game, and online again on one connection, and closes, so the app must be closed while
 //! this runs, and the account reads as offline until the app reopens.
 //!
 //! ```sh
@@ -80,7 +80,7 @@ fn probe(
 }
 
 /// The token stays out of cleartext on screen: it is the one secret in the frame, and the probe's
-/// value is the server's behaviour, not the token -- so it is printed as its length.
+/// value is the server's behaviour, not the token, so it is printed as its length.
 fn mask_token(frame: &str) -> String {
     let mut parsed: serde_json::Value =
         serde_json::from_str(frame).expect("the sign-in frame is valid JSON");

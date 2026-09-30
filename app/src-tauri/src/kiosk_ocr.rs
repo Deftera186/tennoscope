@@ -3,7 +3,7 @@
 //! Same philosophy as the reward-card reader, one important difference: the reward screen is
 //! read all-or-nothing because four cards are one squad's choice, while the kiosk is read
 //! per-slot. A hover card covers two tiles, a filtered inventory leaves the last row short, and
-//! a scroll parks rows half out of view -- none of those may take the other chips down with
+//! a scroll parks rows half out of view. None of those may take the other chips down with
 //! them, so every crop stands on its own and slots that do not clear the match floor simply
 //! render nothing.
 //!
@@ -368,7 +368,7 @@ mod tests {
     }
 
     /// A scrolled grid is read where the rows actually are: shifted one full row pitch down,
-    /// row 0's band lands on row 1's labels -- the 2026-08-23 session that died at dy=-142,
+    /// row 0's band lands on row 1's labels. The 2026-08-23 session that died at dy=-142,
     /// had the reads been phase-corrected, would have read its rows exactly like this.
     #[test]
     fn a_scrolled_grid_is_read_at_the_shifted_bands() {

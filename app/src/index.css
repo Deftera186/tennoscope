@@ -1,4 +1,4 @@
-/* TennoScope base layer — the touchstone.
+/* TennoScope base layer, the touchstone.
    See DESIGN.md. Nothing here glows, floats, or rounds. */
 
 :root {
@@ -22,8 +22,8 @@
   --gold-dim: #a8863a;
   --oxblood: #dd6f60;
 
-  /* A mark struck into metal: dark lip above, catch-light below. No blur radius —
-     a strike is a hard edge, not a soft shadow. */
+  /* A mark struck into metal: dark lip above, catch-light below. No blur radius,
+     because a strike is a hard edge, not a soft shadow. */
   --strike: inset 0 1px 0 rgb(0 0 0 / 78%), inset 0 -1px 0 rgb(232 235 239 / 9%);
   --strike-deep: inset 0 2px 0 rgb(0 0 0 / 88%), inset 0 -1px 0 rgb(232 235 239 / 7%);
 
@@ -62,7 +62,7 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   /* Guilloché: interfering curves, the way a real security print is made. Kept
-     low but not invisible — it should read as engine-turned ground when looked for. */
+     low but not invisible, so it should read as engine-turned ground when looked for. */
   background-image: url("data:image/svg+xml;utf8,\
 <svg xmlns='http://www.w3.org/2000/svg' width='240' height='240' viewBox='0 0 240 240'>\
 <g fill='none' stroke='%23e8ebef' stroke-opacity='0.05' stroke-width='0.6'>\

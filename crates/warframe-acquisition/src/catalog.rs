@@ -86,12 +86,12 @@ impl DucatTable {
 /// Does this catalog entry name the item the reward screen is offering?
 ///
 /// The reward screen, the relic drop tables and warframe.market all name a Warframe part by the
-/// blueprint the player picks up -- "Lavos Prime Chassis Blueprint". WFCD's item catalog names the
+/// blueprint the player picks up: "Lavos Prime Chassis Blueprint". WFCD's item catalog names the
 /// component that blueprint builds, "Lavos Prime Chassis", because the suffix lives in the parent's
 /// component list rather than in the component's own name. Nothing else separates the two spellings.
 ///
-/// Matching on the exact string priced 153 of the 596 names a relic can drop -- every Warframe
-/// part -- at zero ducats and reported them as not owned, while weapon parts, whose two spellings
+/// Matching on the exact string priced 153 of the 596 names a relic can drop (every Warframe
+/// part) at zero ducats and reported them as not owned, while weapon parts, whose two spellings
 /// agree, were right. The trim only ever runs after an exact match fails, so items that really are
 /// named "... Blueprint" in both vocabularies (every prime's own blueprint, Forma) still match
 /// themselves first.
@@ -131,8 +131,8 @@ impl CatalogIndex {
             if !is_prime_parent(&parent.name) {
                 continue;
             }
-            // A prime Frame's tradable parts are their blueprints -- the game's kiosk labels one
-            // "Styanax Prime Neuroptics Blueprint" and warframe.market sells it under that name --
+            // A prime Frame's tradable parts are their blueprints: the game's kiosk labels one
+            // "Styanax Prime Neuroptics Blueprint" and warframe.market sells it under that name,
             // while WFCD's component list names the part the blueprint builds. Spell it the way
             // the two vocabularies that price and read it do, or the kiosk's closed-set match
             // lands on the shorter built-part name (a different item) and the price join, keyed
@@ -219,7 +219,7 @@ impl CatalogIndex {
     }
 
     /// The catalogue's ducat values as a join table. Only entries with ducats to their name: zero
-    /// is a published value -- Forma Blueprint carries it -- but a reading of zero ducats says
+    /// is a published value (Forma Blueprint carries it), but a reading of zero ducats says
     /// nothing the absence of a reading doesn't, and a total must not grow a column of zeroes.
     pub fn ducat_table(&self) -> DucatTable {
         DucatTable {
@@ -360,14 +360,14 @@ fn is_equipment(category: Category) -> bool {
     )
 }
 
-/// The highest rank a mod actually has is 10 -- the game's own ceiling, and the only ranks
+/// The highest rank a mod actually has is 10, the game's own ceiling, and the only ranks
 /// warframe.market quotes are 0 and one of 3, 5 or 10.
 const HIGHEST_REAL_FUSION_LIMIT: u32 = 10;
 
 /// A published fusion limit, or nothing when the catalogue's number cannot be a rank.
 ///
-/// Every riven placeholder carries `fusionLimit: 515`. Taken at face value a rank-3 riven -- which
-/// is a maxed riven -- reads as barely started, and it can never reach its own ceiling, so it would
+/// Every riven placeholder carries `fusionLimit: 515`. Taken at face value a rank-3 riven, which
+/// is a maxed riven, reads as barely started, and it can never reach its own ceiling, so it would
 /// sit forever in the "partially ranked, no market quote" bucket. Dropping the value says the
 /// ceiling is unknown, which is the truth and is what the pricing rule needs to hear.
 fn believable_fusion_limit(published: Option<u32>) -> Option<u32> {
@@ -392,7 +392,7 @@ fn is_prime_parent(name: &str) -> bool {
 }
 
 fn validated_name(name: &str) -> Result<String, CatalogError> {
-    // The Archon shards carry the game's own inline icon tag in their name --
+    // The Archon shards carry the game's own inline icon tag in their name:
     // "<Shard_red_simple> Crimson Archon Shard". Only the game's own text renderer draws that tag;
     // everywhere else it survives as literal angle brackets.
     let trimmed = name
@@ -420,8 +420,8 @@ fn validated_image_name(image_name: Option<&str>) -> Result<Option<String>, Cata
     }))
 }
 
-/// WFCD publishes a Tauforged shard's art as the glow layer alone -- the halo the game composites
-/// over the plain crystal -- so on its own it renders as a coloured smudge. Dropping the `Mythic`
+/// WFCD publishes a Tauforged shard's art as the glow layer alone (the halo the game composites
+/// over the plain crystal), so on its own it renders as a coloured smudge. Dropping the `Mythic`
 /// and `Glow` tokens names the base shard art, the same crystal without the halo, which every
 /// colour ships. The two spellings WFCD uses, `ArchonShardBorealMythicGlow` and
 /// `ArchonShardMythicGreenGlow`, both reduce correctly.

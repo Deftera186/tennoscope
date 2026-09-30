@@ -194,7 +194,7 @@ describe('kiosk overlay route', () => {
 
     // ...and the next settled read reports where the grid truly is. Nothing marked the
     // moment (no reopen, no populate: the epoch is unchanged), but the read is still a
-    // measurement -- leaving it unadopted lets every estimate's error compound forever.
+    // measurement. Leaving it unadopted lets every estimate's error compound forever.
     backend.getKioskView.mockResolvedValue({ ...sampleView, scroll_dy: -8 })
     events.listeners['kiosk-updated']?.({ payload: 7 })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(-8 * var(--h)))' }))
@@ -216,7 +216,7 @@ describe('kiosk overlay route', () => {
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(7 * var(--h)))' }))
 
     release({ ...sampleView, epoch: 4, total_plat: 99, scroll_dy: -50 })
-    // The read itself still lands -- fresh prices, new epoch -- but its offset must not.
+    // The read itself still lands (fresh prices, new epoch), but its offset must not.
     await screen.findByText('99p')
     expect(grid).toHaveStyle({ transform: 'translateY(calc(7 * var(--h)))' })
   })
@@ -250,14 +250,14 @@ describe('kiosk overlay route', () => {
     const strip = await screen.findByTestId('kiosk-strip')
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
 
-    // One noisy look -- a torn frame, a single mid-animation tick -- costs nothing: the
+    // One noisy look (a torn frame, a single mid-animation tick) costs nothing: the
     // good view stands.
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: 12 } })
     await waitFor(() => expect(grid).toHaveStyle({ transform: 'translateY(calc(12 * var(--h)))' }))
     expect(strip).not.toHaveClass('kiosk-faded')
 
-    // Genuine occlusion -- a dialog over the pane, a cinematic -- is a run of nulls and
+    // Genuine occlusion (a dialog over the pane, a cinematic) is a run of nulls and
     // still fades, a few ticks later than before.
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })
     events.listeners['kiosk-scroll']?.({ payload: { session: 7, dy: null } })

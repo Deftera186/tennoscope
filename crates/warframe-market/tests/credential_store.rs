@@ -98,7 +98,7 @@ fn the_backing_is_reported() {
 }
 
 /// The keyring is probed rather than assumed. A Linux session with no secret service running is
-/// ordinary -- minimal window managers frequently have none -- and the fallback is what makes the
+/// ordinary, since minimal window managers frequently have none, and the fallback is what makes the
 /// feature work there at all.
 ///
 /// Which answer comes back depends on the machine, so neither is asserted. What is asserted is
@@ -126,7 +126,7 @@ fn probing_the_keyring_is_cheap_and_repeatable() {
 /// A database file the store opens for itself.
 ///
 /// The path rather than a handle: `AppCore` owns its `SqliteStore` privately and does not lend it
-/// out, and a credential read happens at startup and on renewal -- rare enough that opening for
+/// out, and a credential read happens at startup and on renewal, rare enough that opening for
 /// each one is cheaper than restructuring who owns the connection.
 fn database_path() -> (tempfile::TempDir, std::path::PathBuf) {
     let directory = tempfile::tempdir().expect("temporary directory");

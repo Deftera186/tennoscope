@@ -1,4 +1,4 @@
-//! Detect the Ducat Kiosk's lifecycle in EE.log -- both edges of it.
+//! Detect the Ducat Kiosk's lifecycle in EE.log: both edges of it.
 //!
 //! The game narrates this screen completely, which makes the log the fastest and steadiest
 //! detector available: it costs no capture, no OCR, and it names the transition ~50ms after it
@@ -20,7 +20,7 @@
 //! *build*, not once per visit: a sale confirm rebuilds the kiosk screen mid-visit (EE.log
 //! 2026-09-20 shows `Saving profile`, then `HudVis 0` plus a foreign subscription, then the
 //! full open markers and `PopulateGrid()` one to two seconds later) while the player never leaves.
-//! So `HudVis 0` is necessary but not sufficient for "the visit ended" -- this machine still
+//! So `HudVis 0` is necessary but not sufficient for "the visit ended". This machine still
 //! reports the edge, and the session layer only believes a close that stays silent past its
 //! grace window. An earlier reading of the 2026-08-23 log took `HudVis 0` for the first beat
 //! of a repopulate cycle and gave up on log-driven closes entirely; what it was actually
@@ -29,14 +29,14 @@
 //!
 //! Second, only two screens ever take input from the kiosk: `ThemedButtonBar` (the ordinary
 //! exit, 52 times) and `ItemInfoPopup` (4). The popup case is *either* a real teardown *or*
-//! the sale-confirm rebuild above -- the markers are identical -- so a foreign subscription
+//! the sale-confirm rebuild above, whose markers are identical, so a foreign subscription
 //! stays a close report, never a verdict: whichever witness arrives first opens the grace
 //! window, and the rebuild markers arriving inside it cancel the teardown.
 //!
 //! What the log deliberately does *not* decide is whether the grid is readable. Presence and
 //! readability were one question here for a while, keyed off the OCR miss streak, and every
-//! hiccup in the reader -- a scroll the tracker could not measure, a frame that located no
-//! labels -- read as "the kiosk closed" and tore the overlay down mid-session.
+//! hiccup in the reader (a scroll the tracker could not measure, a frame that located no
+//! labels) read as "the kiosk closed" and tore the overlay down mid-session.
 
 /// A kiosk event worth acting on: open the overlay, re-anchor it because the grid was
 /// (re)populated, or take it down.
@@ -50,11 +50,11 @@ pub enum KioskLogEvent {
 const MODE_MARKER: &str = "InventoryTest - CurrMode: Selling Prime Parts";
 const SWF_MARKER: &str = "/Lotus/Interface/InventoryTest.swf";
 const POPULATE_MARKER: &str = "PopulateGrid()";
-/// The kiosk's teardown line, written as the screen goes away -- including mid-visit rebuilds
+/// The kiosk's teardown line, written as the screen goes away, including mid-visit rebuilds
 /// like the sale-confirm popup, so this is a close *report*, never a verdict on the visit.
 const CLOSE_MARKER: &str = "InventoryTest.lua: DBG: HudVis 0";
 /// Input subscriptions name the screen that owns the keyboard. One for a screen that is not
-/// the kiosk means the kiosk lost input -- either an exit or a mid-visit rebuild, which carry
+/// the kiosk means the kiosk lost input: either an exit or a mid-visit rebuild, which carry
 /// identical markers and are told apart by what follows, not by this line.
 const SUBSCRIBE_MARKER: &str = "Subscribing for /Lotus/Interface/";
 
@@ -65,7 +65,7 @@ pub struct KioskLogMachine {
 }
 
 impl KioskLogMachine {
-    /// Feed raw log bytes; complete lines only are processed, partial tails are carried over --
+    /// Feed raw log bytes; complete lines only are processed, partial tails are carried over,
     /// same contract as `RewardLogMachine::observe_bytes`, because both machines are fed from the
     /// same byte stream.
     pub fn observe_bytes(&mut self, bytes: &[u8]) -> Vec<KioskLogEvent> {
@@ -192,7 +192,7 @@ mod tests {
     }
 
     /// The second witness: input moving to any other screen. It lands ~50ms after the exit
-    /// line, so in practice it is the redundant one -- but a dropped or reordered line must not
+    /// line, so in practice it is the redundant one, but a dropped or reordered line must not
     /// leave the overlay stranded over a screen the player has left.
     #[test]
     fn input_moving_to_another_screen_closes_the_session() {
@@ -227,7 +227,7 @@ mod tests {
 
     /// A close re-arms the machine, and the popup round trip is the case that needs it: the
     /// game tears the kiosk down for the popup and builds a fresh one when the player comes
-    /// back, with no mode line in between -- only `Created`/`Subscribing`.
+    /// back, with no mode line in between, only `Created`/`Subscribing`.
     #[test]
     fn the_screen_reopens_after_a_close() {
         let mut m = KioskLogMachine::default();

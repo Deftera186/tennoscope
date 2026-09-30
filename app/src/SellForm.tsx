@@ -9,13 +9,13 @@ import type { CollectionItem, MarketOrder } from './backend'
  * account would drift, and the one that drifted would be the one nobody was looking at.
  *
  * Without a `listing` this publishes: the price is prefilled from whatever quote the card already
- * carries and the quantity from one, not from the whole stack -- a form that offers to sell
+ * carries and the quantity from one, not from the whole stack. A form that offers to sell
  * everything by default is a form that eventually does.
  *
  * With a `listing` this edits that order: both fields prefilled from the listing itself, and the
  * save patches the price and the count of the order named. warframe.market allows one sell order
  * per item, so selling more of a partly-listed holding is an edit of the existing listing, not a
- * second listing -- and a create attempted against one would be refused by the market after the
+ * second listing, and a create attempted against one would be refused by the market after the
  * request. No visibility choice is offered in edit mode because the save sends none: a checkbox
  * that changed nothing it sent would be a control lying about what it does.
  *

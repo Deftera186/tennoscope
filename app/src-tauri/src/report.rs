@@ -176,7 +176,7 @@ pub fn assemble_report_text(
     ee_log_state: EeLogState,
 ) -> Result<String, String> {
     // Windows names these differently, and a sanitizer that reads only the Unix pair is inert
-    // there -- `C:\Users\TheirRealName\...` would reach a public issue verbatim.
+    // there, since `C:\Users\TheirRealName\...` would reach a public issue verbatim.
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from);
@@ -238,7 +238,7 @@ const ROW_LABELS: &[(&str, &str)] = &[
     ("market_account", "Market account"),
 ];
 
-/// One `Label: state — message` line per health row, then an `Acquisition`
+/// One `Label: state, message` line per health row, then an `Acquisition`
 /// section with only the degraded or failed stages.
 fn diagnostics_rows(health_json: &str) -> Result<String, String> {
     use serde_json::Value;
@@ -320,7 +320,7 @@ pub fn sanitize(text: &str, home: &Path, username: Option<&str>) -> String {
 /// A username like "bob" or a home like "/home/bob" also occurs inside other
 /// words ("builder", "/home/bob-archive"). Replacing those fragments destroys
 /// the report's text, so only free-standing occurrences are scrubbed. A home
-/// path still needs its next character to be a path separator (or the end) —
+/// path still needs its next character to be a path separator (or the end):
 /// scrubbing "/home/bob" out of "/home/bobx" would leave "~x", a path that no
 /// longer exists, and a username leaves its own trailing word fragment behind.
 fn replace_bounded(text: &str, needle: &str, replacement: &str) -> String {
@@ -450,7 +450,7 @@ pub fn log_error_tail(log_dir: &Path) -> Vec<String> {
     deduped[keep..].to_vec()
 }
 
-/// The message part of a log line — everything from the level token on.
+/// The message part of a log line: everything from the level token on.
 fn message_of(line: &str) -> &str {
     line.find("[WARN]")
         .or_else(|| line.find("[ERROR]"))

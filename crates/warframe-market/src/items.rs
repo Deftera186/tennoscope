@@ -32,7 +32,7 @@ struct ItemRecord {
     /// The `/Lotus/` path. Absent for retired items that no longer exist in the game.
     #[serde(default)]
     game_ref: Option<String>,
-    /// Present when one market item stands for several collection rows -- a relic publishes one
+    /// Present when one market item stands for several collection rows. A relic publishes one
     /// entry with four refinements, and the collection holds each refinement separately.
     #[serde(default)]
     subtypes: Option<Vec<String>>,
@@ -61,7 +61,7 @@ struct ItemNames {
 /// `item_id` is what the POST addresses. The other three fields are the contextual ones the API
 /// demands exactly when the item supports the dimension and forbids otherwise: the `rank` a mod
 /// or arcane is listed at, the `subtype` a relic's refinement is listed under, and the `perTrade`
-/// size a bulk-tradable must declare. `None` throughout is a plain listing -- price and quantity
+/// size a bulk-tradable must declare. `None` throughout is a plain listing: price and quantity
 /// and nothing else.
 ///
 /// A `per_trade` of one is the only size this application chooses: it asks nothing of the player
@@ -179,13 +179,13 @@ impl MarketItems {
     /// The listing a collection row would publish, or `None` when there is none this application
     /// can name honestly.
     ///
-    /// `id` is the row's whole key -- a bare path for the unranked stack, `path#rank` for a ranked
-    /// copy, a tier-suffixed path for a relic refinement -- because the row, not the sell form, is
+    /// `id` is the row's whole key: a bare path for the unranked stack, `path#rank` for a ranked
+    /// copy, a tier-suffixed path for a relic refinement, because the row, not the sell form, is
     /// what names the copy for sale. `at_max` says the rank in a suffixed id is the card's
     /// ceiling.
     ///
     /// Three kinds of answer come back. A plain item resolves to price and quantity alone. A
-    /// ranked item -- every mod and arcane -- resolves with the rank the row names, because
+    /// ranked item, every mod and arcane, resolves with the rank the row names, because
     /// warframe.market quotes a card at rank 0 and at its ceiling only: the unranked stack lists
     /// at 0, a maxed copy at its ceiling, and a copy held part-way up has no rank the API would
     /// accept, so it resolves to nothing rather than to a listing that would be refused. A relic
@@ -211,7 +211,7 @@ impl MarketItems {
         let (base, tier) = refinement_of(path)?;
         let (item_id, entry) = self.entry_for_path(base)?;
         // The subtype is read from the entry's own vocabulary rather than the tier mapping, so
-        // the answer can only be a word the market itself publishes -- and a relic-shaped entry
+        // the answer can only be a word the market itself publishes, and a relic-shaped entry
         // whose subtypes are not refinements answers nothing, same as on the exact-match path.
         let subtype = entry
             .subtypes
@@ -236,7 +236,7 @@ impl MarketItems {
     /// The collection row an order names, when it names exactly one.
     ///
     /// The reverse of `listing_for`: selling goes row → listing, and this goes listing → row, so
-    /// the interface can say which holding a live order belongs to -- the join no other party can
+    /// the interface can say which holding a live order belongs to, the join no other party can
     /// make, because an order's `itemId` and a collection row's key are namespaces that share
     /// nothing. The rank and subtype an order carries are decoded against the entry's own
     /// published dimensions, so an order can only ever name a row in the vocabulary the market
@@ -245,7 +245,7 @@ impl MarketItems {
     /// `None` is the row-equivalent of the unverifiable state and is returned for every order that
     /// does not name one row exactly: an unknown id, a retired item with no path, a sculpture, a
     /// variant split the path cannot resolve, a part-ranked copy, a contextual field the item does
-    /// not support. No badge, no claim, no edit -- same restraint as `status_for`.
+    /// not support. No badge, no claim, no edit, same restraint as `status_for`.
     ///
     /// ponytail: same linear scan profile as `listing_for`.
     pub fn row_of(
@@ -326,7 +326,7 @@ impl ItemEntry {
         if self.star_counted {
             return None;
         }
-        // A subtyped entry reached by its own path is a variant split -- the atragraph mods --
+        // A subtyped entry reached by its own path is a variant split (the atragraph mods)
         // and the path cannot say which variant the row holds. A relic never reaches here: the
         // collection holds only tier-suffixed paths, never the base one this would match.
         if !self.subtypes.is_empty() {
@@ -374,7 +374,7 @@ fn refinement_of(path: &str) -> Option<(&str, &str)> {
         .find_map(|(suffix, subtype)| path.strip_suffix(suffix).map(|base| (base, subtype)))
 }
 
-/// The metal tier a market subtype puts back on a relic's path -- the reverse direction of
+/// The metal tier a market subtype puts back on a relic's path, the reverse direction of
 /// `refinement_of`, over the same vocabulary.
 fn tier_suffix(subtype: &str) -> Option<&'static str> {
     const TIERS: [(&str, &str); 4] = [
@@ -394,17 +394,17 @@ fn tier_suffix(subtype: &str) -> Option<&'static str> {
 /// were measured against the live table rather than reasoned about:
 ///
 /// A **relic** publishes one entry carrying the base projection path and separates its four
-/// refinements by `subtype` -- `Axi A1 Relic` is `/Lotus/Types/Game/Projections/T4VoidProjectionE`
+/// refinements by `subtype`: `Axi A1 Relic` is `/Lotus/Types/Game/Projections/T4VoidProjectionE`
 /// with `['intact', 'exceptional', 'flawless', 'radiant']`. The collection holds each refinement
 /// as its own row, suffixed (`…T4VoidProjectionEBronze`). The base path is therefore a row the
 /// collection never has, and asking whether it is held always answers no.
 ///
-/// A **set** publishes the path of the *built* item -- `Braton Prime Set` is
+/// A **set** publishes the path of the *built* item: `Braton Prime Set` is
 /// `/Lotus/Weapons/Tenno/Rifle/BratonPrime`. What a player selling a set actually holds is the
 /// four `/Lotus/Types/Recipes/…` parts. Again the path names a row the collection does not carry.
 ///
-/// Left unhandled, both answer "owned: 0" and every relic and set listing -- between them most of
-/// what a real account sells -- is flagged `Missing` with a button offering to take it down. That
+/// Left unhandled, both answer "owned: 0" and every relic and set listing, between them most of
+/// what a real account sells, is flagged `Missing` with a button offering to take it down. That
 /// is the false accusation the whole unverifiable state exists to prevent, so both are refused
 /// here, at the point where the market's own vocabulary is still in view.
 ///

@@ -34,7 +34,7 @@ pub struct FrameBuffer {
 ///
 /// Row by row, because the stride is padded: copying the buffer wholesale skews every row after
 /// the first and the card crops land on nothing. A short buffer leaves the remainder at zero
-/// rather than panicking -- a torn frame should cost one poll, not the process.
+/// rather than panicking, since a torn frame should cost one poll, not the process.
 pub fn frame_to_rgba(frame: &FrameBuffer) -> image::RgbaImage {
     let mut image = image::RgbaImage::new(frame.width, frame.height);
     for y in 0..frame.height as usize {
@@ -81,8 +81,8 @@ struct Negotiated {
 /// A held-open PipeWire stream on one portal node.
 ///
 /// One stream for the poller's lifetime rather than one per poll: the poller runs every two
-/// seconds, and renegotiating each time would mean a fresh session -- and on a strict portal, a
-/// fresh prompt -- twice a minute.
+/// seconds, and renegotiating each time would mean a fresh session, and on a strict portal a
+/// fresh prompt, twice a minute.
 pub struct NodeStream {
     mainloop: pw::main_loop::MainLoopRc,
     latest: Rc<RefCell<Option<FrameBuffer>>>,
@@ -126,8 +126,8 @@ impl NodeStream {
         let listener = stream
             .add_local_listener_with_user_data(Negotiated::default())
             .state_changed(move |_stream, _negotiated, old, new| {
-                // `Paused` is normal -- the portal parks the stream when it has nothing to send --
-                // so only an error or a real teardown counts. A transition into `Unconnected` is
+                // `Paused` is normal, since the portal parks the stream when it has nothing to
+                // send, so only an error or a real teardown counts. A transition into `Unconnected` is
                 // only a teardown if we were connected before: the stream starts `Unconnected`,
                 // and treating the startup edge as death would kill every stream on open.
                 let terminal = matches!(new, pw::stream::StreamState::Error(_))
@@ -181,7 +181,7 @@ impl NodeStream {
                 let data = &mut datas[0];
 
                 // `Data::chunk()` asserts the chunk pointer is non-null, so on a malformed buffer
-                // it panics -- and this is a callback invoked from C, where an unwind is a crash in
+                // it panics, and this is a callback invoked from C, where an unwind is a crash in
                 // the middle of someone's game. The raw pointer is reachable safely (only
                 // dereferencing it would need `unsafe`), so it gets checked first.
                 if data.as_raw().chunk.is_null() {
@@ -201,8 +201,8 @@ impl NodeStream {
                 }
                 // Only an fd-backed buffer can be read this way. A DMA-BUF fd is a GPU handle
                 // whose bytes are not the pixels, so reading it positionally would yield
-                // plausible-looking garbage and send OCR chasing ghosts -- better to deliver no
-                // frame, which Task 10's notice can explain, than a wrong one.
+                // plausible-looking garbage and send OCR chasing ghosts. Delivering no
+                // frame, which Task 10's notice can explain, beats a wrong one.
                 if kind != libspa::buffer::DataType::MemFd {
                     log::debug!("[DEBUG-capture] portal handed back a {kind:?} buffer, not MemFd");
                     return;
@@ -323,12 +323,12 @@ const MAX_FRAME_BYTES: usize = 512 * 1024 * 1024;
 /// `mmap` is the obvious way and is not available here: it needs `unsafe`, and this crate is
 /// `#![forbid(unsafe_code)]`, which an inner `#[allow]` cannot relax (E0453). Reopening the
 /// buffer's fd through `/proc/self/fd` and reading it positionally gets the same bytes through
-/// safe std APIs -- measured against a live portal cast, `8294400/8294400` bytes of real desktop
+/// safe std APIs, measured against a live portal cast, `8294400/8294400` bytes of real desktop
 /// content, the same node and geometry the mmap spike produced.
 ///
 /// Positioned (`read_at`, i.e. `pread`) rather than sequential, because the fd belongs to
 /// PipeWire: a plain `read` would move the offset it is using. And a short buffer is just a short
-/// read here, where `mmap` past end-of-file raises SIGBUS -- a signal no bounds check prevents and
+/// read here, where `mmap` past end-of-file raises SIGBUS: a signal no bounds check prevents and
 /// nothing can catch safely, in a process running during someone's game.
 fn read_buffer(
     fd: i64,
@@ -360,7 +360,7 @@ fn read_buffer(
 ///
 /// `std::fs::File` is the only implementation on the live path. The trait exists because a real fd
 /// cannot be made to return `EINTR` or a partial read on demand, and those are precisely the two
-/// paths the loop below exists to handle -- so without it they would ship untested.
+/// paths the loop below exists to handle, so without it they would ship untested.
 trait PositionedRead {
     fn read_at(&self, buffer: &mut [u8], offset: u64) -> std::io::Result<usize>;
 }
@@ -373,8 +373,8 @@ impl PositionedRead for std::fs::File {
 
 /// How many interruptions one chunk read may absorb before the frame is abandoned.
 ///
-/// Counted for the whole read rather than reset on progress. Resetting sounds kinder -- it would
-/// never abandon a read that is getting somewhere -- but it re-opens the hole this closes: a reader
+/// Counted for the whole read rather than reset on progress. Resetting sounds kinder, since it
+/// would never abandon a read that is getting somewhere, but it re-opens the hole this closes: a reader
 /// alternating one byte with a burst of signals would iterate `chunk_size * MAX` times, which for
 /// an 8 MB frame is over a hundred million passes and is a hang in all but name. Counting the whole
 /// read bounds the loop at `chunk_size + MAX` iterations no matter what the fd does.
@@ -397,7 +397,7 @@ fn read_chunk<R: PositionedRead>(reader: &R, start: usize, chunk_size: usize) ->
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
                 // A signal can legitimately interrupt a read, but only finitely often. Retrying
                 // without a bound would spin inside the PipeWire callback, wedging the loop thread
-                // and every later poll -- worse than the dropped frame this is trying to avoid.
+                // and every later poll, which is worse than the dropped frame this is trying to avoid.
                 interruptions += 1;
                 if interruptions > MAX_INTERRUPTIONS {
                     log::debug!(
@@ -458,7 +458,7 @@ mod tests {
     }
 
     /// `chunk_size` arrives straight off the wire. A malformed buffer claiming more than the
-    /// mapping holds must be rejected BEFORE the allocation -- otherwise a bogus gigabyte-scale
+    /// mapping holds must be rejected BEFORE the allocation. Otherwise a bogus gigabyte-scale
     /// size is a gigabyte-scale `vec![0; n]` in a process running during someone's game.
     #[test]
     fn a_chunk_larger_than_the_mapping_is_rejected() {
@@ -477,7 +477,7 @@ mod tests {
     }
 
     /// A reader with scripted behaviour, because a real fd cannot be made to return `EINTR` or a
-    /// partial read on demand -- and those are exactly the two paths the retry loop exists for.
+    /// partial read on demand, and those are exactly the two paths the retry loop exists for.
     ///
     /// It honours `offset`, which is what makes the contiguity assertion real: a loop that failed
     /// to advance the offset would re-read the same leading bytes every pass.
@@ -562,7 +562,7 @@ mod tests {
     }
 
     /// A signal arriving faster than the read completes must not spin. Retrying without a bound
-    /// would hang inside the PipeWire callback, wedging the loop thread and every later poll --
+    /// would hang inside the PipeWire callback, wedging the loop thread and every later poll,
     /// worse than the dropped frame the retry was protecting.
     #[test]
     fn a_persistent_interruption_gives_up_rather_than_spinning() {
@@ -613,7 +613,7 @@ mod tests {
             height: 1,
             stride: 4,
             format: PixelOrder::Bgrx,
-            // B, G, R, x -- a pure red pixel in BGRx.
+            // B, G, R, x: a pure red pixel in BGRx.
             bytes: vec![0, 0, 255, 255],
         });
         assert_eq!(image.get_pixel(0, 0).0, [255, 0, 0, 255]);
@@ -633,7 +633,7 @@ mod tests {
     }
 
     /// A pixel whose three colour bytes are the last three bytes of the buffer is readable, and
-    /// must actually be read. Pinned because the obvious guard -- `offset + 3 >= len` -- is off by
+    /// must actually be read. Pinned because the obvious guard, `offset + 3 >= len`, is off by
     /// one and silently drops it, which is a black pixel appearing at the truncation point rather
     /// than at the first genuinely missing byte.
     #[test]

@@ -21,7 +21,7 @@ use crate::overlay_window::WindowRect;
 ///
 /// Not "which display server the game is on": a Wayland session runs XWayland too, so the game
 /// may be an X11 client on a Wayland desktop. That is a separate question, answered by whether
-/// X11 enumeration finds a window -- see `game_rect`.
+/// X11 enumeration finds a window; see `game_rect`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SessionKind {
     X11,
@@ -162,8 +162,8 @@ const fn x11_frame_target(session: SessionKind) -> X11FrameTarget {
 ///
 /// A rung is inert data so that [`WAYLAND_LADDER`] can be the single statement of precedence:
 /// both the probing in `GameCapture::backend_availability` and the selection in
-/// [`capture_sources`] walk it in order. Before, each expressed the order in its own way -- a
-/// short-circuit chain and an `if` ladder -- and a backend added to one but not the other would
+/// [`capture_sources`] walk it in order. Before, each expressed the order in its own way (a
+/// short-circuit chain and an `if` ladder), and a backend added to one but not the other would
 /// be probed and never chosen, or chosen and never probed.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WaylandRung {
@@ -373,7 +373,7 @@ pub fn last_capture_sources() -> (Option<&'static str>, Option<&'static str>) {
 /// Record the capture geometry.
 ///
 /// At Info when the shape changes, so a stable-build report carries the one line that
-/// distinguishes "no window" from "wrong monitor" from "captured a helper window" -- the
+/// distinguishes "no window" from "wrong monitor" from "captured a helper window", the
 /// distinction the 2026-08-22 report could not make. At Debug otherwise, because the poller
 /// re-captures the same monitor every 400ms and a line per poll would evict the history.
 fn trace_capture(shape: CaptureShape, visible: &geometry::VisibleRegion, changed: bool) {
@@ -973,7 +973,7 @@ mod tests {
     ///
     /// This is the invariant that keeps one ladder honest: `offers` is what the probe loop uses to
     /// record an answer and what `capture_sources` uses to select, so a new backend wired into one
-    /// and not the other -- probed and never chosen, or chosen and never probed -- fails here.
+    /// and not the other (probed and never chosen, or chosen and never probed) fails here.
     #[test]
     fn each_ladder_rung_is_selected_by_exactly_its_own_offer() {
         for rung in WAYLAND_LADDER {

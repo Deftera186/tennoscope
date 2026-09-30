@@ -11,8 +11,8 @@ fn discovery_reports_absence_rather_than_failure_when_the_game_is_not_running() 
 }
 
 /// PID 0 is the System Idle Process: it always exists and `OpenProcess` never opens it. Which
-/// refusal Windows picks is not worth pinning here -- the unit tests cover the mapping from each
-/// error code -- but a refusal must never surface as an empty-but-successful region list, because
+/// refusal Windows picks is not worth pinning here. The unit tests cover the mapping from each
+/// error code, but a refusal must never surface as an empty-but-successful region list, because
 /// the scanner would read that as "the game has no memory worth scanning" and give up quietly.
 #[test]
 fn a_process_that_cannot_be_opened_fails_rather_than_reporting_no_regions() {
@@ -20,7 +20,7 @@ fn a_process_that_cannot_be_opened_fails_rather_than_reporting_no_regions() {
     assert!(adapter.readable_regions(&GameProcess::new(0)).is_err());
 }
 
-/// An empty read must not open a handle or touch the process -- the scanner issues them at region
+/// An empty read must not open a handle or touch the process. The scanner issues them at region
 /// boundaries and would otherwise turn every boundary into an `OpenProcess` call.
 #[test]
 fn an_empty_read_succeeds_without_touching_the_process() {

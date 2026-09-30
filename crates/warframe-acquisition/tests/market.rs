@@ -92,7 +92,7 @@ fn an_unreadable_body_is_reported_rather_than_priced_at_nothing() {
 }
 
 /// A relic is one listing with four separately-priced refinement subtypes, so the request has to
-/// name the tier. A bare relic name means intact -- the tier warframe.market shows by default, and
+/// name the tier. A bare relic name means intact, the tier warframe.market shows by default and
 /// the one the refined tiers fall back to. Nothing else asks about a subtype at all.
 #[test]
 fn a_relic_asks_about_its_refinement_and_everything_else_asks_about_none() {
@@ -116,7 +116,7 @@ fn a_relic_asks_about_its_refinement_and_everything_else_asks_about_none() {
 
 /// The subtype is filtered client-side as well as in the query string, because warframe.market
 /// answers a `/top` request carrying an unrecognised parameter by ignoring it. Trusting the server
-/// alone would serve the cheap intact order under a radiant relic's name -- silently, and it is
+/// alone would serve the cheap intact order under a radiant relic's name, silently, and it is
 /// the exact number the whole distinction exists to stop showing.
 #[test]
 fn a_subtype_the_server_did_not_filter_is_filtered_here() {
@@ -221,8 +221,8 @@ fn a_warmed_price_is_not_requested_again() {
     );
 }
 
-/// Three call paths share one cache -- the relic pool warm, a collection page refresh and the
-/// reward screen's fill -- and any two can run at once. Pacing each caller separately puts twice
+/// Three call paths share one cache (the relic pool warm, a collection page refresh and the
+/// reward screen's fill), and any two can run at once. Pacing each caller separately puts twice
 /// the documented rate on the API, so the floor has to belong to the cache, not to the caller.
 /// The reward fill asks for no gap of its own and must still not be able to breach it.
 #[test]
@@ -413,7 +413,7 @@ fn a_zero_per_trade_count_is_treated_as_one() {
 }
 
 /// The cheapest thing on the market still costs something. 1p for six rounds to nothing, and "0p"
-/// on a card reads as free rather than as cheap -- a price of zero is the one number this app uses
+/// on a card reads as free rather than as cheap. A price of zero is the one number this app uses
 /// to mean "worthless", so the cheapest real listing must not borrow it.
 #[test]
 fn a_bulk_listing_too_cheap_to_divide_is_still_worth_a_platinum() {

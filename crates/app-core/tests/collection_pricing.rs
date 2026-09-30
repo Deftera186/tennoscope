@@ -104,8 +104,8 @@ fn a_live_price_takes_precedence_over_the_dump_and_says_so() {
 /// The two ranks are two holdings and must not converge on one number.
 ///
 /// The live cache and the checked-price map are keyed by listing name alone, and both rank rows
-/// resolve to the same one. Applied to both, the market's answer -- which is about rank 0, because
-/// the orders endpoint returns the cheapest sellers and those are unranked -- would price a maxed
+/// resolve to the same one. Applied to both, the market's answer, which is about rank 0 because
+/// the orders endpoint returns the cheapest sellers and those are unranked, would price a maxed
 /// mod at what an unranked one goes for.
 #[test]
 fn a_live_price_answers_for_the_unranked_row_only() {
@@ -190,7 +190,7 @@ fn an_item_with_no_live_price_falls_back_to_the_dump_unmarked() {
 
 /// A persisted checked price is a live price that outlived its cache entry, and it must keep
 /// saying so. The alternative is a relic silently presenting as a dump price under a line reading
-/// "prices from the 27 Jul market summary" -- which is false about every relic on screen, because
+/// "prices from the 27 Jul market summary", which is false about every relic on screen, because
 /// the dump deliberately prices no relics at all.
 #[test]
 fn a_swept_relic_price_stays_marked_live_after_the_cache_expires() {
@@ -211,7 +211,7 @@ fn a_swept_relic_price_stays_marked_live_after_the_cache_expires() {
 }
 
 /// The same for an item the dump *does* price. A page refresh checks whatever is on screen, and
-/// once its answer is persisted the card must show that number and say it was checked live --
+/// once its answer is persisted the card must show that number and say it was checked live,
 /// otherwise the better measurement is presented as the day-old one it replaced.
 #[test]
 fn a_persisted_checked_price_reads_as_live_for_a_non_relic() {
@@ -254,11 +254,11 @@ fn only_the_named_items_are_resolved_for_a_live_lookup() {
     assert_eq!(names, vec!["Mirage Prime Systems Blueprint".to_owned()]);
 }
 
-/// Two refinements of one relic are two prices on warframe.market -- separate subtypes of one
-/// listing, and a radiant sells for a median 1.46x its intact tier -- so a page holding both costs
+/// Two refinements of one relic are two prices on warframe.market (separate subtypes of one
+/// listing, and a radiant sells for a median 1.46x its intact tier), so a page holding both costs
 /// two requests, not one. Repeats of the *same* tier still collapse. The store returns entries
 /// ordered by item id (see `SqliteStore::load_collection`'s `ORDER BY item_id`), so "/b" sits
-/// between the two "/a"/"/c" entries of the same relic pre-sort -- the duplicate market names are
+/// between the two "/a"/"/c" entries of the same relic pre-sort. The duplicate market names are
 /// not adjacent until `market_names_for` sorts them, which is what makes the `dedup()` sufficient.
 #[test]
 fn one_relic_tier_asked_for_twice_collapses_to_a_single_request() {
@@ -327,7 +327,7 @@ fn an_item_the_player_does_not_own_is_not_priced() {
 }
 
 /// The page control promised prices for items it was never going to send. It counted everything
-/// owned on screen, while the backend drops every name the price table cannot resolve -- so a
+/// owned on screen, while the backend drops every name the price table cannot resolve, so a
 /// register full of untradeable resources read "Price these 48" and priced a handful. `priceable`
 /// is the same question `market_names_for` already answers, asked per item so the control can
 /// count what it is actually about to do.

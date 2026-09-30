@@ -25,7 +25,7 @@ fn table() -> PriceTable {
     PriceTable::from_dump_json(DUMP.as_bytes(), "2026-07-27").expect("fixture parses")
 }
 
-/// Download, fold in what has already been checked, store -- the three steps the startup path
+/// Download, fold in what has already been checked, store: the three steps the startup path
 /// takes. It composes them here because these tests have no runtime lock to straddle; production
 /// keeps them apart on purpose, and
 /// `the_startup_refresh_must_adopt_from_the_current_table_not_a_pre_download_snapshot` says why.
@@ -93,7 +93,7 @@ fn a_blueprint_resolves_to_a_listing_without_the_suffix() {
 }
 
 /// warframe.market's `sell` statistics quote a bulk listing's whole lot, and the dump mirrors them
-/// unmodified, so a relic's daily ask runs high — measured up to 6x, and heavy-tailed enough that
+/// unmodified, so a relic's daily ask runs high: measured up to 6x, and heavy-tailed enough that
 /// no constant corrects it. An ask is therefore never a relic's price, however alone it stands.
 #[test]
 fn a_relic_is_not_priced_from_the_dumps_asking_price() {
@@ -102,7 +102,7 @@ fn a_relic_is_not_priced_from_the_dumps_asking_price() {
     assert_eq!(table.price_for("Axi A1 Relic"), None);
 }
 
-/// The `closed` statistics are the same day's *completed trades*, and they are quoted per unit --
+/// The `closed` statistics are the same day's *completed trades*, and they are quoted per unit.
 /// warframe.market's bulk-lot fault is in `statistics_live` alone. Measured 2026-07-30 on
 /// `lith_t11_relic` intact: 30p asked, 4.5p traded, and 4.67-5.00p per unit across all four online
 /// sellers. So a relic that traded has a dump price, and the sweep no longer has to buy it.
@@ -146,7 +146,7 @@ fn a_tier_that_did_not_trade_falls_back_to_the_intact_one() {
 
 /// A closed record standing on one or two trades is one player's odd deal, not a price. Measured on
 /// the 2026-07-30 dump, every record quoting more than 1.5x its own ask sat at volume 4 or below.
-/// For a relic there is no ask to fall back to, so a thin record leaves it unpriced -- which is the
+/// For a relic there is no ask to fall back to, so a thin record leaves it unpriced, which is the
 /// answer the sweep is for.
 #[test]
 fn a_closed_price_on_too_few_trades_is_refused() {
@@ -168,7 +168,7 @@ fn a_closed_price_on_too_few_trades_is_refused() {
 }
 
 /// A closed record clears the volume floor and still reads high. `Vitality` unranked on 2026-07-30
-/// closed at 115p on four trades -- against a 1p ask backed by 3,186 listings -- and its rank-10
+/// closed at 115p on four trades, against a 1p ask backed by 3,186 listings, and its rank-10
 /// row asks 35p. Trusting the trade outright priced 113 unranked copies at 35p, 3,955p of one
 /// account's collection, from a rank nobody in it held. The lower of the two measurements is the
 /// price, so a freak trade loses to the ask exactly as a six-pack ask loses to the trade.
@@ -276,9 +276,9 @@ fn a_checked_relic_price_is_served_like_any_other() {
 
 /// `REFINEMENTS` is a hand-written list of four suffixes; a test that only ever tries `Radiant`
 /// cannot catch a typo or reordering in `Intact`, `Exceptional`, or `Flawless`. Each tier is its
-/// own warframe.market subtype and its own key, and intact keeps the bare listing name -- the tier
-/// the market means by default, and the key every price checked before the tiers were told apart
-/// was stored under.
+/// own warframe.market subtype and its own key, and intact keeps the bare listing name. That is the
+/// tier the market means by default, and the key every price checked before the tiers were told
+/// apart was stored under.
 #[test]
 fn every_refinement_tier_resolves_to_its_own_subtype() {
     for (name, expected) in [
@@ -295,8 +295,8 @@ fn every_refinement_tier_resolves_to_its_own_subtype() {
     }
 }
 
-/// The tiers are separately priced -- a radiant sells for a median 1.46x its intact tier and up to
-/// 17x -- so a price checked for one must not be served as another's.
+/// The tiers are separately priced (a radiant sells for a median 1.46x its intact tier and up to
+/// 17x), so a price checked for one must not be served as another's.
 #[test]
 fn a_checked_tier_does_not_price_a_different_tier() {
     let mut table = table();
@@ -428,7 +428,7 @@ fn a_part_ranked_copy_is_bounded_rather_than_priced() {
     assert_eq!(priced.ceiling, Some(48));
 }
 
-/// A riven's ceiling is unpublished -- the catalogue's 515 is a sentinel -- and an unknown ceiling
+/// A riven's ceiling is unpublished (the catalogue's 515 is a sentinel), and an unknown ceiling
 /// is not the same answer as "not maxed". Claiming the maxed quote for a copy that might not have
 /// earned it would overstate the holding, so it stays a bound.
 #[test]
@@ -566,8 +566,8 @@ fn a_dump_from_today_or_yesterday_is_not_downloaded_again() {
 /// sweep runs again for the day it describes.
 ///
 /// This replaces `a_relic_sweep_is_current_exactly_when_its_dump_is`, which pinned a second date
-/// gate on the sweep. That gate was false on any ordinary day -- the dumps lag, so the cached table
-/// is usually older than yesterday -- and its falseness re-swept all 65 relics on every launch.
+/// gate on the sweep. That gate was false on any ordinary day (the dumps lag, so the cached table
+/// is usually older than yesterday), and its falseness re-swept all 65 relics on every launch.
 /// Adoption across a same-date refresh is what the gate was trying to express, and it works on the
 /// days the gate did not.
 #[test]
@@ -662,7 +662,7 @@ fn the_reported_count_grows_as_relics_are_swept() {
 
 /// The point of persisting a checked price: it is the better measurement, so it must win. For a
 /// relic there is no dump price to lose to, which is why the order went unnoticed while only the
-/// relic sweep wrote here -- for everything else the dump would shadow the number the player just
+/// relic sweep wrote here, since for everything else the dump would shadow the number the player just
 /// spent a request on.
 #[test]
 fn a_checked_price_outranks_the_dumps_for_the_same_item() {
@@ -700,7 +700,7 @@ fn a_checked_price_reaches_an_item_through_the_name_rules() {
 
 /// The startup dump refresh spends seconds downloading 3.9 MB, and the relic sweep or a page
 /// refresh can land in that window. Folding into the new table must therefore read the table the
-/// runtime is serving *now*, not the snapshot startup took before the download -- adopting from
+/// runtime is serving *now*, not the snapshot startup took before the download. Adopting from
 /// the snapshot silently erases a price the player has already paid a request for, from memory and
 /// from disk. `start_collection_prices` keeps the fold under the same lock hold as the store and
 /// the publish for this reason; this is what that ordering is protecting against.
@@ -789,7 +789,7 @@ fn a_corrupt_cache_file_yields_no_table_rather_than_a_panic() {
 /// A cache written by an older parse must be refused, not read.
 ///
 /// What is stored is the parsed table, and `dump_is_current` skips the download while the stored
-/// date is today's or yesterday's -- so a pricing fix does not reach a running install until the
+/// date is today's or yesterday's, so a pricing fix does not reach a running install until the
 /// publisher moves on. It happened: the 2026-07-29 dump was cached before subtypes were priced
 /// apart, storing `Serration` at its maxed 48p under the plain listing name, and every rank of
 /// every mod showed that price for a day after the fix shipped. One download is the cost of not
@@ -844,7 +844,7 @@ fn a_cache_write_failure_is_not_blamed_on_the_dump() {
 ///
 /// Without somewhere to put it the startup sweep filtered on "has a price", so every relic the
 /// market answered about with an empty book failed that test again on the next inventory sync, and
-/// again on the one after -- the same requests, the same answer, for the rest of the session. The
+/// again on the one after: the same requests, the same answer, for the rest of the session. The
 /// two facts stay distinct: the item is checked, and it still has no price to show.
 #[test]
 fn a_relic_nobody_is_selling_counts_as_answered() {
@@ -874,7 +874,7 @@ fn a_price_replaces_the_mark_that_said_there_was_none() {
 /// The whole freshness policy, applied to the other kind of answer. A no-seller reading belongs to
 /// the day it was made exactly as a price does, so it rides the same refresh and dies to the same
 /// newer dump. Carrying prices across but not these would have left the sweep re-asking about
-/// every unsold relic on every launch -- the bug, restored by the fix for the bug.
+/// every unsold relic on every launch, the bug restored by the fix for the bug.
 #[test]
 fn a_no_seller_answer_survives_the_same_dump_and_dies_to_a_newer_one() {
     let directory = tempfile::tempdir().expect("temp dir");
@@ -1077,7 +1077,7 @@ fn one_trade_is_too_thin_to_be_a_price_and_still_counts_as_a_trade() {
 /// to ride along, and for every item rather than only the relics: `Intruder` completed 159 trades
 /// across twenty-eight days and carries no `closed` record at all on the 2026-07-30 dump, so a stack
 /// of 104 read as unsellable on the strength of one quiet morning. It rides along as a mean, not as
-/// the last count seen -- a day with no trade is a real zero, and a rate that only ever inherits the
+/// the last count seen. A day with no trade is a real zero, and a rate that only ever inherits the
 /// days somebody bought one reads every quiet listing as a busy one.
 #[test]
 fn a_quiet_day_averages_into_the_appetite_rather_than_replacing_it() {

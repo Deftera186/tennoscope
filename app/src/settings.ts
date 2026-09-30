@@ -3,7 +3,7 @@
  *
  * The price floor changes one figure the frontend already computes from a view it already has. The
  * backend has no use for it, so putting it in SQLite would mean a schema migration, an IPC pair and
- * a round trip to move a slider -- for a number that never leaves this file.
+ * a round trip to move a slider, for a number that never leaves this file.
  */
 const FLOOR_KEY = 'tennoscope.price-floor'
 
@@ -21,7 +21,7 @@ export function clampPriceFloor(value: unknown): number {
   return Number.isFinite(floor) ? Math.min(Math.max(floor, 0), MAX_PRICE_FLOOR) : 0
 }
 
-/** Storage is allowed to be missing or refused -- a webview with it disabled still runs the app. */
+/** Storage is allowed to be missing or refused; a webview with it disabled still runs the app. */
 export function readPriceFloor(): number {
   try {
     return clampPriceFloor(localStorage.getItem(FLOOR_KEY))
@@ -146,7 +146,7 @@ export function writeUpdateLastSurfaced(pubDate: string): void {
 
 /** Strikes per version. "Not now" alone never strikes: it only snoozes the
  *  version for 7 days. A strike accrues only when dismissing a version that
- *  already has a snooze record — i.e. the second dismissal after a lapse.
+ *  already has a snooze record, which is the second dismissal after a lapse.
  *  Two strikes and this version stays quiet until the next version. */
 const DISMISS_KEY = 'tennoscope.update-dismissed'
 

@@ -175,7 +175,7 @@ fn patching_with_a_slash_in_the_id_is_refused() {
 }
 
 /// Editing is the player changing their mind about a listing they can see, and the two things they
-/// can change are the price and the count. Both go in one patch -- the edit form collects them
+/// can change are the price and the count. Both go in one patch. The edit form collects them
 /// together, and a player who raised the count while the price silently stayed would find out from
 /// a buyer, same as the reverse.
 #[test]
@@ -335,7 +335,7 @@ fn a_ranked_listing_declares_its_rank() {
 
 /// A relic listing names its refinement as the subtype the market publishes, and declares the
 /// per-trade size every bulk-tradable must carry. An arcane's listing carries the per-trade size
-/// with a rank instead -- the dimensions compose, and neither implies the other.
+/// with a rank instead. The dimensions compose, and neither implies the other.
 #[test]
 fn a_relic_listing_declares_its_subtype_and_trade_size() {
     let transport = FakeTransport::new(vec![ok(

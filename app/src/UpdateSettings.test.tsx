@@ -153,7 +153,7 @@ describe('UpdatesSetting', () => {
     bootUpdateChecks()
     // Boot bails without version info; a manual check still surfaces the offer.
     await userEvent.click(screen.getByRole('button', { name: 'Check now' }))
-    // Generic nudge: no manager names, no download — but never a swallowed update.
+    // Generic nudge: no manager names, no download, but never a swallowed update.
     expect(await screen.findByRole('button', { name: 'Open release page' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Download update' })).not.toBeInTheDocument()
   })

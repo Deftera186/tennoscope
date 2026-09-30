@@ -203,7 +203,7 @@ fn latest_snapshot_metadata_round_trips_and_empty_store_has_none() {
 }
 
 /// A rank has to survive the database or the row split means nothing: both rows come back
-/// unranked, resolve to the same market listing, and are handed the same price -- which is exactly
+/// unranked, resolve to the same market listing, and are handed the same price, which is exactly
 /// what a maxed `Arcane Reaper` showing an unranked one's 15p looked like.
 #[test]
 fn a_ranked_row_keeps_its_rank_and_ceiling_across_a_reopen() {

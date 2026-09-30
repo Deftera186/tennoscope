@@ -107,7 +107,7 @@ impl RewardAdvisor {
     /// answer was only ever visible when the platinum values happened to tie. Both orders are
     /// published and the choice is left to the player.
     ///
-    /// The ducat winner is `None` when nothing on offer is worth any ducats -- four Forma would
+    /// The ducat winner is `None` when nothing on offer is worth any ducats. Four Forma would
     /// otherwise crown one of them for a currency none of them carry.
     pub fn advise(cards: Vec<RewardCandidate>) -> RewardView {
         let certain = |(_, candidate): &(usize, &RewardCandidate)| candidate.confidence >= 0.80;

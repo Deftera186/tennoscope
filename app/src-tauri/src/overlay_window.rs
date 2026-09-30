@@ -28,13 +28,13 @@ const OVERLAY_HEIGHT: f32 = 156.0 / 1080.0;
 /// screen made it 1440px against the cards' 966 and put it ~75px too low, with columns that lined
 /// up with nothing.
 ///
-/// `cards` is how many the screen is showing, because the game centres the block on that count --
+/// `cards` is how many the screen is showing, because the game centres the block on that count:
 /// a three-player squad's cards sit half a pitch right of a four-player squad's. Same reason the
 /// reader takes it, and the same source, so the strip and the crops can never disagree.
 ///
 /// The block is measured against window *height* and centred horizontally, which is how Warframe
 /// scales its HUD. At 16:9 that is indistinguishable from fractions of width, which is why this was
-/// width-based for so long; at 16:10 -- a Steam Deck's 1280x800 -- the two disagree by up to 36px
+/// width-based for so long. At 16:10 (a Steam Deck's 1280x800) the two disagree by up to 36px
 /// on a 178px card, enough to cut a title in half.
 ///
 /// No clamp on the width: the point is to track the cards, and a clamp is what would break that.
@@ -99,7 +99,7 @@ fn overlay_geometry(
 ///
 /// The reward strip spans only the card block because its columns line up with cards that never
 /// move. The kiosk chips ride a scrolling grid, so they have to move *inside* the overlay window
-/// rather than have the window moved under them -- which only works if the window owns the whole
+/// rather than have the window moved under them, which only works if the window owns the whole
 /// game rect to scroll within.
 pub fn kiosk_overlay_geometry(
     screen_width: u32,
@@ -164,7 +164,7 @@ fn kiosk_geometry(window: &WebviewWindow) -> tauri::Result<Option<OverlayGeometr
 ///
 /// On Linux the advice is the same but the reason is different. A native Wayland game is
 /// invisible to X11 window enumeration no matter what mode it is in, so the capture path falls
-/// back to casting the monitor -- which only lines up with the cards when the game fills that
+/// back to casting the monitor, which only lines up with the cards when the game fills that
 /// monitor. This used to return `None` on every non-Windows platform, so the one user who hit
 /// it was told nothing at all.
 pub const fn placement_notice(
@@ -211,8 +211,8 @@ fn configure_reward_overlay(
     window.set_always_on_top(true)?;
     // Escape hatch for the one failure this cannot be tested for from here: a WebView2 child HWND
     // under `WS_EX_LAYERED` with no layer attributes is the likeliest way `transparent: true` comes
-    // out invisible or black on a real Windows machine. Setting a colour makes the strip opaque --
-    // uglier, but readable -- and costs nothing when unset.
+    // out invisible or black on a real Windows machine. Setting a colour makes the strip opaque,
+    // uglier but readable, and costs nothing when unset.
     if std::env::var_os("TENNOSCOPE_OPAQUE_OVERLAY").is_some() {
         window.set_background_color(Some(tauri::window::Color(14, 16, 22, 255)))?;
     }
@@ -242,7 +242,7 @@ fn preferred_game_rect(
         .or_else(|| matched_rect.map(|rect| (rect, GameRectOrigin::MatchedCapture)))
 }
 
-/// Same trio of window styles as the reward strip -- click-through, no activation, topmost --
+/// Same trio of window styles as the reward strip (click-through, no activation, topmost),
 /// sized to the whole game window instead of a card block. See `configure_reward_overlay` for why
 /// each of the three is load-bearing.
 pub fn configure_kiosk_overlay(window: &WebviewWindow) -> tauri::Result<()> {
@@ -264,7 +264,7 @@ pub fn configure_kiosk_overlay(window: &WebviewWindow) -> tauri::Result<()> {
 /// The window is made *override-redirect*, which takes it out of the window manager's hands
 /// altogether: it is never reparented, restacked, or tiled, and its position is the one we give
 /// it. That is what makes the behaviour identical everywhere. The alternatives each cover only
-/// part of the field -- `wlr-layer-shell` is absent on GNOME, `_NET_WM_STATE_ABOVE` is ignored by
+/// part of the field: `wlr-layer-shell` is absent on GNOME, `_NET_WM_STATE_ABOVE` is ignored by
 /// sway, and neither can be relied on to beat a fullscreen game.
 ///
 /// It only works because the whole app runs on X11 (see `run`), in the same display server and the
@@ -279,7 +279,7 @@ pub fn configure_kiosk_overlay(window: &WebviewWindow) -> tauri::Result<()> {
 /// activation the instant it maps. For a native-Wayland game client (`PROTON_ENABLE_WAYLAND=1`,
 /// e.g. the `warframe-wayland` launcher) that focus steal deactivates its `xdg_toplevel`, and
 /// winewayland.drv's fullscreen-focus-loss handling can leave the game's own render loop stalled
-/// -- confirmed live: the game froze on-screen the instant the overlay mapped, and refocusing it
+/// Confirmed live: the game froze on-screen the instant the overlay mapped, and refocusing it
 /// with `swaymsg '[app_id="warframe.x64.exe"] focus'` was what unstuck it. XWayland Warframe never
 /// showed this because the game's own window shares the same X11/XWM focus semantics as the
 /// overlay there, and winex11.drv's borderless mode does not tie itself to activation the same way.
@@ -304,7 +304,7 @@ fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
     };
     gdk_window.set_override_redirect(true);
     // Stops wlroots compositors (sway) from handing this window keyboard focus/activation on map
-    // -- see the doc comment above for why that matters beyond just stealing input.
+    // See the doc comment above for why that matters beyond just stealing input.
     gdk_window.set_type_hint(gtk::gdk::WindowTypeHint::Utility);
     let width = i32::try_from(geometry.width).unwrap_or(966);
     let height = i32::try_from(geometry.height).unwrap_or(156);
@@ -315,7 +315,7 @@ fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
     gtk_window.resize(width, height);
     gtk_window.move_(geometry.x, geometry.y);
     gtk_window.show_all();
-    // Nothing else will restack us, so raising is ours to do -- and the move is reissued because a
+    // Nothing else will restack us, so raising is ours to do, and the move is reissued because a
     // position set before the window is on screen is not always the one it keeps.
     gdk_window.raise();
     gtk_window.move_(geometry.x, geometry.y);
@@ -326,8 +326,8 @@ fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
 }
 
 /// Both ends of the overlay's life are traced, because "the overlay lingered" has several possible
-/// owners -- the poller not noticing the screen went, the monitor not acting on it, or the hide
-/// call itself not taking effect -- and they are indistinguishable from outside.
+/// owners (the poller not noticing the screen went, the monitor not acting on it, or the hide
+/// call itself not taking effect), and they are indistinguishable from outside.
 fn trace_overlay(action: &str) {
     log::debug!("[DEBUG-overlay] {action}");
 }

@@ -386,7 +386,7 @@ fn fallback_finds_a_candidate_only_in_a_file_backed_region() {
 ///
 /// The budget is a fixed number of bytes over an address space far larger than it, and where the
 /// account/nonce pair happens to sit varies per launch. A Steam Deck report saw a read succeed and
-/// then fail with `AuthorizationNotFound` on the retry, same session -- the sampler simply missed.
+/// then fail with `AuthorizationNotFound` on the retry, same session: the sampler simply missed.
 /// Giving up after one pass turned "we did not look there" into "your game has no credential".
 #[test]
 fn a_credential_the_first_pass_misses_is_still_found() {

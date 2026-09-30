@@ -1,9 +1,9 @@
 //! What the overlay draws once the screen has been read.
 //!
 //! Recognition answers "which slot holds which name"; this module answers "what is that worth".
-//! Every number the chips show -- platinum, ducats, owned counts, the basket total -- comes from
-//! joins against data the app already holds, never from the screen: the spec's no-digit-OCR rule
-//! keeps the game's own numerals out of the pipeline entirely.
+//! A chip carries a name and a platinum figure and nothing else, so both are joins against data
+//! the app already holds: reading the game's own ducat or platinum numerals is a spec non-goal,
+//! so they never enter this pipeline. The owned count a player sees is the game's.
 
 use serde::Serialize;
 
@@ -20,8 +20,8 @@ pub struct CellChip {
 }
 
 /// One basket row's platinum value. The game already draws each row's ducats; this only adds
-/// what it does not show. A row the price table cannot price stays listed -- the game still
-/// drew it, and the frontend decides what a missing price looks like -- but contributes nothing
+/// what it does not show. A row the price table cannot price stays listed (the game still
+/// drew it, and the frontend decides what a missing price looks like) but contributes nothing
 /// to the total.
 #[derive(Clone, Debug, Serialize)]
 pub struct BasketChip {
@@ -170,8 +170,8 @@ pub fn build_view(
         })
         .collect();
 
-    // Chips carry the unit price -- the number a marketplace listing shows for one copy --
-    // so the basket row and the grid tile agree per name, whatever the stack size. Only the
+    // Chips carry the unit price, the number a marketplace listing shows for one copy, so
+    // the basket row and the grid tile agree per name, whatever the stack size. Only the
     // total multiplies: that is the one place "what is this basket worth" means the pile.
     let basket_chips: Vec<BasketChip> = basket
         .iter()
@@ -210,8 +210,8 @@ pub fn build_view(
 ///
 /// Each box is filled with the median luma of its border ring: the label background the game
 /// drew behind the chip, which is inert to both the edge-count profile and the per-crop OCR
-/// normalisation. Nothing under a chip was captured anyway -- the chip occludes it on screen
-/// -- so masking loses no information about the game, only about ourselves.
+/// normalisation. Nothing under a chip was captured anyway, since the chip occludes it on
+/// screen, so masking loses no information about the game, only about ourselves.
 /// `mask_dy` is where the chips actually sit in design pixels right now: the published
 /// phase plus any scroll deltas streamed since. Tiles must shift the same distance the
 /// frontend slides them, or the moment after a scroll the previous epoch's chips re-enter
@@ -344,8 +344,8 @@ mod tests {
         assert_eq!(view.total_plat, 26);
     }
 
-    /// The row chip is the unit price -- what one copy sells for and what the grid tile of
-    /// the same item shows -- while the total alone multiplies: a 7p barrel counted twice is
+    /// The row chip is the unit price, what one copy sells for and what the grid tile of
+    /// the same item shows, while the total alone multiplies: a 7p barrel counted twice is
     /// worth 14 but lists for 7.
     #[test]
     fn basket_rows_show_the_unit_price_and_the_total_sums_copies() {

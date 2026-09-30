@@ -5,7 +5,7 @@
 //! request/response over a `MarketTransport` trait, and a persistent connection with a background
 //! thread and a reconnect loop is a different lifecycle that would infect its every test.
 //!
-//! Three statuses can be *set* -- `online`, `ingame`, `invisible`. `offline` is observed-only:
+//! Three statuses can be *set*: `online`, `ingame`, `invisible`. `offline` is observed-only:
 //! going offline means closing the socket, and this crate spells it that way rather than sending a
 //! value the server does not accept.
 #![forbid(unsafe_code)]
@@ -60,7 +60,7 @@ pub fn sign_in_frame(token: &str) -> String {
 
 /// `duration` is deliberately omitted: without one the status holds for the life of the
 /// connection, which is exactly the claim "this application is running" makes. `activity` is
-/// omitted too -- it is rich presence, and nobody asked for it.
+/// omitted too, since it is rich presence and nobody asked for it.
 pub fn set_status_frame(status: Presence) -> String {
     serde_json::json!({
         "route": "@wfm|cmd/status/set",
@@ -71,8 +71,8 @@ pub fn set_status_frame(status: Presence) -> String {
 
 /// The route a frame declares, if it is parseable JSON carrying one.
 ///
-/// Every message on this socket names itself by route, so the server's several meanings -- a
-/// credential accepted or refused, a status committed, a report pushed -- are told apart by
+/// Every message on this socket names itself by route, so the server's several meanings (a
+/// credential accepted or refused, a status committed, a report pushed) are told apart by
 /// comparing it, and the comparison lives in the helpers rather than being re-typed.
 fn route(frame: &str) -> Option<String> {
     serde_json::from_str::<serde_json::Value>(frame)
@@ -92,8 +92,8 @@ pub fn is_signin_refusal(frame: &str) -> bool {
 /// Whether this frame is the server accepting the credential.
 ///
 /// Acceptance and refusal are both command replies, `signIn:ok` and `signIn:error`. The status
-/// event is not a reply to signing in, and a fresh connection is not guaranteed one -- the server
-/// sends it when a status is *set*, not when a client *arrives* -- so it cannot be the signal a
+/// event is not a reply to signing in, and a fresh connection is not guaranteed one. The server
+/// sends it when a status is *set*, not when a client *arrives*, so it cannot be the signal a
 /// client waits for before asking for the status it holds.
 pub fn is_sign_in_success(frame: &str) -> bool {
     route(frame).is_some_and(|route| route == "@wfm|cmd/auth/signIn:ok")
@@ -103,7 +103,7 @@ pub fn is_sign_in_success(frame: &str) -> bool {
 ///
 /// The server is the source of truth here: this reads the committed value rather than the screen
 /// echoing back whatever was asked for. The answer to a set is the command echo `set:ok` with the
-/// status it just committed in its payload -- which is what later sets in the same connection
+/// status it just committed in its payload, which is what later sets in the same connection
 /// receive. The event route arrives only at the start of a connection, announcing the status the
 /// server held when the connection opened, so a client that read only the event would confirm the
 /// first set and then hang on every later one.
@@ -228,7 +228,7 @@ fn session(
     // second call returns Err and is ignored, so this is safe from any thread on any reconnect.
     let _ = rustls::crypto::ring::default_provider().install_default();
     let (mut socket, _) = tungstenite::connect(request).map_err(|_| ())?;
-    // Reads would otherwise block until the server says something, which can be minutes -- and a
+    // Reads would otherwise block until the server says something, which can be minutes, and a
     // close asked for in the meantime would sit unsent that whole time. A one-second read timeout
     // turns the read into a poll the command channel gets a turn between.
     match socket.get_mut() {
@@ -294,7 +294,8 @@ fn session(
                 // The credential was accepted. Ask for the status this socket holds now, rather
                 // than waiting for the server to volunteer one: the status event is the server's
                 // answer to a set request, not a greeting a fresh connection is guaranteed, so
-                // nothing would ever be sent -- committed a status that was never asked for.
+                // nothing would ever be sent, and the app would have committed a status that was
+                // never asked for.
                 signed_in = true;
                 unanswered = 0;
                 if *committed.lock().expect("status mutex poisoned") != Some(*wanted) {
@@ -309,7 +310,7 @@ fn session(
                 unanswered = 0;
                 *committed.lock().expect("status mutex poisoned") = Some(status);
                 // Normally a status event is read after the set request answered it. It can also
-                // arrive unasked, when the server announces the account's current status -- in
+                // arrive unasked, when the server announces the account's current status. In
                 // which case asking for what is already held would be a wasted frame.
                 if !signed_in {
                     signed_in = true;
@@ -321,13 +322,13 @@ fn session(
                 }
                 continue;
             }
-            // Any other frame -- the server's periodic reports, orders, chat -- answers no status
+            // Any other frame (the server's periodic reports, orders, chat) answers no status
             // ask, so it must not quiet the stall count below: a chatty server would otherwise
             // mask a status ask whose answer was lost.
         }
         // Nothing was recognized this pass, so the server said nothing. A status asked for but
-        // not committed within a few quiet passes is a lost answer -- or a dead connection that
-        // has not noticed -- and asking again is the difference between settling and hanging on
+        // not committed within a few quiet passes is a lost answer, or a dead connection that
+        // has not noticed, and asking again is the difference between settling and hanging on
         // "Asking warframe.market" forever. Re-ask on odd passes, and if it stays silent for
         // several more, trade the connection for a new one: `run` reconnects from the `Err`.
         if signed_in && *committed.lock().expect("status mutex poisoned") != Some(*wanted) {
@@ -560,7 +561,7 @@ mod handshake_tests {
     /// Replays the live transcript captured against the real server: the first set is answered
     /// with the event (the status held when the connection opened, then the new one) and every
     /// later set with the command echo alone. Reading only the event commits the first status by
-    /// luck and then never moves -- the switch must read the echo to settle at all.
+    /// luck and then never moves. The switch must read the echo to settle at all.
     #[test]
     fn a_late_switch_reads_the_committed_status_from_the_command_echo() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test listener binds");

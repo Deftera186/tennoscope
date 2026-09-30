@@ -3,7 +3,7 @@
 //!
 //! Ownership model (architecture report #1):
 //! - One worker thread owns the non-`Send` capture adapter. It constructs the adapter
-//!   itself on each open epoch and drops it on close — the requesting thread never
+//!   itself on each open epoch and drops it on close. The requesting thread never
 //!   touches it. Capture takes no state mutex.
 //! - `close` is nonblocking: it retires the epoch, invalidates pending/in-flight results
 //!   and publication tokens, and asks the worker to drop its source. `shutdown`/`Drop`
@@ -346,7 +346,7 @@ where
             shared.gate.retire();
         }
         // At cold start (epoch 0) there is no session: no epoch bump, no deadline arm, no
-        // resolved-epoch carry -- otherwise the first fissure would be suppressed as a
+        // resolved-epoch carry. Otherwise the first fissure would be suppressed as a
         // duplicate and a 45-minute watch would arm for a session that never opened.
         *lock(&shared.delivery) = None;
         shared.paused.store(true, Ordering::Release);
@@ -389,7 +389,7 @@ where
             return RecognitionUpdate::default();
         };
         // A delivery is only valid when the session epoch and evidence revision it was
-        // captured under are still current — queued or in-flight results from a closed or
+        // captured under are still current: queued or in-flight results from a closed or
         // advanced epoch can never be delivered.
         if delivery.epoch != current_epoch || delivery.revision != current_revision {
             return RecognitionUpdate::default();

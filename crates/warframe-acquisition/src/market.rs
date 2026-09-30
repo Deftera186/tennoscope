@@ -102,7 +102,7 @@ struct Order {
     /// listing six relics for 18p is asking 3p each, not 18p each.
     #[serde(default = "one")]
     per_trade: u32,
-    /// Which variant of the listing this order is for -- a relic's refinement, a fish's size.
+    /// Which variant of the listing this order is for: a relic's refinement, a fish's size.
     #[serde(default)]
     subtype: Option<String>,
 }
@@ -117,7 +117,7 @@ struct OrderUser {
 ///
 /// The subtype is filtered here as well as in the query string. warframe.market answers a `/top`
 /// request with an unrecognised query parameter by ignoring it, so trusting the server alone would
-/// turn a mistyped refinement into the intact price served silently under a radiant relic's name --
+/// turn a mistyped refinement into the intact price served silently under a radiant relic's name,
 /// which is the exact wrong number this distinction exists to stop showing.
 pub fn lowest_sell_top(body: &[u8], subtype: Option<&str>) -> PriceLookup {
     let Ok(response) = serde_json::from_slice::<TopResponse>(body) else {
@@ -134,7 +134,7 @@ pub fn lowest_sell_top(body: &[u8], subtype: Option<&str>) -> PriceLookup {
             // nearest rather than truncated: 12p for five is 2.4p each, and truncation would quote
             // 2p and understate every bulk seller. A malformed count of zero is treated as one
             // rather than dividing by it. Floored at 1p because a bulk listing that rounds to zero
-            // -- 1p for six -- renders as "0p", which reads as free rather than as cheap.
+            // (1p for six) renders as "0p", which reads as free rather than as cheap.
             let per_trade = order.per_trade.max(1);
             ((order.platinum + per_trade / 2) / per_trade).max(1)
         })
@@ -241,7 +241,7 @@ impl RequestPacer {
 /// made minutes earlier.
 ///
 /// EE.log names the squad's relics when they are *loaded*, which is a long way ahead of the reward
-/// screen -- 125s in the replayed run, against a screen that lives for fifteen seconds. Pricing
+/// screen: 125s in the replayed run, against a screen that lives for fifteen seconds. Pricing
 /// only started when the cards were already on screen, so every card showed a dash until the
 /// requests came back, which is exactly the moment the player is deciding. This fills that window:
 /// everything the pool can drop is priced while the mission is still being played, and by the time
@@ -289,7 +289,7 @@ impl MarketPriceCache {
     /// Price every name not already held, keeping requests at least `gap` apart.
     ///
     /// The gap is what keeps a pool of two dozen names from arriving at warframe.market as a burst.
-    /// There is no hurry -- the whole point is that this runs minutes early -- so it is cheap to be
+    /// There is no hurry, since the whole point is that this runs minutes early, so it is cheap to be
     /// polite. A caller in a hurry may pass `Duration::ZERO` to skip its own extra politeness, but
     /// `MARKET_MIN_GAP` still applies across every caller.
     pub fn warm(
@@ -322,7 +322,7 @@ impl MarketPriceCache {
 ///
 /// The counts exist so a caller can tell the diagnostics row something true. Without them every
 /// failure arrives as the same absent price, and "warframe.market is sending us more than we will
-/// read" is indistinguishable from "nobody is selling this" -- which is the difference between a
+/// read" is indistinguishable from "nobody is selling this", which is the difference between a
 /// client that needs fixing and an ordinary quiet evening.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct WarmOutcome {
@@ -337,7 +337,7 @@ impl WarmOutcome {
     ///
     /// Oversize outranks everything: it does not fix itself, it hits every item at once, and as an
     /// absent price it presents as "the whole collection is worthless" with nothing saying
-    /// otherwise. An unreachable endpoint is reported whether or not the pass priced anything --
+    /// otherwise. An unreachable endpoint is reported whether or not the pass priced anything:
     /// a 48-item page that lost half its prices to an outage is not a healthy pass, and reading
     /// Ready off it is how a player concludes those relics are simply worthless. A pass that priced
     /// something and merely found an item unsold is not news.

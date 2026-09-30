@@ -12,8 +12,8 @@ const MOD_ID: &str = "54ca39abe7798915c1c11e10";
 /// A market item with no `gameRef`, of which the live table carries 35.
 const RETIRED_ID: &str = "5program0000000000000000";
 /// A relic and a set, both taken verbatim from `GET /v2/items` on 2026-08-03. Their published
-/// paths name rows the collection never carries -- the relic's four refinements are stored
-/// suffixed, and a set's parts are `/Recipes/` rows rather than the built item -- which is why
+/// paths name rows the collection never carries. The relic's four refinements are stored
+/// suffixed, and a set's parts are `/Recipes/` rows rather than the built item, which is why
 /// neither can be compared against an owned quantity.
 const RELIC_ID: &str = "56783f24cbfa8f0432dd89a2";
 const SET_ID: &str = "54a73e65e779893a797ffef1";
@@ -299,7 +299,7 @@ fn a_relic_order_is_unverifiable_rather_than_missing() {
 }
 
 /// A set listing names the built item; what the seller holds is the parts. Left uncaught, every
-/// set on the account -- the most common thing there is to sell -- reads as missing.
+/// set on the account, the most common thing there is to sell, reads as missing.
 #[test]
 fn a_set_order_is_unverifiable_rather_than_missing() {
     let orders = vec![sell_order(SET_ID, 1, 1_785_405_600)];
@@ -316,7 +316,7 @@ fn a_set_order_is_unverifiable_rather_than_missing() {
 
 /// The badge on a collection card is a join the frontend cannot make on its own: an order names the
 /// market's opaque id and a card names a `/Lotus/` row, and the two namespaces share nothing. The
-/// reconciliation already holds the item table, so it names the row for the interface -- including
+/// reconciliation already holds the item table, so it names the row for the interface, including
 /// for orders it declines to judge, because an unverifiable order is still a live listing whose
 /// holding the card should be able to speak about.
 #[test]

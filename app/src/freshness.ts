@@ -21,7 +21,7 @@ function readingOf(observed: Date, now: Date): Reading | null {
 /** Reads a backend stamp string, or `null` when it holds no usable time. Health rows and the market
  * order fetch time are emitted as Unix seconds (`now_unix_seconds`, `SystemTime::as_secs`) while the
  * price-dump row keeps a calendar date, so digit-only stamps are read as seconds and everything else
- * is left to `Date`. Owning that test here is what keeps callers from re-deriving it -- read as a
+ * is left to `Date`. Owning that test here is what keeps callers from re-deriving it. Read as a
  * calendar string, `1785492000` is not a 2026 date but `Invalid Date`. */
 export function stampReading(value: string, now = new Date()): Reading | null {
   return readingOf(/^\d{9,}$/.test(value) ? new Date(Number(value) * 1000) : new Date(value), now)

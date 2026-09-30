@@ -75,7 +75,7 @@ export default function KioskOverlay() {
   // `kiosk-updated` events can overlap IPC reads. Only the newest-started read may publish;
   // otherwise a slow older response can roll the epoch, prices, and absolute offset back.
   const refreshSeq = useRef(0)
-  // Unreadable looks fade the chips; a settled read unhides them again -- but only when no
+  // Unreadable looks fade the chips; a settled read unhides them again, but only when no
   // unreadable look landed while the read was in flight, otherwise a stale pre-dialog view
   // would briefly paint chips over the dialog until the next null re-fades them.
   const fadeSeq = useRef(0)
@@ -121,7 +121,7 @@ export default function KioskOverlay() {
         }
         const sessionChanged = next.session !== sessionSeen.current
         if (sessionChanged) adoptSession(next.session)
-        // A settled read means the grid was readable when the read began -- but only when no
+        // A settled read means the grid was readable when the read began, but only when no
         // unreadable look landed while it was in flight. Otherwise the settling view predates
         // the occlusion (an unreadable strip look during a dialog) and unhiding would paint
         // stale chips over it until the next null re-fades them. Gating the old epoch check
@@ -130,7 +130,7 @@ export default function KioskOverlay() {
         nullStreak.current = 0
         if (fadeAtRead === fadeSeq.current) setFaded(false)
         // Every settled read measured where the grid sits right now, so its offset is
-        // authoritative whenever nothing has moved since the read began -- not just when
+        // authoritative whenever nothing has moved since the read began, not just when
         // an anchor marks it. Adopting only anchors lets each look's estimation error
         // compound unrestrained until the chips drift clean off their cards mid-session.
         if (sessionChanged || seqAtRead === scrollSeq.current) {
@@ -141,9 +141,9 @@ export default function KioskOverlay() {
       } catch { /* transient IPC failure: keep the last anchor standing */ }
     }
 
-    // While the grid moves the backend streams how far it moved since the last look -- the
+    // While the grid moves the backend streams how far it moved since the last look. The
     // chips ride the scroll by accumulating those deltas. An unreadable look (null) fades
-    // them until the next settled read publishes where the grid actually is -- but only
+    // them until the next settled read publishes where the grid actually is, but only
     // after a short run of nulls, so one noisy look cannot blink a good view.
     void listen<{ session: number, dy: number | null }>('kiosk-scroll', (event) => {
       if (!active || event.payload.session !== sessionSeen.current) return

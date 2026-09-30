@@ -122,7 +122,7 @@ struct RawXpEntry {
 /// One inventory response.
 ///
 /// Every section is defaulted *and* holds raw rows rather than decoded ones. `inventory.php` omits
-/// a section entirely when the account holds nothing in it -- no Necramech means no `MechSuits` --
+/// a section entirely when the account holds nothing in it (no Necramech means no `MechSuits`),
 /// and it also emits rows the game's own client refuses: a Steam Deck report carried
 /// `Inventory has NULL item` in Warframe's `EE.log` against the very response we were reading, and
 /// one `"ItemType": null` failed the entire account's snapshot. The client skips such a row and
@@ -183,8 +183,8 @@ struct RawInventory {
 
 /// A section, tolerating the two shapes that are not a list of rows.
 ///
-/// `null` is not the same as absent to serde -- `#[serde(default)]` covers a missing key and
-/// nothing else -- and the endpoint emits both. Anything that is neither a list nor null is a
+/// `null` is not the same as absent to serde. `#[serde(default)]` covers a missing key and
+/// nothing else, and the endpoint emits both. Anything that is neither a list nor null is a
 /// section we did not understand, and reads as empty rather than failing its nineteen siblings.
 fn rows<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
@@ -226,7 +226,7 @@ impl DecodeReport {
 /// A skipped row named by its `ItemType` alone.
 ///
 /// The rest of a row can carry a riven's rolled stats or a trade's counterparty, so only the item
-/// path -- which is game content, identical for every account that owns one -- is ever quoted.
+/// path, which is game content identical for every account that owns one, is ever quoted.
 fn row_label(row: &serde_json::Value) -> String {
     match row.get("ItemType").and_then(serde_json::Value::as_str) {
         Some(path) if path.len() <= 128 => format!("ItemType={path}"),
@@ -253,7 +253,7 @@ fn parse_entry(row: serde_json::Value, report: &mut DecodeReport) -> Option<RawE
 
 struct AccumulatedEntry {
     /// The catalogue path these copies came from, which is the map key for everything except a
-    /// ranked mod -- that one is keyed per rank, and still has to look its artwork and name up here.
+    /// ranked mod. That one is keyed per rank, and still has to look its artwork and name up here.
     path: String,
     name: Option<String>,
     category: Category,
@@ -486,7 +486,7 @@ fn build_entry(path: String, accumulated: AccumulatedEntry) -> Option<InventoryE
 ///
 /// A failed read reaches the player as "Inventory snapshot was invalid" and reaches us as nothing
 /// at all: the serde error was discarded at the parse, so the one report that mattered could not
-/// be answered from the app's own output. This is counts and item paths only -- see `row_label`.
+/// be answered from the app's own output. This is counts and item paths only; see `row_label`.
 fn trace_decode(line: &str) {
     log::warn!("{line}");
 }
@@ -512,7 +512,7 @@ fn add_misc_section(
 
 /// Mods, arcanes and rivens, whether they carry a rank or not.
 ///
-/// Both sections mix the two kinds, and only the path tells them apart -- WFCD files an arcane
+/// Both sections mix the two kinds, and only the path tells them apart. WFCD files an arcane
 /// under `/Upgrades/CosmeticEnhancers/`. The fallback is what an unresolved path gets: 12 of this
 /// account's 1,011 rows are newer than the cached catalog, and "a mod" is a better guess for them
 /// than "a resource".
@@ -634,7 +634,7 @@ fn add_stackable_item(
 
 /// Whether a path is one the game could have written.
 ///
-/// A row failing this is a row we cannot key, name, or price, so it is dropped -- but the account
+/// A row failing this is a row we cannot key, name, or price, so it is dropped, but the account
 /// around it is untouched. Rejecting the snapshot over one such path is what a real read hit.
 fn validate_item_type(path: &str) -> bool {
     path.starts_with("/Lotus/")

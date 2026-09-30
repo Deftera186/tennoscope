@@ -22,8 +22,8 @@ export async function readWindowMaximized(): Promise<boolean> {
   return await getCurrentWindow().isMaximized()
 }
 
-/** The state can change from outside the app -- KDE's snap and keyboard shortcuts never touch
- * this code -- so the glyph follows the window rather than the button. */
+/** The state can change from outside the app. KDE's snap and keyboard shortcuts never touch
+ * this code, so the glyph follows the window rather than the button. */
 export async function watchWindowResized(handler: () => void): Promise<() => void> {
   return await getCurrentWindow().onResized(() => handler())
 }

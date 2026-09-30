@@ -1,7 +1,7 @@
 //! Portal ScreenCast + PipeWire: fallback capture for native Wayland compositors without wlroots
 //! screencopy.
 //!
-//! `xcap`'s own Wayland branch is unusable for polling -- it calls the portal `Screenshot`
+//! `xcap`'s own Wayland branch is unusable for polling, since it calls the portal `Screenshot`
 //! with `interactive: false, modal: true`, which is a permission dialog every two seconds.
 //! ScreenCast restores an explicitly authorized grant at startup; gameplay communicates only with
 //! that live session and never negotiates with the portal.
@@ -140,8 +140,8 @@ pub fn has_saved_grant() -> bool {
 
 /// Persist the grant at `0600`.
 ///
-/// A restore token is a capability -- anything that can read it can re-open a screen cast of this
-/// desktop -- so it does not get the default `0644`. `OpenOptions::mode` only applies to a file
+/// A restore token is a capability: anything that can read it can re-open a screen cast of this
+/// desktop, so it does not get the default `0644`. `OpenOptions::mode` only applies to a file
 /// this call creates, so a token file left behind at a broader mode is tightened explicitly. Both
 /// happen before any byte is written, so the token is never briefly world-readable.
 fn save_token(token: &str) {
@@ -173,7 +173,7 @@ fn save_token_at(path: &Path, token: &str) -> std::io::Result<()> {
 /// monitor behind each one sits.
 ///
 /// It retains the portal `Session`, because that handle is the only thing that can end the cast.
-/// ashpd has no `Drop` impl for `Session` -- it is closed only by an explicit `Close` call -- so
+/// ashpd has no `Drop` impl for `Session`, which is closed only by an explicit `Close` call, so
 /// without this the compositor's screen-sharing indicator stays lit for the whole process
 /// lifetime, long after the last fissure ended. `Drop` makes that call.
 pub struct PortalSession {
@@ -195,8 +195,8 @@ impl Drop for PortalSession {
             close_blocking(session);
             return;
         }
-        // Dropped inside a runtime. The close moves to a fresh thread -- which has no ambient
-        // runtime, so it can block -- rather than being skipped: skipping it leaves the cast live
+        // Dropped inside a runtime. The close moves to a fresh thread, which has no ambient
+        // runtime and so can block, rather than being skipped: skipping it leaves the cast live
         // and the compositor's screen-sharing indicator lit for the rest of the process, which is
         // the exact leak retaining the session was meant to fix.
         //
@@ -217,7 +217,7 @@ impl Drop for PortalSession {
 /// Close a cast from a thread that has no ambient runtime.
 ///
 /// Blocking is safe here by construction: both callers have already established that no runtime is
-/// driving the current thread. `warn`, not `debug`, on failure -- a cast the compositor still
+/// driving the current thread. `warn`, not `debug`, on failure. A cast the compositor still
 /// believes is live is a visible indicator the user cannot account for, so it belongs in a report.
 fn close_blocking(session: Session<Screencast>) {
     let Ok(runtime) = portal_runtime() else {
@@ -249,7 +249,7 @@ fn close_blocking(session: Session<Screencast>) {
 /// while some thread sits inside `block_on`, so the connection's socket reader stops between
 /// calls. And its `block_on` takes exclusive hold of the single scheduler core, so a
 /// `PortalSession::drop` closing a cast would queue behind an interactive handshake for up to
-/// `HANDSHAKE_DEADLINE` -- on the frame worker's thread, that is a minute-long capture stall. One
+/// `HANDSHAKE_DEADLINE`, and on the frame worker's thread that is a minute-long capture stall. One
 /// worker thread is enough: the D-Bus work here is entirely IO-bound.
 fn portal_runtime() -> Result<&'static tokio::runtime::Runtime, &'static str> {
     static RUNTIME: LazyLock<Result<tokio::runtime::Runtime, &'static str>> = LazyLock::new(|| {
@@ -298,7 +298,7 @@ impl PortalSession {
     /// The deadline is applied per await rather than by wrapping the whole handshake in a single
     /// `timeout`. That distinction is the whole point: `ashpd`'s `Session` does not close on drop,
     /// so a future cancelled while it owned the session would abandon a cast the portal still
-    /// considers live -- a screen-sharing indicator the user cannot turn off. Timing out inside the
+    /// considers live, a screen-sharing indicator the user cannot turn off. Timing out inside the
     /// handshake instead lets every exit run `close_unused`.
     async fn negotiate(
         restore_token: Option<&str>,
@@ -930,7 +930,7 @@ mod tests {
     }
 
     /// A stream with no geometry is not usable as a rect, and must not be silently treated as
-    /// the origin -- that would crop the wrong monitor.
+    /// the origin, since that would crop the wrong monitor.
     #[test]
     fn a_stream_without_geometry_has_no_rect() {
         assert!(
@@ -997,7 +997,7 @@ mod tests {
         );
     }
 
-    /// When X11 did give us a rect, the stream containing it is the right one -- no guessing.
+    /// When X11 did give us a rect, the stream containing it is the right one. No guessing.
     #[test]
     fn a_known_rect_picks_the_stream_that_contains_it() {
         let streams = [
@@ -1187,8 +1187,8 @@ mod tests {
     }
 
     /// The documented degradation, pinned so it stays deliberate rather than incidental: a rect
-    /// the portal has no matching monitor for -- an output hotplugged away between the rect query
-    /// and the handshake -- still yields a stream, because a probably-wrong monitor the card
+    /// the portal has no matching monitor for (an output hotplugged away between the rect query
+    /// and the handshake) still yields a stream, because a probably-wrong monitor the card
     /// reader will reject beats capturing nothing. `pick_stream` logs this case.
     #[test]
     fn a_rect_matching_no_stream_still_yields_the_first_stream() {
@@ -1203,7 +1203,7 @@ mod tests {
     }
 
     /// Half a geometry is not a monitor. A stream that reports a position but no size cannot be
-    /// containment-tested, so it must be skipped rather than treated as a match -- matching on
+    /// containment-tested, so it must be skipped rather than treated as a match. Matching on
     /// position alone would send an unbounded monitor every rect to its right.
     #[test]
     fn a_stream_missing_its_size_is_not_a_containment_match() {
@@ -1226,7 +1226,7 @@ mod tests {
     }
 
     /// The portal's size fields are signed. A negative one is not a rectangle, and must not wrap
-    /// into a huge `u32` -- that would be a monitor that contains everything.
+    /// into a huge `u32`, which would be a monitor that contains everything.
     #[test]
     fn a_negative_size_has_no_rect() {
         assert!(

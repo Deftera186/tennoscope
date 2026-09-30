@@ -191,7 +191,7 @@ export function useUpdateStore(): UpdateSnapshot {
 
 /** Daily auto-check. Runs once per mount; CI-light by contact, not by timer.
  *  A persisted offer restores immediately so the masthead stays across
- *  restarts until dismissed, installed, or superseded — the daily throttle
+ *  restarts until dismissed, installed, or superseded. The daily throttle
  *  would otherwise hide it until the next network check. */
 export function bootUpdateChecks(): void {
   if (booted) return
@@ -308,7 +308,7 @@ export function dismissOffered(): void {
   if (available) {
     // Honest model: "Not now" snoozes 7 days with no strike. A strike
     // accrues only when dismissing a version that already has a snooze
-    // record — the second dismissal after a lapse — then the snooze renews.
+    // record (the second dismissal after a lapse), then the snooze renews.
     if (snoozedUntil(available.version) !== null) dismissVersion(available.version)
     snoozeVersion(available.version)
     // The idle row would otherwise give no acknowledgment that the reminder

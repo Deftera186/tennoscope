@@ -1,7 +1,7 @@
 //! Log-monitor health recordings log transitions, not steady state.
 //!
 //! The monitor thread re-records the log-monitor health every second. When the game is not
-//! running the steady state is "idle, Waiting for Warframe" — logging it on every tick
+//! running the steady state is "idle, Waiting for Warframe". Logging it on every tick
 //! floods the console with lines that carry no new information.
 
 use std::sync::{Mutex, Once};

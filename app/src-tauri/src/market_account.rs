@@ -96,7 +96,7 @@ impl MarketSession {
     /// The item table already held, if a fetch has happened since launch.
     ///
     /// For a caller that wants to fetch unlocked: it can take this handle, decide for itself
-    /// whether a fetch is needed, and only come back to store the result -- rather than holding
+    /// whether a fetch is needed, and only come back to store the result, rather than holding
     /// whatever lock guards this session for the whole network round trip.
     pub fn cached_items(&self) -> Option<Arc<MarketItems>> {
         self.items.clone()
@@ -189,7 +189,7 @@ pub const ORDER_NOT_HELD: &str = "That order is not on the currently held list";
 /// `OrderStatus::Overshoot { owned }`. An order that is not an overshoot has no such count to send.
 pub const ORDER_NOT_OVERSHOOT: &str = "That order is not currently flagged as oversold";
 
-/// An edit was asked for on an order that does not name one row of the collection -- a set, a
+/// An edit was asked for on an order that does not name one row of the collection: a set, a
 /// sculpture, a retired item. There is no holding to bound the edit against, so there is no edit.
 pub const ORDER_NOT_ON_A_ROW: &str =
     "That listing does not name one row of this device's collection";
@@ -209,8 +209,8 @@ pub fn find_order<'a>(view: &'a MarketAccountView, order_id: &str) -> Option<&'a
 }
 
 /// The quantity a write is allowed to send for this order: the collection's own count, and only
-/// when the reconciliation has flagged the order as overselling it. Anything else -- `Ok`,
-/// `Missing`, `Unverifiable`, or an id absent from the view -- has no quantity this command may
+/// when the reconciliation has flagged the order as overselling it. Anything else (`Ok`,
+/// `Missing`, `Unverifiable`, or an id absent from the view) has no quantity this command may
 /// derive, and the caller must refuse rather than fall back to a frontend-supplied number.
 pub fn overshoot_quantity(view: &MarketAccountView, order_id: &str) -> Option<u32> {
     match find_order(view, order_id)?.status {
@@ -224,8 +224,8 @@ pub const ITEM_NOT_OWNED: &str = "This device's collection does not hold that it
 
 /// A sell was asked for on a row whose listing this application cannot name honestly.
 ///
-/// A copy held part-way up its ranks -- warframe.market quotes a card at rank 0 and at its ceiling
-/// only -- an Ayatan sculpture whose socketed stars no row knows, a set whose market entry names
+/// A copy held part-way up its ranks (warframe.market quotes a card at rank 0 and at its ceiling
+/// only), an Ayatan sculpture whose socketed stars no row knows, a set whose market entry names
 /// the built item rather than the parts actually held. The refusal is backend-side because the
 /// request would be refused by warframe.market anyway, after the request.
 pub const ITEM_NOT_LISTABLE: &str = "That item cannot be listed from TennoScope: warframe.market needs details this app does not ask for";
@@ -235,8 +235,8 @@ pub const ITEM_NOT_LISTABLE: &str = "That item cannot be listed from TennoScope:
 /// Takes a collection row id rather than a market id for the same reason `set_order_quantity`
 /// derives its own quantity: a market id supplied by the frontend is a value nothing checked, and
 /// this one addresses which item a real listing gets published for. The row is checked against the
-/// collection first -- offering to sell what the player does not have is the mirror of the
-/// `missing` flag this screen exists to raise -- and then resolved through the item table, which
+/// collection first (offering to sell what the player does not have is the mirror of the
+/// `missing` flag this screen exists to raise), and then resolved through the item table, which
 /// answers with the rank, subtype and per-trade size the row's own identity implies. Every
 /// contextual field of the create body comes from here; none is ever taken from the caller.
 pub fn authorize_sell<'a>(
@@ -262,7 +262,7 @@ pub fn authorize_removal(view: &MarketAccountView, order_id: &str) -> Result<(),
 /// Whether an edit may proceed, bounded by the holding of the row the order names.
 ///
 /// The price and the count both come from the player, so unlike the derived quantity repair this
-/// write does take caller-supplied numbers -- and everything that can be checked against this
+/// write does take caller-supplied numbers, and everything that can be checked against this
 /// device's own knowledge is: the order is on the held view, it is a sell listing, its `row_id`
 /// names a row the collection holds, and the count does not exceed that row's holding. Only the
 /// price is left to the market crate's own bounds, because a fair price is the player's alone to

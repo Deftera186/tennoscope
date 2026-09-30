@@ -66,7 +66,7 @@ const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: str
 
 // The two value sorts are named and marked by their own metal: "Value" stopped answering once a
 // card could carry two prices, and a currency's own icon is the disambiguator this screen already
-// teaches. Ducats belongs to the ducat layer -- offered only while the values are on screen.
+// teaches. Ducats belongs to the ducat layer, offered only while the values are on screen.
 const sortOptions: Array<{ value: Sort; label: string; metal?: 'plat' | 'ducat' }> = [
   { value: 'name-asc', label: 'Name A–Z' },
   { value: 'quantity-desc', label: 'Quantity' },
@@ -80,7 +80,7 @@ const categoryName = Object.fromEntries(categories.map(category => [category.val
 const monthAbbr = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
 /** `2026-07-27` -> `27 Jul`. Formatted by hand rather than `Intl`, whose month/day order follows
- * the runtime locale -- this reading has to look the same on every machine it runs on. */
+ * the runtime locale. This reading has to look the same on every machine it runs on. */
 function shortDumpDate(isoDate: string): string {
   const [, month, day] = isoDate.split('-').map(Number)
   return `${day} ${monthAbbr[month - 1]}`
@@ -117,7 +117,7 @@ function Mark({ name, className = 'punch-glyph' }: { name: Page | 'refresh' | 's
 
 /**
  * Minimize, maximize and close, drawn in the same square-stroke grammar as the page marks. The
- * maximize control is named by what it does next -- restore while maximized -- because a button
+ * maximize control is named by what it does next (restore while maximized), because a button
  * whose name never changes cannot say which press undoes the other.
  */
 function WindowControls() {
@@ -330,7 +330,7 @@ function App() {
    * Deliberately outside `runForeground`: a page refresh prices up to forty-eight items at three
    * requests a second, so it is on the wire for about sixteen seconds, and the whole promise of it
    * is that prices appear as they land. That only happens if the 2.5s poll keeps running through
-   * it. Ordering remains coherent -- `requestView` applies a response only while its request is
+   * it. Ordering remains coherent: `requestView` applies a response only while its request is
    * newest one started, so an older view can never land on top of a newer one.
    *
    * The local flag exists only to hold the control down for the up-to-2.5s gap before the poll
@@ -345,7 +345,7 @@ function App() {
 
   /**
    * Every market write goes through here: fresh view on success, a banner on failure. The optional
-   * note is spoken once, on success only -- the badge appearing is the sighted player's
+   * note is spoken once, on success only. The badge appearing is the sighted player's
    * confirmation, and the note is the same confirmation for anyone not looking at it.
    */
   async function ordersOperation(
@@ -786,7 +786,7 @@ function CollectionEntry({ item, ownershipVerified, showDucats, listedOrder, sel
   // Nothing offered on a card whose whole holding is already listed: the badge above says so, and
   // the market allows one sell order per item, so a second listing is not what "sell more" can
   // mean. A listing that covers part of the holding keeps the control, as an edit of the listing
-  // that already stands -- raising the count is the only honest way to sell the remainder.
+  // that already stands. Raising the count is the only honest way to sell the remainder.
   const remaining = sellable && (!listedOrder || listedOrder.quantity < item.quantity)
   return <article className={`entry cat-${item.category}`} aria-label={label}>
     <div className="entry-well">
@@ -820,7 +820,7 @@ function CollectionEntry({ item, ownershipVerified, showDucats, listedOrder, sel
             </b>}
         </span>}
         {/* Baro's price, beside the market's. It is a fact of the item rather than of a holding,
-            so it reads on a missing part too, where the platinum span above stays silent -- and it
+            so it reads on a missing part too, where the platinum span above stays silent, and it
             totals like platinum does, because a stack of parts banks a stack of ducats. */}
         {showDucats && (item.ducats !== undefined
           ? <span className="price ducat-reading">
@@ -1154,7 +1154,7 @@ function AboutPage({ effectiveMode }: { effectiveMode: AccessMode }) {
 
 /**
  * The strip is placed against the game's own window, so a preview is the only way
- * to see it without a fissure running -- but a preview you cannot dismiss does not
+ * to see it without a fissure running. A preview you cannot dismiss does not
  * earn its place, which is why this is a toggle and not a one-way button.
  */
 function OverlayPreviewToggle({ prohibited, busy }: { prohibited: boolean; busy: boolean }) {

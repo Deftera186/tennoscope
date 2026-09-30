@@ -38,7 +38,7 @@ use warframe_domain::RewardCandidate;
 /// Shared with the kiosk poller; reward recognition owns its own search/watch cadence.
 const POLLER_LIFETIME: Duration = Duration::from_secs(45 * 60);
 /// The kiosk poller's steady cadence: the kiosk stays up while the player browses, so there is
-/// no "found it, watch faster" split like the reward screen's -- one rate fast enough to feel
+/// no "found it, watch faster" split like the reward screen's. One rate fast enough to feel
 /// live against basket edits and slow enough to keep OCR off the CPU.
 const KIOSK_POLL_INTERVAL: Duration = Duration::from_millis(400);
 /// The kiosk poller's cadence while the grid is drifting: a grim capture costs ~25ms, so a 60ms
@@ -46,7 +46,7 @@ const KIOSK_POLL_INTERVAL: Duration = Duration::from_millis(400);
 const KIOSK_MOTION_INTERVAL: Duration = Duration::from_millis(60);
 /// How long a kiosk close stays a maybe: a sale confirm rebuilds the kiosk screen mid-visit
 /// (EE.log `Saving profile`, then `HudVis 0` plus a foreign subscription, then the full open
-/// markers one to two seconds later -- measured 1.67s on a 2026-09-20 live session), so the
+/// markers one to two seconds later (measured 1.67s on a 2026-09-20 live session), so the
 /// monitor only tears down once the close markers stay silent past this window. A reopen
 /// inside the window cancels the pending teardown.
 pub const KIOSK_CLOSE_GRACE: Duration = Duration::from_millis(3000);
@@ -380,7 +380,7 @@ fn leading_uptime(line: &[u8]) -> Option<f64> {
 }
 
 /// How far before attachment a line may still have happened and count as fresh. EE.log reaches
-/// this process seconds after the events it describes -- measured at ~7.5s on 2026-07-27 -- so a
+/// this process seconds after the events it describes, measured at ~7.5s on 2026-07-27, so a
 /// line written just after attach can carry a timestamp from just before it.
 pub const EE_LOG_ATTACH_GRACE_SECS: u64 = 60;
 
@@ -392,7 +392,7 @@ pub const EE_LOG_ATTACH_GRACE_SECS: u64 = 60;
 /// second after attach, the flip reset the read offset to zero, and the morning's fissure replayed
 /// as if it were live: the poller armed from eleven-hour-old relic loads, the reward pipeline ran
 /// against a screen that did not exist, and health ended the day degraded for a game that was
-/// never running. A file that cannot be placed in time at all is treated as stale -- a missed
+/// never running. A file that cannot be placed in time at all is treated as stale: a missed
 /// reward is quieter than a false report.
 pub fn ee_log_rotation_keep_from(
     bytes: &[u8],
@@ -417,7 +417,7 @@ pub(crate) fn inventory_log_path(pid: u32) -> Option<PathBuf> {
 }
 
 /// On Windows the game writes to its own `%LOCALAPPDATA%`, so there is no prefix to discover and
-/// the PID is not needed -- but the signature is shared with the Wine path, which does need it.
+/// the PID is not needed, but the signature is shared with the Wine path, which does need it.
 #[cfg(windows)]
 pub(crate) fn inventory_log_path(_pid: u32) -> Option<PathBuf> {
     inventory_log_under(Path::new(&std::env::var_os("LOCALAPPDATA")?))
@@ -520,7 +520,7 @@ pub struct KioskSession {
     close_deadline: Option<Instant>,
     /// The overlay is on screen, so a teardown has something to take down. Separate from
     /// `poller_active` because a close retires the poller at once while the window waits for
-    /// the monitor's next tick -- and a reopen in between cancels the teardown entirely.
+    /// the monitor's next tick, and a reopen in between cancels the teardown entirely.
     overlay_up: bool,
     reanchor: Arc<std::sync::atomic::AtomicBool>,
     active_session: Option<u64>,
@@ -537,7 +537,7 @@ impl KioskSession {
     /// Feed incremental EE.log bytes into the kiosk lifecycle, stamped with the monitor tick
     /// that delivered them. `spawn_poller` receives the session identity and shared flags:
     /// `reanchor` requests a read and `gone` permanently stops the worker. A close only arms
-    /// a teardown deadline -- a later open inside the window cancels it before anything retires,
+    /// a teardown deadline. A later open inside the window cancels it before anything retires,
     /// so a sale-confirm rebuild rides out as the same visit.
     pub fn observe(
         &mut self,
@@ -570,9 +570,9 @@ impl KioskSession {
                 }
                 kiosk_log::KioskLogEvent::KioskClosed => {
                     // A close is a maybe, not a verdict. The sale-confirm popup rebuilds the
-                    // kiosk screen mid-visit -- EE.log shows `Saving profile`, then `HudVis 0`
+                    // kiosk screen mid-visit (EE.log shows `Saving profile`, then `HudVis 0`
                     // plus a foreign subscription, then the full open markers one to two seconds
-                    // later -- and retiring here took the overlay down on every sale. So this
+                    // later), and retiring here took the overlay down on every sale. So this
                     // only arms a deadline: the poller keeps reading, the session and the
                     // published view stay put, and the monitor's next ticks call `take_close`,
                     // which tears down only once the markers stay silent past the window.
@@ -586,7 +586,7 @@ impl KioskSession {
         }
     }
 
-    /// Adopt whatever state a stretch of log *ends* in -- called once when the monitor attaches
+    /// Adopt whatever state a stretch of log *ends* in, called once when the monitor attaches
     /// to a game process. Presence is edge-triggered and the live tail starts at EOF (replaying
     /// history is what produced the 2026-08-22 ghost report), so a kiosk already on screen when
     /// the app started had no open marker left to see and the overlay stayed dark until the
@@ -628,15 +628,15 @@ impl KioskSession {
         show: &dyn Fn(),
         spawn_poller: &SpawnKioskPoller<'_>,
     ) {
-        // Pending is already false here -- a close no longer retires, so an open while one is
-        // pending cancels it in `observe` and never reaches this -- but a reopen must never
+        // Pending is already false here (a close no longer retires, so an open while one is
+        // pending cancels it in `observe` and never reaches this), but a reopen must never
         // inherit a stale deadline, so both are cleared unconditionally.
         self.close_pending = false;
         self.close_deadline = None;
         self.poller_active = true;
         self.overlay_up = true;
         // Flags are per poller, never recycled. The previous visit's thread may still be
-        // winding down -- it reads its stop every 60-400ms -- and clearing a shared flag for
+        // winding down (it reads its stop every 60-400ms), and clearing a shared flag for
         // this poller would un-stop that one as well, which a player who reopens quickly can
         // trigger by hand.
         self.reanchor = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -649,7 +649,7 @@ impl KioskSession {
     /// Did the session end? True only once a close has stayed silent past the grace window, at
     /// which point the teardown is `close_overlay`'s. Inside the window this is false: the visit
     /// is still alive and a later open cancels the pending teardown outright. The verdict comes
-    /// from sustained log silence, not a single line -- the poller only ever stops looking, it
+    /// from sustained log silence, not a single line: the poller only ever stops looking, it
     /// does not judge.
     pub fn take_close(&mut self, kiosk_view: &KioskState, hide: &dyn Fn(), now: Instant) -> bool {
         if !self.close_pending {
@@ -1270,7 +1270,7 @@ pub(crate) fn run(
         .and_then(|runtime| load_relic_catalog(&runtime.app_data));
     let mut reward_session =
         RewardSession::new(catalog, relic_catalog, reward_catalog, price_cache.clone());
-    // EE.log reaches us seconds after the events it describes -- measured at ~7.5s on 2026-07-27,
+    // EE.log reaches us seconds after the events it describes (measured at ~7.5s on 2026-07-27),
     // by which time the fifteen-second reward screen can already be gone. The relic-load signal
     // arrives minutes ahead of the screen though, so it can arm a poller that watches for the cards
     // directly. The closed-set match is its own detector: only the reward screen yields four names
@@ -1529,8 +1529,8 @@ pub struct KioskRead {
     pub basket: Vec<BasketRow>,
 }
 
-/// The screen behind the kiosk poller, as one method so a test can script it -- the same shape
-/// that made the reward poller testable without playing a fissure.
+/// The screen behind the kiosk poller, as one method so a test can script it. The same shape
+/// made the reward poller testable without playing a fissure.
 pub trait KioskFrameSource {
     /// `dy` is the grid's tracked scroll offset in pixels: the label bands are calibrated for
     /// the unscrolled grid, so a read at any other scroll position must look there instead.
@@ -1550,8 +1550,8 @@ pub trait KioskFrameSource {
 
 /// The live kiosk screen. It owns the same long-lived capture backend as the reward reader, so
 /// native Wayland sessions reuse their direct/KWin/portal session instead of renegotiating it on
-/// every poll. A settle tick would otherwise pay for two captures back to back -- the strip look
-/// and the full read -- so the last frame is kept briefly and reused when it is younger than one
+/// every poll. A settle tick would otherwise pay for two captures back to back (the strip look
+/// and the full read), so the last frame is kept briefly and reused when it is younger than one
 /// poll interval; anything staler than that is simply captured again.
 pub struct ScreenKioskSource {
     capture: reward_capture::GameCapture,
@@ -1593,7 +1593,7 @@ fn stash_publish(chips: &ChipsState, view: KioskView) {
 }
 
 /// Scroll arm: streamed deltas ride the chips between publishes, so the mask rides with
-/// them. A null verdict fades the chips visually but the pixels were already captured --
+/// them. A null verdict fades the chips visually but the pixels were already captured, so
 /// the mask stays put either way.
 fn track_scroll_delta(chips: &ChipsState, verdict: Option<i32>) {
     if let Some(delta) = verdict {
@@ -1699,7 +1699,7 @@ const KIOSK_CONFIDENT_SCORE: f32 = 0.85;
 const KIOSK_FINE_LADDER_RUNGS: i32 = 2;
 
 /// Confident cells a read holds: matches at or above [`KIOSK_CONFIDENT_SCORE`]. A failed
-/// read has none. This is the recovery referee -- sparse-but-true panes read weak in
+/// read has none. This is the recovery referee: sparse-but-true panes read weak in
 /// count yet high in score, misphased panes the reverse.
 fn confident_cells(read: &Result<KioskRead, &'static str>) -> usize {
     match read {
@@ -1729,11 +1729,11 @@ const KIOSK_UNMEASURED_READ_LOOKS: u32 = 3;
 
 /// The kiosk poller's body, with the screen and the join as parameters.
 ///
-/// This loop does not decide whether the kiosk is open -- EE.log does, on both edges, and it
+/// This loop does not decide whether the kiosk is open. EE.log does, on both edges, and it
 /// says so ~50ms after the fact (see `kiosk_log`). That separation is the whole design: for a
 /// while presence was inferred from the reader's own failures, and every hiccup that made a
-/// frame unreadable -- a scroll the tracker could not measure, a locator that found no label
-/// band, a capture that came back torn -- read as "the player left" and tore the overlay down
+/// frame unreadable (a scroll the tracker could not measure, a locator that found no label
+/// band, a capture that came back torn) read as "the player left" and tore the overlay down
 /// mid-session. Here an unreadable look costs nothing but that look: the last good view stays
 /// up, and the next tick tries again.
 ///
@@ -1794,7 +1794,7 @@ where
         let mut unmeasured_fell_through = false;
 
         let deadline = Instant::now() + timing.lifetime;
-        // The top anchor is the LOCATOR's on purpose -- deriving it from the OCR crop's rect
+        // The top anchor is the LOCATOR's on purpose: deriving it from the OCR crop's rect
         // coupled the two, and growing the crop to catch three-line labels dragged the locator's
         // keying 22 rows down the screen with it.
         while Instant::now() < deadline {
@@ -1819,7 +1819,7 @@ where
             // The cheap look first. Motion is frame to frame: only pixels that actually moved
             // between two looks count, so a still screen is still at ANY offset from anything.
             // (An anchor-relative "moved" verdict on a still screen once blocked every read
-            // for a minute -- the undead session of 2026-08-23.)
+            // for a minute, the undead session of 2026-08-23.)
             let current_strip = source.strip_profile();
             let reading = current_strip.as_ref().ok();
             let strip_error = current_strip.as_ref().err().copied();
@@ -1845,7 +1845,7 @@ where
                 // Treating that as blindness faded the chips through any animated
                 // but still pane, so the overlay only ever appeared in rare truly
                 // static moments. Count these looks separately instead: a short run
-                // still reads -- the read re-anchors through the locator, so
+                // still reads, because the read re-anchors through the locator, so
                 // in-place animation cannot misalign its crops. A strip that did not
                 // even read is real blindness (a cinematic over the pane, the kiosk
                 // gone) and keeps the fade verdict.
@@ -1900,7 +1900,7 @@ where
                 std::thread::sleep(timing.motion_interval);
                 continue;
             }
-            // Two readable, agreeing looks mean settled. The settled read locates itself -- the
+            // Two readable, agreeing looks mean settled. The settled read locates itself: the
             // grid's own label rows name the offset at any scroll position, so the crops land on
             // the text instead of the gaps. An unmeasured run that fell through above bypasses
             // the two-look gate for this one read; the locator gates it on its own.
@@ -1941,7 +1941,7 @@ where
             // all, or lookalikes whose chips then sit half a band off their cards.
             //
             // Content is the referee the fold cannot be, but the referee needs to know
-            // how much text to expect -- the fold already counted it. So recovery fires
+            // how much text to expect, since the fold already counted it. So recovery fires
             // while confident cells lag rendered bands (capped at two, so a nearly-right
             // page with one occluded row does not churn): conviction, not cell count,
             // tells a sparse-but-true page from a misphased one.
@@ -1950,7 +1950,7 @@ where
             // then an eighth-pitch ladder around the tier-one winner for the midpoint
             // drag. Every tier adopts by (confidence, cells): a confident read always
             // beats lookalikes, and among lookalikes the widest read stands, as before.
-            // The ladder stops at the first rung that reads every rendered band -- that
+            // The ladder stops at the first rung that reads every rendered band: that
             // rung is on the text, further rungs only re-read it shifted. A correction
             // that proved itself rides the next settle directly, and one that stopped
             // reading is retired in place.
@@ -1986,7 +1986,7 @@ where
                 read_confidence = confident_cells(&read);
                 if read_confidence < fullness {
                     // Half-pitch probes: on a dim frame the fold can key the card-art
-                    // comb as loudly as the label comb -- text and art sit half a pitch
+                    // comb as loudly as the label comb, because text and art sit half a pitch
                     // apart, and no other tier can reach that.
                     for shifted in [read_dy - pitch / 2, read_dy + pitch / 2] {
                         match source.read_kiosk(&candidates, shifted) {
@@ -2255,7 +2255,7 @@ fn spawn_market_price_fetch(
         move |choices| {
             // Anything the pool warmed while the mission was still running is already here, so the
             // common case does no requests at all and the overlay never shows a dash. Only a reward
-            // the warm pass missed -- a pool that never loaded, an API that was down then -- is
+            // the warm pass missed (a pool that never loaded, an API that was down then) is
             // fetched now, and it is fetched with no gap because the screen is already up.
             let mut prices = choices
                 .iter()
@@ -2338,8 +2338,8 @@ where
 /// Price the whole relic pool while the mission is still being played.
 ///
 /// The pool is known when the relics load and the reward screen is minutes away, so there is time
-/// to be unhurried and polite about it. Doing this later -- when the cards are actually on screen
-/// -- is what made every card show a dash for the first seconds of a fifteen-second window.
+/// to be unhurried and polite about it. Doing this later, when the cards are actually on screen,
+/// is what made every card show a dash for the first seconds of a fifteen-second window.
 fn spawn_market_price_warm(pool: &[RewardCatalogEntry], price_cache: &MarketPriceCache) {
     let names = pool
         .iter()
@@ -2402,7 +2402,7 @@ fn apply_reward_observations(
 /// A string that stays the same while the log grows and changes when the log is replaced.
 ///
 /// The monitor resumes at a byte offset, so it has to be able to tell "the same file, longer" from
-/// "a new file that happens to be at the same path" -- getting that wrong either re-reads the whole
+/// "a new file that happens to be at the same path": getting that wrong either re-reads the whole
 /// log or silently skips the start of a new one.
 ///
 /// This was `dev:ino`, which is exactly the right answer and does not exist on Windows. Creation
@@ -2414,7 +2414,7 @@ fn apply_reward_observations(
 /// Seconds, not the full precision the platform offers: under Wine the reported creation time
 /// jitters by a few hundred microseconds between reads of the same unmodified file, which would
 /// make every poll look like a rotation and re-read the log from zero. A rotation and the append
-/// before it cannot share a second and also matter -- the replacement log starts empty, so the
+/// before it cannot share a second and also matter, since the replacement log starts empty, so the
 /// length check catches it either way.
 pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
     let created = metadata
@@ -2431,8 +2431,8 @@ pub fn log_identity(path: &Path, metadata: &fs::Metadata) -> String {
 /// Whether the log line about the followed EE.log path differs from the last one emitted.
 ///
 /// The resolution debug line exists to explain which game the monitor is following (Wine prefix
-/// surprises are the usual cause for confusion), so it must print when that state changes --
-/// pid found, pid lost, another pid, another path -- and stay silent while the same path is
+/// surprises are the usual cause for confusion), so it must print when that state changes
+/// (pid found, pid lost, another pid, another path) and stay silent while the same path is
 /// being polled at up to ten times a second.
 fn monitor_path_changed(
     tracked: Option<&(u32, Option<PathBuf>)>,
@@ -2538,7 +2538,7 @@ pub fn build_monitor_input(
     // A read from zero means the log changed identity under the same process: a rotation, or the
     // path resolution settling on a different Wine prefix's EE.log. Everything from before this
     // process was attached is not this session's events, and replaying it as if it were is the
-    // whole of the 2026-08-22 ghost report -- an hours-old fissure armed the poller, ran the
+    // whole of the 2026-08-22 ghost report: an hours-old fissure armed the poller, ran the
     // reward pipeline against a screen that was not there, and left health degraded for a game
     // that was never running.
     let mut observation_len = offset + bytes.len() as u64;
@@ -2724,7 +2724,7 @@ mod tests {
                     .unwrap_or_default());
             }
             // An exhausted script is a vanished screen: the read fails instead of a panic
-            // inside the poller thread. It is NOT a close -- only the log ends a session.
+            // inside the poller thread. It is NOT a close; only the log ends a session.
             self.looks
                 .lock()
                 .expect("looks")
@@ -2783,7 +2783,7 @@ mod tests {
 
     /// A pane profile at 1080p scale: 790 rows (the whole pane, 193 to 983), bands on the
     /// grid's pitch, two 11-row text lines per band at +6 and +27, the first band at the
-    /// calibration position (strip row 150 = absolute 343) -- which `label_offset` reads as
+    /// calibration position (strip row 150 = absolute 343), which `label_offset` reads as
     /// offset zero.
     fn label_strip() -> Vec<f32> {
         label_strip_at(0)
@@ -2863,7 +2863,7 @@ mod tests {
     #[test]
     fn a_failed_read_is_followed_by_a_good_one() {
         // The first settle read fails, the next publishes: one miss has never meant the screen
-        // closed. The script runs dry afterwards, which is just more failed reads -- what
+        // closed. The script runs dry afterwards, which is just more failed reads. What
         // matters is that the bad read in between did not stop the publish.
         // Pops come off the back: the first settle read fails, the second is the good frame.
         let source = ScriptedKiosk::new(vec![
@@ -2884,7 +2884,7 @@ mod tests {
     }
 
     /// The poller does not decide whether the kiosk is there. A pane it cannot read costs that
-    /// look and nothing else -- no close, no cleared view -- because EE.log owns presence and
+    /// look and nothing else (no close, no cleared view), because EE.log owns presence and
     /// says so within ~150ms. (Inferring presence from the reader's failures is what tore the
     /// overlay down mid-session all through 2026-08-23.)
     #[test]
@@ -2948,7 +2948,7 @@ mod tests {
     #[test]
     fn a_reanchor_accepts_a_partially_filled_grid() {
         // The player narrowed a filter: the epoch advanced and the next read holds fewer
-        // cells. That is not an occlusion -- publish what is there.
+        // cells. That is not an occlusion, so publish what is there.
         let reanchor = Arc::new(AtomicBool::new(true));
         let gone = Arc::new(AtomicBool::new(false));
         let published: Arc<StdMutex<Vec<KioskView>>> = Arc::new(StdMutex::new(Vec::new()));
@@ -2987,7 +2987,7 @@ mod tests {
     /// then land between label bands: the located read sees nothing, while the
     /// dy-independent basket reads fine underneath. Content is the referee: the located
     /// read scores no confident match, the neighbouring phases are tried, and whichever
-    /// reads the grid with conviction wins -- and the published offset follows it.
+    /// reads the grid with conviction wins; the published offset follows it.
     #[test]
     fn a_misphased_locator_recovers_by_reading_neighbouring_phases() {
         // The strip's true phase is 0, so the locator names dy=0; the grid's text, though,
@@ -3033,7 +3033,7 @@ mod tests {
 
     /// An animated-but-present pane defeats frame-to-frame correlation without moving
     /// the grid: hover-card renders, dialog pulses. Those looks are unmeasurable, not
-    /// blind -- the strip read and the locator can still name the bands -- so after a
+    /// blind: the strip read and the locator can still name the bands. So after a
     /// short run the poller reads anyway, anchored on the locator.
     #[test]
     fn an_unmeasurable_but_present_strip_publishes_after_a_run() {
@@ -3133,7 +3133,7 @@ mod tests {
         );
     }
 
-    /// One lucky slot (or one confident lookalike) must not certify the phase -- one
+    /// One lucky slot (or one confident lookalike) must not certify the phase. One
     /// confident cell against several rendered bands is evidence of misphase, and the
     /// ladder must run until the page reads.
     #[test]
@@ -3416,7 +3416,7 @@ mod tests {
 
     /// When no probed phase reads with conviction, the page on screen is only lookalikes:
     /// names that half-match the crop's partial text. Publishing them puts real-looking
-    /// prices on the wrong cards, which is strictly worse than showing no chips -- so the
+    /// prices on the wrong cards, which is strictly worse than showing no chips, so the
     /// publish strips the grid cells. The basket still publishes: it does not share the
     /// phase, so the misphase never wrongs it.
     #[test]
@@ -3473,8 +3473,8 @@ mod tests {
     }
 
     /// The total-failure tail of that contract: when no rung of any tier ever reads a
-    /// confident cell (a pane too degraded to read at all), the publish still happens --
-    /// an empty grid keeps the basket's prices visible -- but its cell list is empty,
+    /// confident cell (a pane too degraded to read at all), the publish still happens: an
+    /// empty grid keeps the basket's prices visible, but its cell list is empty,
     /// never garbage.
     #[test]
     fn a_never_confident_read_publishes_with_no_cells() {
@@ -3665,7 +3665,7 @@ mod tests {
 
     /// End-to-end against the chips-baked selected fixture: a fully populated kiosk whose
     /// first two rows are selected, with the overlay's own chips baked into the capture.
-    /// The whole loop -- mask, fold, read, publish -- must converge on the true grid and
+    /// The whole loop (mask, fold, read, publish) must converge on the true grid and
     /// hold it.
     #[test]
     fn the_selected_field_frame_publishes_the_whole_grid_and_stays_stable() {
@@ -3769,7 +3769,7 @@ mod tests {
             "settled publishes converge instead of oscillating: {states:?}"
         );
         // The frame is pixel-exact unscrolled, so the published phase must sit within
-        // rounding of zero -- this is the value that paints the chips onto their cards.
+        // rounding of zero. This is the value that paints the chips onto their cards.
         let dy = published.last().expect("last view").scroll_dy;
         assert!(
             dy.abs() <= 1,
@@ -4063,8 +4063,8 @@ mod tests {
         assert_eq!(chips.lock().expect("chips").as_ref().unwrap().mask_dy, -12);
     }
 
-    /// Shift the pane's own content down inside the fixture -- the way the game draws a
-    /// scroll under the clipped pane -- and hand the loop the result.
+    /// Shift the pane's own content down inside the fixture, the way the game draws a
+    /// scroll under the clipped pane, and hand the loop the result.
     fn scrolled_fixture(path: &str, dy: i64) -> image::DynamicImage {
         use image::GenericImage;
         let base = image::open(path).expect("kiosk fixture");
@@ -4082,8 +4082,8 @@ mod tests {
     }
 
     /// The 1080p calibration fixture scrolled a third of a row: the fold must name +74, the
-    /// reads must find the same labels at the shifted bands, and the published phase -- the
-    /// value that paints chips onto cards -- must be that +74 and nothing else. At 1080p the
+    /// reads must find the same labels at the shifted bands, and the published phase (the
+    /// value that paints chips onto cards) must be that +74 and nothing else. At 1080p the
     /// strip and design units coincide, so this is the deterministic identity case.
     #[test]
     fn a_scrolled_1080p_grid_prices_the_shifted_bands_at_the_true_phase() {
@@ -4235,7 +4235,7 @@ mod tests {
         );
     }
 
-    /// Motion streams frame-to-frame deltas -- not offsets against some anchor -- and the
+    /// Motion streams frame-to-frame deltas, not offsets against some anchor, and the
     /// settled read publishes the grid's self-located offset, so the chips land on the rows
     /// wherever the scroll stopped. (2026-08-23: a stop at -142 read the gaps and died.)
     #[test]

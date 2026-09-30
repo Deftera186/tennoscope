@@ -100,7 +100,7 @@ fn fetching_asks_the_items_route() {
 
 /// Selling needs the opposite direction from reconciliation: the player picks a collection row,
 /// and the market wants the listing that row becomes. For most of the collection that listing is
-/// price and quantity and nothing else -- the row's path already names the item exactly.
+/// price and quantity and nothing else, since the row's path already names the item exactly.
 #[test]
 fn a_plain_collection_row_resolves_to_a_listing_with_no_context() {
     let items = MarketItems::from_response(ITEMS.as_bytes()).expect("items parse");
@@ -117,7 +117,7 @@ fn a_plain_collection_row_resolves_to_a_listing_with_no_context() {
     assert_eq!(items.listing_for("/Lotus/Types/Nothing", false), None);
 }
 
-/// warframe.market quotes a mod at exactly two ranks -- unranked and fully ranked -- and the
+/// warframe.market quotes a mod at exactly two ranks, unranked and fully ranked, and the
 /// create body has to say which. The unranked stack and a maxed copy are therefore the two rows
 /// of a card that can list; a part-ranked copy is neither, and there is no rank the API would
 /// accept for it, so it resolves to nothing rather than to a listing that would be refused.
@@ -126,7 +126,7 @@ fn the_two_quoted_ranks_are_the_unranked_stack_and_a_maxed_copy() {
     let items = MarketItems::from_response(ITEMS.as_bytes()).expect("items parse");
     const MOD: &str = "/Lotus/Upgrades/Mods/Pistol/DualStat/CorruptedCritChanceFireRatePistol";
 
-    // Still reconciled, still flaggable, still removable -- comparability is a different question.
+    // Still reconciled, still flaggable, still removable: comparability is a different question.
     assert!(items.comparable("54ca39abe7798915c1c11e10"));
 
     assert_eq!(
@@ -151,7 +151,7 @@ fn the_two_quoted_ranks_are_the_unranked_stack_and_a_maxed_copy() {
 }
 
 /// A relic is one market entry standing for four collection rows. The row names its refinement in
-/// the game's own vocabulary -- a metal tier on the end of the path -- and the listing has to
+/// the game's own vocabulary (a metal tier on the end of the path), and the listing has to
 /// translate that into the subtype the market expects, and declare the per-trade size that every
 /// bulk-tradable demands. Measured 2026-08-22: all 772 relic entries publish the base projection
 /// path with the four refinements as subtypes, all of them bulk-tradable.
@@ -193,8 +193,8 @@ fn a_relic_row_resolves_to_its_refinement_subtype() {
     assert_eq!(items.listing_for(&format!("{BASE}Copper"), false), None);
 }
 
-/// An arcane is ranked and bulk-tradable at once -- every arcane entry measured on 2026-08-22
-/// carries both -- so its listing declares a rank and a per-trade size together. The two
+/// An arcane is ranked and bulk-tradable at once. Every arcane entry measured on 2026-08-22
+/// carries both, so its listing declares a rank and a per-trade size together. The two
 /// dimensions are independent, and neither may be assumed to imply the other.
 #[test]
 fn an_arcane_declares_its_rank_and_its_trade_size_together() {
@@ -234,7 +234,7 @@ fn a_sculpture_whose_stars_are_unknown_resolves_to_nothing() {
     );
 }
 
-/// 19 mods publish one entry under two subtypes -- the card and its atragraph variant -- with a
+/// 19 mods publish one entry under two subtypes (the card and its atragraph variant) with a
 /// single `gameRef` between them. The path alone cannot say which variant a row holds, and a
 /// listing that guessed would publish against something the player did not choose.
 #[test]
@@ -253,7 +253,7 @@ fn a_path_shared_by_subtypes_that_are_not_refinements_resolves_to_nothing() {
 /// The badge on a collection card needs the opposite direction from selling: the player is looking
 /// at a live order, and the row it belongs to is what the interface has to name. The order carries
 /// the market's opaque id and its contextual fields; the row is the `/Lotus/` path those resolve
-/// back to -- the exact reverse of `listing_for`, and a join nothing else can make, because the
+/// back to: the exact reverse of `listing_for`, and a join nothing else can make, because the
 /// order's id namespace and the collection's share nothing.
 #[test]
 fn a_plain_order_names_the_row_of_its_path() {
@@ -317,7 +317,7 @@ fn a_relic_order_names_the_row_of_its_refinement() {
     );
 }
 
-/// Subtypes that are not refinements -- the atragraph mods -- are a variant split the path cannot
+/// Subtypes that are not refinements, the atragraph mods, are a variant split the path cannot
 /// resolve in either direction: no row can be listed from here, and no order can be attributed to
 /// one.
 #[test]
@@ -332,7 +332,7 @@ fn an_order_on_a_path_shared_by_subtypes_that_are_not_refinements_names_no_row()
 
 /// What cannot be named, in one place: a sculpture whose socketed stars no row knows, a retired
 /// item with no path at all, an id the table has never heard of, and a plain order carrying rank or
-/// subtype context it has no business carrying. Each resolves to nothing -- the row-equivalent of
+/// subtype context it has no business carrying. Each resolves to nothing, the row-equivalent of
 /// the unverifiable state: no badge, no claim, no edit.
 #[test]
 fn what_no_row_can_be_named_for_resolves_to_nothing() {

@@ -231,7 +231,7 @@ pub trait ProcessDiscovery {
     fn discover(&self) -> Result<Option<GameProcess>, AcquisitionError>;
 
     /// Whether the Warframe launcher (not the game itself) is currently visible. Only meaningful
-    /// when `discover` returns `Ok(None)` -- it exists to tell "waiting for the launcher" apart
+    /// when `discover` returns `Ok(None)`. It exists to tell "waiting for the launcher" apart
     /// from "nothing is open at all". Defaults to `false` since only the Linux backend can tell.
     fn launcher_present(&self) -> bool {
         false
@@ -357,7 +357,7 @@ impl fmt::Display for AcquisitionError {
         match self {
             Self::GameNotRunning => formatter.write_str("Warframe is not running"),
             Self::LauncherRunning => {
-                formatter.write_str("Warframe launcher is open — waiting for the game to launch")
+                formatter.write_str("Warframe launcher is open, waiting for the game to launch")
             }
             Self::ProcessDiscoveryFailed => {
                 formatter.write_str("Warframe process discovery failed")
@@ -437,7 +437,7 @@ impl fmt::Display for AcquisitionDiagnostic {
         let message = match self {
             Self::Ready => "ready",
             Self::GameNotRunning => "Warframe is not running",
-            Self::LauncherRunning => "Warframe launcher is open — waiting for the game to launch",
+            Self::LauncherRunning => "Warframe launcher is open, waiting for the game to launch",
             Self::ProcessDiscoveryFailed => "Warframe process discovery failed",
             Self::MemoryPermissionDenied => "permission to read Warframe memory was denied",
             Self::MemoryReadFailed => "Warframe memory could not be read",

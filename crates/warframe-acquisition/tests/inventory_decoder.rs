@@ -227,7 +227,7 @@ fn mods_arcanes_sculptures_and_armaments_are_tracked_and_each_rank_is_its_own_ro
             .clone()
     };
 
-    // Serration is held at three ranks, so it is three holdings worth three different prices --
+    // Serration is held at three ranks, so it is three holdings worth three different prices:
     // 3p, and whatever a rank-5 and a rank-10 copy fetch. Summed onto one row, the only price the
     // row could honestly show is the unranked one, and the ranked copies would be given away.
     let unranked = by_id("/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod");
@@ -281,7 +281,7 @@ fn mods_arcanes_sculptures_and_armaments_are_tracked_and_each_rank_is_its_own_ro
 }
 
 /// The ceiling decides which of the market's two quotes a copy is owed, so it has to come from the
-/// catalogue -- and a riven's published ceiling is a sentinel that has to be refused.
+/// catalogue, and a riven's published ceiling is a sentinel that has to be refused.
 #[test]
 fn ranked_copies_carry_the_ceiling_the_catalogue_can_vouch_for() {
     let catalog = CatalogIndex::from_wfcd_json(

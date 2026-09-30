@@ -32,7 +32,7 @@ describe('snapshot freshness', () => {
 describe('backend stamp readings', () => {
   it('reads Unix-second stamps as instants, not as year-1970 milliseconds', () => {
     // Health rows and the market fetch time arrive as seconds. `new Date('1784980560')` is not a
-    // 2026 date but `Invalid Date`, and a shorter stamp like '1' silently lands in 2001 -- which is
+    // 2026 date but `Invalid Date`, and a shorter stamp like '1' silently lands in 2001, which is
     // how a fixture once hid this.
     expect(stampReading('1784980560', now)?.relative).toBe('4 minutes ago')
   })

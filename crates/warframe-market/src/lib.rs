@@ -57,8 +57,8 @@ pub struct MarketRequest {
     pub body: Option<String>,
 }
 
-/// Hand-written so a stray `{request:?}` -- in a log line, a panic message, an `.expect(&format!())`
-/// -- prints the method and url and nothing that could be a credential. `token` is the account
+/// Hand-written so a stray `{request:?}`, in a log line, a panic message or an `.expect(&format!())`,
+/// prints the method and url and nothing that could be a credential. `token` is the account
 /// token; `body` is, for signin, the serialized password.
 impl std::fmt::Debug for MarketRequest {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -73,7 +73,7 @@ impl std::fmt::Debug for MarketRequest {
 }
 
 /// The response, with the `Authorization` header kept because that is where a renewed token
-/// arrives -- warframe.market reissues on use rather than only at signin.
+/// arrives: warframe.market reissues on use rather than only at signin.
 #[derive(Clone)]
 pub struct MarketResponse {
     pub status: u16,

@@ -96,7 +96,7 @@ fn a_prime_part_the_player_does_not_own_still_carries_its_ducats() {
 }
 
 /// Before the catalogue loads, and for anything it does not list, the view says nothing rather
-/// than zero -- zero ducats would read as "worthless" for a part that is merely not yet described.
+/// than zero. Zero ducats would read as "worthless" for a part that is merely not yet described.
 #[test]
 fn a_view_built_before_the_catalog_loads_has_no_ducats() {
     let core = core_with_items(vec![item(

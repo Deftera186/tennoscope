@@ -42,7 +42,7 @@ impl LatchingAvailability {
     /// The first ask probes while holding the lock, so a concurrent first caller waits for the
     /// real answer instead of being told "unavailable". That matters because a spurious negative
     /// downgrades the caller to the next backend in precedence, and on KDE that means the portal
-    /// and its visible screen-chooser dialog. Retry probes run with the lock released -- there is
+    /// and its visible screen-chooser dialog. Retry probes run with the lock released, since there is
     /// a cached answer to serve meanwhile, and `probing` keeps a second prober out.
     ///
     /// A poisoned lock is recovered rather than propagated: a panicked prober leaves a

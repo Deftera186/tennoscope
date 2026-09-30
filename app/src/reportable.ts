@@ -20,7 +20,7 @@ const REPORTABLE_WHEN_FIRST_DEGRADED = new Set(['capture', 'market', 'collection
  * The rows in `REPORTABLE_WHEN_FIRST_DEGRADED` need no `last_success` stamp:
  * they sit idle until used, so degraded already means something failed. The
  * remaining rows keep the stamp requirement, because they can degrade while
- * still working — a catalog served from cache is the clear case — and a stamp
+ * still working (a catalog served from cache is the clear case), and a stamp
  * is what separates "worked, then broke" from a state nobody needs to report.
  */
 export function reportBlockVisible(health: AppView['health']): boolean {

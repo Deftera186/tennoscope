@@ -50,7 +50,7 @@ fn the_committed_status_is_read_from_the_servers_own_event() {
 #[test]
 fn the_committed_status_is_read_from_the_answers_own_echo() {
     // Observed against the live server: every set is answered with the command echo, carrying the
-    // status it just committed. It is the only confirmation later sets in a connection receive --
+    // status it just committed. It is the only confirmation later sets in a connection receive;
     // the event above arrives once, announcing the status held when the connection opened.
     assert_eq!(
         committed_status(
@@ -66,7 +66,7 @@ fn the_committed_status_is_read_from_the_answers_own_echo() {
 
 #[test]
 fn nothing_is_read_from_a_frame_that_is_not_that_event() {
-    // Every other route on this socket -- order events, chat, subscriptions -- goes past this
+    // Every other route on this socket (order events, chat, subscriptions) goes past this
     // function, and a status read out of one of them would be a presence nobody set.
     assert_eq!(
         committed_status(r#"{"route":"@wfm|event/orders/new","payload":{"status":"ingame"}}"#),

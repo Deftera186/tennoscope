@@ -309,8 +309,8 @@ fn decode_image(meta: &ValidatedMetadata, bytes: &[u8]) -> Result<RgbaImage, &'s
 ///
 /// `origin_x`/`origin_y` are the output's logical position, which travels with the pixels so a
 /// monitor at a negative origin still crops correctly. The image keeps its physical density
-/// while the frame reports logical geometry -- the same split the portal backend already uses,
-/// so downstream resampling needs no new case.
+/// while the frame reports logical geometry. That is the same split the portal backend already
+/// uses, so downstream resampling needs no new case.
 pub fn decode_monitor_frame(
     meta: &ScreenshotMetadata,
     bytes: &[u8],
@@ -400,7 +400,7 @@ struct PendingOutput {
 /// Incomplete entries are dropped rather than defaulted: an output with no logical size would
 /// otherwise become a zero-sized or origin-anchored rectangle, and a guessed rectangle silently
 /// crops the wrong region forever. Repeated names collapse to their first occurrence, because a
-/// name is what identifies a screen to KWin -- capturing it twice would only duplicate work.
+/// name is what identifies a screen to KWin, and capturing it twice would only duplicate work.
 fn finish_outputs(pending: &[PendingOutput]) -> Result<Vec<KwinOutput>, &'static str> {
     let mut outputs: Vec<KwinOutput> = Vec::with_capacity(pending.len());
 

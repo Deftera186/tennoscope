@@ -2,7 +2,7 @@
 //! (`tests/fixtures/kiosk/kiosk-open.png`).
 //!
 //! Same convention as `reward_ocr.rs`: Warframe scales its HUD with window *height* and centres
-//! it horizontally, so every constant below is a fraction of height -- horizontal positions as a
+//! it horizontally, so every constant below is a fraction of height: horizontal positions as a
 //! signed offset of that fraction from the window's horizontal centre. Fractions of width would
 //! agree at 16:9 and silently drift everywhere else.
 //!
@@ -16,7 +16,7 @@
 //!
 //! The rendering anchors (`tile_anchor`, `total_row_pair`, the chip/digit sizes) have no Rust
 //! consumer: the `/kiosk` window positions its chips in CSS. They stay because they are the
-//! calibration of record -- fixture-exact, test-asserted -- and the TypeScript constants are
+//! calibration of record, fixture-exact and test-asserted, and the TypeScript constants are
 //! mirrors of these, not a second measurement.
 #![allow(dead_code)]
 
@@ -53,7 +53,7 @@ const GRID_LEFT: f32 = fcx(76.0);
 const ROW_TOPS: [f32; GRID_ROWS] = [fx(199.0), fx(421.0), fx(643.0), fx(865.0)];
 /// The grid pane's clip edge in design pixels, measured on a live 1080p frame: card-column
 /// mean luma drops 77 to 48 between y=982 and y=985, so 983 is where the pane ends. A label
-/// band that would land at y=1009 is never rendered -- the game clips before drawing it.
+/// band that would land at y=1009 is never rendered. The game clips before drawing it.
 const PANE_BOTTOM: f32 = fx(983.0);
 /// The strip's height in design pixels: `grid_strip`'s y extent (`193..983` at the
 /// calibration). Vertical offsets measured in the strip's own rows rebase onto this span
@@ -71,7 +71,7 @@ pub const ROW_PITCH_1080: i32 = 222;
 pub const LABEL_BAND_TOP_1080: i32 = 343;
 pub const LABEL_BAND_H_1080: i32 = 46;
 /// Label crop top relative to its row's card top: grown upward from the two-line band (144)
-/// because three-line labels stack upward out of it -- *Styanax Prime Neuroptics Blueprint*
+/// because three-line labels stack upward out of it. *Styanax Prime Neuroptics Blueprint*
 /// renders its first line at card top +124, 20px above the old crop, and went unpriced for
 /// it (measured live, 2026-08-23). The bottom edge stays where it was.
 const LABEL_DY: f32 = fx(122.0);
@@ -80,7 +80,7 @@ const LABEL_H: f32 = fx(68.0);
 /// Each card border stroke's position in design pixels, measured off a live 1080p capture
 /// (the lit columns were 264/265, 471/472, 679/680, 1094/1095, 1302/1303; col3 interpolated
 /// on the 207.6px pitch the others confirm). A chip's right edge sits on these, flush with
-/// its card's top-right corner -- see `tile_anchor`.
+/// its card's top-right corner; see `tile_anchor`.
 const COL_RIGHT_1080: [f32; 6] = [264.0, 471.5, 679.5, 887.0, 1094.5, 1302.5];
 
 /// Digit baseline of the first basket row; rows follow on a 38 1/3px pitch.
@@ -145,7 +145,7 @@ pub fn grid_label_rect(
 /// The corner is the card border stroke's own position, measured per column off a live
 /// capture (2026-08-24): the 207.5px column pitch rasterizes each border on a different
 /// half-pixel, and a pitch formula rounded once per chip drifted up to 5px by the last
-/// column -- the player asked for pixel-for-pixel and the formula could not deliver it.
+/// column. The player asked for pixel-for-pixel and the formula could not deliver it.
 pub fn tile_anchor(width: u32, height: u32, col: usize, row: usize) -> Option<(f32, f32)> {
     if col >= GRID_COLS || row >= GRID_ROWS {
         return None;
@@ -171,7 +171,7 @@ pub fn basket_row_pair(width: u32, height: u32, row: usize) -> Option<(f32, f32)
 /// The screen area one published grid chip occupies, in pixels: the chip's top-right corner
 /// sits on `tile_anchor(col, row)` and extends left. Capture rectangles of every monitor
 /// include our own overlay (portal captures the composited monitor), so the kiosk pipeline
-/// masks exactly these boxes out of a frame before profiles and OCR -- an unread chip cannot
+/// masks exactly these boxes out of a frame before profiles and OCR. An unread chip cannot
 /// fold the locator onto the card-top row or feed digits to a quantity read.
 ///
 /// The box is the chip's own geometry grown by a few pixels of antialias fringe; text behind
@@ -233,7 +233,7 @@ const PAIR_DESCENT_PX: f32 = 3.0;
 /// The grid pane's top clip as a height fraction: chips scrolled above it are not drawn.
 const ROW_TOPS_MIN_CLIP: f32 = fx(193.0);
 
-/// Clip `-- [right-w_1080*scale, top) x (w_1080, h_1080)*scale --` into the frame.
+/// Clip `[right-w_1080*scale, top) x (w_1080, h_1080)*scale` into the frame.
 fn mask_box(
     right: f32,
     top: f32,
@@ -267,7 +267,7 @@ pub fn total_row_pair(width: u32, height: u32) -> (f32, f32) {
 /// pane's height, `(x, y, w, h)` in pixels.
 ///
 /// The pane, not the window: the basket beside it never moves, and rows outside it (title
-/// bar, navigation) carry no scroll information -- including them only dilutes the correlation.
+/// bar, navigation) carry no scroll information. Including them only dilutes the correlation.
 /// The bottom is the pane's own clip edge, not the last calibrated row: at some scroll phases
 /// the game renders a fourth label band below row 2, and a band the tracker cannot see is a
 /// row of items that never gets read.
@@ -290,8 +290,8 @@ pub fn grid_strip(width: u32, height: u32) -> (u32, u32, u32, u32) {
 /// Where the scroll locator's label bands fall inside a row profile of `rows` samples, in that
 /// profile's own pixels.
 ///
-/// The locator reads a profile of the [`grid_strip`] pane, and every profile it can be handed --
-/// a 1440p capture's strip, a downscaled one, the 1080p calibration itself -- is the same pane
+/// The locator reads a profile of the [`grid_strip`] pane, and every profile it can be handed
+/// (a 1440p capture's strip, a downscaled one, the 1080p calibration itself) is the same pane
 /// at a different length. That ratio is the only thing separating the calibrated anchors from
 /// the ones the locator needs, so it is applied here rather than at each call site: two callers
 /// re-deriving `profile.len() / strip_h` had already drifted apart on which of the three numbers
@@ -326,9 +326,9 @@ mod tests {
     use super::*;
 
     /// The 1920x1080 calibration must reproduce the fixture's measured pixels exactly; these
-    /// numbers were measured off the capture structurally -- count-badge centres at
+    /// numbers were measured off the capture structurally: count-badge centres at
     /// (tile_left+20, tile_top+17.5) on a 207.5x222 grid, card borders at
-    /// x=265.95+207.55k, ducat digit baselines -- and any drift here is a drifted overlay.
+    /// x=265.95+207.55k, ducat digit baselines. Any drift here is a drifted overlay.
     #[test]
     fn chip_masks_cover_where_the_overlay_draws() {
         // The grid chip's top-right corner is the tile anchor; the mask spans left of it.
@@ -457,7 +457,7 @@ mod tests {
 
     /// A three-line label (*Styanax Prime Neuroptics Blueprint*, measured live on the
     /// unscrolled fixture at rows +124..+182 relative to its card top) stacks UPWARD out of
-    /// the two-line box, so the crop grows upward too -- its bottom edge stays on the two-line
+    /// the two-line box, so the crop grows upward too. Its bottom edge stays on the two-line
     /// geometry every other measurement was calibrated against. Above the label is the tile's
     /// dead space: nothing bright renders between the badge zone and row +123.
     #[test]

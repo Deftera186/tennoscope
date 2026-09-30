@@ -1,6 +1,6 @@
 //! The account's orders, and the two writes that reduce one.
 //!
-//! Both writes shrink something the player already published -- taking a listing down, or lowering
+//! Both writes shrink something the player already published: taking a listing down, or lowering
 //! it to what they hold. Publishing something new is a separate action and is not in this phase.
 
 use local_store::SnapshotInstant;
@@ -160,7 +160,7 @@ pub fn delete_order(
 /// Only the quantity is sent. A patch that also carried the price would silently reprice an order
 /// the player asked only to shrink, and they would find out from a buyer.
 ///
-/// This call sends whatever `quantity` it is given -- it has no current quantity to check against,
+/// This call sends whatever `quantity` it is given. It has no current quantity to check against,
 /// so it cannot enforce that the value is a reduction. Keeping the new quantity at or below what
 /// the order already holds is the caller's obligation.
 pub fn set_order_quantity(
@@ -219,12 +219,12 @@ pub fn update_order(
 ///
 /// Built from a [`crate::Listing`], which is where the rule lives: the API's create body carries
 /// `perTrade`, `rank`, `subtype`, star counts and charges, each required for the items that
-/// support it and *forbidden* for the ones that do not -- a 400 either way. The resolver answers
+/// support it and *forbidden* for the ones that do not, a 400 either way. The resolver answers
 /// with exactly the fields the item's own entry calls for, so this struct never has to decide
 /// what to send and the body never carries a field the item did not ask for.
 ///
 /// `visible` is the one plain choice in here, and it is sent explicitly because the API defaults
-/// it to `false`, and a listing nobody can see is not what someone pressing "sell" asked for --
+/// it to `false`, and a listing nobody can see is not what someone pressing "sell" asked for,
 /// as this account found out the hard way.
 #[derive(Clone, Copy, Debug)]
 pub struct NewSellOrder<'a> {
@@ -260,7 +260,7 @@ impl<'a> NewSellOrder<'a> {
 /// Publish a sell listing.
 ///
 /// The four base fields go to every item. Each contextual field goes in exactly when it is
-/// `Some` -- which only happens for the item whose resolver produced it, because the API demands
+/// `Some`, which only happens for the item whose resolver produced it, because the API demands
 /// the field when the item supports the dimension and rejects it when the item does not.
 pub fn create_order(
     transport: &dyn MarketTransport,

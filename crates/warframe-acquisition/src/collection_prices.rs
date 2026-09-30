@@ -54,8 +54,8 @@ struct DumpRecord {
 ///
 /// A closed record standing on one or two trades is one player's odd deal, not a price: on the
 /// 2026-07-30 dump `Pressure Point` closed at 50p against a 1p ask on a single trade. Three is
-/// enough to be a median of something. It is not enough on its own -- `Vitality` closed at 115p
-/// against a 1p ask on four -- which is why the ask bounds it rather than losing to it.
+/// enough to be a median of something. It is not enough on its own (`Vitality` closed at 115p
+/// against a 1p ask on four), which is why the ask bounds it rather than losing to it.
 const MIN_CLOSED_VOLUME: f64 = 3.0;
 
 /// How many of one listing warframe.market completed on the day this dump covers.
@@ -81,7 +81,7 @@ fn daily_trade_count(records: &[DumpRecord], subtype: Option<&str>) -> Option<f6
 /// The window a holding is valued over: what the market takes in a month, matching `CARRY_DAYS`.
 ///
 /// Long enough that a slow listing still registers, short enough to be a plan rather than a
-/// retirement. Nothing about a longer window is more honest -- the figure already assumes the
+/// retirement. Nothing about a longer window is more honest: the figure already assumes the
 /// player personally makes every trade in the game for these items.
 const MONTH_DAYS: u32 = 30;
 
@@ -93,17 +93,17 @@ const MONTH_DAYS: u32 = 30;
 /// daily counts per item, and the cache is a file the app rewrites on every checked price, so
 /// storing them would cost more than the figure they support is worth. Weighting today at a flat
 /// thirtieth from the first day instead leaves the very first dump 40% of the estimate a month
-/// later -- measured, it read `Quickdraw`, which the game trades twice a month, as fifteen.
+/// later. Measured, it read `Quickdraw`, which the game trades twice a month, as fifteen.
 const DAY_WEIGHT: f64 = 1.0 / MONTH_DAYS as f64;
 
 /// Every `(subtype, rank)` the listing quotes, and what one unit of each costs.
 ///
 /// A group's price is the lowest of the two measurements the dump carries for it. Neither survives
-/// being trusted alone. `sell` -- what sellers ask -- quotes a bulk listing's whole *lot*, and the
+/// being trusted alone. `sell`, what sellers ask, quotes a bulk listing's whole *lot*, and the
 /// dump mirrors warframe.market unmodified, so a six-pack enters the day's median at six times what
 /// one item costs: measured 2026-07-30 on `lith_t11_relic` intact, 30p asked against the 4.5p it
-/// traded at, where the online sellers' own per-unit asks were 4.67-5.00p. `closed` -- what trades
-/// actually completed at -- is per unit and carries no such fault, but it is a thin sample on most
+/// traded at, where the online sellers' own per-unit asks were 4.67-5.00p. `closed`, what trades
+/// actually completed at, is per unit and carries no such fault, but it is a thin sample on most
 /// items, and a thin sample runs the other way: `Vitality` unranked closed at 115p on four trades
 /// against an ask of 1p backed by 3,186 listings.
 ///
@@ -182,7 +182,7 @@ pub struct RankedPrice {
 /// `Axi A1 Relic`, and `None` for anything that is not a refined relic.
 ///
 /// The parenthetical is only read off a name already ending in ` Relic`, so it cannot mistake a
-/// market name that carries brackets of its own -- `Rifle Riven Mod (Veiled)` -- for a refinement.
+/// market name that carries brackets of its own (`Rifle Riven Mod (Veiled)`) for a refinement.
 pub fn relic_base(market_name: &str) -> Option<&str> {
     let (base, refinement) = market_name.split_once(" (")?;
     (base.ends_with(RELIC_SUFFIX) && refinement.ends_with(')')).then_some(base)
@@ -197,12 +197,12 @@ pub fn relic_base(market_name: &str) -> Option<&str> {
 /// fourth collection, `checked_unpriced`, remembers the names the market answered about with
 /// nothing for sale, so that answer is not mistaken for an unasked question.
 ///
-/// A relic is priced from its `closed` records only. warframe.market's `sell` statistics -- which
-/// the dump mirrors unmodified -- quote a bulk listing's whole lot, and sellers list relics six at a
+/// A relic is priced from its `closed` records only. warframe.market's `sell` statistics, which
+/// the dump mirrors unmodified, quote a bulk listing's whole lot, and sellers list relics six at a
 /// time, so the ask reads at six times what one relic costs: measured 2026-07-30 on
 /// `lith_t11_relic` intact, 30p asked against 4.5p traded and 4.67-5.00p per unit across the four
 /// online sellers. `closed` is per unit and needs no divisor, but only 163 of 772 relics carry one
-/// on a given day -- which is what `carried_relic_prices` and `adopt` are for. A relic's dump key
+/// on a given day, which is what `carried_relic_prices` and `adopt` are for. A relic's dump key
 /// lives in `relic_names` whether or not it was priced, because the live path builds its
 /// warframe.market slug from that name.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -230,14 +230,14 @@ pub struct PriceTable {
     /// Relic prices kept from the dumps that produced them, with that dump's date.
     ///
     /// A relic is priced from `closed` records alone, and only 163 of 772 relics carry one on any
-    /// given day -- so a table built from one dump prices 44% of a real collection's relics and
+    /// given day, so a table built from one dump prices 44% of a real collection's relics and
     /// leaves the rest blank. The dumps do not disagree; they are sparse. Union them and the same
     /// collection reaches 76% at three days, 86% at seven and 96% at twenty-eight, for no extra
     /// request at all: the app already downloads a dump a day and was throwing the previous one's
     /// relic prices away.
     ///
-    /// Kept apart from `prices` rather than folded into it so the two can be told apart -- today's
-    /// file said this, an older file said that -- and so `CARRY_DAYS` has a date to enforce.
+    /// Kept apart from `prices` rather than folded into it so the two can be told apart (today's
+    /// file said this, an older file said that) and so `CARRY_DAYS` has a date to enforce.
     #[serde(default)]
     carried_relic_prices: HashMap<String, (u32, String)>,
     /// Completed trades a day, averaged over the dumps seen so far, with how many of them that is
@@ -254,7 +254,7 @@ pub struct PriceTable {
     /// swung it by a tenth with whichever listings happened to trade that morning: `Intruder`
     /// completed 159 trades over twenty-eight days and carries no `closed` record at all on the 30th.
     /// Carrying the last count *seen* overstates just as hard, because it conditions on a day where a
-    /// trade happened -- it read `Quickdraw` as thirty a month.
+    /// trade happened: it read `Quickdraw` as thirty a month.
     #[serde(default)]
     trade_rate: HashMap<String, (f64, u32, String)>,
     dump_date: String,
@@ -268,7 +268,7 @@ pub struct PriceTable {
 ///
 /// The cache stores the parsed table, not the download, and `dump_is_current` skips the download
 /// while the stored date is today's or yesterday's. So a table keeps whatever the parse meant on
-/// the day it was written, for as long as that date stays current -- and every checked price
+/// the day it was written, for as long as that date stays current, and every checked price
 /// rewrites the file, which makes the stale numbers look freshly saved.
 ///
 /// The 2026-07-29 dump was parsed into this cache before subtypes were
@@ -280,7 +280,7 @@ pub struct PriceTable {
 /// item traded at rather than what was asked for it, which moved 1,442 of 3,059 non-relic items and
 /// gave 142 relics a dump price they never had.
 ///
-/// Bumped to 3 for `trade_rate`, which a table written before it existed does not carry at all --
+/// Bumped to 3 for `trade_rate`, which a table written before it existed does not carry at all,
 /// and an absent rate reads as an untraded item, so the whole collection would be worth nothing
 /// until the next dump. The same bump covers a `prices` map that no longer answers for an unranked
 /// copy from a rank-only quote.
@@ -321,14 +321,14 @@ impl PriceTable {
                 max_rank_prices.insert(name.clone(), maxed);
             }
             // The cheapest quoted variant, among the ones that speak for an unranked copy. The
-            // subtype is often not knowable from the inventory -- a fish's size, an Ayatan's socket
-            // count -- so the lowest is the least the player is certainly holding; taking whichever
+            // subtype is often not knowable from the inventory (a fish's size, an Ayatan's socket
+            // count), so the lowest is the least the player is certainly holding; taking whichever
             // record came first in the file valued a `Tromyzon` at its `magnificent` 10p when its
             // `basic` was 2p.
             //
             // A rank above 0 is excluded rather than merely outranked. Seven listings in the dump
-            // are quoted at one rank and no other -- `Scan Matter` at rank 3 alone, and six more
-            // between 80p and 300p -- and a minimum over every group handed that maxed quote to
+            // are quoted at one rank and no other (`Scan Matter` at rank 3 alone, and six more
+            // between 80p and 300p), and a minimum over every group handed that maxed quote to
             // every copy for want of anything else, pricing a 0/3 `Scan Matter` at 240p. Having no
             // price is the honest answer there: `max_rank_price` above still keeps the quote for
             // the copies that earned it, and the name still resolves, so the page refresh can go
@@ -405,7 +405,7 @@ impl PriceTable {
         }
         // A listing quoted only above rank 0 has no entry in `prices` and is still a name this
         // table knows: a maxed copy has a real price to read, and an unranked one is priceable in
-        // the sense that matters -- warframe.market can be asked about it.
+        // the sense that matters: warframe.market can be asked about it.
         if let Some((key, _)) = self.max_rank_prices.get_key_value(name) {
             return Some(key);
         }
@@ -435,7 +435,7 @@ impl PriceTable {
     ///
     /// `None` and `Some(0)` mean the same thing on purpose: nothing in the last thirty days of
     /// dumps recorded anybody buying one. A stack the market does not touch is worth its unit price
-    /// and nothing in total, which is the whole point of the figure -- `Scan Matter` is a 240p mod
+    /// and nothing in total, which is the whole point of the figure. `Scan Matter` is a 240p mod
     /// that has traded 0 times in twenty-eight days.
     pub fn monthly_trades(&self, name: &str) -> Option<u32> {
         let key = self.market_name(name)?;
@@ -459,9 +459,9 @@ impl PriceTable {
     /// A mod or arcane is worth what its rank is worth, and the market says so in two numbers per
     /// listing and no more: rank 0 and the ceiling. So there are three answers, not one. Unranked
     /// copies take the rank-0 median, which is the only price this table held before. Fully ranked
-    /// copies take the ceiling's. A copy stopped somewhere in between has no quote anywhere -- the
-    /// market simply does not trade half-ranked cards -- and the honest report of that is the pair
-    /// it sits between, not either end passed off as the answer.
+    /// copies take the ceiling's. A copy stopped somewhere in between has no quote anywhere: the
+    /// market simply does not trade half-ranked cards. The honest report of that is the pair it
+    /// sits between, not either end passed off as the answer.
     pub fn ranked_price_for(
         &self,
         name: &str,
@@ -502,7 +502,7 @@ impl PriceTable {
 
     /// Records that warframe.market was asked about this item and had nobody selling it.
     ///
-    /// Only for `PriceLookup::NoSellers`. An unreachable endpoint must keep retrying -- recording
+    /// Only for `PriceLookup::NoSellers`. An unreachable endpoint must keep retrying: recording
     /// an outage here would blacklist a relic until tomorrow's dump over a router that rebooted.
     pub fn mark_checked_unpriced(&mut self, market_name: &str) {
         if !self.checked_prices.contains_key(market_name) {
@@ -542,7 +542,7 @@ impl PriceTable {
     /// **Relic dump prices carry across dumps**, up to `CARRY_DAYS`. Each daily file prices only
     /// the 163-odd relics that happened to trade that day, so any one of them leaves most of a
     /// collection blank while the file before it had the answer. Unioning them takes a real
-    /// collection's relic coverage from 44% to 96% at no cost -- the download already happens --
+    /// collection's relic coverage from 44% to 96% at no cost (the download already happens),
     /// and it is what lets the startup sweep go away entirely. The staleness is affordable because
     /// relics are cheap: a typical closed median is 4.2p and 90% are under 7p, so the median 20%
     /// drift across a month is 0.8p on an item.
@@ -550,7 +550,7 @@ impl PriceTable {
     /// **Checked prices belong to their own dump's day** and are dropped when a genuinely newer
     /// one lands. They are the live path's answers, and the live path is now only ever the player
     /// asking about the page in front of them; re-asking is a click away and costs one request.
-    /// The dumps lag -- on 2026-07-29 the newest published was dated the 27th -- so an ordinary
+    /// The dumps lag (on 2026-07-29 the newest published was dated the 27th), so an ordinary
     /// launch re-downloads a file it already has and parses it into a table whose `checked_prices`
     /// is empty, which is the case this exists for.
     ///
@@ -560,7 +560,7 @@ impl PriceTable {
     /// re-asking about every relic nobody is selling.
     pub fn adopt(&mut self, previous: &PriceTable) {
         // Everything the last table could price a relic from, each under the dump that produced it
-        // -- its own carried entries, plus its dump prices, which its dump date vouches for. The
+        // its own carried entries, plus its dump prices, which its dump date vouches for. The
         // two are disjoint: a name is only carried while no dump in hand prices it.
         let inherited = previous
             .carried_relic_prices
@@ -663,7 +663,7 @@ impl PriceTable {
 /// What a fully-ranked copy is quoted at, or nothing if this listing has no ranks.
 ///
 /// The highest quoted rank is the maxed one. warframe.market publishes exactly two per rankable
-/// listing -- rank 0 and the ceiling -- measured across the 2026-07-29 dump, where 1,512 of the
+/// listing (rank 0 and the ceiling), measured across the 2026-07-29 dump, where 1,512 of the
 /// 1,514 rankable names quote precisely two and the ceiling is 3, 5 or 10. Nothing is quoted in
 /// between, which is why a half-ranked copy has no price of its own to show.
 ///
@@ -871,7 +871,7 @@ impl CollectionPriceCache {
     ///
     /// There is deliberately no `fetch-adopt-store` method here. Fetching takes seconds and must
     /// happen outside the runtime lock, while adopting and storing must happen inside it against
-    /// the table the runtime is serving at that moment -- a combined call can only take a snapshot
+    /// the table the runtime is serving at that moment. A combined call can only take a snapshot
     /// of the previous table, and any price checked while it was downloading is then lost from
     /// memory and disk alike. `start_collection_prices` composes the two steps around the lock.
     pub fn store_table(&self, table: &PriceTable) -> Result<(), PriceDumpError> {

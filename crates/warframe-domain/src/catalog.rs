@@ -23,8 +23,8 @@ impl ItemId {
 
     /// The catalogue path behind this id: the whole id, unless it names a rank.
     ///
-    /// A mod or arcane held at several ranks is several holdings -- the market prices rank 0 and
-    /// the ceiling separately -- so each gets a row keyed `<path>#<rank>`. The catalogue knows
+    /// A mod or arcane held at several ranks is several holdings. The market prices rank 0 and
+    /// the ceiling separately, so each gets a row keyed `<path>#<rank>`. The catalogue knows
     /// only the path, and anything asking it about one of those rows has to ask about this or be
     /// told the item does not exist.
     pub fn catalog_path(&self) -> &str {

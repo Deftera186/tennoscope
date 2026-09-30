@@ -129,7 +129,7 @@ fn listed_value_counts_only_what_is_actually_offered() {
 }
 
 /// What the section badge counts. An unverifiable order is not a problem and must not be counted
-/// as one -- a badge reading "9 problems" on a machine that simply has not read the game yet is
+/// as one: a badge reading "9 problems" on a machine that simply has not read the game yet is
 /// the exact false alarm the unverifiable state exists to prevent.
 #[test]
 fn only_claims_are_counted_as_flagged() {
@@ -167,7 +167,7 @@ fn a_relink_is_reported_as_its_own_state() {
 }
 
 /// A failed fetch keeps the orders already held. The list is still the truth as of when it was
-/// fetched, and its age is on the screen -- discarding it would replace a slightly old answer with
+/// fetched, and its age is on the screen. Discarding it would replace a slightly old answer with
 /// no answer.
 #[test]
 fn a_failed_fetch_keeps_the_orders_already_held() {
@@ -216,7 +216,7 @@ fn unlinking_clears_the_orders() {
 }
 
 /// A bulk listing prices one trade, not one unit. Measured against the live API, where a traded
-/// relic carries `perTrade: 6` on roughly a third of its orders -- 300 listed at 18p per six is
+/// relic carries `perTrade: 6` on roughly a third of its orders. 300 listed at 18p per six is
 /// asking 900p, and multiplying the two figures together would put 5,400p at the top of the
 /// screen.
 #[test]
@@ -234,7 +234,7 @@ fn listed_value_prices_a_trade_rather_than_a_unit() {
 }
 
 /// The listable set names rows, not paths, because the rows are what differ. A card held unranked
-/// and held maxed is two holdings with two listings -- rank 0 and rank 5 -- while the part-ranked
+/// and held maxed is two holdings with two listings (rank 0 and rank 5), while the part-ranked
 /// copy between them has no rank the market would accept and so no offer. A relic refinement row
 /// resolves through its tier suffix. The order is the collection's own: sorted by row id.
 #[test]

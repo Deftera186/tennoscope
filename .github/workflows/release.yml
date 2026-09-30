@@ -80,7 +80,7 @@ jobs:
           fi
           echo "gated on all $expected CI jobs"
 
-      # `check-versions.sh` proves the four in-tree version declarations agree with each other.
+      # `check-versions.sh` proves the five in-tree version declarations agree with each other.
       # Nothing has ever proved they agree with the tag being built, because only this workflow
       # knows the tag -- so `v0.5.3` could quietly produce artifacts labelled 0.5.2. Same failure
       # that script exists to catch, one level up.

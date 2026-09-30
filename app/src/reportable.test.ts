@@ -71,7 +71,7 @@ describe('reportBlockVisible', () => {
 
   // Capture, market and collection prices sit idle until something uses them, so a degraded state
   // already means a real failure. The backend carries the old `last_success` forward when they
-  // degrade, so the first failure of a session has no stamp -- and requiring one hid exactly the
+  // degrade, so the first failure of a session has no stamp, and requiring one hid exactly the
   // report worth having. A reward screen that never read cleanly stayed silent all session.
   it('reports a degraded reward observer that has never read a screen', () => {
     const h = health({

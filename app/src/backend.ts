@@ -11,7 +11,7 @@ export interface RewardCard { name: string; platinum: number; ducats: number; ow
 export type LinkState = 'unlinked' | 'linked' | 'needs_relink'
 export type CredentialBacking = 'keyring' | 'database'
 export type Presence = 'online' | 'ingame' | 'invisible'
-/** `status: null` is offline — no socket held. */
+/** `status: null` is offline: no socket held. */
 export interface PresenceView { status: Presence | null; wanted: Presence | null; auto: boolean }
 export type OrderStatus =
   | { state: 'ok' }
@@ -77,7 +77,7 @@ export const collectReportText = () => invoke<string>('collect_report_text')
  * Setup status, waiting out a backend that has not finished starting.
  *
  * Tauri builds the windows before it runs the setup hook, so the webview can reach `invoke`
- * before the runtime is managed -- and the first thing setup does is open SQLite, which on a cold
+ * before the runtime is managed, and the first thing setup does is open SQLite, which on a cold
  * first run is slow enough to lose that race. One failure here is not "the backend is
  * unavailable", it is "the backend is still starting"; only a persistent one is worth telling the
  * player about. The retry belongs to the startup call site, which is the only call that races

@@ -26,8 +26,8 @@ const PAGE_SIZE: usize = 4096;
 /// of these when the failure is "this page is not readable" rather than "this process is gone".
 const ERROR_ACCESS_DENIED: i32 = 5;
 const ERROR_INVALID_HANDLE: i32 = 6;
-/// `OpenProcess` against a PID that no live process owns -- which is what a game that has just
-/// quit looks like -- reports this rather than a not-found of any kind.
+/// `OpenProcess` against a PID that no live process owns, which is what a game that has just
+/// quit looks like, reports this rather than a not-found of any kind.
 const ERROR_INVALID_PARAMETER: i32 = 87;
 const ERROR_NOACCESS: i32 = 998;
 const ERROR_PARTIAL_COPY: i32 = 299;
@@ -43,8 +43,8 @@ const ERROR_PARTIAL_COPY: i32 = 299;
 /// PID reuse is guarded by the cached handle rather than by a start time comparison: a live
 /// `PROCESS_VM_READ` handle pins the PID for as long as it is held, so the kernel cannot hand that
 /// number to another process behind our back. `GameProcess::start_time_ticks` still carries
-/// `sysinfo`'s value, but that is seconds-since-epoch here and clock-ticks-since-boot on Linux --
-/// the two must never be compared across backends.
+/// `sysinfo`'s value, but that is seconds-since-epoch here and clock-ticks-since-boot on Linux.
+/// The two must never be compared across backends.
 pub struct WindowsProc {
     handles: Mutex<HashMap<GameProcess, Arc<ProcessHandle>>>,
 }
@@ -107,7 +107,7 @@ impl ProcessDiscovery for WindowsProc {
 /// Pick the live game out of the processes sharing its image name.
 ///
 /// Newest first, then lowest PID: a launcher relaunch leaves the dying instance visible for a
-/// moment beside the one it just started, and the survivor is the new one -- the old one is on its
+/// moment beside the one it just started, and the survivor is the new one. The old one is on its
 /// way out. `start_time` is seconds since the epoch here, so newest is largest, which is what
 /// `Reverse` selects. PID breaks the tie when both start within the same second.
 ///
@@ -160,7 +160,7 @@ impl MemoryReader for WindowsProc {
         read_chunked(handle.as_ref(), address, buffer).map_err(|error| {
             let mut classified = classify_io(process.pid(), &error);
             // A dead process reports the same denial as a guard page; only the handle knows which,
-            // and it stays valid after exit. Downgrade nothing here -- the scanner treats a denial
+            // and it stays valid after exit. Downgrade nothing here: the scanner treats a denial
             // as fatal, which is right when the very first page of the very first region fails.
             if matches!(classified, AcquisitionError::MemoryReadFailed { .. }) {
                 classified = AcquisitionError::MemoryReadFailed { pid: process.pid() };
@@ -172,8 +172,8 @@ impl MemoryReader for WindowsProc {
 
 /// Read as much of `buffer` as the process will give us, page by page.
 ///
-/// `copy_address` returns `io::Result<()>`, not a byte count -- it passes `lpNumberOfBytesRead` as
-/// NULL -- so a straddling read that covers one bad page fails entirely and tells us nothing about
+/// `copy_address` returns `io::Result<()>`, not a byte count. It passes `lpNumberOfBytesRead` as
+/// NULL, so a straddling read that covers one bad page fails entirely and tells us nothing about
 /// where. Retrying at page granularity recovers the Linux backend's short-read behaviour: stop at
 /// the first page the process refuses and report how much came before it. `PAGE_GUARD` regions land
 /// here too; `proc-maps` neither masks `PAGE_GUARD` off `Protect` nor exposes it, so tolerating the
@@ -360,8 +360,8 @@ mod tests {
     /// old one is still winding down, so both carry the image name for a moment. Reading the dying
     /// instance means every later poll fails against a process on its way out, so the newest wins.
     ///
-    /// The comment here used to say "oldest first", which is the opposite of what the sort does --
-    /// nothing asserted it either way, so the two could disagree indefinitely.
+    /// The comment here used to say "oldest first", which is the opposite of what the sort does.
+    /// Nothing asserted it either way, so the two could disagree indefinitely.
     #[test]
     fn a_relaunch_is_read_from_the_new_process_rather_than_the_dying_one() {
         // start_time is seconds since the epoch on this backend, so the newer game is the larger.

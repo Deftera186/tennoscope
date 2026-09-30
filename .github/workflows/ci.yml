@@ -50,7 +50,7 @@ jobs:
       - run: pip install --break-system-packages pynacl && ./scripts/test-verify-update-feed.sh
 
       # Tauri's Linux system libraries plus tesseract. Screen capture and the crop pipeline are
-      # Rust now, so tesseract is the only thing the reward tests still shell out to.
+      # Rust now, so tesseract is the only thing the OCR tests still shell out to.
       #
       # The block after libssl is xcap's, not ours. Its Linux capture path links EGL, gbm, wayland
       # and xcb, depends on pipewire unconditionally for the portal route, and generates bindings

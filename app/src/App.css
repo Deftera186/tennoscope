@@ -47,7 +47,7 @@
 .prose { max-width: 68ch; margin: 0; color: var(--platinum-dim); font-size: .88rem; line-height: 1.65; }
 
 /* The one authored moment: a punch coming down. Hard, short, exponential.
-   It starts visible — a strike lands, it does not fade in, and content must never
+   It starts visible: a strike lands, it does not fade in, and content must never
    depend on an animation running to be readable. */
 @keyframes strike {
   from { opacity: .35; transform: translateY(-7px) scaleY(.94); }
@@ -58,7 +58,7 @@
   100% { transform: translateX(400%); }
 }
 
-/* ------------------------------------------------------------------ masthead */
+/* masthead */
 
 .assay { min-width: 0; min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 
@@ -94,7 +94,7 @@
   padding: var(--tight) clamp(var(--step), 3vw, var(--field)); border-top: 1px solid var(--rule);
 }
 
-/* Assay state. Form and colour together — never colour alone. */
+/* Assay state. Form and colour together, never colour alone. */
 .assay-state { display: flex; align-items: center; gap: .6rem; min-width: 0; }
 .assay-state .state-mark {
   width: .7rem; height: .8rem; flex: none;
@@ -132,7 +132,7 @@
   padding-left: var(--step); border-left: 1px solid var(--rule);
 }
 
-/* The three controls are drawn quiet -- a hairline on hover, not a raised plate -- because
+/* The three controls are drawn quiet (a hairline on hover, not a raised plate) because
    they sit beside the refresh stamp and must not read as part of the page's own business.
    Close takes the caution colour, which is how this register already says "final". */
 .window-control {
@@ -192,7 +192,7 @@
   font-size: .58rem; font-style: normal; font-weight: 700; letter-spacing: .04em;
 }
 
-/* --------------------------------------------------------------------- sheet */
+/* sheet */
 
 .sheet { width: min(96rem, 100%); margin: 0 auto; padding: clamp(var(--course), 5vh, var(--bed)) clamp(var(--step), 3vw, var(--field)) var(--bed); }
 .page { display: grid; gap: clamp(var(--course), 4vh, var(--field)); }
@@ -201,7 +201,7 @@
    at the baseline. Costs no vertical space the register needs. */
 .mark-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 38ch); align-items: end; gap: var(--course); }
 /* Scales on viewport HEIGHT as well as width, so the mark stays the largest thing
-   on the page in the 760px-tall window the app actually ships in. Continuous —
+   on the page in the 760px-tall window the app actually ships in. Continuous, so there is
    no cliff at a breakpoint. */
 .mark-head h1 { font-size: clamp(2.6rem, 4.6vh + 2.8vw, 5.5rem); text-wrap: balance; animation: strike .28s cubic-bezier(.16, 1, .3, 1) both; }
 .mark-head .prose { padding-bottom: .3rem; text-wrap: pretty; }
@@ -214,7 +214,7 @@
 }
 /* The ducat cell is a fifth struck figure, not a swap for one of the four, so the band widens
    rather than reflows. Five columns have less air each, so the figures narrow their clamp
-   together -- singling one out would make the newcomer read as a lesser reading. */
+   together. Singling one out would make the newcomer read as a lesser reading. */
 .assay-band.with-ducats { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .assay-band.with-ducats .band-figure { font-size: clamp(2.1rem, 4vw, 3.4rem); }
 .band-cell { padding: var(--course) var(--step) var(--course) 0; }
@@ -238,7 +238,7 @@
 .band-label { display: block; margin-top: var(--step); font-family: var(--face-register); font-size: .62rem; letter-spacing: .15em; text-transform: uppercase; color: var(--platinum-dim); }
 .band-note { margin: var(--hair) 0 0; color: var(--platinum-deep); font-size: .72rem; }
 
-/* ------------------------------------------------------------------ register */
+/* register */
 
 .register { display: grid; gap: var(--course); }
 
@@ -296,8 +296,8 @@
   font-family: var(--face-register); font-size: .62rem; letter-spacing: .1em; color: var(--platinum-deep);
 }
 /* The assay gauge. Live pricing takes about twenty-two seconds and moves the collection's worth
-   the whole time, so the bar's own bottom rule fills with platinum as the pass advances -- the
-   engraved hairline that already divides this sheet, struck into a reading. No spinner, no track,
+   the whole time, so the bar's own bottom rule fills with platinum as the pass advances. That is
+   the engraved hairline that already divides this sheet, struck into a reading. No spinner, no track,
    no second element: the rule under it is the track. Absent entirely when nothing is running,
    because `--assay-progress` is only set while a pass is in flight. Scaled rather than sized: a
    width transition is laid out every frame, a transform is not. */
@@ -311,8 +311,8 @@
   /* The fill is the reading, so it stays; only its travel is removed. */
   .register-bar::after { transition: none; }
 }
-/* The pass's own readout, last in the row so the two standing statements -- which day, which
-   slice -- keep their order and the transient one appends rather than displaces. */
+/* The pass's own readout, last in the row so the two standing statements (which day, which
+   slice) keep their order and the transient one appends rather than displaces. */
 .register-line.pricing { color: var(--platinum-dim); }
 .tally { display: flex; gap: 0; }
 .tally button {
@@ -332,7 +332,7 @@
 /* The ducat layer's valve. A switch, not a mode chip: the tally rows beside it choose one of
    several readings, while this turns one reading on and off, and only its own two states are its
    siblings. On, the thumb crosses the track's midline and takes the gold every ducat reading on
-   this sheet already wears -- the control's state is the color of what it governs. */
+   this sheet already wears, since the control's state is the color of what it governs. */
 .display-switch {
   display: inline-flex; align-items: center; gap: .6rem;
   padding: .55rem .85rem; border: 1px solid var(--rule-control); background: transparent;
@@ -371,8 +371,8 @@
 }
 
 /* The provenance line states the baseline once, so no card needs a legend to explain a price's
-   date or authority. It and the range readout are one statement -- which day these prices are
-   from, and which slice of the register is on screen -- so they sit together and the control
+   date or authority. It and the range readout are one statement (which day these prices are
+   from, and which slice of the register is on screen), so they sit together and the control
    anchors the end of the row, where an action is expected and where it is still adjacent to the
    range that scopes it. An action between two status phrases broke a line meant to read as one. */
 .provenance-row { display: flex; align-items: center; justify-content: space-between; gap: var(--step); flex-wrap: wrap; }
@@ -433,8 +433,8 @@
 .hallmark.doubt { color: var(--oxblood); background: rgb(221 111 96 / 18%); }
 
 /* A dump reading is yesterday's median; a live one was fetched moments ago and is good for 15
-   minutes. Different measurements, so the live one earns brighter ink -- never sharing a column
-   with nothing to tell them apart -- and its own freshness line below, not a badge with a word
+   minutes. Different measurements, so the live one earns brighter ink, never sharing a column
+   with nothing to tell them apart, and it keeps its own freshness line below, not a badge with a word
    nothing else on screen explains. */
 .price { display: inline-flex; align-items: center; gap: .32rem; }
 .price b { font-family: var(--face-mark); font-size: .95rem; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; color: var(--platinum-deep); }
@@ -447,13 +447,13 @@
 /* One mark leading the group, not one per figure: the unit price and the stack total are the same
    currency, so a second copy of the icon between them is repetition rather than information.
    Held to about the figure's own cap height. Larger than that and it outweighs the item name above
-   it -- the register is a dense sheet, and the mark is here to say which currency, not to be the
+   it. The register is a dense sheet, and the mark is here to say which currency, not to be the
    loudest thing in the row. Below it the canister loses its dark chip and reads as a grey lozenge.
    A dump reading keeps the mark dimmer along with its figure, so the freshness signal above is not
    diluted by an icon that stays equally bright either way. */
 .price .metal-mark { height: 1.15rem; width: auto; opacity: .68; }
 .price.live .metal-mark { opacity: 1; }
-/* The ducat reading keeps the price span's whole shape -- figure, mark, stack total -- and takes
+/* The ducat reading keeps the price span's whole shape (figure, mark, stack total) and takes
    the gold the reward screen already gives this currency, so the two prices on a prime part are
    told apart by their metals and not by position alone. */
 .price.ducat-reading b { color: var(--gold); }
@@ -484,7 +484,7 @@
 .page-slot { display: inline-flex; align-items: center; gap: var(--hair); }
 .page-slot i { color: var(--platinum-deep); font-style: normal; }
 
-/* ------------------------------------------------------- the assay slip (rewards) */
+/* the assay slip (rewards) */
 
 /* Exactly N equal columns. auto-fit could wrap to 3+1 at the ship width and
    destroy the sideways scan the fixed rows exist to protect. */
@@ -524,7 +524,7 @@
 /* Sized in `rem` and not `em`: a rendered object loses its dark chip and turns to a grey lozenge
    below about 18px where a flat mark would still read, so the legibility floor has to hold even
    where the figure beside it has scaled down. Height-normalised with `width: auto`, because the
-   canister is a wide object and the sigil a tall one -- a shared square box renders the canister
+   canister is a wide object and the sigil a tall one. A shared square box renders the canister
    visibly smaller than the sigil beside it. */
 .metal-mark { flex: none; height: 1.7rem; width: auto; user-select: none; }
 .metal.plat .metal-label { color: var(--platinum-deep); }
@@ -544,11 +544,11 @@
 .metal.plat .metal-hallmark { background: var(--platinum); color: var(--touchstone); }
 .metal.ducat .metal-hallmark { background: var(--gold); color: var(--touchstone); }
 
-/* -------------------------------------------------------- the assay procedure */
+/* the assay procedure */
 
 .procedure-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--step); flex-wrap: wrap; padding-bottom: var(--step); border-bottom: 1px solid var(--rule); }
 /* The failed reading gets a struck record: a ruled plate offering the three
-   ways the evidence leaves the machine -- by the player's own hand. No new
+   ways the evidence leaves the machine, by the player's own hand. No new
    visual language: the failure mark, the register labels, the office stamp. */
 .report-plate {
   display: grid; gap: var(--course);
@@ -615,10 +615,10 @@
 .stages li.degraded .assay-verdict { color: var(--gold); }
 .stages li.failed .assay-verdict { color: var(--oxblood); }
 
-/* ------------------------------------------------------------------ settings */
+/* settings */
 
 /* Each preference is a ruled plate under the "Preferences" head, which draws the top rule for the
-   first of them -- so a setting rules only below itself and two never double up. Grid items start
+   first of them, so a setting rules only below itself and two never double up. Grid items start
    rather than stretch: a control is as wide as it needs to be, and the stamp is not a banner. */
 .setting { display: grid; justify-items: start; gap: var(--step); padding: var(--course) 0; border-bottom: 1px solid var(--rule); }
 .setting > * { max-width: 100%; }
@@ -676,14 +676,14 @@
 .dial-slot input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--touchstone), 0 0 0 4px var(--gold); }
 .dial-slot input[type="range"]:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 2px var(--touchstone), 0 0 0 4px var(--gold); }
 
-/* ------------------------------------------------------------------- clauses */
+/* clauses */
 
 .clauses { display: grid; }
 .clause { display: grid; grid-template-columns: 4rem minmax(0, 1fr); gap: var(--step); padding: var(--course) 0; border-bottom: 1px solid var(--rule); }
 .clause:first-child { border-top: 1px solid var(--rule); }
 .clause-index { font-family: var(--face-register); font-size: .58rem; letter-spacing: .14em; color: var(--platinum-deep); }
 /* A disclosure is not a feature. It gets a seated ground and gold hairlines top and
-   bottom — a ruled band, the register's own way of setting a notice apart. Not a
+   bottom: a ruled band, the register's own way of setting a notice apart. Not a
    side stripe: a thick coloured edge on a callout is the oldest tell there is. */
 .clause.caution { padding-inline: var(--step); background: var(--plate); box-shadow: inset 0 1px 0 var(--gold-dim), inset 0 -1px 0 var(--gold-dim); }
 .clause.caution .clause-index { color: var(--gold); }
@@ -691,7 +691,7 @@
 .clause .prose { font-size: .84rem; }
 .clause .stamp { margin-top: var(--step); }
 
-/* ---------------------------------------------------------- setup certificate */
+/* setup certificate */
 
 .certificate { min-height: 100vh; display: grid; align-content: center; padding: clamp(var(--step), 4vh, var(--field)) clamp(var(--step), 5vw, var(--field)); }
 .certificate:has(.access-selector) { align-content: start; padding-block: var(--step); }
@@ -729,7 +729,7 @@
 
 .footnote { margin: 0 0 var(--course); max-width: 68ch; color: var(--platinum-deep); font-size: .76rem; line-height: 1.6; }
 
-/* ------------------------------------------------------ access mode register */
+/* access mode register */
 .mode-setting { margin-bottom: var(--field); padding-bottom: var(--course); border-bottom: 1px solid var(--rule-bright); }
 .access-selector { margin: var(--course) 0; }
 .access-rail { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -806,11 +806,11 @@
 .seal:disabled { opacity: .5; cursor: wait; }
 .certificate:has(.access-selector) .seal { position: sticky; z-index: 2; bottom: var(--step); box-shadow: 0 -12px 24px var(--touchstone), var(--strike); }
 
-/* -- wide certificate ------------------------------------------------------
+/* wide certificate
    The window ships at 1180x760, but a tiled window runs wide (1890px here).
    Past 90rem the sheet opens to the full window and the register reads as a
-   certificate proper: a letterhead title row over a two-column body -- the
-   three-stop rail on its plate at the left, the reading struck beside it --
+   certificate proper: a letterhead title row over a two-column body. The
+   three-stop rail on its plate at the left, the reading struck beside it,
    the prohibitions as a full-width conditions line at the foot, and the
    confirm seal closing the document. The floating 1180px design is untouched
    below the breakpoint. */
@@ -842,7 +842,7 @@
 
 
 
-/* ------------------------------------------------------------------- states */
+/* states */
 
 .error-banner {
   margin: 0 0 var(--course);
@@ -863,7 +863,7 @@
 .empty-state h2 { margin: 0; font-family: var(--face-mark); font-size: 1.6rem; font-weight: 700; letter-spacing: -.015em; text-transform: uppercase; color: var(--platinum-dim); }
 .empty-state p { max-width: 46ch; margin: 0; color: var(--platinum-deep); font-size: .8rem; line-height: 1.6; }
 
-/* ------------------------------------------------------------------- overlay
+/* overlay
    Sized to the game's four-card block, so a column here is a card there. The
    0.207% gap is the game's own 2px-in-242 card spacing as a fraction, which
    keeps the columns aligned at any window size rather than only at 1080p.
@@ -879,7 +879,7 @@
 .overlay-rewards .slip {
   gap: .3rem; padding: .55rem .7rem; animation: none;
   /* Opaque enough to survive arbitrary game imagery underneath. Legibility here
-     is a product constraint, not a taste call — the blur is doing work, not decoration. */
+     is a product constraint, not a taste call. The blur is doing work, not decoration. */
   background: rgb(11 12 14 / 93%);
   box-shadow: inset 0 0 0 1px rgb(232 235 239 / 16%);
   -webkit-backdrop-filter: blur(14px) saturate(112%);
@@ -908,7 +908,7 @@
 }
 .overlay-empty strong { font-size: .68rem; font-weight: 700; color: var(--platinum-dim); }
 
-/* --------------------------------------------------------------- responsive */
+/* responsive */
 
 /* The window ships at 1180x760, not at an ideal 1080-tall viewport. On a short
    viewport the field compresses so the register is reachable without scrolling;
@@ -1140,8 +1140,8 @@
 }
 
 /* The row states its own case, in the register face the product uses for anything struck rather
-   than written. Empty on an ordinary row -- including an unverifiable one, which has nothing to
-   say -- and the column holds its width so the rows below do not shift. */
+   than written. Empty on an ordinary row, including an unverifiable one which has nothing to
+   say, and the column holds its width so the rows below do not shift. */
 .line-claim {
   min-width: 0; overflow: hidden;
   font-family: var(--face-register); font-size: .58rem; font-weight: 700; letter-spacing: .1em;
@@ -1200,7 +1200,7 @@
    screen and the hairline it would otherwise draw against the block's own border. */
 .relink .clause-pair { margin: 0; }
 
-/* ------------------------------------------------------------- sell listing */
+/* sell listing */
 
 /* Publishing sits below the card's marks, not among them: the marks state what is held, and a
    control that changes a real account elsewhere is not one more fact about the item. It appears
@@ -1208,7 +1208,7 @@
 .sell-open { align-self: flex-start; }
 
 /* The form takes the card's own width and rules itself off from the marks above. Two narrow
-   number fields sit on one line -- platinum and quantity are read together, as a price is. */
+   number fields sit on one line: platinum and quantity are read together, as a price is. */
 .sell-form {
   display: flex; flex-wrap: wrap; gap: var(--tight);
   margin-top: var(--tight); padding-top: var(--tight); border-top: 1px solid var(--rule);
@@ -1284,7 +1284,7 @@
 .pick-list button:hover:not(:disabled) .pick-held, .pick-list button:focus-visible .pick-held { color: var(--touchstone); }
 .pick-empty, .pick-more { margin: 0; color: var(--platinum-dim); font-size: .76rem; line-height: 1.5; }
 
-/* ---------------------------------------------------------------- presence */
+/* presence */
 
 /* A row of struck choices rather than a dropdown: there are four, they are mutually exclusive,
    and which one is current is the thing the player came here to read. A select hides that behind
@@ -1293,7 +1293,7 @@
   display: flex; flex-direction: column; gap: var(--tight);
   margin-block: var(--step); padding: var(--step); background: var(--touchstone);
 }
-/* The mode sits opposite the label, above the row it governs -- automatic is not a fifth status,
+/* The mode sits opposite the label, above the row it governs. Automatic is not a fifth status;
    it is who is choosing among the four, so it is not offered as one more of them. */
 .presence-head { display: flex; align-items: center; justify-content: space-between; gap: var(--step); flex-wrap: wrap; }
 .presence-label {
@@ -1308,7 +1308,7 @@
 .presence-auto input { accent-color: var(--gold); }
 .presence-choices { display: flex; flex-wrap: wrap; gap: var(--hair); }
 /* Under automatic the row still says which status is in force, but it is being reported rather
-   than offered -- so it reads as a readout, without the disabled controls going invisible. */
+   than offered, so it reads as a readout, without the disabled controls going invisible. */
 .presence-choices[data-auto] .stamp:disabled { opacity: 1; }
 .presence-choices[data-auto] .stamp:disabled:not(.struck) { opacity: .45; }
 .presence-note { margin: 0; color: var(--platinum-dim); font-size: .76rem; line-height: 1.5; }
@@ -1318,7 +1318,7 @@
 .presence .stamp.struck:hover:not(:disabled) { background: var(--gold); border-color: var(--gold); }
 .presence-choices[data-auto] .stamp.struck:disabled { background: var(--gold); border-color: var(--gold); color: var(--touchstone); }
 
-/* ------------------------------------------------------------------ kiosk
+/* kiosk
    Chips over the in-game ducat kiosk. Every position is a design pixel of the
    1920x1080 calibration (mirrored from kiosk_geometry.rs) times `--h`, one
    design pixel's actual size; horizontal offsets hang off the window centre,

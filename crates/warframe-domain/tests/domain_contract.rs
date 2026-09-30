@@ -109,7 +109,7 @@ fn all_uncertain_rewards_have_no_best_value() {
 }
 
 /// The case that ranking on platinum alone hides. A cheap common can carry more ducats than the
-/// card the market values highest, and a player saving for Baro wants that one -- so the two
+/// card the market values highest, and a player saving for Baro wants that one, so the two
 /// answers have to be separately visible, not collapsed into a tiebreak.
 #[test]
 fn the_ducat_winner_is_reported_even_when_another_card_is_worth_more_platinum() {

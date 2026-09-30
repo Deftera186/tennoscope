@@ -115,7 +115,7 @@ impl AppCore {
     }
 
     /// The live price cache, shared with the reward overlay. Cheap to clone and entries expire on
-    /// their own, so the collection reads whatever the player last asked warframe.market about --
+    /// their own, so the collection reads whatever the player last asked warframe.market about,
     /// including anything a relic pool warmed during a mission.
     pub fn set_live_prices(&mut self, live: MarketPriceCache) {
         self.live = Some(live);
@@ -144,7 +144,7 @@ impl AppCore {
         let mut names = collection
             .entries()
             .filter(|entry| item_ids.iter().any(|id| id == entry.item.id.as_str()))
-            // A ranked row will not show what comes back -- the market answers about rank 0 -- so
+            // A ranked row will not show what comes back (the market answers about rank 0), so
             // asking on its behalf spends a request to learn a number that is then discarded. The
             // unranked row of the same name, where one is owned, still asks for it.
             .filter(|entry| entry.rank.unwrap_or(0) == 0)
@@ -213,7 +213,7 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: market account degraded — {message}");
+        log::warn!("health: market account degraded: {message}");
         let last_success = self.health.market_account.last_success.clone();
         self.health.market_account =
             BackendHealth::new(HealthState::Degraded, message, last_success)?;
@@ -323,7 +323,7 @@ impl AppCore {
         })
     }
 
-    /// The catalogue's ducats for this entry, joined by path -- the same route enrichment takes,
+    /// The catalogue's ducats for this entry, joined by path: the same route enrichment takes,
     /// so the " Blueprint" suffix that separates the two vocabularies never applies.
     fn ducats_for(&self, entry: &warframe_domain::InventoryEntry) -> Option<u32> {
         self.ducats
@@ -492,7 +492,7 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: catalog failed — {message}");
+        log::warn!("health: catalog failed: {message}");
         self.health.catalog = BackendHealth::failed(message)?;
         self.current_view()
     }
@@ -504,7 +504,7 @@ impl AppCore {
         let message = message.into();
         // The monitor thread re-records this every poll; log only the transition into the state.
         if self.health.log_monitor.state() != HealthState::Failed {
-            log::warn!("health: log monitor failed — {message}");
+            log::warn!("health: log monitor failed: {message}");
         }
         self.health.log_monitor = BackendHealth::failed(message)?;
         self.current_view()
@@ -516,7 +516,7 @@ impl AppCore {
     ) -> Result<AppView, AppError> {
         let message = message.into();
         if self.health.log_monitor.state() != HealthState::Degraded {
-            log::warn!("health: log monitor degraded — {message}");
+            log::warn!("health: log monitor degraded: {message}");
         }
         let last_success = self.health.log_monitor.last_success.clone();
         self.health.log_monitor = BackendHealth::new(HealthState::Degraded, message, last_success)?;
@@ -529,7 +529,7 @@ impl AppCore {
     ) -> Result<AppView, AppError> {
         let message = message.into();
         if self.health.log_monitor.state() != HealthState::Idle {
-            log::info!("health: log monitor idle — {message}");
+            log::info!("health: log monitor idle: {message}");
         }
         let last_success = self.health.log_monitor.last_success.clone();
         self.health.log_monitor = BackendHealth::idle(message, last_success)?;
@@ -558,7 +558,7 @@ impl AppCore {
             last_success,
         )?;
         // `acquisition_stages` only changes on a full acquisition attempt, not on every monitor
-        // tick -- so a transient "game not found" blip during startup (briefly classified as
+        // tick, so a transient "game not found" blip during startup (briefly classified as
         // GameDiscovery/Degraded, e.g. GameNotRunning or LauncherRunning) would otherwise sit
         // there forever once the process reconnects, since nothing else clears it. An unrelated
         // failure (say, AuthorizationNotFound while logged out) is real information and must
@@ -579,7 +579,7 @@ impl AppCore {
         observed_at: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let observed_at = observed_at.into();
-        log::info!("health: capture ready — {observed_at}");
+        log::info!("health: capture ready at {observed_at}");
         self.health.capture =
             BackendHealth::ready("Reward screen observer ready", Some(observed_at))?;
         self.current_view()
@@ -597,7 +597,7 @@ impl AppCore {
         } else {
             "OCR"
         };
-        log::info!("health: capture ready — {source} ({elapsed_ms} ms) — {observed_at}");
+        log::info!("health: capture ready at {source} ({elapsed_ms} ms) by {observed_at}");
         self.health.capture = BackendHealth::ready(
             format!("{source} reward observer ready ({elapsed_ms} ms)"),
             Some(observed_at),
@@ -613,7 +613,7 @@ impl AppCore {
         observed_at: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let observed_at = observed_at.into();
-        log::info!("health: market ready — {priced} priced — {observed_at}");
+        log::info!("health: market ready, {priced} priced, at {observed_at}");
         self.health.market = BackendHealth::ready(
             format!("warframe.market pricing ready ({priced} priced)"),
             Some(observed_at),
@@ -626,7 +626,7 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: market degraded — {message}");
+        log::warn!("health: market degraded: {message}");
         let last_success = self.health.market.last_success.clone();
         self.health.market = BackendHealth::new(HealthState::Degraded, message, last_success)?;
         self.current_view()
@@ -644,7 +644,7 @@ impl AppCore {
         dump_date: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let dump_date = dump_date.into();
-        log::info!("health: collection prices ready — {dump_date} — {priced} items");
+        log::info!("health: collection prices ready, {dump_date}, {priced} items");
         self.health.collection_prices = BackendHealth::ready(
             format!("Priced from the {dump_date} price dump ({priced} items)"),
             Some(dump_date),
@@ -657,7 +657,7 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: collection prices degraded — {message}");
+        log::warn!("health: collection prices degraded: {message}");
         let last_success = self.health.collection_prices.last_success.clone();
         self.health.collection_prices =
             BackendHealth::new(HealthState::Degraded, message, last_success)?;
@@ -669,7 +669,7 @@ impl AppCore {
         message: impl Into<String>,
     ) -> Result<AppView, AppError> {
         let message = message.into();
-        log::warn!("health: capture degraded — {message}");
+        log::warn!("health: capture degraded: {message}");
         let last_success = self.health.capture.last_success.clone();
         self.health.capture = BackendHealth::new(HealthState::Degraded, message, last_success)?;
         self.current_view()
@@ -897,12 +897,12 @@ pub enum HealthState {
     Ready,
     /// Enabled, unimpaired, and with nothing to do yet.
     ///
-    /// Distinct from `Ready` on purpose. The reward observer shells out to `xwininfo`,
-    /// `magick` and `tesseract`, and none of them are probed until a reward screen
-    /// actually appears -- so before the first read there is nothing to justify a green
-    /// state, and claiming one would be a guess. Distinct from `Degraded` because
-    /// nothing is wrong: reporting "waiting for work" as a fault trains the reader to
-    /// ignore the colour that means a real fault.
+    /// Distinct from `Ready` on purpose. The reward observer spawns `xwininfo` and `tesseract`,
+    /// and it starts spawning them once a relic baseline reaches the log, which arrives minutes
+    /// before any reward screen does. So there is a real window in which the observer is working
+    /// and has produced nothing yet, and calling that green would be a guess.
+    /// Distinct from `Degraded` because nothing is wrong: reporting "waiting for work" as
+    /// a fault trains the reader to ignore the colour that means a real fault.
     Idle,
     Degraded,
     Failed,
@@ -990,7 +990,7 @@ pub struct HealthView {
     collection_prices: BackendHealth,
     database: BackendHealth,
     acquisition_stages: Vec<AcquisitionStageView>,
-    /// The linked warframe.market account, kept apart from `market` -- that row answers "could we
+    /// The linked warframe.market account, kept apart from `market`: that row answers "could we
     /// reach warframe.market for a price", and this one answers "is an account connected". One
     /// can be healthy while the other is not.
     market_account: BackendHealth,
@@ -1130,7 +1130,7 @@ pub struct ReconciledOrder {
     /// missing the entry entirely.
     pub name: Option<String>,
     /// The collection row this order's item resolves to, rank suffix or relic tier included, or
-    /// `None` for an order that names no one row -- a set, a sculpture, a retired item, a
+    /// `None` for an order that names no one row: a set, a sculpture, a retired item, a
     /// part-ranked copy. The interface's only way to say which holding a live listing belongs to:
     /// the order's `item_id` and the row's key are namespaces that share nothing, and only the
     /// item table joins them.
@@ -1146,7 +1146,7 @@ pub struct ReconciledOrder {
 /// That restraint is not caution for its own sake. The application's stated failure posture is to
 /// keep the last coherent inventory when the reader breaks, so a snapshot can be stale or absent
 /// while looking exactly like a current one from here. Judging against one produces confident
-/// accusations about orders that were never wrong -- each with a delete button beside it.
+/// accusations about orders that were never wrong: each with a delete button beside it.
 pub fn reconcile_orders(
     orders: &[MarketOrder],
     items: &MarketItems,
@@ -1240,14 +1240,14 @@ pub struct MarketAccountView {
     pub fetched_at: Option<String>,
     /// What the visible sell orders are asking, in total.
     pub listed_platinum: u32,
-    /// How many orders carry a claim. Not a count of orders worth looking at -- an unverifiable
+    /// How many orders carry a claim. Not a count of orders worth looking at: an unverifiable
     /// order is not a problem, and counting one would put a false alarm on the navigation of every
     /// machine that has not read the game yet.
     pub flagged: usize,
     /// The collection rows this account may publish a listing for.
     ///
     /// Row ids rather than paths, because the rows are what a listing names: an unranked stack and
-    /// a maxed copy of one card are two listings -- rank 0 and the ceiling -- while a part-ranked
+    /// a maxed copy of one card are two listings (rank 0 and the ceiling) while a part-ranked
     /// copy between them is none, and a relic refinement is one of four. Sent rather than
     /// recomputed on the frontend because the rule is the resolver in the crate that parses
     /// warframe.market's own table. A second implementation in TypeScript would be a copy of a

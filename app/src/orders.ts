@@ -74,7 +74,7 @@ export function uncountedReason(order: MarketOrder): string | null {
  *
  * Matched on the row the backend resolved, never on the order's own `item_id`: that is
  * warframe.market's opaque id and a collection row is a `/Lotus/` path, and the two namespaces
- * share nothing -- a badge that compared them directly matched nothing, ever, which is how a
+ * share nothing. A badge that compared them directly matched nothing, ever, which is how a
  * successful sell used to leave the card it was pressed on looking untouched. Hidden orders and
  * buy orders are not listings anybody can see, so an item with only those is not "listed" and the
  * card says nothing.
@@ -88,7 +88,7 @@ export function listedOrderFor(orders: readonly ReconciledOrder[], itemId: strin
 
 /**
  * What the badge on a listed card says. A listing that covers part of the holding says how much of
- * it -- "listed 3 of 5" -- because the remainder is exactly what the Sell button beside it still
+ * it ("listed 3 of 5") because the remainder is exactly what the Sell button beside it still
  * offers. A listing that covers the whole holding (or more than it, which the orders screen
  * carries as its own claim) says the listing plain, never a division by a holding smaller than
  * itself.

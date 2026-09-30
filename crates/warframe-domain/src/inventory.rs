@@ -14,7 +14,7 @@ pub struct InventoryEntry {
     /// and the tier the market quotes by default.
     ///
     /// A rank is not cosmetic. `Serration` sells for 3p at rank 0 and 48p at rank 10, so copies at
-    /// different ranks are different holdings and get an entry each -- which is why this is on the
+    /// different ranks are different holdings and get an entry each, which is why this is on the
     /// entry rather than on the catalog item, whose identity is the same card either way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rank: Option<u32>,

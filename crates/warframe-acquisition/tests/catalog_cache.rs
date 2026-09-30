@@ -214,7 +214,7 @@ fn concurrent_writers_leave_one_whole_valid_generation() {
                 // Either writer may lose the race to replace the generation file. On Windows
                 // the replace of a destination being replaced at the same moment fails
                 // transiently (MoveFileExW), and the loser reporting CacheWrite is a
-                // legitimate outcome -- the invariant under test is that one whole valid
+                // legitimate outcome, since the invariant under test is that one whole valid
                 // generation survives, asserted below. Any other failure is a bug.
                 if let Err(error) = outcome
                     && !matches!(error, CatalogCacheError::CacheWrite)

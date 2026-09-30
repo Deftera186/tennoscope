@@ -1,7 +1,7 @@
 //! The one file in this crate that reaches the network.
 //!
-//! Deliberately thin. Everything worth testing -- what a signin body looks like, which status
-//! means an expired credential, how an order parses -- lives in a module that takes a transport,
+//! Deliberately thin. Everything worth testing (what a signin body looks like, which status
+//! means an expired credential, how an order parses) lives in a module that takes a transport,
 //! so the tests never depend on warframe.market being up or on the orders behind a real account.
 
 use std::{io::Read, time::Duration};

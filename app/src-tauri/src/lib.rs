@@ -23,7 +23,7 @@ use warframe_acquisition::{
 };
 
 /// The platform's process-memory backend. Both sides implement `MemoryReader` and
-/// `ProcessDiscovery`, which is the seam everything below the app already works through -- naming
+/// `ProcessDiscovery`, which is the seam everything below the app already works through. Naming
 /// the concrete type once here is what keeps `cfg` out of the call sites.
 #[cfg(unix)]
 use warframe_acquisition::LinuxProc as GameMemory;
@@ -342,7 +342,7 @@ pub fn contains_inventory_sync_trigger(bytes: &[u8]) -> bool {
 /// The presence socket and the two answers that only mean anything beside it: whether presence is
 /// following the game reader, and what the socket was last asked to hold.
 ///
-/// Kept together because no caller has ever wanted one without the others -- a status change is a
+/// Kept together because no caller has ever wanted one without the others: a status change is a
 /// socket write and a new `wanted` in the same breath, and going offline is all three at once.
 #[derive(Default)]
 struct PresenceHold {
@@ -429,7 +429,7 @@ impl PresenceHold {
 /// another refresh is running, or one finished recently enough that repeating it would only cost
 /// the player a process-memory read for the same answer.
 ///
-/// Kept together because neither field means anything alone -- `started` without `running` is a
+/// Kept together because neither field means anything alone. `started` without `running` is a
 /// debounce, and `running` without `started` is a refresh nothing will ever release.
 #[derive(Clone, Default)]
 struct RefreshIdle(Arc<(Mutex<bool>, std::sync::Condvar)>);
@@ -710,7 +710,7 @@ async fn set_market_presence(
     .map_err(|_| "presence task failed".to_owned())?
 }
 
-/// ponytail: the game reader's own health, mapped straight across -- `ready` means the process is
+/// ponytail: the game reader's own health, mapped straight across. `ready` means the process is
 /// open, which is as much as this application currently knows. The upgrade is EE.log activity,
 /// which is also what would let the `activity` object the API accepts be filled in.
 fn auto_presence(runtime: &Runtime) -> warframe_status::Presence {
@@ -729,7 +729,7 @@ fn auto_presence(runtime: &Runtime) -> warframe_status::Presence {
 /// players see, which is the server's answer and not the request that was made.
 ///
 /// Automatic mode is re-derived here rather than only when it is switched on. It maps the game
-/// reader's state, and that state changes on its own -- computing it once at the press would mean
+/// reader's state, and that state changes on its own. Computing it once at the press would mean
 /// "follow the game" stopped following the moment Warframe was launched.
 fn publish_presence(runtime: &mut Runtime) -> Result<AppView, String> {
     if runtime.presence.is_automatic() {
@@ -1011,7 +1011,7 @@ async fn refresh_prices(
                 match persisted {
                     // Only ever refreshes a row that already reports health. A page refresh knows
                     // nothing about the dump download, so writing Ready here would clear a startup
-                    // failure -- "No warframe.market price dump could be read" -- and leave the row
+                    // failure ("No warframe.market price dump could be read") and leave the row
                     // reading healthy over whatever stale table that failure left behind. But if the
                     // row is Degraded from a transient failure (a market blip or failed disk write),
                     // we need to clear it with a successful refresh. The discriminator is last_success:
@@ -1075,7 +1075,7 @@ async fn load_fake_session(state: State<'_, SharedRuntime>) -> Result<AppView, S
 /// The same form `refresh_blocking` already stamps snapshot metadata with, rather than a second
 /// vocabulary for the same idea. Only two things read it: the reconciliation, which normalises
 /// both forms to an instant anyway, and the interface, whose `snapshotFreshness` already parses
-/// epoch seconds -- so formatting a calendar date here would add a date algorithm to produce a
+/// epoch seconds, so formatting a calendar date here would add a date algorithm to produce a
 /// string nothing needs in that shape.
 fn now_unix_seconds() -> String {
     SystemTime::now()
@@ -1093,8 +1093,8 @@ fn now_unix_seconds() -> String {
 ///
 /// The runtime mutex is taken three times rather than once and held throughout, because `get_view`
 /// polls that same mutex every 2.5 seconds from the frontend. Holding it across the item fetch and
-/// `list_mine` -- each a real HTTP call with its own timeout, plus whatever the pacer makes them
-/// wait -- would freeze that poll, and with it the whole interface, for as long as warframe.market
+/// `list_mine`, each a real HTTP call with its own timeout, plus whatever the pacer makes them
+/// wait, would freeze that poll, and with it the whole interface, for as long as warframe.market
 /// takes to answer. Cheap state is read under the first lock and carried out by value; the network
 /// happens with no lock held; the result is published under a final lock taken only to write it.
 /// If a sign-out happened while this fetch was unlocked, `generation` is now stale: whatever the
@@ -1443,7 +1443,7 @@ async fn remove_order(
 
 /// Publish a sell listing for one row of the collection.
 ///
-/// The item is named by its collection row id -- the whole key, rank suffix or relic tier
+/// The item is named by its collection row id: the whole key, rank suffix or relic tier
 /// included, never a market id: a market id from the frontend is a value nothing checked, and it
 /// decides which item a real listing is published against. `authorize_sell` resolves it here,
 /// refusing rows this device does not hold and rows whose listing would need details no row
@@ -1502,8 +1502,8 @@ async fn create_order(
 ///
 /// The quantity is never taken from the caller: it is derived here from the reconciliation's own
 /// `OrderStatus::Overshoot { owned }` on the order named, which is the only quantity this command
-/// will ever send. An order that is not currently flagged as an overshoot -- including one whose
-/// id is not on the held list at all -- is refused before anything is sent, because a value the
+/// will ever send. An order that is not currently flagged as an overshoot, including one whose
+/// id is not on the held list at all, is refused before anything is sent, because a value the
 /// frontend supplied unchecked would be a write of anything it liked to a real account.
 #[tauri::command]
 async fn set_order_quantity(
@@ -1530,7 +1530,7 @@ async fn set_order_quantity(
 
 /// Edit the price and the count of a listing the player is looking at.
 ///
-/// Unlike the derived quantity repair beside it, both numbers are the player's own choice -- and
+/// Unlike the derived quantity repair beside it, both numbers are the player's own choice, and
 /// everything this device can check about them is checked here: `authorize_update` bounds the
 /// count against the holding of the row the order names, and the market crate bounds the price and
 /// the count against what the API accepts. Neither bound is the frontend's to enforce alone,
@@ -1769,7 +1769,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
 /// unless the player asks for one.
 ///
 /// There is nothing to schedule. The whole collection is priced by a single file, so this runs
-/// once at start and is done -- no queue, no worker, no rate limiting, because there are no
+/// once at start and is done: no queue, no worker, no rate limiting, because there are no
 /// per-item requests to pace. A cached table that is already as new as anything published skips
 /// the download entirely; the file is 3.9 MB and it changes once a day.
 ///
@@ -1778,7 +1778,7 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
 /// more: the fault was the *ask*, and the same file carries completed trades, which are per unit.
 /// One file prices only the relics that traded that day, so `PriceTable::adopt` unions it with the
 /// files before it and coverage goes from 45% of a real collection's relics to 96%. The sweep's
-/// remaining job -- the last few percent -- is not worth 70 requests a launch against a holding
+/// remaining job, the last few percent, is not worth 70 requests a launch against a holding
 /// that came to 391p.
 ///
 /// The dumps lag, so the usual launch re-downloads the same file it already had. The refreshed
@@ -1788,8 +1788,8 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
 /// The download and the fold are deliberately separate steps. `latest_dump` spends seconds on the
 /// network, so it runs outside the lock; the fold, the write to disk and the publish then happen
 /// under one hold of it. Folding in a table read *before* the download would silently erase any
-/// price a page refresh landed while it was in flight -- prices the player has already paid
-/// requests for -- and erase them from disk as well as memory. Do not reorder these.
+/// price a page refresh landed while it was in flight (prices the player has already paid
+/// requests for), and erase them from disk as well as memory. Do not reorder these.
 fn start_collection_prices(shared: SharedRuntime) {
     std::thread::spawn(move || {
         let Some(app_data) = shared.lock().ok().map(|runtime| runtime.app_data.clone()) else {
@@ -1855,8 +1855,8 @@ const CHECKED_PRICES_UNSAVED: &str = "Checked prices could not be saved for the 
 /// is selling.
 ///
 /// Both things this does beyond `MarketPriceCache::warm` need the loop opened up. Progress has to
-/// be published *during* the pass -- twenty-two seconds of silence on a figure that moves the whole
-/// time is the complaint this answers -- and a `NoSellers` verdict has to be attributed to the name
+/// be published *during* the pass. Twenty-two seconds of silence on a figure that moves the whole
+/// time is the complaint this answers, and a `NoSellers` verdict has to be attributed to the name
 /// that produced it, which a summed `WarmOutcome` cannot do.
 ///
 /// Each name still goes through `warm`, so every request claims a slot from the same shared clock
@@ -1910,8 +1910,8 @@ fn publish_pricing_progress(shared: &SharedRuntime, pricing: Option<PricingProgr
 /// outlive the 15-minute live cache and survive a restart.
 ///
 /// The whole read-modify-write-persist runs under one hold of the runtime lock. The page refresh
-/// is the only writer, but two of them overlap readily -- the player clicks, changes page, clicks
-/// again -- and either could otherwise clone the table, be overtaken, and then write its stale
+/// is the only writer, but two of them overlap readily: the player clicks, changes page, clicks
+/// again, and either could otherwise clone the table, be overtaken, and then write its stale
 /// copy over the other's prices on disk.
 /// The network work is deliberately *not* in here: callers pace their own requests first and call
 /// this with the answers, so the lock the 2.5-second view poll needs is held for a clone and a
@@ -2026,7 +2026,7 @@ pub fn run() {
     builder
         // Raise the window that is already open rather than starting a rival process. Two instances
         // tail the same EE.log, write the same database and draw two override-redirect overlays at
-        // the same coordinates over the game, where whichever raised last wins -- so the strip on
+        // the same coordinates over the game, where whichever raised last wins, so the strip on
         // screen need not be the build you just started.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
@@ -2051,7 +2051,7 @@ pub fn run() {
             // The file target keeps debug traces in dev builds and trims to Info in stable
             // releases: per-OCR-attempt debug lines land every 200 ms, and with only 5 MiB
             // per rotated file a stable session of hours would otherwise keep just the last
-            // minutes of history — the very window the report block exists to serve.
+            // minutes of history, the very window the report block exists to serve.
             let file = tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                 file_name: Some("tennoscope.log".to_owned()),
             });
@@ -2072,7 +2072,7 @@ pub fn run() {
                     //
                     // `app_lib` is the one that matters and the one that was missing: the log
                     // target is the *library* name from `[lib]`, not the package name, so naming
-                    // only `tennoscope` filtered out every reward diagnostic there is --
+                    // only `tennoscope` filtered out every reward diagnostic there is:
                     // `[DEBUG-capture]`, `[DEBUG-card]` and `[DEBUG-poller]` all log from this
                     // crate's lib. The 2026-08-20 report is what that costs: a wall of identical
                     // `poll failed` warnings and no way to see which monitor was captured or what
@@ -2373,7 +2373,7 @@ mod tests {
     }
 
     /// A refresh that is already running, and one that just finished, are both reasons not to
-    /// start another -- and the caller must not have to remember that they are two questions.
+    /// start another, and the caller must not have to remember that they are two questions.
     #[test]
     fn refresh_window_refuses_while_running_and_during_the_debounce() {
         let mut window = RefreshWindow::default();

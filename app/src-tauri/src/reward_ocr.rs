@@ -56,21 +56,21 @@ pub(crate) fn clear_latest_matched_rect() {
 /// Card geometry, calibrated from a labelled 1920x1080 reward screen: four cards on a 242px pitch
 /// from x=478, i.e. a block centred on x=960.
 ///
-/// These are fractions of window *height*, offset from the horizontal centre -- not fractions of
+/// These are fractions of window *height*, offset from the horizontal centre, not fractions of
 /// width. Warframe scales its HUD with height and centres it horizontally, so a card's distance
 /// from the centre is a fixed multiple of the window height at every aspect ratio. Fractions of
 /// width only look right because they agree with these at 16:9, and disagree everywhere else.
 const CARD_PITCH: f32 = 242.0 / 1080.0;
 const CARD_WIDTH: f32 = 240.0 / 1080.0;
 /// Centre of the card block, as a signed fraction of height from the window's horizontal centre.
-/// The 1920x1080 block spans x=478 to x=1444, whose centre is x=961 -- one pixel right of the
+/// The 1920x1080 block spans x=478 to x=1444, whose centre is x=961, one pixel right of the
 /// screen centre, which is measurement noise, not an offset. Keeping the measured value rather
 /// than rounding it to zero is what makes the 1920x1080 calibration reproduce exactly.
 const BLOCK_CENTRE: f32 = (478.0 + (242.0 * 3.0 + 240.0) / 2.0 - 960.0) / 1080.0;
 
 /// The four-card block, for anything that needs to sit against the cards rather than read them.
 ///
-/// The overlay used to invent its own rectangle -- 75% of the screen wide, 56% of the way down --
+/// The overlay used to invent its own rectangle (75% of the screen wide, 56% of the way down)
 /// while this module had the cards measured to the pixel. Two independent guesses at one rectangle
 /// is why the overlay was half again as wide as the cards and about 75px below them. There is one
 /// definition now, and it is this one, because this is the one that is calibrated.
@@ -102,7 +102,7 @@ pub fn card_block_width(cards: usize, height: u32) -> f32 {
 /// The title band, measured against three captured reward screens on 2026-07-27.
 ///
 /// This box was y=418 high 76, which was wrong at both edges. The top clipped the ascenders off
-/// the first line of a two-line title, and clipped glyphs do not read as noise -- they read as
+/// the first line of a two-line title, and clipped glyphs do not read as noise: they read as
 /// confident wrong letters, so `Caliban Prime Chassis` came back as `Caliban Flime Gnassis`
 /// (`C`->`G`, `h`->`n`) and the closed-set match had to absorb damage that was never in the pixels
 /// on screen. The bottom reached past the title into the divider ornament below each card, which
@@ -126,7 +126,7 @@ const CROP_KEEP_BELOW: f32 = 0.85;
 /// Two readers are live at once whenever the log-triggered retry overlaps the poller, which is
 /// exactly during the reward screen. Sharing one crop path means each deletes the other's file
 /// mid-read, so the reads fail precisely when they are needed. Only the crop still touches the
-/// disk -- it is what tesseract is handed -- because the capture itself now stays in memory.
+/// disk, since it is what tesseract is handed, because the capture itself now stays in memory.
 static SCRATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 fn scratch_file(kind: &str, extension: &str) -> PathBuf {
@@ -193,8 +193,8 @@ fn read_capture_candidates<T>(
 /// reward through the closed-set match, so a name-only assertion passes against a misaligned crop
 /// and proves nothing.
 ///
-/// How many cards there are is not knowable ahead of time -- it is the squad size, and EE.log only
-/// says so after the screen has already come and gone -- so the layouts are simply tried. Each
+/// How many cards there are is not knowable ahead of time. It is the squad size, and EE.log only
+/// says so after the screen has already come and gone, so the layouts are simply tried. Each
 /// wrong one costs a single crop, because the read stops at the first card that will not match.
 ///
 /// Widest first, and that ordering is load-bearing: a two-card block sits exactly over a four-card
@@ -213,7 +213,7 @@ pub fn read_cards(
     read_cards_in(&frame, candidates)
 }
 
-/// The same read against an already-decoded frame, which is what the live path has -- screen
+/// The same read against an already-decoded frame, which is what the live path has. Screen
 /// capture stays in memory.
 pub fn read_cards_in(
     image: &DynamicImage,
@@ -224,7 +224,7 @@ pub fn read_cards_in(
     }
     let (width, height) = image.dimensions();
     // Up to three layouts per poll rather than one, so a poll off the reward screen costs
-    // three crops instead of one -- about 200ms every two seconds. Narrow it by asking the log for
+    // three crops instead of one, about 200ms every two seconds. Narrow it by asking the log for
     // the squad size if that ever shows up in a profile.
     let widest = read_cards_at(image, width, height, MAX_CARDS, candidates);
     if widest.is_ok() {
@@ -256,7 +256,7 @@ const BLANK_CARD: &str = "a reward card read as blank";
 
 /// Reads the `cards` title slots of one layout, stopping at the first that will not match. The
 /// failing slot comes back with the reason because `read_cards` needs to know whether the *first*
-/// slot was the one that failed -- that is what tells a misplaced block apart from a pool gap.
+/// slot was the one that failed, which is what tells a misplaced block apart from a pool gap.
 fn read_cards_at(
     image: &DynamicImage,
     width: u32,
@@ -278,7 +278,7 @@ fn read_cards_at(
         let matched = best_match(&text, candidates);
         // Without the raw text a failed read is unattributable: reading the wrong place, reading a
         // screen that is not the reward screen, and reading a card whose name is not in the pool
-        // all surface as the same error. The text alone is not enough either -- a misplaced crop
+        // all surface as the same error. The text alone is not enough either: a misplaced crop
         // yields clean-looking wrong words rather than obvious garbage, which is how the title box
         // stayed 10px too low for five live runs. Keep the pixels behind a poor read.
         #[cfg(debug_assertions)]
@@ -307,14 +307,14 @@ fn read_cards_at(
     Ok(read)
 }
 
-/// Crop one region and OCR it. Returns the text and the crop, which the caller deletes -- it is
+/// Crop one region and OCR it. Returns the text and the crop, which the caller deletes. It is
 /// kept only when the read was poor enough to be worth looking at.
 ///
 /// The card title is near-white text laid over arbitrary card art, and handing tesseract that
 /// greyscale crop directly makes it read the art: a dark helmet behind a word garbles it, and card
 /// borders at the edge of the crop come back as leading `|`, `Fr` or `pA UY`. Isolating the text
 /// from the art is what fixes both, and it is a two-step job. `-normalize` first, so the cutoff is
-/// relative to the crop's own brightness rather than an absolute grey level -- that is what makes
+/// relative to the crop's own brightness rather than an absolute grey level. That is what makes
 /// one constant work across card art, and it should also absorb another machine's gamma. Then
 /// `-threshold` to drop everything dimmer than the text, and `-negate` because tesseract is trained
 /// on dark-on-light.
@@ -411,7 +411,7 @@ pub fn normalize_contrast(grey: &[u8]) -> Vec<u8> {
         })
         .unwrap_or(255) as u8;
 
-    // A flat crop -- a capture taken a moment too early is entirely black -- has no range to
+    // A flat crop (a capture taken a moment too early is entirely black) has no range to
     // stretch, and dividing by it would panic on exactly that frame.
     if high <= low {
         return grey.to_vec();
@@ -467,14 +467,14 @@ pub fn use_bundled_tesseract(resource_dir: &Path) {
 /// OCR a crop that `read_region` has already isolated to text.
 ///
 /// `--psm 11`, sparse text, rather than the obvious `--psm 6`, one uniform block. The title band
-/// reserves room above the title for a second line, and on a one-line title that room is empty --
+/// reserves room above the title for a second line, and on a one-line title that room is empty,
 /// so anything the game draws up there arrives as a speck floating above the words. `psm 6` has to
 /// call one of them "the block", and when it picks the speck it does not merely add noise, it
 /// returns the speck *instead of the title*: a real 2026-07-28 crop reading `Dual Zoren Prime
 /// Handle` came back as `"| @\nn |\n|"`. Every poll failed that way until the speck went, which cost
 /// about nine seconds of a fifteen-second screen.
 ///
-/// `psm 11` does not have to choose -- it reads every text region it finds. Swept over the twelve
+/// `psm 11` does not have to choose, since it reads every text region it finds. Swept over the twelve
 /// labelled crops from four captured screens plus that live one, `psm 11` and `psm 12` read all
 /// twelve; `psm 3`, `4` and `6` miss the speck case entirely, `psm 7` mangles wrapped titles, and
 /// `psm 13` clips leading letters. `11` over `12` only because `12` adds orientation detection this
@@ -537,7 +537,7 @@ fn run_tesseract(
 ///
 /// The installed app resolves its resource directory in verbatim `\\?\` form (issue #12),
 /// but Tesseract joins this directory to `eng.traineddata` with a forward slash, which
-/// verbatim paths reject -- so the open fails even though the file shipped. Strip the
+/// verbatim paths reject, so the open fails even though the file shipped. Strip the
 /// prefix; ordinary paths are untouched. String-level rather than `Prefix`-based so the
 /// behaviour is testable on every platform: install paths are valid Unicode in practice.
 fn tessdata_dir_arg(directory: &Path) -> PathBuf {
@@ -565,8 +565,8 @@ fn normalise(text: &str) -> String {
 /// Scoring fragments is what lets a card be found under the specks Tesseract returns at
 /// `--psm 11`, but it cannot be done at `MATCH_FLOOR`: `blueprint` is a suffix of most rewards
 /// and alone scores 0.64 against `Forma Blueprint`, so a mis-crop that recovers one generic word
-/// would resolve to a confident wrong reward. Measured: `WOH DIGeil / Blueprint` -- this file's
-/// own 2026-08-20 wrong-monitor read -- scored 0.56 and was rejected before fragments were
+/// would resolve to a confident wrong reward. Measured: `WOH DIGeil / Blueprint`, this file's
+/// own 2026-08-20 wrong-monitor read, scored 0.56 and was rejected before fragments were
 /// scored, and 0.64 and accepted after. A fragment has to be a near-exact match to speak.
 const PARTIAL_MATCH_FLOOR: f32 = 0.85;
 
@@ -608,7 +608,7 @@ fn text_groups(text: &str) -> Vec<String> {
 /// recovers `Forma Blueprint` from under three specks of noise (0.64 -> 1.0) without letting a
 /// lone `Blueprint` name a card it cannot identify.
 ///
-/// Still a closed-set match -- it returns the nearest pool name, never "not in the pool" -- so
+/// Still a closed-set match: it returns the nearest pool name, never "not in the pool", so
 /// the floors are the only guard against a confident wrong answer.
 pub fn best_match(text: &str, candidates: &[RewardCatalogEntry]) -> Option<(String, f32)> {
     let whole = best_match_of(text, candidates);
@@ -618,7 +618,7 @@ pub fn best_match(text: &str, candidates: &[RewardCatalogEntry]) -> Option<(Stri
         fragments.push(groups[start..].join(" "));
     }
     // Deduped on the normalised form, because `normalise` strips the separators that are the only
-    // difference between a wrapped name and its rejoined groups -- on raw text every such pair
+    // difference between a wrapped name and its rejoined groups. On raw text every such pair
     // scores twice. Seeding with the whole text drops the `start == 0` run, which normalises to
     // exactly it. That is to avoid a redundant pass over the pool, not to protect a floor: the
     // whole text is scored above without a local floor either way, and a duplicate of it can only
@@ -867,7 +867,7 @@ mod tests {
     }
 
     /// A mis-crop that recovers one generic word must not name a card. `Blueprint` is a suffix on
-    /// most Warframe rewards, so alone it identifies nothing -- yet it scores 0.64 against
+    /// most Warframe rewards, so alone it identifies nothing, yet it scores 0.64 against
     /// `Forma Blueprint`, over the 0.6 floor.
     ///
     /// `WOH DIGeil` is this file's own recorded read of the 2026-08-20 wrong-monitor capture. That
@@ -924,7 +924,7 @@ mod tests {
     }
 
     /// The case between the other two: noise above a name that is itself wrapped. Neither the
-    /// whole text nor any single group matches here -- only a trailing run of groups does, which
+    /// whole text nor any single group matches here: only a trailing run of groups does, which
     /// is what makes that loop load-bearing rather than decoration.
     #[test]
     fn a_trailing_run_of_groups_recovers_a_wrapped_name_under_noise() {
@@ -945,7 +945,7 @@ mod tests {
 
     /// Issue #12: the installed app resolves its resource directory in verbatim `\\?\` form,
     /// and Tesseract joins `--tessdata-dir` to the filename with `/`, which verbatim paths
-    /// reject -- so `eng.traineddata` fails to open even though it shipped. The directory
+    /// reject, so `eng.traineddata` fails to open even though it shipped. The directory
     /// handed to Tesseract must never carry the verbatim prefix.
     #[test]
     fn verbatim_tessdata_dir_is_unprefixed_for_tesseract() {

@@ -427,7 +427,7 @@ impl CandidateSet {
     ///
     /// A mistyped password, a re-login, or a session the game refreshed leaves each nonce it ever
     /// held resident in the process until the game itself restarts, and the scan finds all of
-    /// them -- which read as "multiple authorizations" and stayed unrecoverable for the rest of
+    /// them, which read as "multiple authorizations" and stayed unrecoverable for the rest of
     /// the play session. The nonce is a monotonically increasing counter for a given account, so
     /// the largest one is the live session; the smaller ones are dead credentials that would be
     /// rejected by the endpoint anyway. Ambiguity across *different* accounts is left alone: that

@@ -5,8 +5,8 @@ use warframe_acquisition::{MemoryReader, ProcessDiscovery, WindowsProc};
 /// Opt-in smoke probe for a running native Warframe session.
 ///
 /// This is the only thing that can answer the two questions CI cannot: does `OpenProcess` with
-/// `PROCESS_VM_READ` succeed against Warframe without elevation, and does a full region rescan --
-/// which is all this backend has, there being no soft-dirty equivalent -- stay fast enough to poll.
+/// `PROCESS_VM_READ` succeed against Warframe without elevation, and does a full region rescan
+/// (which is all this backend has, there being no soft-dirty equivalent) stay fast enough to poll.
 ///
 /// Output is limited to stage names and aggregate counts. It never prints mapped paths, addresses,
 /// memory bytes, or authorization data.
@@ -50,7 +50,7 @@ fn live_windows_proc_probe_emits_only_safe_stage_metadata() {
 
 /// The trait defaults are load bearing here: without soft-dirty tracking, `recently_written_regions`
 /// must degrade to a full rescan rather than returning nothing, and the snapshot must be absent
-/// rather than empty -- an empty snapshot would read as "the game wrote nothing".
+/// rather than empty, because an empty snapshot would read as "the game wrote nothing".
 #[test]
 #[ignore = "requires a running Warframe session and explicit local opt-in"]
 fn live_recent_writes_degrade_to_a_full_rescan() {
@@ -73,7 +73,7 @@ fn live_recent_writes_degrade_to_a_full_rescan() {
     );
     // Not an equality: the two enumerations are seconds apart against a running game, which maps
     // and unmaps as it goes, so the counts drift by a region or two in either direction and an
-    // exact comparison fails at random. What has to hold is that the rescan is a *full* one -- a
+    // exact comparison fails at random. What has to hold is that the rescan is a *full* one: a
     // degraded write-tracker that returned a handful of regions, or none, would read as "the game
     // barely wrote anything" and the scanner would skip the memory it needs.
     let drift = recent.len().abs_diff(readable.len());

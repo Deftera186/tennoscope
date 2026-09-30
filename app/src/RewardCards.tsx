@@ -3,7 +3,7 @@ import { MetalMark } from './MetalMark'
 
 /**
  * Platinum and ducats are two different answers to "which one do I take", and the player picks
- * between them for reasons this program cannot see -- saving for Baro, or just not wanting to sit
+ * between them for reasons this program cannot see: saving for Baro, or just not wanting to sit
  * in trade chat. So both are shown at the same weight, in their own metal, with the leader marked
  * inside the column it won, rather than one headline number and a footnote.
  *

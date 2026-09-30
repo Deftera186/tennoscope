@@ -11,7 +11,7 @@ afterEach(() => {
   // catches it as a false failure somewhere unrelated.
   vi.clearAllMocks()
   // A test that fails mid-body never reaches its own teardown, so a fake clock set by one test
-  // would otherwise stay installed and time out every test after it -- reporting the leak as a
+  // would otherwise stay installed and time out every test after it, reporting the leak as a
   // pile of unrelated failures instead of the one real one.
   vi.useRealTimers()
 })
@@ -66,7 +66,7 @@ describe('the unlinked screen', () => {
   it('explains what linking does before offering to do it', () => {
     render(<OrdersView account={account({ link: 'unlinked', backing: undefined })} {...handlers} busy={false} error={null} />)
 
-    // The consent statement is on this screen, at the moment the player decides -- not in a
+    // The consent statement is on this screen, at the moment the player decides, not in a
     // settings page they would have to go looking for afterwards. Matched as one statement rather
     // than as two loose words: the screen now names warframe.market in several places, and an
     // assertion that any of them exists would pass on a screen that had lost the consent notice.
@@ -257,7 +257,7 @@ describe('failures', () => {
   it('asks for a re-link when the credential was refused', () => {
     render(<OrdersView account={account({ link: 'needs_relink' })} {...handlers} busy={false} error={null} />)
 
-    // The block that owns the recovery, not the band note that summarises it -- both say to sign
+    // The block that owns the recovery, not the band note that summarises it. Both say to sign
     // in again, and only this one carries the forms that let the player do it.
     expect(screen.getByRole('heading', { name: /credential refused/i })).toBeInTheDocument()
     expect(screen.getByText(/refused the stored credential/i)).toBeInTheDocument()
@@ -297,8 +297,8 @@ const braton: CollectionItem = {
 describe('editing a listing from its row', () => {
   /// The row is where the player is looking at the listing itself, so it is where a change of
   /// price or count is made. Offered only where the order names one held row: a count bounded by
-  /// a holding is the one thing this write insists on, and an order that names no row -- a set, a
-  /// sculpture -- has no holding to be bounded against.
+  /// a holding is the one thing this write insists on, and an order that names no row (a set, a
+  /// sculpture) has no holding to be bounded against.
   it('opens the form prefilled from the row, and saves through the order', async () => {
     const user = userEvent.setup()
     render(
@@ -527,7 +527,7 @@ describe('the market status switch', () => {
     // Automatic is not a fifth status: the row still names which of the four is in force.
     expect(screen.getByRole('button', { name: 'In game' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('checkbox', { name: /follow the game/i })).toBeChecked()
-    // Reporting, not offering -- pressing one would be undone by the next poll.
+    // Reporting, not offering. Pressing one would be undone by the next poll.
     expect(screen.getByRole('button', { name: 'Online' })).toBeDisabled()
   })
 

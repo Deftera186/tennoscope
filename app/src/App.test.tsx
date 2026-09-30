@@ -52,7 +52,7 @@ const view: AppView = {
       // Owned, and no name rule reaches a warframe.market listing for it. The page control must
       // leave it out: counting it promised a price for an item no request is ever made about.
       { id: 'bad-baby', name: 'Bad Baby', category: 'vehicle', quantity: 1, mastered: false, live: false, priceable: false },
-      // Priced at exactly 0 -- a real, tradeable price, distinct from an item with no listing at
+      // Priced at exactly 0, a real tradeable price, distinct from an item with no listing at
       // all. Exercises the `?? -1` sentinel in the value sort: a `?? 0` bug would tie this with
       // every unpriced item instead of ranking it above all of them.
       { id: 'zenith-prime-receiver', name: 'Zenith Prime Receiver', category: 'prime_part', quantity: 1, mastered: false, platinum: 0, live: false, priceable: true },
@@ -514,8 +514,8 @@ describe('MVP desktop interface', () => {
     for (const label of ['Game reader', 'EE.log', 'Reward observer', 'Catalog', 'Market data', 'Database', 'Process discovery', 'Memory read', 'Authorization scan', 'Inventory fetch', 'Schema validation']) {
       expect(within(panel).getByText(label)).toBeInTheDocument()
     }
-    // Rows keep their success time in their own source's format -- most write Unix seconds, the
-    // price dump a calendar date -- so the row resolves both to something a reader can act on
+    // Rows keep their success time in their own source's format: most write Unix seconds, the
+    // price dump a calendar date. So the row resolves both to something a reader can act on
     // rather than printing the stamp it was handed.
     expect(within(panel).getAllByText(/Last success: .*\d{4}/).length).toBeGreaterThan(0)
     expect(within(panel).queryByText('Last success: 1785492000')).not.toBeInTheDocument()
@@ -823,7 +823,7 @@ describe('MVP desktop interface', () => {
   })
 
   // A page refresh is on the wire for about sixteen seconds, and it is only bearable because the
-  // prices appear as they land. That is the poll's doing, so the poll has to keep running -- unlike
+  // prices appear as they land. That is the poll's doing, so the poll has to keep running, unlike
   // an inventory refresh, which replaces the whole collection and does pause it.
   it('keeps polling while a live price refresh is in flight, so prices appear as they land', async () => {
     vi.useFakeTimers()
@@ -956,7 +956,7 @@ describe('MVP desktop interface', () => {
   // Ducats are the other price a prime part carries: set by Baro rather than the market, and
   // useful in bulk, so they get the stack total platinum gets and a band figure over the whole
   // collection. They are a fact of the item rather than of a holding, so a missing part keeps its
-  // reading where it keeps no platinum -- and the whole display is the player's choice to hide.
+  // reading where it keeps no platinum, and the whole display is the player's choice to hide.
   it('shows ducats beside platinum, totals the stack, and banks a collection figure', async () => {
     backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
     backend.getView.mockResolvedValue({
@@ -992,7 +992,7 @@ describe('MVP desktop interface', () => {
     expect(within(band).getByText('45')).toBeInTheDocument()
     expect(within(band).getByText('Ducats at stake')).toBeInTheDocument()
 
-    // The switch is the layer's valve -- a two-state control, not a mode among the sorts and
+    // The switch is the layer's valve, a two-state control, not a mode among the sorts and
     // filters beside it. Off, every reading above goes, card and band alike.
     const ducatsSwitch = screen.getByRole('switch', { name: 'Ducat values' })
     expect(ducatsSwitch).toHaveAttribute('aria-checked', 'true')
@@ -1078,7 +1078,7 @@ describe('MVP desktop interface', () => {
     expect(within(daily).queryByText(/checked/i)).not.toBeInTheDocument()
   })
 
-  // Someone who clicks it should not have to guess whether it prices the page or the collection --
+  // Someone who clicks it should not have to guess whether it prices the page or the collection,
   // or find that two of the items it counted were never going to be asked about. The fixture's
   // visible page carries eight owned items; the quantity-0 Forma Blueprint and the unresolvable
   // Bad Baby are both left out, leaving seven the backend will actually send.
@@ -1088,7 +1088,7 @@ describe('MVP desktop interface', () => {
     expect(await screen.findByRole('button', { name: /Price these 7/ })).toBeInTheDocument()
   })
 
-  // A relic no dump in the last month saw trade is unpriced -- and an unpriced item is precisely
+  // A relic no dump in the last month saw trade is unpriced, and an unpriced item is precisely
   // the one a manual refresh exists for. Sending only already-priced items would close the recovery
   // path against the items that need it.
   it('offers to price an owned item that has no price yet, and never an unowned one', async () => {
@@ -1125,7 +1125,7 @@ describe('MVP desktop interface', () => {
     expect(names[0]).toBe('Ash Prime Blueprint')  // 45p × 1
     expect(names[1]).toBe('Lith A1 Relic')        // 20p × 7 = 140 total, but 20p each
     expect(names[2]).toBe('Lex Prime Receiver')   // 19p, below the relic it outranks by stack value
-    // Zenith is priced at 0 -- it must rank above every unpriced item, not tie with them.
+    // Zenith is priced at 0. It must rank above every unpriced item, not tie with them.
     expect(names[3]).toBe('Zenith Prime Receiver')
     expect(names.at(-1)).toBe('Rhino')
   })
@@ -1212,8 +1212,8 @@ describe('MVP desktop interface', () => {
   })
 
   // The production shape of an order: warframe.market's opaque item id, joined to the row by the
-  // backend. The badge used to compare the market id against the row id directly -- two namespaces
-  // that share nothing -- and never matched, which is how a sell left the card looking untouched.
+  // backend. The badge used to compare the market id against the row id directly (two namespaces
+  // that share nothing) and never matched, which is how a sell left the card looking untouched.
   it('shows a listed-order badge on a collection item with a live sell order', async () => {
     backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
     backend.marketStatus.mockResolvedValue({
@@ -1315,8 +1315,8 @@ describe('MVP desktop interface', () => {
 
   /**
    * A sell started from a card is answered on the card's own screen. The failure state lived only
-   * on the orders screen, so a refused listing from the collection told the player nothing at all
-   * -- the form simply closed and the item was not listed.
+   * on the orders screen, so a refused listing from the collection told the player nothing at all:
+   * the form simply closed and the item was not listed.
    */
   it('says so on the collection screen when a sell from a card is refused', async () => {
     backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
@@ -1347,7 +1347,7 @@ describe('MVP desktop interface', () => {
     })
 
     /**
-     * `deep` makes every part of the bar a grab handle except the controls standing on it --
+     * `deep` makes every part of the bar a grab handle except the controls standing on it,
      * including the brand text, whose own drag attribute would otherwise answer first and
      * refuse clicks that are meant to fall through to the bar behind it.
      */

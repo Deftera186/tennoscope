@@ -12,7 +12,7 @@ export function stackValue(item: { quantity: number; platinum?: number }): numbe
  * A correct unit price is half of what a holding is worth, and the collection total was reading as
  * if it were all of it. This account owns 182 Quickdraw at a true 2p; the entire game traded two of
  * them in twenty-eight days, so 364p of that total is 4p. An item nobody bought is worth nothing in
- * bulk however dear one copy is — `Scan Matter` is 240p and has traded zero times — so a missing
+ * bulk however dear one copy is: `Scan Matter` is 240p and has traded zero times, so a missing
  * count means zero rather than "no limit".
  *
  * The floor is the player's own, and defaults to counting everything. What the market completes is
@@ -83,7 +83,7 @@ export function collectionTotals(items: readonly CollectionItem[], priceFloor: n
     if (sellable > 0) totals.sellableCount += 1
     // What the whole ducat holding would bank at Baro's. Unlike platinum this is not a market
     // opinion but a posted price, so the only qualification worth a note is that it counts prime
-    // parts actually held -- a missing part's reading is on its card, not in this figure.
+    // parts actually held. A missing part's reading is on its card, not in this figure.
     if (item.quantity > 0 && item.ducats !== undefined) {
       totals.ducatsAtStake += item.ducats * item.quantity
     }
@@ -93,7 +93,7 @@ export function collectionTotals(items: readonly CollectionItem[], priceFloor: n
 }
 
 /**
- * Whether these copies are fully ranked, or null when the ceiling is unknown — which is not the
+ * Whether these copies are fully ranked, or null when the ceiling is unknown, which is not the
  * same answer as "no". A riven publishes a sentinel instead of a rank limit, and a card that might
  * be maxed must not be drawn as one that certainly is not.
  */
@@ -103,7 +103,7 @@ export function atMaxRank(item: { rank?: number; max_rank?: number }): boolean |
 }
 
 /**
- * How the rank reads on the card, or null for the unranked stack — which is every mod's default
+ * How the rank reads on the card, or null for the unranked stack, which is every mod's default
  * state and most of the collection. Labelling 674 cards "Rank 0/10" would bury the 268 that say
  * something.
  */
