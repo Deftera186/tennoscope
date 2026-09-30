@@ -33,8 +33,8 @@ Examples of unacceptable behavior include:
 
 Because of what this project does, one project-specific item is added to that list:
 
-* Publishing another player's account identifier, handle, or session data — in an issue, a pull
-  request, a screenshot, or a capture — without their explicit permission.
+* Publishing another player's account identifier, handle, or session data, in an issue, a pull
+  request, a screenshot, or a capture, without their explicit permission.
 
 ## Enforcement Responsibilities
 
@@ -55,10 +55,12 @@ an appointed representative at an online or offline event.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the
-maintainer privately through GitHub's [private reporting
-form](https://github.com/Deftera186/tennoscope/security/advisories/new). GitHub advisories are the
-only private channel this project has; a report sent there is visible to the maintainer alone.
+Instances of abusive, harassing, or otherwise unacceptable behavior go to the maintainer through
+the same private channel a vulnerability report uses, and [SECURITY.md](SECURITY.md) is where that
+channel is described: GitHub's [private vulnerability
+reporting](https://github.com/Deftera186/tennoscope/security/advisories/new). A report sent there
+reaches the maintainer alone. Opening a public issue to report conduct is not a private report,
+and for a harassment report that is the harm itself.
 
 All complaints will be reviewed and investigated promptly and fairly. All community leaders are
 obligated to respect the privacy and security of the reporter of any incident.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Warframe Helper is a GPLv3 alternative to AlecaFrame with local-only persistence. It connects only to public catalog, pricing, reader-definition, and release sources; player data never leaves the device. Linux and Windows are both first-class: on Linux the application must work across distributions, desktop environments, window managers, X11, and Wayland, and on Windows against the native client, in either case without Overwolf. The first release focuses on automatic relic reward advice and automatic inventory/mastery tracking.
+Warframe Helper is a GPLv3 alternative to AlecaFrame with local-only persistence. It connects only to public catalog, pricing, reader-definition, and release sources; collection, mastery, and reward history never leave the device. Linux and Windows are both first-class: on Linux the application must work across distributions, desktop environments, window managers, X11, and Wayland, and on Windows against the native client, in either case without Overwolf. The first release focuses on automatic relic reward advice and automatic inventory/mastery tracking.
 
 The product is one packaged desktop application built from a modular Rust workspace and a Tauri 2 shell. Rust owns all game integration, recognition, persistence, and domain logic. HTML and CSS render a modern collection browser and a transient in-game overlay without carrying Electron's runtime overhead.
 
@@ -20,7 +20,7 @@ The first release provides:
 - English UI recognition, with locale-independent catalog identities in storage; and
 - native packaging for Arch, Gentoo, Debian/Ubuntu, and Fedora, an AppImage fallback, and a per-user NSIS installer for Windows.
 
-The MVP excludes macOS support — Warframe has no macOS client — as well as Flatpak, accounts, telemetry, cloud synchronization, trade automation, builds, farming planners, and non-English recognition.
+The MVP excludes macOS support (Warframe has no macOS client) as well as Flatpak, accounts, telemetry, cloud synchronization, trade automation, builds, farming planners, and non-English recognition.
 
 ## User Experience
 
@@ -73,7 +73,7 @@ Game Acquisition hides Wine/Proton process topology, log formats, memory layouts
 
 Production adapters cover `EE.log` and passive local artifacts, process memory, and process lifecycle. These are real internal seams because replay and synthetic adapters exercise the same acquisition behavior in tests.
 
-Memory access has one adapter per platform behind the same `MemoryReader`/`ProcessDiscovery` traits: procfs with `process_vm_readv` on Linux, `VirtualQueryEx` with `ReadProcessMemory` on Windows. They differ in one observable way. Linux resets and reads `/proc/<pid>/clear_refs` soft-dirty bits, so a poll rescans only the pages the game wrote; Windows has no equivalent that works on another process, so its adapter falls back to the trait defaults and rescans everything. Neither crate contains `unsafe` — every platform call is made through a crate that encapsulates its own.
+Memory access has one adapter per platform behind the same `MemoryReader`/`ProcessDiscovery` traits: procfs with `process_vm_readv` on Linux, `VirtualQueryEx` with `ReadProcessMemory` on Windows. They differ in one observable way. Linux resets and reads `/proc/<pid>/clear_refs` soft-dirty bits, so a poll rescans only the pages the game wrote; Windows has no equivalent that works on another process, so its adapter falls back to the trait defaults and rescans everything. Neither crate contains `unsafe`: every platform call is made through a crate that encapsulates its own.
 
 Access authorization is a closed Rust `AccessMode` and one derived `AccessPolicy`, never frontend
 visibility. Each running monitor generation receives an immutable policy. A mode transition stops
@@ -134,8 +134,9 @@ found there is promoted to the keyring and cleared from the database.
 
 Authentication has one route available to third parties. `/v2/auth/signin` requires a Firebase App
 Check header only first-party clients can produce, and OAuth 2.0 registration is closed, so the
-v1 signin route is used -- which warframe.market's own documentation directs integrations to. That
-route is undocumented in the sense that matters: it can be withdrawn without notice. Linking with
+v1 signin route is used, which is the route warframe.market's own documentation directs
+integrations to. That route is undocumented in the sense that matters: it can be withdrawn
+without notice. Linking with
 a token pasted from a signed-in browser session is therefore offered as an equal path rather than
 as a fallback.
 
@@ -143,29 +144,29 @@ Reconciliation is the Warframe Library's, not this module's: it joins an order l
 inventory snapshot, and the account module has no concept of a collection. A mismatch is claimed
 only when the snapshot is coherent and newer than the order; every other case is reported as
 unverifiable and carries no claim. Each reconciled order also names the collection row it belongs
-to, resolved through the item table as the reverse of the listing resolution -- the join nothing
+to, resolved through the item table as the reverse of the listing resolution: the join nothing
 else can make, because an order's `itemId` and a row's key are namespaces that share nothing. The
 presentation reads it for the "listed" badge on a card, and the edit writes bound their count
 against it; an order that names no one row (a set, a sculpture, a retired item) carries none, and
 no surface offers what it cannot name.
 
-Writes -- publishing a listing, editing its price and count, taking one down, lowering an oversold
-quantity -- are authorized against the held view before any transport is built, and address items
-by the collection's own row id -- the whole `/Lotus/` key, rank suffix or relic tier included --
+Writes, whether publishing a listing, editing its price and count, taking one down, or lowering an
+oversold quantity, are authorized against the held view before any transport is built, and address
+items by the collection's own row id, the whole `/Lotus/` key, rank suffix or relic tier included,
 rather than by a market identifier the presentation layer supplied. Publishing is resolved from
 the row against the item table, because the row names the exact copy for sale: a bare path is the
 unranked stack, `path#rank` a ranked copy, a tier-suffixed path a relic refinement. Editing is
 bounded by the row the order names: warframe.market allows one sell order per item, so selling
 more of a partly-listed holding is an edit of the existing listing rather than a second one, and
-the count may not exceed that row's holding -- the overshoot flag's own condition, not created by
-hand. `POST /order` requires contextual fields exactly when the item supports the dimension -- a
-rank, star counts, a per-trade size -- and refuses the request either way, so the resolver sends
+the count may not exceed that row's holding, which is the overshoot flag's own condition and not
+something created by hand. `POST /order` requires contextual fields exactly when the item supports
+the dimension (a rank, star counts, a per-trade size) and refuses the request either way, so the resolver sends
 each field only for the items that demand it, and a row whose listing would need details no row
 knows (a part-ranked copy, a sculpture's socketed stars, a variant split) is not offered rather
 than refused after the fact. That is a narrower question than whether an owned count can be read
 off the collection: a ranked mod reconciles by its path and lists by its rank.
 
-Presence -- what warframe.market shows the account as -- is a separate crate, because it is a held
+Presence, meaning what warframe.market shows the account as, is a separate crate, because it is a held
 WebSocket with a reconnect lifecycle rather than request and response over a transport. It reports
 only what the server has confirmed; what was last asked for is held by the presentation layer
 beside it, so a press registers before the socket answers. `offline` is not a settable value on
@@ -254,7 +255,7 @@ fallback.
 
 ## Testing Strategy
 
-Interfaces are the test surfaces. Tests assert observable snapshots, reward views, persisted state, and health—not internal offsets or helper call sequences.
+Interfaces are the test surfaces. Tests assert observable snapshots, reward views, persisted state, and health, not internal offsets or helper call sequences.
 
 - Game Acquisition tests replay synthetic and redacted memory layouts, process topologies, and logs through test adapters.
 - Snapshot contract tests cover additions, legitimate deletions, zero quantities, changing generations, corrupt counts, invalid bounds, duplicate identities, and unknown catalog relationships.

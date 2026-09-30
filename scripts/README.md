@@ -1,22 +1,24 @@
 # Research scripts
 
 One-off instruments from the investigation that produced [`docs/research/`](../docs/research). They
-are **not** part of the application, not covered by CI, and not supported — they are kept because
+are **not** part of the application, not covered by CI, and not supported. They are kept because
 they are the reproducible evidence behind the claims in those documents, and because the memory
 path they exercise is still live code in `warframe-acquisition`.
 
 Two files are exceptions, being real build tooling rather than research instruments:
 
-- `build-linux-bundles.sh` — the bundle helper, documented in [`packaging/`](../packaging).
-- `tauri.mjs` — what `pnpm tauri` runs. It forwards to the Tauri CLI, setting `NO_STRIP` on Linux
+- `build-linux-bundles.sh`, the bundle helper, documented in [`packaging/`](../packaging).
+- `tauri.mjs`, which is what `pnpm tauri` runs. It forwards to the Tauri CLI, setting `NO_STRIP` on Linux
   because linuxdeploy's bundled `strip` predates RELR relocations and fails on distributions whose
   toolchain emits `.relr.dyn`. An explicit `NO_STRIP` from the caller always wins.
 
 ## Requirements
 
-Python 3.11+, a running Warframe session under Wine/Proton, and the same `/proc` access the app
-needs. These are Linux-only research instruments, not shipped code: the screen ones still shell
-out to `xwininfo`, `import`, `magick` and `tesseract`, which the app itself no longer does.
+Python 3.8 or newer, and NumPy for [`scan_response_records.py`](scan_response_records.py), which
+is the only script here that needs anything outside the standard library. You also need a
+running Warframe session under Wine/Proton and the same `/proc` access the app needs. These are
+Linux-only research instruments, not shipped code. The screen ones shell out to `xwininfo`,
+`import`, `magick` and `tesseract`; the app itself spawns two of those four.
 
 No paths are hardcoded: [`_paths.py`](_paths.py) finds the Wine prefix from the live process's own
 mappings, the same way the app does. Override with `TENNOSCOPE_EE_LOG` and `TENNOSCOPE_CATALOG` to

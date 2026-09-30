@@ -1,4 +1,4 @@
-# Ducat Kiosk Overlay — Design Spec
+# Ducat Kiosk Overlay: Design Spec
 
 ## Goal
 
@@ -62,15 +62,14 @@ the next poll retries. This prevents transient unreadable frames from tearing do
 - Ducats: `RewardCatalogEntry.ducats` via `reward_name_matches` (catalog.rs:98).
 - Platinum: `PriceTable::price_for(name)` (collection_prices.rs:421), daily dump source.
   Fallback: `MarketPriceCache::get`.
-- Owned count: `CollectionView::items()` name join, quantity (lib.rs:2313 pattern).
-  Owned count renders inside the existing ✓N badge area — we do NOT draw our own owned badge;
-  the game draws one. (v8 has no owned element.)
+- Owned count: not published. `CellChip` and `BasketChip` carry a name and a platinum figure
+  only, so the ✓N badge on screen is the game's own.
 
 ### Geometry
 
 All positions are fractions of **window height**, horizontal offsets as signed fractions of
-height from the window's horizontal centre — the same convention as `reward_ocr.rs:33-39`,
-because Warframe scales its HUD with height and centres horizontally.
+height from the window's horizontal centre, the same convention as the `BLOCK_CENTRE` fractions
+in `reward_ocr.rs`, because Warframe scales its HUD with height and centres horizontally.
 
 Calibration constants @1920×1080 were measured from the committed kiosk fixtures and are
 asserted by the calibration tests:
@@ -78,17 +77,17 @@ asserted by the calibration tests:
 | Element | Value |
 |---|---|
 | Grid columns | 6, 207.5px pitch, first left edge x=76, tile width 190px |
-| Grid rows | 3, card tops y=199/421/643 (222px pitch) |
+| Grid rows | 4, card tops y=199/421/643/865 (222px pitch) |
 | Label OCR crop | card top +122px, 68px tall; locator band starts at y=343 and is 46px tall |
 | Basket rows | first digit baseline y=243, 38⅓px pitch, overlay pair right edge x=1750 |
-| Total row | digit baseline y=875, overlay pair right edge x=1717 |
+| Total row | digit baseline y=875, overlay pair right edge x=1700 |
 | Grid pane | clip edge y=983; tracked strip x=70..1310, y=193..983 |
 
 ### Rendering
 
 - Second always-on-top transparent click-through window `kiosk-overlay`, url `/kiosk`
-  (clone of the reward-overlay declarations in tauri.conf.json:26-41 +
-  capabilities/default.json).
+  (clone of the `reward-overlay` window in `tauri.conf.json` plus
+  `capabilities/default.json`).
 - One window spans the whole game window rect (unlike reward-overlay's card-sized window):
   chips are absolutely positioned DOM nodes at fraction coordinates over the full screen.
 
@@ -112,7 +111,7 @@ flag stops the poller; a close arriving during OCR discards that in-flight resul
 ### Speed notes (measured, live machine)
 
 - One tesseract spawn ≈ 165ms; crops fan out across up to 12 threads with each child pinned to
-  one OpenMP thread (`OMP_THREAD_LIMIT=1`) — without that pin, 12 concurrent spawns oversubscribe
+  one OpenMP thread (`OMP_THREAD_LIMIT=1`), because without that pin 12 concurrent spawns oversubscribe
   and the grid pass goes from 385ms to 6s.
 - A uniform-background prefilter (`band_has_text`) skips the spawn for slots whose label band
   has no glyphs: empty basket rows and partial grids cost ~nothing.

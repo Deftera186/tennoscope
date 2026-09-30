@@ -8,25 +8,63 @@ Build it from the repository root with:
 ./scripts/build-linux-bundles.sh appimage
 ```
 
-The artifact is written under `target/release/bundle/appimage/`. Run it as the same Unix user that runs Warframe:
+The artifact is written under `target/release/bundle/appimage/`, and the helper fails the
+build unless the result is executable. Run it as the same Unix user that runs Warframe:
 
 ```bash
 chmod +x TennoScope_*_amd64.AppImage
 ./TennoScope_*_amd64.AppImage
 ```
 
-On KDE, the AppImage uses the screen-sharing portal for reward capture. KDE cannot grant an AppImage its silent screenshot permission because the executable path changes when the image is mounted or extracted. Install the deb, rpm, Arch, or Gentoo package instead if you want silent KDE capture.
+The helper does two things to this artifact that Tauri does not. The generated
+desktop entry is rewritten to a PATH-resolved `Exec=tennoscope`, because the
+`/usr/bin/tennoscope` the native desktop template needs does not exist on another host, and
+the KWin permission key is stripped out of it. `usr/lib/libwayland-client.so.0` is then
+deleted from the AppDir: Tauri pins a 2024 linuxdeploy whose excludelist predates that
+library, and the older bundled copy cannot drive the host's Mesa EGL vendor. linuxdeploy
+then repacks the AppDir, and the helper extracts the result again to check that the
+rewritten desktop entry is the one that shipped. It also refuses to continue if the GTK
+plugin's generated launcher stops forcing `GDK_BACKEND=x11`, which is what the reward
+overlay needs: that environment variable would override the backend the app requests for
+itself. Build AppImages through the helper rather than invoking
+`pnpm tauri build --bundles appimage` directly.
 
-Some distributions no longer install FUSE 2 compatibility by default. Prefer installing the distribution's FUSE 2 compatibility package. For a one-off fallback, AppImage supports extraction-and-run mode:
+The helper sets `NO_STRIP=true` for AppImage assembly. Tauri's `linuxdeploy` bundles a
+`strip` that cannot read the newer ELF RELR sections found on distributions whose toolchain
+emits `.relr.dyn`. Skipping this optional packaging-time strip step produces a larger artifact
+but preserves the already optimized Rust executable and allows the bundle to complete.
+
+Tauri downloads its linuxdeploy plugins into its own cache under `~/.cache/tauri` during
+the first build, so a build machine needs network access for that step.
+
+On KDE, the AppImage uses the screen-sharing portal for reward capture. KDE authorizes a
+caller by comparing the desktop entry's `Exec` with the running executable, and an AppImage's
+path is ephemeral, so the two can never match; the app refuses the KWin rung outright when
+`APPIMAGE` is set. Install the deb, rpm, Arch, or Gentoo package instead if you want silent
+KDE capture.
+
+The AppImage bundles neither of the two programs the app shells out to, because both are spawned
+by bare name from `PATH` rather than from the AppDir. The Windows installer bundles Tesseract,
+because Windows has no package manager to lean on. On Linux the OCR path runs whatever
+`tesseract` is on `PATH`, so install one with English data if you want the relic overlay. The
+collection browser works without it.
+
+`xwininfo` is the other one, needed only when Wine's virtual-desktop mode hides the game from the
+ordinary window list, and the collection browser and the marketplace do not use it either. Install
+your distribution's `xwininfo` package if you run the game that way: `x11-utils` on Debian and
+Ubuntu, `xorg-xwininfo` on Arch, `xwininfo` on Fedora, `x11-apps/xwininfo` on Gentoo. Gentoo is
+the exception: Portage cannot recommend a package, so the overlay ebuilds require
+`app-text/tesseract` and do not declare `xwininfo` at all. When one is missing the Diagnostics
+`Reward observer` row names it: `Screen capture failed: xwininfo is not installed`.
+
+Some distributions no longer install FUSE 2 compatibility by default. Prefer installing
+the distribution's FUSE 2 compatibility package. For a one-off fallback, AppImage supports
+extraction-and-run mode:
 
 ```bash
 APPIMAGE_EXTRACT_AND_RUN=1 ./TennoScope_*_amd64.AppImage
 ```
 
-The AppImage does not bypass `/proc` or Yama restrictions, does not contain Warframe, and should never be run as root or made setuid. The first catalog download still requires network access.
-
-Tauri may download its AppImage packaging tools during the build. This is a build-time operation; release builders should archive checksums and build logs when publishing artifacts.
-
-The repository helper sets `NO_STRIP=true` for AppImage assembly. The `linuxdeploy` binary currently used by Tauri contains an older `strip` that cannot read the newer ELF RELR sections found on some rolling-release systems, including current Gentoo installations. Skipping this optional packaging-time strip step produces a larger artifact but preserves the already optimized Rust executable and allows the bundle to complete.
-
-The helper also checks the GTK plugin's generated launcher. Upstream forces `GDK_BACKEND=x11`, which is what the reward overlay needs: it is an override-redirect X11 window placed against the game's own X11 window, and an environment variable naming a different backend would override the request the app makes for itself. The helper fails the build if that line ever disappears. Build AppImages through the helper rather than invoking `pnpm tauri build --bundles appimage` directly.
+The AppImage does not bypass `/proc` or Yama restrictions, does not contain Warframe, and
+should never be run as root or made setuid. The first catalog download still requires
+network access.

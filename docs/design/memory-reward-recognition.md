@@ -12,7 +12,7 @@ Solo fissures do not display a choice screen and therefore serve as negative con
 
 ## Acquisition Pipeline
 
-`EE.log` is the lifecycle clock. The monitor records loaded relic paths during the mission and recognizes `OpenVoidProjectionRewardScreenRMI`, `GetVoidProjectionRewards`, `Got rewards`, selection completion, and shutdown. Memory work only runs during this bounded reward window.
+`EE.log` is the lifecycle clock. The monitor records loaded relic paths during the mission and recognizes `OpenVoidProjectionRewardScreenRMI`, the per-player reward-reply lines, `Client has reward info for all players now`, `ProjectionRewardChoice.lua: Got rewards`, the `Missing icon data!` line the game prints once per rendered card, `ProjectionsCountdown.lua: Initialize timer`, and the screen's shutdown. Memory work only runs during this bounded reward window.
 
 The first implementation uses temporal, candidate-limited scanning:
 

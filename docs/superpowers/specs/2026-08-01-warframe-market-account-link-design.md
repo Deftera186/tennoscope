@@ -10,8 +10,8 @@ Answer "what am I selling, and is any of it wrong" inside TennoScope, instead of
 next to it.
 
 The collection already knows what the player owns and what it is worth. warframe.market knows what
-the player has listed. Nothing joins the two, so the listings that outlive their items -- sold in
-game, never taken down -- are found by the next person who whispers about one.
+the player has listed. Nothing joins the two, so the listings that outlive their items (sold in
+game, never taken down) are found by the next person who whispers about one.
 
 ## Accounts
 
@@ -69,7 +69,7 @@ left alone long enough does; the token's documented lifetime is about sixty days
 
 The token is stored in the OS keyring where one is available, and in the local database, file
 permissions `0600`, where one is not. A Linux session without a running secret service is ordinary
-rather than exceptional -- minimal window managers frequently have none -- so a keyring-only design
+rather than exceptional: minimal window managers frequently have none, so a keyring-only design
 would need this fallback anyway.
 
 Which backend holds the credential is reported in the health panel. The difference is real: a
@@ -90,7 +90,7 @@ A token is a credential. Anyone holding it can post and delete orders on the acc
 tidiness: acquisition reads the game, this calls a website, and they fail for unrelated reasons and
 must be diagnosed apart.
 
-**`auth`** owns the credential lifecycle -- `sign_in`, `link_token`, refresh on use, `sign_out` --
+**`auth`** owns the credential lifecycle (`sign_in`, `link_token`, refresh on use, `sign_out`)
 and hides the token from its callers.
 
 **`orders`** owns `list_mine` against `GET /v2/orders/my`, which returns every order on the
@@ -98,8 +98,8 @@ account, visible and hidden, in one request. It also owns the two writes the fix
 `delete` against `DELETE /v2/order/{id}`, and `set_quantity` against `PATCH /v2/order/{id}`.
 
 Phase 1 is therefore not read-only, and the distinction that matters is not reads against writes.
-It is that every write here *reduces* an existing listing -- taking one down, or lowering it to what
-is owned -- and each is one button the player presses on one row. Phase 2 adds `create`, which
+It is that every write here *reduces* an existing listing (taking one down, or lowering it to what
+is owned) and each is one button the player presses on one row. Phase 2 adds `create`, which
 publishes something new.
 
 **`credential_store`** owns the keyring-or-database decision behind `load` and `store`, and reports
@@ -150,8 +150,8 @@ coherent and newer than the order.** Four cases produce it:
 
 - no snapshot has been taken yet;
 - the snapshot predates the order's last update;
-- the order names something the collection cannot match by identity -- ranked mods and Arcanes,
-  where the market's rank and subtype do not map onto an inventory row; and
+- the order names something the collection cannot match by identity (ranked mods and Arcanes,
+  where the market's rank and subtype do not map onto an inventory row); and
 - the order is a buy order, where owning none is the ordinary state.
 
 An `Unverifiable` row carries no flag and no fix button. It is an ordinary row, because there is
@@ -163,7 +163,7 @@ screen of accusations, each with a delete button beside it.
 Orders are fetched when the section opens, when the player asks, and after any write the
 application itself performs. There is no polling.
 
-`GET /v2/orders/my` returns everything in one request, so a fetch is cheap -- but a timer spends
+`GET /v2/orders/my` returns everything in one request, so a fetch is cheap, but a timer spends
 requests continuously to discover changes that, from phase 2 onward, almost always originate in this
 application, which already knows about them. What a timer would catch and this does not is an order
 changed on the website in another tab, and the manual refresh covers that.
@@ -182,8 +182,8 @@ convenience over per-item badges.
 that order data will leave the device, and the two ways in.
 
 **Linked** is one list. Each row carries item, price, quantity, direction, and visibility. Rows
-needing attention sort to the top and state their case in the row -- "you no longer own this", "you
-own 1 of 3 listed" -- with the fix inline. A header states total listed value and when the list was
+needing attention sort to the top and state their case in the row ("you no longer own this", "you
+own 1 of 3 listed") with the fix inline. A header states total listed value and when the list was
 last fetched.
 
 Status reads "Linked". Not the email address: one account is linked, so the identity answers no
@@ -192,7 +192,7 @@ is the right thing to show, and `GET /v2/me` already returns it.
 
 ### Collection
 
-An item with a live order shows it inline -- `listed 12p`. This is what phase 2's sell action
+An item with a live order shows it inline: `listed 12p`. This is what phase 2's sell action
 attaches to.
 
 ### Health
@@ -228,7 +228,7 @@ log, the diagnostics output, or the repository.
 
 ## Testing
 
-Test-driven throughout, at interfaces, with deterministic adapters -- the convention the workspace
+Test-driven throughout, at interfaces, with deterministic adapters, the convention the workspace
 already follows.
 
 **`auth`,** against a fake transport: a successful exchange, a rejection, and the renewed token read
@@ -242,7 +242,7 @@ keeps the rule true through later edits.
 snapshot, stale snapshot, ranked mod, buy order. The absent and stale snapshot cases carry the most
 weight, since they are what stops a broken game reader from producing false accusations.
 
-**Interface,** across the three states -- unlinked, linked and clean, linked with mismatches -- in
+**Interface,** across the three states (unlinked, linked and clean, linked with mismatches) in
 the existing vitest setup.
 
 **Live,** ignored by default alongside the existing `live_*` tests. It is read-only: `GET /v2/me`

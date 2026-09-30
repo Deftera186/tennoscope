@@ -9,10 +9,10 @@ decision. Written 2026-07-26 from five labelled live runs.
 |---|---|---|
 | screen order of the four cards | EE.log squad ring, rotated so the local player is first | confirmed in all five labelled runs |
 | the local player's own reward | `VoidProjections: <id> gets reward <path>` | exact, always present |
-| the other three rewards | reading the reward screen | the only source, hosting or not |
+| the other three rewards | reading the reward screen | the only source in these runs, hosting or not |
 
-Memory answers none of these. It was tried first for the three remote rewards until 2026-07-27 and
-never once answered on a live run; see below.
+Memory, on the transient per-player records described below, answered none of these. It was tried
+first for the three remote rewards until 2026-07-27 and never once answered on a live run.
 
 ## The ordering model
 
@@ -29,20 +29,20 @@ The first responder plus the `Still waiting` identities, in log order, give the 
 Rotating that list left so the local player is first reproduces the on-screen left-to-right order.
 
 Note the reward screen also prints player names under the cards. Those are the **selection**
-indicator — who has picked which reward — not a mapping of who contributed what. Reading them as
+indicator, who has picked which reward, not a mapping of who contributed what. Reading them as
 attribution is wrong and briefly looked like it falsified the ordering model.
 
 ## Response record layouts
 
 Both captured verbatim from a live process and committed as fixtures.
 
-Outgoing, what a client serialises for itself (`tests/fixtures/void-response-record.bin`):
+Outgoing, what a client serialises for itself (`crates/warframe-acquisition/tests/fixtures/void-response-record.bin`):
 
 ```
 18 <24-byte account id> <len> <display name> 00 <len> <session key> .. <len> 00 <reward path>
 ```
 
-Host-side, one per squad member (`tests/fixtures/void-response-record-host.bin`):
+Host-side, one per squad member (`crates/warframe-acquisition/tests/fixtures/void-response-record-host.bin`):
 
 ```
 .. <len=0x48> <reward path> .. <len=0x18> <account id> <len> <display name>
@@ -59,18 +59,18 @@ nothing observed links them to a player or to a slot.
 
 | route | result |
 |---|---|
-| per-player record beside the account id | does not exist as a client — nearest identity was 90 KB from any reward path |
+| per-player record beside the account id | does not exist as a client: nearest identity was 90 KB from any reward path |
 | pointer array to the four reward strings | tightest cluster containing all four spanned 425 KB, and not in screen order |
 | four display names in an ordered UI buffer | scattered; nearest pair 45 KB apart |
 
 Useful incidental facts: a pointer to a reward string aims at `path_start - 24`, the string object
 header. A reward may be resident under `/Lotus/Types/Recipes/...`, the `/Lotus/StoreItems/...`
-alias, or both — filtering on the alias alone silently dropped a quarter of one squad.
+alias, or both; filtering on the alias alone silently dropped a quarter of one squad.
 
 ### It was not a timing artefact
 
 Every capture above was triggered by `Got rewards` in EE.log, which arrives with the flush delay
-described below — so all of them may have run after the screen tore down. Interned path strings
+described below, so all of them may have run after the screen tore down. Interned path strings
 outlive the screen, per-player structures would not, and "no such record exists" and "we looked
 after it was freed" produce identical evidence. That confound made the whole table suspect.
 
@@ -86,7 +86,7 @@ Run of 2026-07-27 01:10:48, captured 6.5s into a fifteen-second screen:
 
 The local record is the control: found in-window, at three addresses, carrying the reward the
 screenshot shows in slot 1. The scan therefore works at that moment, so the three remote absences
-are absences rather than a scan that ran too late. Reading in-window changes nothing — a client
+are absences rather than a scan that ran too late. Reading in-window changes nothing: a client
 holds a response record for itself and for nobody else.
 
 Note the sweep's other "records" are false positives: `BeastNeutralStance` entries belonging to pet
@@ -95,7 +95,7 @@ companion ids, not squad members.
 ### Hosting does not help either
 
 The table above once had a separate row promising that a host keeps a record per squad member, on
-the strength of `tests/fixtures/void-response-record-host.bin` — 288 bytes captured while hosting,
+the strength of `crates/warframe-acquisition/tests/fixtures/void-response-record-host.bin`, 288 bytes captured while hosting,
 with the reward path 181 bytes *before* the account id. `RECORD_LOOKBEHIND` exists to read that
 layout, and `structured_response_reads_a_host_record_whose_reward_precedes_the_identity` still
 passes against those bytes.
@@ -146,13 +146,13 @@ Isolating the text takes two steps, and the first is what the earlier attempt wa
 ```
 
 `-normalize` makes the cutoff relative to the crop's own brightness rather than an absolute grey
-level, which is what lets a single constant hold across different card art — and should absorb
+level, which is what lets a single constant hold across different card art, and should absorb
 another machine's gamma. `-threshold` then drops everything dimmer than the text, and `-negate`
 turns it dark-on-light, which is what tesseract is trained on.
 
 74% is the middle of a plateau, not a tuned peak. Over the twelve labelled cards, every cutoff from
 70% to 78% reads all twelve exactly. Plain thresholding without `-normalize` only manages that at
-isolated values — 78%, 80%, 88% — and falls to 0.89 between them, which is a spike to fall off
+isolated values (78%, 80%, 88%) and falls to 0.89 between them, which is a spike to fall off
 rather than a setting to depend on. The plateau is the reason to trust the constant.
 
 Result: **all twelve cards read exactly, 1.000 across the board**, with no leading or trailing junk
@@ -166,7 +166,7 @@ As fractions of the window so it carries across resolutions: cards on a 242/1920
 
 That box was 418/1080 high 76/1080 until 2026-07-27, and was wrong at both edges. The top started
 below the ascenders of the first line of a title long enough to wrap onto two lines, and clipped
-glyphs do not read as noise — they read as confident wrong letters, so `Caliban Prime Chassis` came
+glyphs do not read as noise: they read as confident wrong letters, so `Caliban Prime Chassis` came
 back as `Caliban Flime Gnassis` (`C`→`G`, `h`→`n`, and `Caliban`→`Laliban` on a worse frame). The
 bottom reached into the divider ornament, which tesseract read as a trailing `4` or `ty` on *every*
 card, costing every read an edit against its own name. Thresholding cannot recover either: clipped
@@ -176,13 +176,13 @@ The failure mode is worth naming, because it is why this survived five live runs
 does not fail. The closed-set match absorbed the damage and returned the right reward anyway, at
 0.83 against a floor of 0.6, so nothing downstream ever complained. Only the score moved.
 
-`tests/fixtures/reward-screen-wrapped-title.png` is that host screen, masked to the title band, so
+`app/src-tauri/tests/fixtures/reward-screen-wrapped-title.png` is that host screen, masked to the title band, so
 the wrapped-title case has a fixture; the single-line fixture cannot catch this. The test asserts
 scores rather than names, for the reason above.
 
 When a card scores below 0.85 its crop is kept and its path logged, so the next fault can be
 diagnosed from pixels rather than from garbled text. Both of the defects above were invisible in the
-text alone — the geometry one was only found because an unrelated capture script had saved a
+text alone: the geometry one was only found because an unrelated capture script had saved a
 screenshot.
 
 Two guards keep a bad read off the screen: anything below the match floor is dropped, and a read
@@ -190,13 +190,13 @@ that does not contain the log's local reward is discarded.
 
 ## Watching for the screen instead of being told about it
 
-EE.log is flushed seconds after the events it describes -- measured at ~7.5s on 2026-07-27, against
+EE.log is flushed seconds after the events it describes, measured at ~7.5s on 2026-07-27, against
 a screen that lives for fifteen. Every reward capture triggered by `Got rewards` therefore starts
 at or after the point the screen is already tearing down, which is why the overlay never appeared
 on a live run and why the memory evidence below is weaker than it looks.
 
-Relic *loading* is logged minutes earlier -- 125s ahead of the screen in the run replayed by
-`app/src-tauri/tests/relic_run_replay.rs` -- so that is what arms a poller instead. The closed-set
+Relic *loading* is logged minutes earlier, 125s ahead of the screen in the run replayed by
+`app/src-tauri/tests/relic_run_replay.rs`, so that is what arms a poller instead. The closed-set
 match doubles as the detector: only the reward screen yields four names from this squad's relic
 pool, so no separate "is the screen up" check is needed.
 
@@ -210,9 +210,9 @@ first relic pair does not resolve, which is the common case early in a fissure.
 
 From outside this is invisible: no thread, no reads, no log line, indistinguishable from the poller
 having run and found nothing. It stayed unnoticed for four live runs because the loop hardcoded its
-screen source and could only be reached by playing a fissure. `spawn_reward_screen_poller_with`
-takes the source and the timings as arguments so `app/src-tauri/tests/reward_poller.rs` can drive
-it against a scripted screen in milliseconds; that test caught this on its first run.
+screen source and could only be reached by playing a fissure. `RewardRecognition` takes the source
+and the timings as arguments so `app/src-tauri/tests/reward_recognition.rs` can drive it against a
+scripted screen in milliseconds; that test caught this on its first run.
 
 The first poll now happens immediately rather than one interval in.
 
@@ -233,7 +233,7 @@ spent the whole fissure matching a four-card screen against a pool that knew two
 
 What made it look like a capture failure is that one unmatched card fails the *entire* read: the
 screen showed Kompressa Prime Blueprint, Banshee Prime Neuroptics Blueprint, Cedo Prime Receiver and
-Caliban Prime Chassis Blueprint, of which only Banshee was absent from the stale pool — and the
+Caliban Prime Chassis Blueprint, of which only Banshee was absent from the stale pool, and the
 whole screen was rejected on that one card, over and over, for fifteen seconds. Three of the four
 were being read perfectly the entire time.
 
@@ -243,21 +243,21 @@ that alongside the reconstructed pool took the diagnosis from "OCR is broken aga
 and the pool is stale" in one step.
 
 The pool is now a shared cell the poller re-reads every poll, and every baseline publishes into it
-rather than only the first. `a_relic_that_loads_after_arming_still_reaches_the_running_poller`
-covers it, and fails against the old capture-by-value.
+rather than only the first. `a_relic_that_loads_after_the_baseline_still_grows_the_pool` in
+`app/src-tauri/tests/reward_recognition.rs` covers it, and fails against the old capture-by-value.
 
 Still open: a single unrecognised card still discards the other three. That is correct when the read
-is garbage, and wrong when it is one genuinely unknown reward — a new prime the catalog has not
+is garbage, and wrong when it is one genuinely unknown reward: a new prime the catalog has not
 caught up with would silently cost the whole overlay.
 
 ### What the layer-shell path was skipping
 
-`show_reward_overlay` returns as soon as `configure_linux_layer` succeeds, so on Wayland every
+`show_reward_overlay` returned as soon as the layer-shell path in `show_over_game` succeeded, so on Wayland every
 property set in `configure_reward_overlay` was skipped: `set_size`, `set_position`,
 `set_focusable(false)`, `set_ignore_cursor_events(true)` and `set_always_on_top(true)`. Two reported
 symptoms came from that one early return.
 
-Click-through was the felt one — without it the strip is an input-grabbing surface parked over the
+Click-through was the felt one: without it the strip is an input-grabbing surface parked over the
 game, so the pointer catches on it for as long as the overlay is up. The other was width: the layer
 path sized itself with `set_default_size`, which is only an initial hint, and a layer surface
 anchored on two edges is free to come out wider. The overlay is a four-column grid sized to the
@@ -266,13 +266,13 @@ sits under. `set_size_request` pins it.
 
 ### The retry that blocked the hide
 
-`visual_choices` runs synchronously on the monitor thread, and that thread is also the one that
-watches `visual_screen_gone` and takes the overlay down. Because EE.log is flushed late, the retry is
-routinely entered *after* the screen has already closed — and it then spent its full eight-second
-deadline capturing a screen that was not there, with the monitor blocked behind it, unable to act on
-a hide it had already been told to perform.
+`RewardSourceCoordinator::choices` used to run synchronously on the monitor thread, and that thread
+was also the one that watched for the screen to be gone and took the overlay down. Because EE.log
+is flushed late, the retry is routinely entered *after* the screen has already closed, and it then
+spent its full eight-second deadline capturing a screen that was not there, with the monitor
+blocked behind it, unable to act on a hide it had already been told to perform.
 
-It now takes the screen-gone flag and returns immediately when it is set. The 8.1-second run of
+It now gives up as soon as the screen-gone flag is set. The 8.1-second run of
 failing captures at 355ms intervals visible in the 2026-07-27 02:44 crop timestamps is exactly this
 loop.
 
@@ -292,25 +292,26 @@ poller keeps looking after it has found the cards and reports the screen disappe
 which is the same signal the show path uses. Two consecutive failed reads are required, because a
 card reads blank often enough mid-screen that one miss is not evidence.
 
-The screen's life is deterministic once the cards render -- `ProjectionsCountdown.lua: Initialize
-timer nil 15` to `Countdown timer expired` was exactly 15.000s in both captured runs -- but every
+The screen's life is deterministic once the cards render: `ProjectionsCountdown.lua: Initialize
+timer nil 15` to `Countdown timer expired` was exactly 15.000s in both captured runs, but every
 one of those lines is lagged, so the timer is useful for understanding and useless for triggering.
 
 ### Instrumentation
 
-`append_debug_line` honours `TENNOSCOPE_DEBUG_LOG`. Tests set it to a scratch file, because fixture
-output in the live log is indistinguishable from a real fissure -- 68 lines of it were briefly read
+Debug lines carry a `[DEBUG-…]` tag and go through the `log` crate, and `TENNOSCOPE_DEBUG_LOG` is
+the test-only override for the scratch file they land in. That file is per-test because fixture
+output in the live log is indistinguishable from a real fissure: 68 lines of it were briefly read
 as evidence from a live run.
 
 ## Pricing
 
-Ducats cannot rank relic rewards on their own — most commons are worth the same 15. Platinum comes
+Ducats cannot rank relic rewards on their own, since most commons are worth the same 15. Platinum comes
 from warframe.market v2, `/v2/orders/item/{slug}`, quoting the lowest visible sell order from a
 seller who is **in game**; offline sellers list prices nobody can trade at. Slugs are derived from
 the reward name (lowercase, non-alphanumerics to underscore) and verified against the live API for
 every reward observed. Untradeable items, Forma among them, have no entry and stay unpriced.
 
-Ducats are not a tiebreak. Most commons share the same 15, so platinum is what separates them — but
+Ducats are not a tiebreak. Most commons share the same 15, so platinum is what separates them, but
 a card worth almost nothing on the market can still be the right take for a player saving for Baro,
 and the two orderings disagree often. Both winners are computed and shown separately; collapsing
 ducats into a platinum tiebreak meant the ducat answer was only ever visible when the platinum
@@ -322,14 +323,14 @@ Pricing used to start when the cards were published, which is the worst possible
 lives fifteen seconds, the player is deciding during them, and every card showed a dash until the
 requests came back.
 
-The relic pool is known far earlier. It is the same signal that arms the screen poller — relics are
+The relic pool is known far earlier. It is the same signal that arms the screen poller, since relics are
 logged when they load, 125s ahead of the screen in the replayed run. Every reward that pool can drop
 is priced in that window, into a cache that outlives the mission, so the common case at publish time
 is zero requests and no dashes. Only a reward the warm pass missed is fetched late, and that one is
 fetched without pacing because the screen is already up.
 
 The warm pass paces itself at 250ms per request; two dozen names is six seconds against a two-minute
-budget, so there is no reason to arrive as a burst. Misses are not cached — an untradeable item and
+budget, so there is no reason to arrive as a burst. Misses are not cached: an untradeable item and
 an unreachable API are indistinguishable from here, and caching the second would leave a card
 unpriced for the rest of the session.
 
@@ -362,8 +363,8 @@ Neuroptics is `XakuPrimeHelmet`, Fang Prime Handle is `PrimeFangHandle`, Vadarya
   arming bug and the shared-scratch-file race were fixed.
 - Reading memory inside the fifteen-second window gives the same answer as reading it late, so the
   attribution gap is real and not an artefact of the log delay.
-- Hosting does not close that gap. Memory is off the live reward path; the screen is the only
-  source for the three remote cards, and EE.log for the fourth.
+- The per-player-record route never resolved the three remote cards on any run, and it is off the
+  live reward path; the screen supplied those three and EE.log the fourth.
 - The card title crop was 10px too low and 18px too tall. Fixed, and pinned by a wrapped-title
   fixture that asserts scores, because a misaligned crop still returns the right name.
 - Separating the title from the card art with `-normalize -threshold 74% -negate` takes all twelve

@@ -20,7 +20,7 @@ From the user's report (`2026-08-22-231838279`):
 | 22:15:54 → 22:41:24 | `blank` / `did not match the relic pool` | 507 |
 | 23:06:04 → 23:14:25 | `no Warframe window found` | 250 |
 
-The 22:14 session worked — three `reward: published cards=[...]` lines. The 23:04 session
+The 22:14 session worked, with three `reward: published cards=[...]` lines. The 23:04 session
 never located the window once, and the attached EE.log covers exactly that session:
 `-windowMode:2`, `Borderless mode. Desktop resolution is 1920x1080`.
 
@@ -172,10 +172,10 @@ identified by its terminal on portal implementations; direct KWin capture avoids
 
 `reward_capture/mod.rs` owns backend precedence and the common `MonitorFrame` contract:
 
-- `reward_capture/x11.rs` — X11 window discovery and drawable capture
-- `reward_capture/direct.rs` — wlroots screencopy
-- `reward_capture/kwin.rs` — KWin DBus capture and raw `QImage` conversion
-- `reward_capture/portal/` — explicit portal authorization and PipeWire fallback
+- `reward_capture/x11.rs`: X11 window discovery and drawable capture
+- `reward_capture/direct.rs`: wlroots screencopy
+- `reward_capture/kwin.rs`: KWin DBus capture and raw `QImage` conversion
+- `reward_capture/portal/`: explicit portal authorization and PipeWire fallback
 
 `reward_ocr.rs` keeps geometry, cropping, OCR, and matching. The held `GameCapture` feeds the same
 `visible_region` / `window_frame_from_monitor` path from every backend, preserving multi-monitor and
@@ -238,7 +238,7 @@ nothing at all. Give it a Linux message.
 The report actively misled here, in three separate ways.
 
 **Wrong subsystem named.** Plumb the capture failure reason through `visual_choices` so the
-health message says what failed — `Screen capture failed: no Warframe window found` — instead
+health message says what failed (`Screen capture failed: no Warframe window found`) instead
 of blaming log parsing. `try_publish_player_records` returning `false` must not collapse two
 unrelated causes into one message.
 
@@ -252,7 +252,7 @@ means something is actually wrong.
 **The decisive line was filtered out.** `[DEBUG-capture]` (`reward_ocr.rs:297`) is what
 distinguishes "no window" from "wrong monitor" from "captured an XWayland helper", and stable
 builds cap the file target at Info (`lib.rs:2766`). Logging it per poll at Info would flood a
-5 MiB rotation, so log it at Info *only when the capture configuration changes* — memoized on
+5 MiB rotation, so log it at Info *only when the capture configuration changes*, memoized on
 rect, monitor origin and region. Reports then carry the geometry without the flood, which is
 what the original comment at `lib.rs:2780-2786` was worried about.
 

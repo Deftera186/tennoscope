@@ -73,7 +73,7 @@
     "homepage": "https://github.com/Deftera186/tennoscope",
     "publisher": "Deftera186",
     "shortDescription": "Local-first Warframe collection and relic companion",
-    "longDescription": "TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the four rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.",
+    "longDescription": "TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.",
     "resources": {
       "../../LICENSE": "LICENSE",
       "../../THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"

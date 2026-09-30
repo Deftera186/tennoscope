@@ -12,6 +12,40 @@ declares stability. Releases through `0.11.0` treated any user-visible behaviour
 minor; from here on a fix that restores intended behaviour is a patch even when the user can
 see the difference.
 
+## [Unreleased]
+
+### Fixed
+
+- **An update offer survives a restart.** The daily check throttle skipped the
+  network on reopen, so the masthead button vanished on the next launch and
+  stayed gone until the next check ran. The offered version is now stored and
+  the mark comes back on startup, where it waits until you dismiss it, install
+  it, or a newer build replaces it. Clicking it opens Settings, and the
+  AppImage mount check reads your temporary directory instead of assuming
+  `/tmp`.
+
+- **An update offer survives a check that cannot run.** With no network the
+  automatic check restored the previous phase in silence, so the app went on
+  reporting a last-checked time for a check that never ran, and pressing Check
+  by hand threw away an offer that was already standing along with the button
+  that acts on it. A standing offer now keeps the note.
+- **The sell form says which bound you crossed.** A bad price or quantity
+  disabled the button with nothing naming the field or its range. Each now
+  reports itself, and the reason is attached to the input rather than to a
+  control you cannot focus.
+- **Hidden status text is still announced.** Two strings were removed from the
+  accessibility tree rather than merely hidden, so a reader arriving before the
+  text had nothing to say and the verdict disappeared entirely below a narrow
+  window. Both are clipped now, and the control borders meet the contrast
+  target the stylesheet sets for them.
+- **A clipped label gives its whole text on hover.** The reader's verdict, the
+  game-reader line and each order's line-claim could only be read in full by
+  widening the window.
+- **The Linux packages recommend `xwininfo`.** Wine's virtual-desktop mode
+  hides the game from the ordinary window search, so the X11 path walks an
+  `xwininfo` tree to find it. The deb, rpm and COPR now recommend it beside
+  tesseract, and the Gentoo overlay names it at install time.
+
 ## [0.12.1-rc1] - 2026-09-29
 
 ### Fixed
@@ -31,14 +65,13 @@ see the difference.
   A lone credential is confirmed with a wider scan instead of refused, and a
   truncated partial scan reports a retryable state rather than an error.
 
-
 ## [0.12.0] - 2026-09-24
 
 ### Added
 
 - **Download-and-prompt self-update for portable installs.** Portable
   AppImages and per-user Windows installs now check for new versions daily,
-  download only when asked, and restart to finish — nothing installs itself.
+  download only when asked, and restart to finish. Nothing installs itself.
   A masthead mark announces offered and downloaded updates, and the About
   page names the installed version with its installer identity. System
   installs (deb/rpm/Gentoo/Arch) check too but get a package-manager nudge
@@ -64,7 +97,7 @@ see the difference.
   stay gated by the monitor generation.
 - **Windows reward and kiosk recognition works in the installed app again.** The bundled
   Tesseract received its data directory in verbatim `\\?\` form, which rejects the forward
-  slash Tesseract appends to the filename -- so `eng.traineddata` failed to open on every
+  slash Tesseract appends to the filename, so `eng.traineddata` failed to open on every
   read (issue #12). The directory is unprefixed before Tesseract ever sees it.
 - **Ducat kiosk overlay stays up while picking items.** Confirming a sale rebuilds the kiosk
   screen, and its close markers no longer end the visit: a close waits out a 1.5s grace
@@ -152,11 +185,11 @@ see the difference.
   and use the portal fallback instead.
 
 - **The masthead is the window's titlebar.** The main window runs with the compositor's own
-  decorations off, so on a desktop where nobody knows the window-management keys — KDE most of
-  all — there was nothing to grab to move it and no buttons to minimize, maximize or close it.
+  decorations off, so on a desktop where nobody knows the window-management keys (KDE most of
+  all) there was nothing to grab to move it and no buttons to minimize, maximize or close it.
   The masthead now carries Tauri's deep drag region, making the whole bar a grab handle while
-  every control standing on it stays clickable, and a quiet group of three square marks —
-  minimize, maximize/restore, close — takes its right edge, drawn in the page-mark grammar and
+  every control standing on it stays clickable, and a quiet group of three square marks
+  (minimize, maximize/restore, close) takes its right edge, drawn in the page-mark grammar and
   taking the caution colour only under the pointer of close. The maximize control names itself
   by its next action and follows the real window state, so snapping from the keyboard keeps it
   honest.
@@ -200,23 +233,23 @@ see the difference.
 ### Added
 
 - **Prime parts carry their ducat value in the collection, beside their platinum.** The
-  catalogue already knew the number — the same WFCD data the reward overlay reads — so the
+  catalogue already knew the number, the same WFCD data the reward overlay reads, so the
   collection joins it onto every card by catalog path: a gold ducat reading next to the
   market's, a stack total when more than one copy is held, and a "Ducats at stake" figure in
   the summary band totaling every owned prime part at Baro Ki'Teer's posted prices. Ducats
   describe the item rather than a sale, so a missing part keeps its reading where it keeps no
-  platinum — the number is what tells the player which relic reward to take. The display is on
-  by default, and a switch in the collection toolbar — labeled "Ducat values", its thumb
-  crossing the track in ducat gold when on — puts it away, remembered in local storage like
+  platinum: the number is what tells the player which relic reward to take. The display is on
+  by default, and a switch in the collection toolbar (labeled "Ducat values", its thumb
+  crossing the track in ducat gold when on) puts it away, remembered in local storage like
   the price floor. With two prices on one card the old "Value" sort stopped answering, so the
-  value sorts are now named and marked by their metal — "Platinum" and "Ducats" — and the
+  value sorts are now named and marked by their metal, "Platinum" and "Ducats", and the
   ducat sort exists only while its values are shown, falling back to platinum when they are
   hidden: nothing orders the register by a number it is not showing.
 
 - **A listing can be edited from either screen it is visible on.** Every order row on the Orders
   screen offers an edit that opens in place, prefilled with the listing's own price and count, and
   a collection card whose listing covers only part of the holding offers "Sell more" beside the
-  badge — an edit of the existing listing, because warframe.market allows one sell order per item
+  badge, an edit of the existing listing, because warframe.market allows one sell order per item
   and a second create would be refused by the market after the request. The edit sends price and
   count together in one patch, and offers no visibility choice because it sends none. It is
   offered only where the order names one held row of this device's collection: a set, a sculpture
@@ -228,33 +261,34 @@ see the difference.
 - **A stale EE.log replayed as a live session produced a reward report for a game that was not
   running.** Resolving the log path under a freshly discovered process can settle on a different
   Wine prefix's EE.log a moment after attaching, and the identity change reset the read offset to
-  zero — so a morning fissure replayed within a second as if it were happening now: relic loads
+  zero, so a morning fissure replayed within a second as if it were happening now: relic loads
   from hours before armed the reward poller, the pipeline ran against a screen that did not exist,
   and capture health ended the day degraded with "Structured reward records were incomplete", the
   state the Report block then shows until a real reward screen reads clean. A replacement log is
   now placed in time before any of it is replayed: by the session start from the `[UTC: ...]`
   clock the game writes at the top of every log (EE.log lines themselves carry only engine
   uptime), or by the file's own creation time when no clock line is readable. Lines older than
-  the moment the monitor attached to the process — less a minute's grace for the flush delay —
+  the moment the monitor attached to the process, less a minute's grace for the flush delay,
   are dropped, a log that is entirely older is skipped outright, and a log that cannot be placed
   in time at all is skipped too: a missed reward is quieter than a false report.
 
 - **The "listed" badge on a collection card never appeared.** It matched the order's `item_id`
-  against the collection row's id — warframe.market's opaque identifier against a `/Lotus/` path,
-  two namespaces that share nothing — so no card ever said it was listed, a successful sell left
-  the card it was pressed on looking untouched, and the same row could be offered for sale again
-  with nothing to say it already was. The reconciliation now names the row each order belongs to
+  against the collection row's id (warframe.market's opaque identifier against a `/Lotus/`
+  path, two namespaces that share nothing), so no card ever said it was listed. A successful sell
+  left the card it was pressed on looking untouched, and the same row could be offered for sale
+  again with nothing to say it already was.
+  The reconciliation now names the row each order belongs to
   (the reverse of the listing resolution: rank 0 is the unranked stack's row, a card's ceiling its
   ranked row, a relic subtype its tier-suffixed refinement), and the badge, the sell-more offer
-  and the edit all read that join. The badge counts the holding — "listed 3 of 7 @ 20p" — and a
+  and the edit all read that join. The badge counts the holding ("listed 3 of 7 @ 20p"), and a
   listing published or edited is now spoken once, as the confirmation of the press that made it.
 
 - **Mods, arcanes and relics can be listed for sale.** The Sell button now appears for every
   collection row warframe.market can actually trade: an unranked stack and a maxed copy of a mod
-  or arcane (the two ranks the market quotes — a part-ranked copy between them is still not
+  or arcane (the two ranks the market quotes: a part-ranked copy between them is still not
   offered, because there is no rank the API would accept for it), and each of a relic's four
-  refinements. The row itself carries what the listing needs — the rank in its key, the
-  refinement in its path — so the form still asks for only a price and a quantity, and the
+  refinements. The row itself carries what the listing needs (the rank in its key, the
+  refinement in its path), so the form still asks for only a price and a quantity, and the
   backend derives the rest. A bulk-tradable's per-trade size is sent as one; batch sizes remain
   an edit on the market site. Still not offered, on purpose: sets (the market entry names the
   built item, not the parts held), Ayatan sculptures (socketed star counts no collection row
@@ -263,7 +297,7 @@ see the difference.
 
 - **The reward overlay no longer names rewards from an earlier fissure.** The relic pool a card is
   matched against was only replaced when the new one held more names, so a squad carrying fewer
-  relics than a previous run inherited that run's pool — and the closed-set match cannot report
+  relics than a previous run inherited that run's pool, and the closed-set match cannot report
   "not in the pool", only the nearest name it was given. On 2026-08-20 that published `Forma
   Blueprint` as `2X Forma Blueprint`, `Lavos Prime Chassis Blueprint` as `Yareli Prime Chassis
   Blueprint` and `Daikyu Prime Blueprint` as `Xaku Prime Blueprint`, all comfortably above the
@@ -284,7 +318,7 @@ see the difference.
   scrubbed of IP and email addresses and safe to attach to a public issue; the toast used to call
   it sensitive and direct it to Discord instead.
 - **Reward diagnostics reach the report bundle again.** The debug records the reward reader
-  keeps — which monitor was captured, what each card read — were filtered out of the log file, so
+  keeps (which monitor was captured, what each card read) were filtered out of the log file, so
   a failed reward screen produced no evidence to fix it.
 
 ## [0.6.0] - 2026-08-19
@@ -292,13 +326,13 @@ see the difference.
 ### Added
 
 - **A Support section on the Settings page.** The report actions Diagnostics shows only when it
-  detects a failure — *Open an issue*, *Copy diagnostics*, *Save logs* — are now always available
+  detects a failure (*Open an issue*, *Copy diagnostics*, *Save logs*) are now always available
   in Settings, so a problem that automatic detection misses can still be reported.
 
 ### Changed
 
 - **Save logs now includes the game's own log.** The report folder carries a copy of EE.log
-  whenever the game is running (or was — the last known location is remembered), not just after a
+  whenever the game is running (or was; the last known location is remembered), not just after a
   failed acquisition stage. The copy is scrubbed of IP and email addresses so it is safe to attach
   to a public issue.
 
@@ -352,7 +386,7 @@ see the difference.
 
 - **A report you can hand over.** Diagnostics now has *Open an issue*, *Copy report* and
   *Save logs*. The report carries the version, the health of every system and the tail of the log,
-  with your home directory and username scrubbed out. Nothing is sent anywhere — it leaves the
+  with your home directory and username scrubbed out. Nothing is sent anywhere. It leaves the
   machine only when you paste or attach it.
 - **A stable build now keeps a log.** The reward-reading diagnostics used to exist only in a
   debug build, which is not the build anyone plays. They are written to the platform log
@@ -362,7 +396,7 @@ see the difference.
 
 - **Reward cards are read on a scaled display.** A capture that came back larger than the window
   it was asked for was cropped rather than scaled, leaving a magnified top-left corner in which
-  no card is where the reader looks — every read failed, and from outside that is
+  no card is where the reader looks. Every read failed, and from outside that is
   indistinguishable from OCR simply not working.
 
 ## [0.5.4] - 2026-08-10
@@ -370,8 +404,8 @@ see the difference.
 ### Fixed
 
 - **Reward cards are read where the game draws them on non-16:9 screens.** Card positions
-  were fractions of the window's width; Warframe scales its HUD with height. On a 16:10 screen —
-  a Steam Deck's 1280x800 — the reader looked a fifth of a card away from the real slots, clipped
+  were fractions of the window's width; Warframe scales its HUD with height. On a 16:10 screen
+  (a Steam Deck's 1280x800) the reader looked a fifth of a card away from the real slots, clipped
   titles read as confident wrong letters, both outer cards fell under the match floor, and every
   poll failed for the whole life of the screen. The overlay strip was drawn in the wrong place on
   the same screens; both are right now.
@@ -381,21 +415,21 @@ see the difference.
 ### Fixed
 
 - **One unreadable item no longer fails your whole collection.** The inventory response can
-  contain a row the game's own client refuses — it logs `Inventory has NULL item` and carries
-  on — and TennoScope turned that single row into "Inventory snapshot was invalid" for the
+  contain a row the game's own client refuses (it logs `Inventory has NULL item` and carries
+  on) and TennoScope turned that single row into "Inventory snapshot was invalid" for the
   entire account. Unreadable rows are now skipped the way the game skips them; a response with
   no readable holdings at all is still refused.
 - **A credential the first pass misses is now searched for.** Warframe's memory is sampled
   within a budget, and on a smaller machine the credential can sit outside what the budget
-  reached — the same session read fine once and reported "inventory authorization was not
+  reached. The same session read fine once and reported "inventory authorization was not
   found" on the retry. Finding nothing now widens the search to the rest of the process rather
   than reporting an answer it had not earned.
 
 ### Changed
 
-- Debug builds record what a read had to throw away — how many rows were skipped and which
-  item path was first, how many bytes of memory were sampled and how many candidates were seen
-  — so a failed read can be explained. Counts and item paths only; no account data.
+- Debug builds record what a read had to throw away, so a failed read can be explained: how
+  many rows were skipped and which item path was first, how many bytes of memory were sampled,
+  and how many candidates were seen. Counts and item paths only; no account data.
 
 ## [0.5.2] - 2026-08-07
 
@@ -403,8 +437,8 @@ see the difference.
 
 - **Presence switches no longer hang on "Asking warframe.market…".** The first status change
   on a connection went through and every later one waited on the ask, even though the site had
-  applied it. The site confirms a change twice — in its reply to the change itself, and, once
-  per connection, as the status it last recorded — and TennoScope was reading only the second,
+  applied it. The site confirms a change twice, in its reply to the change itself and, once
+  per connection, as the status it last recorded. TennoScope was reading only the second,
   announcing at the start of a connection. It now reads the reply too, and a change that gets
   no reply at all asks again, reconnecting after a quiet connection instead of waiting forever.
 
@@ -413,8 +447,8 @@ see the difference.
 ### Fixed
 
 - **Your collection reads on an account that does not own everything yet.** If you had no
-  Necramech, no Amp, or nothing at all in any one category, the read failed outright — "reader
-  failed", and a collection of zeroes — even though everything else about it had worked. Warframe
+  Necramech, no Amp, or nothing at all in any one category, the read failed outright ("reader
+  failed", and a collection of zeroes) even though everything else about it had worked. Warframe
   leaves a category out of its reply when you own nothing in it, and TennoScope was treating that
   as a broken reply rather than an empty shelf.
 
@@ -424,23 +458,23 @@ see the difference.
 
 - **Windows support.** TennoScope runs on Windows 10 and 11 against the native client, with the
   same collection browser, reward overlay and local-only storage. The installer is a per-user NSIS
-  package — no admin prompt, no prerequisites, its own Tesseract — but it is unsigned, so
+  package with no admin prompt, no prerequisites and its own Tesseract, but it is unsigned, so
   SmartScreen warns on first run. Support is best-effort: it is run before a release, but Linux is
   the first-class platform and nothing is guaranteed.
 - **Warframe's display mode is checked.** Exclusive fullscreen owns the display on Windows, so the
   diagnostics panel asks for Borderless when it cannot find the game window instead of reporting a
   generic capture failure.
 - **Optional warframe.market account link.** Off by default. Sign in or paste a token and see your
-  orders beside the collection — total listed value, fetch age, and any order that no longer
-  matches what you own, fixable in one action. The credential is kept in your OS keyring (the
+  orders beside the collection (total listed value, fetch age, and any order that no longer
+  matches what you own), fixable in one action. The credential is kept in your OS keyring (the
   local database where there is no keyring); unlinking removes it. Nothing else about the account
   is uploaded.
 - **Publish a sell listing**, from a collection card or the orders screen. Price and quantity are
   yours to set; quantity cannot exceed what this device says you hold. Items needing more than a
-  price and a quantity — relics, sets, anything with a rank — are not offered.
+  price and a quantity (relics, sets, anything with a rank) are not offered.
 - **Take down any listing**, not only ones flagged as wrong. A listing nothing is wrong with asks
   once before it goes.
-- **Set what warframe.market shows you as** — online, in game, invisible or offline — while
+- **Set what warframe.market shows you as**, online, in game, invisible or offline, while
   TennoScope runs. "Follow the game" reports in game while Warframe is running and online
   otherwise.
 - **Where to find your token**, on the screen that asks for one, and what it is worth to anyone
@@ -449,14 +483,14 @@ see the difference.
 ### Changed
 
 - **The reward reader no longer shells out to anything but Tesseract.** Capture, cropping, contrast
-  and thresholding are in-process Rust now — `xwininfo` and ImageMagick drop off the Linux
+  and thresholding are in-process Rust now. `xwininfo` and ImageMagick drop off the Linux
   recommended dependencies, and every read is one process spawn instead of four.
 
 ### Fixed
 
 - **A mistyped password no longer locks acquisition out for the session.** Failed and successful
-  logins both leave credentials in memory, so two existed and the reader refused to choose —
-  "multiple inventory authorizations were found", cleared only by a restart. It now takes the
+  logins both leave credentials in memory, so two existed and the reader refused to choose (
+  "multiple inventory authorizations were found"), cleared only by a restart. It now takes the
   newest, which is the live session. Two *different* accounts still refuse, because that case has
   no right answer.
 - **Pre-release builds no longer open a console window beside the app.** They keep debug
@@ -482,8 +516,8 @@ see the difference.
 
 - **Mods, arcanes and rivens are in the collection**, as two new categories. They were never read
   at all, so for most players this is the largest thing in the collection finally showing up.
-- **Each rank is its own row.** warframe.market only quotes a card at rank 0 and at its ceiling —
-  Serration is a few platinum unranked and a good deal more maxed — so a part-ranked copy shows
+- **Each rank is its own row.** warframe.market only quotes a card at rank 0 and at its ceiling,
+  and Serration is a few platinum unranked and a good deal more maxed, so a part-ranked copy shows
   both ends rather than picking one. Rivens are ranked but never maxed; their published ceiling is
   a placeholder, not a rank.
 - **Ayatan sculptures and stars, and built Railjack armaments**, are tracked too. Kubrow imprints
@@ -507,7 +541,7 @@ see the difference.
 ### Fixed
 
 - **Prices come from completed trades, not asking prices.** An asking price covers a bulk seller's
-  whole lot, so anything sold in stacks read high — a Lith relic at 30p against the 4.5p it
+  whole lot, so anything sold in stacks read high: a Lith relic at 30p against the 4.5p it
   actually traded at, and the same for gems, fish and fragments. Thin trade data has the opposite
   problem, so the lower of the two wins and anything with fewer than three sales is ignored. Most
   of the collection moved, and relics that never had a price now have one.
@@ -527,18 +561,18 @@ see the difference.
 
 - Relics are priced for the refinement tier the player holds. warframe.market quotes the four tiers
   as four subtypes of one listing, and all four resolved to the bare listing name, so a Radiant was
-  priced at whatever an Intact was going for — a median 1.46x understatement across the 80 relics
-  measured, and 1p against 17p on Requiem I-IV. Refined tiers are thinly traded, so a tier nobody is
+  priced at whatever an Intact was going for, a median 1.46x understatement across the 80 relics
+  measured and 1p against 17p on Requiem I-IV. Refined tiers are thinly traded, so a tier nobody is
   selling still falls back to the Intact listing, which is what every tier fell back to before.
 - An item the daily dump quotes more than once is priced at the lowest of them rather than whichever
   record the file happened to list first. Thirty-nine of the sixty are fish, whose subtype is a size
-  the inventory does not record — a Tromyzon is a Tromyzon whether it is the 2p basic or the 10p
-  magnificent — so an unknown was being valued at its best case.
+  the inventory does not record. A Tromyzon is a Tromyzon whether it is the 2p basic or the
+  10p magnificent, so an unknown was being valued at its best case.
 - Archon shards are listed under their own names and drawn as the shard. The catalogue publishes the
   twelve with the game's inline icon tag, `<Shard_red_simple> Crimson Archon Shard`, which only
-  Warframe's text renderer draws, and publishes the six Tauforged as the glow layer alone — a
-  coloured smudge with no crystal in it. Neither needs a re-download; the cached catalogue is parsed
-  again at launch.
+  Warframe's text renderer draws, and publishes the six Tauforged as the glow layer alone, a
+  coloured smudge with no crystal in it. Neither needs a re-download; the cached catalogue is
+  parsed again at launch.
 
 ## [0.3.0] - 2026-07-30
 
@@ -547,8 +581,8 @@ see the difference.
 - Platinum and ducat figures carry the game's own icon, on the reward slips and throughout the
   collection. The two currencies were told apart by hue and a tracked 8px word, over a bright
   moving game, under a countdown.
-- Live pricing reports the pass that is running — sweep or page refresh alike, since both spend one
-  budget — as a count beside the provenance line and a rule that fills as it advances.
+- Live pricing reports the pass that is running, sweep or page refresh alike, since both spend
+  one budget, as a count beside the provenance line and a rule that fills as it advances.
 
 ### Changed
 
@@ -564,7 +598,7 @@ see the difference.
 
 - Warframe parts are priced in ducats and counted as owned. The reward screen names a part by the
   blueprint the player picks up, "Voruna Prime Chassis Blueprint", where the item catalogue names
-  the component it builds — 153 of the 596 names a relic can drop read as 0 ducats and as not
+  the component it builds, so 153 of the 596 names a relic can drop read as 0 ducats and as not
   owned. Weapon parts, whose two spellings agree, were always right. Platinum was never affected.
 - A relic nobody is selling no longer costs a request on every inventory sync. The absence of an
   order book is now recorded as an answer and carried across a refresh, while an outage still
@@ -575,7 +609,7 @@ see the difference.
 ### Added
 
 - Collection items show a platinum price and stack total, seeded from the daily warframe.market
-  price dump — one request a day for the whole collection rather than one per item.
+  price dump, one request a day for the whole collection rather than one per item.
 - Live pricing on request for the current page, marked apart from the daily figures with an inline
   "checked live" line rather than a badge. A live price now updates the stored prices, so it
   outlives its cache entry instead of expiring back to the daily figure.

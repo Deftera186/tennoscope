@@ -6,7 +6,7 @@ Turn the functional Warframe Helper vertical slice into a credible, distinctive 
 
 ## Product Identity
 
-TennoScope is a local-first instrument for inspecting a Tenno account and making time-sensitive reward choices. The visual language is a restrained field console: near-black mineral surfaces, warm ivory text, a single void-teal signal color, fine technical rules, and asymmetric clipped corners. It avoids generic dashboard tropes such as oversized metric tiles, glowing gradient blobs, letter avatars, and interchangeable rounded cards.
+TennoScope is a local-first instrument for inspecting a Tenno account and making time-sensitive reward choices. The visual language is a restrained field console: near-black mineral surfaces, platinum and gold for the two metals, oxblood for a failed reading, fine technical rules, and asymmetric clipped corners. It avoids generic dashboard tropes such as oversized metric tiles, glowing gradient blobs, letter avatars, and interchangeable rounded cards.
 
 The user-facing name, window titles, package metadata, executable, desktop entry, documentation, and setup copy become TennoScope. The existing application identifier and data directory remain readable through an explicit migration so current users keep setup consent and snapshots.
 
@@ -22,7 +22,7 @@ The immutable application view gains explicit snapshot metadata: observed timest
 
 ## Reward Observer and Overlay
 
-The overlay is a separate, borderless, transparent window aligned over Warframe's reward choices rather than a miniature desktop page. It contains only the enriched choices -- as many as the screen drew -- and small status affordances. Cards are horizontally aligned to the game's selectable columns, preserve the central game view, and use translucent backing. The best-value marker, ownership, mastery relevance, ducats, price age, and uncertain recognition state remain visible without stealing focus.
+The overlay is a separate, borderless, transparent window aligned over Warframe's reward choices rather than a miniature desktop page. It contains only the enriched choices, as many as the screen drew, and small status affordances. Cards are horizontally aligned to the game's selectable columns, preserve the central game view, and use translucent backing. The best-value marker, ownership, mastery relevance, ducats, price age, and uncertain recognition state remain visible without stealing focus.
 
 The Linux observer first looks for Warframe's X11/XWayland window; when found, that window and its
 rectangle win. A native-Wayland game instead uses whole-output capture in this order: wlroots

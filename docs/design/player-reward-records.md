@@ -10,7 +10,7 @@ The July 25 live capture showed all four network responses arriving within 106 m
 
 ## Architecture
 
-`RewardLogMachine` emits each responder identity in arrival order and a complete-set event as soon as EE.log reports that all rewards are present. A deep `PlayerRewardRecordScanner` module receives the ordered identities plus the current relic candidate set. It performs one bounded scan for player identities and compact/internal reward identities, accepts only candidate names structurally adjacent to a responder identity, and returns either one unambiguous reward per responder or no result.
+`RewardLogMachine` emits each responder identity in arrival order and a complete-set event as soon as EE.log reports that all rewards are present. `RewardMemoryScanner::resolve_records` receives the ordered identities plus the current relic candidate set as a `RewardRecordQuery`, under a `RewardRecordPolicy` that names the representation it is allowed to believe. It performs one bounded scan for player identities and compact/internal reward identities, accepts only candidate names structurally adjacent to a responder identity, and returns either one unambiguous reward per responder or no result.
 
 The local reward path logged by Warframe anchors the first card. Remote cards follow responder arrival order with the local identity removed. This ordering rule is kept behind one resolver interface so later evidence can replace it without changing overlay code.
 

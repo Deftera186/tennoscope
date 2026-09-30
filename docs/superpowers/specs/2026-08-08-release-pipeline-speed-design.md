@@ -6,7 +6,7 @@ A release takes 50+ minutes. This cuts it to roughly 20 without weakening a sing
 
 Measured from `v0.5.1` (run 31021288441), the cleanest recent sample.
 
-The two jobs run back to back, because `bundles` declares `needs: windows` -- not for a build
+The two jobs run back to back, because `bundles` declares `needs: windows`, not for a build
 reason, but so the `.exe` exists to attach to the draft release. 27m + 26m serial.
 
 | Windows installer (27m) | | Linux bundles (26m) | |
@@ -54,7 +54,7 @@ source downloads, not the codegen. This is the smallest of the three fixes.
 
 Naming the Linux cache costs one cold run. CI's Linux job id is `rust`, so its prefix moves from
 `v0-rust-rust-Linux-x64` to `v0-rust-linux-Linux-x64` and the first run after merge rebuilds from
-scratch before repopulating under the new name. Windows is unaffected -- its job id was already
+scratch before repopulating under the new name. Windows is unaffected: its job id was already
 `windows`, so the prefix does not move, which the PR run confirmed by hitting its cache and
 finishing in 6m14 against a historical 10m35.
 
@@ -72,7 +72,7 @@ gate ──┬── windows ──┐
 
 Waits for CI to conclude on this exact SHA. It has to *wait*, not read once: the tag and the
 `main` commit are pushed together, so at the moment Release starts, CI is still `queued`. A
-read-once check would pass vacuously against a suite that has not run yet -- which is worse than
+read-once check would pass vacuously against a suite that has not run yet, which is worse than
 no gate, because it looks like one.
 
 `lewagon/wait-on-check-action`, pinned to a commit SHA rather than a tag. It sits on the release
@@ -83,19 +83,19 @@ sail through.
 
 The action's filter only *selects*: it fails when the matched set is empty, never when it is
 merely smaller than intended. So a job renamed in ci.yml would fall out of the allowlist and the
-gate would go green having waited on two jobs instead of three -- silently, because the regexp and
+gate would go green having waited on two jobs instead of three, silently, because the regexp and
 the job names live in different files with nothing holding them together. A second step counts the
 matched successes and fails if there are not three. That is the difference between a gate and the
 appearance of one.
 
 CI's `cancel-in-progress` needed a matching change. It grouped by ref, so on `main` it would
-cancel the very run the gate waits for as soon as another commit landed -- and `cancelled` is not
+cancel the very run the gate waits for as soon as another commit landed, and `cancelled` is not
 an allowed conclusion, so an unrelated merge would fail a release. `main` now groups by SHA, giving
 each commit its own group; branches and pull requests still collapse to the newest push.
 
-The gate also asserts the tag equals the workspace version. `check-versions.sh` proves the four
+The gate also asserts the tag equals the workspace version. `check-versions.sh` proves the five
 in-tree declarations agree with each other, but nothing has ever proved they agree with the tag
-being built -- and only the release workflow knows the tag. `v0.5.3` building `0.5.2` artifacts
+being built, and only the release workflow knows the tag. `v0.5.3` building `0.5.2` artifacts
 is exactly the silent mislabelling `check-versions.sh` was written to prevent, one level up. A
 pre-release tag carries a suffix the manifests cannot hold, so the comparison uses the part before
 the first `-`. This doubles as the guard on `workflow_dispatch`: dispatched on a branch the ref is
@@ -110,7 +110,7 @@ PATH for the test suite; the bundle's own engine comes from `vendor-windows-tess
 downloads and verifies its own copy. With the tests gone the install has no remaining consumer.
 
 `build-linux-bundles.sh` grows a `--skip-gates` flag. It skips `cargo test`, `cargo clippy` and
-`pnpm check` -- the three CI just ran -- and keeps everything that inspects the artifact:
+`pnpm check` (the three CI just ran) and keeps everything that inspects the artifact:
 
 - `assert_appimage_runs_on_x11`, the only check anywhere that the shipped AppImage still forces
   `GDK_BACKEND=x11`, which the reward overlay depends on
@@ -154,5 +154,5 @@ Before pushing:
 `max(windows ≈ 11m, bundles ≈ 12m)` behind a gate that costs whatever CI costs, most of which is
 already spent by the time the tag lands. Roughly 20m wall clock, from 53m.
 
-Nothing is checked less. The same clippy, the same tests, on the same commit -- once instead of
+Nothing is checked less. The same clippy, the same tests, on the same commit, once instead of
 twice, with release blocked until they pass.

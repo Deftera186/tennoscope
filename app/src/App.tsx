@@ -859,7 +859,7 @@ function RewardPage({ view, effectiveMode }: { view: AppView; effectiveMode: Acc
       <h1 id="reward-title" className="mark">Reward advisor</h1>
       <p className="prose">{companion
         ? 'Live reward observation is inactive in Companion. Historical reward cards remain available with saved ownership marked unverifiable.'
-        : 'TennoScope watches EE.log for a Void Fissure reward, reads the four cards off the screen with OCR, and places advice below the reward row.'}</p>
+        : 'TennoScope watches EE.log for a Void Fissure reward, reads the reward cards off the screen with OCR, and places advice below the reward row.'}</p>
     </div>
     <section aria-label="Reward advisor">
       {view.reward.cards.length
