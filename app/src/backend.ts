@@ -7,9 +7,17 @@ export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 're
 export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; platinum_ceiling?: number; ducats?: number; rank?: number; max_rank?: number; live: boolean; priceable: boolean; monthly_trades?: number }
 /** How far the live pricing pass the player asked for has got. */
 export interface PricingProgress { done: number; total: number }
-export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }
+export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery?: MasteryMark; confidence: number }
 /** One slot of the set a Prime item is built from: the copies the recipe takes, the copies held, and whether this reward is the one that fills it. */
 export interface SetPart { name: string; image: string | null; uses: number; held: number; this: boolean }
+/** Absent for items mastery never touches or while marks are off; `unknown` still replaces the
+ * ownership line, as a dash. `subject` names the consumer a mastered part is still wanted by. */
+export type MasteryMark =
+  | { state: 'mastered' }
+  | { state: 'built'; rank: number; max_rank: number }
+  | { state: 'in_foundry' }
+  | { state: 'unmastered'; subject: string | null; parts: SetPart[]; missing: boolean; completes: boolean }
+  | { state: 'unknown' }
 export type LinkState = 'unlinked' | 'linked' | 'needs_relink'
 export type CredentialBacking = 'keyring' | 'database'
 export type Presence = 'online' | 'ingame' | 'invisible'

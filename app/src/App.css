@@ -557,6 +557,20 @@ svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
 .set-slot[data-this]::after { content: ''; position: absolute; left: .19rem; right: .19rem; bottom: -.25rem; height: 2px; background: currentColor; }
 .set-count { margin-left: .125rem; font: 600 .56rem/1 var(--face-register); color: var(--platinum-deep); }
 
+/* What the collection knows about the item this reward builds, wrapping inside its slip. The
+   padding reserves the room the set row's tick hangs into, below the row's own box. */
+.ledger { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--hair); min-width: 0; padding-bottom: .25rem; }
+/* Same face, weight, and tracking as `.hallmark`, so a ledger word reads as one of the slip's marks. */
+.ledger-word { font: 700 .56rem/1 var(--face-register); letter-spacing: .1em; text-transform: uppercase; color: var(--platinum-deep); }
+.ledger[data-tone="loud"] .ledger-word { color: var(--platinum); }
+/* The chip inverts onto platinum rather than gaining a hue. It is scoped under `.ledger` because
+   the loud tone above would otherwise repaint the ink of a word whose ground is already platinum. */
+.ledger .ledger-word.inverted { padding: .19rem .32rem .19rem .38rem; background: var(--platinum); color: var(--touchstone); }
+/* A part an unmastered, unbuilt item still lacks rules the slip; the last one double-rules it. Both
+   selectors are named so the rule replaces the overlay slip's faint frame instead of stacking. */
+.slip.ruled, .overlay-rewards .slip.ruled { box-shadow: inset 0 0 0 1px var(--platinum); }
+.slip.ruled-double, .overlay-rewards .slip.ruled-double { box-shadow: inset 0 0 0 1px var(--platinum), inset 0 0 0 3px var(--touchstone), inset 0 0 0 4px var(--platinum); }
+
 /* the assay procedure */
 
 .procedure-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--step); flex-wrap: wrap; padding-bottom: var(--step); border-bottom: 1px solid var(--rule); }
@@ -897,6 +911,9 @@ svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
   box-shadow: inset 0 0 0 1px rgb(232 235 239 / 16%);
   -webkit-backdrop-filter: blur(14px) saturate(112%);
   backdrop-filter: blur(14px) saturate(112%);
+  /* The window's size is fixed, so this stops a line that outgrows its column from painting over
+     the next slip; the ledger wraps inside the column long before that. */
+  overflow: hidden;
 }
 .overlay-rewards .slip { grid-template-rows: auto 1fr auto; }
 .overlay-rewards .slip-lot { display: none; }
@@ -910,6 +927,13 @@ svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
 /* Never let the reading we distrust be the mark that falls off the end. */
 .overlay-rewards .hallmark.doubt { order: -1; }
 .overlay-rewards .hallmark { padding: .2rem .38rem .42rem; font-size: .48rem; }
+/* A 1080p overlay is 180px tall, which leaves no room for a ledger on two lines: the word stacks
+   beside its set row instead, and a five-part set draws its shapes 2px smaller to fit the width. */
+@media (max-height: 190px) {
+  .overlay-rewards .ledger:has(.set-row) .ledger-word { width: min-content; }
+  .overlay-rewards .ledger:has(.set-slot:nth-child(5)) .set-glyph { width: 1.625rem; height: 1.625rem; }
+  .overlay-rewards .ledger:has(.set-slot:nth-child(5)) .set-glyph + .set-glyph { margin-left: -1rem; }
+}
 
 .overlay-empty {
   display: grid; place-content: center; justify-items: center; gap: .3rem; height: 100vh;

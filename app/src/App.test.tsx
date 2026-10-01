@@ -61,10 +61,20 @@ const view: AppView = {
   },
   reward: {
     cards: [
-      { name: 'Forma Blueprint', platinum: 12, ducats: 25, owned: 0, mastery_relevant: false, confidence: 1 },
-      { name: 'Lex Prime Receiver', platinum: 8, ducats: 15, owned: 1, mastery_relevant: true, confidence: 1 },
-      { name: 'Rare Prime Set', platinum: 30, ducats: 100, owned: 0, mastery_relevant: false, confidence: 0.79 },
-      { name: 'Paris Prime String', platinum: 6, ducats: 45, owned: 1, mastery_relevant: false, confidence: 1 },
+      { name: 'Forma Blueprint', platinum: 12, ducats: 25, owned: 0, confidence: 1 },
+      { name: 'Lex Prime Receiver', platinum: 8, ducats: 15, owned: 1, confidence: 1 },
+      { name: 'Rare Prime Set', platinum: 30, ducats: 100, owned: 0, confidence: 0.79 },
+      {
+        name: 'Paris Prime String', platinum: 6, ducats: 45, owned: 1, confidence: 1,
+        mastery: {
+          state: 'unmastered', subject: null, missing: true, completes: false,
+          parts: [
+            { name: 'Blueprint', image: 'blueprint.png', uses: 1, held: 1, this: false },
+            { name: 'String', image: 'GenericGunPrimeReceiver.png', uses: 1, held: 0, this: true },
+            { name: 'Barrel', image: 'GenericGunPrimeBarrel.png', uses: 1, held: 1, this: false },
+          ],
+        },
+      },
     ],
     best_value_index: 0,
     best_ducat_index: 3,
@@ -533,7 +543,13 @@ describe('MVP desktop interface', () => {
     expect(within(advisor).getAllByRole('article')).toHaveLength(4)
     expect(within(advisor).getByRole('article', { name: 'Forma Blueprint' })).toHaveTextContent('Top plat')
     expect(within(advisor).getByRole('article', { name: 'Lex Prime Receiver' })).toHaveTextContent('Owned ×1')
-    expect(within(advisor).getByRole('article', { name: 'Lex Prime Receiver' })).toHaveTextContent('Mastery needed')
+    // A slip that carries a mark states it in the ledger and drops the ownership line, because the
+    // set row already says how much of the part is held. The line stays for a card with no mark.
+    const paris = within(advisor).getByRole('article', { name: 'Paris Prime String' })
+    expect(paris).toHaveTextContent('Unmastered')
+    expect(paris).toHaveClass('ruled')
+    expect(within(paris).getByRole('list', { name: 'Set' })).toBeInTheDocument()
+    expect(paris).not.toHaveTextContent('Owned ×1')
     // Paris Prime String carries the most ducats while Forma Blueprint is worth the most platinum:
     // both have to be callable, because the player picks between them for reasons we cannot see.
     expect(within(advisor).getByRole('article', { name: 'Paris Prime String' })).toHaveTextContent('Top ducats')
