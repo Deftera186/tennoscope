@@ -342,6 +342,10 @@
 }
 .display-switch:hover { color: var(--platinum-dim); background: var(--plate); }
 .display-switch:focus-visible { outline: none; background: var(--platinum); color: var(--touchstone); border-color: var(--platinum); }
+/* A switch waiting on its own backend is disabled, not dead: it keeps its shape and reads as
+   pending rather than refusing input the player never asked for. */
+.display-switch:disabled { opacity: .5; cursor: default; }
+.display-switch:disabled:hover { color: var(--platinum-deep); background: transparent; }
 .display-face { display: inline-flex; align-items: center; gap: .34rem; }
 .display-switch .metal-mark { height: 1.15rem; width: auto; opacity: .68; }
 .display-switch[aria-checked="true"] { color: var(--platinum); }

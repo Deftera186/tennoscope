@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import './App.css'
 import {
   authorizeScreenCapture,
+  getPreferences,
   getSetupStatus,
   getVersionInfo,
   getView,
@@ -17,6 +18,7 @@ import {
   updateOrder,
   setMarketPresence,
   setAccessMode,
+  setMasteryMarks,
   setOrderQuantity,
   type AppView,
   type BackendHealth,
@@ -1034,6 +1036,8 @@ function SettingsPage({ view, priceFloor, effectiveMode, selectedMode, modeBusy,
         <p className="band-note">{figure(counted)} stacks counted · {figure(total)} platinum sellable</p>
       </div>
 
+      <MasteryMarksSetting/>
+
       <DesktopCaptureSetting actionAvailable={effectiveMode !== 'companion' && desktopCaptureActionAvailable} prohibited={effectiveMode === 'companion'} busy={captureAuthorizationBusy} note={captureNote} onNote={onCaptureNote} onAuthorize={onAuthorizeCapture}/>
 
       <div className="setting">
@@ -1055,6 +1059,62 @@ function SettingsPage({ view, priceFloor, effectiveMode, selectedMode, modeBusy,
   </section>
 }
 
+
+/** The preference lives in the backend and a click is a command it may refuse. A refusal leaves
+ * the switch where it was and says so, so the thumb never claims a state the overlays are not in. */
+function MasteryMarksSetting() {
+  const [enabled, setEnabled] = useState(true)
+  const [loaded, setLoaded] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+    // A failed read leaves the switch on, the backend's own fallback, and usable: a control frozen
+    // on a guess would teach the player that the guess is a fact.
+    getPreferences()
+      .then(preferences => { if (mounted) setEnabled(preferences.mastery_marks) })
+      .catch(() => { if (mounted) setNote('Could not read this setting.') })
+      .finally(() => { if (mounted) setLoaded(true) })
+    return () => { mounted = false }
+  }, [])
+
+  async function toggle() {
+    if (!loaded || busy) return
+    setBusy(true)
+    setNote(null)
+    try {
+      // The command answers with the stored preference, so the switch takes the backend's word
+      // for what it now holds rather than the value that was asked for.
+      const preferences = await setMasteryMarks(!enabled)
+      setEnabled(preferences.mastery_marks)
+    } catch {
+      setNote('Could not save this setting.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return <div className="setting">
+    <div>
+      <h3>Mastery marks on overlays</h3>
+      <p className="prose">On the reward screen, each Prime part's slip says whether the item it builds is mastered, built, in the foundry or still unmastered, and draws the set behind an unmastered one. On the Ducat Kiosk, a part of an item you have not mastered, built or started building gets a strip with its price. Full access shows every mark after an inventory sync; Overlay access shows only what you have already mastered.</p>
+    </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={enabled}
+      className="display-switch"
+      disabled={!loaded || busy}
+      aria-busy={busy}
+      onClick={() => { void toggle() }}
+    >
+      <span className="display-face">Mastery marks</span>
+      <span className="display-track" aria-hidden="true"><span className="display-thumb"/></span>
+    </button>
+    {note && <p className="band-note" role="status">{note}</p>}
+  </div>
+}
 
 function DesktopCaptureSetting({ actionAvailable, prohibited, busy, note, onNote, onAuthorize }: { actionAvailable: boolean; prohibited: boolean; busy: boolean; note: string | null; onNote: (note: string | null) => void; onAuthorize: () => Promise<void> }) {
   useEffect(() => {
