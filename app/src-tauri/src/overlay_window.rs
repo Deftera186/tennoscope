@@ -16,9 +16,9 @@ pub struct WindowRect {
     pub height: u32,
 }
 
-/// Overlay height as a fraction of the screen: room for a wrapped reward name, the value row and a
-/// badge row, without covering more of the game than it has to.
-const OVERLAY_HEIGHT: f32 = 156.0 / 1080.0;
+/// Room for a wrapped reward name, the value row, a badge row and the set row at a slip's foot.
+/// The window hangs below the game's reward cards, so its extra height never covers them.
+const OVERLAY_HEIGHT: f32 = 180.0 / 1080.0;
 
 /// Place the overlay directly under the game's reward cards.
 ///
@@ -307,7 +307,7 @@ fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
     // See the doc comment above for why that matters beyond just stealing input.
     gdk_window.set_type_hint(gtk::gdk::WindowTypeHint::Utility);
     let width = i32::try_from(geometry.width).unwrap_or(966);
-    let height = i32::try_from(geometry.height).unwrap_or(156);
+    let height = i32::try_from(geometry.height).unwrap_or(180);
     // The overlay is one column per card, sized to the game's own card block, so extra width is
     // shared out and every column renders wider than the reward it sits under. `set_default_size`
     // is only a hint; `set_size_request` is the part that pins it.
