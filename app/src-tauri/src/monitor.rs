@@ -2,7 +2,7 @@ use super::{
     AccessPolicy, SharedRuntime, apply_outcome, kiosk_geometry, kiosk_log,
     kiosk_ocr::{self, BasketRow, GridCell},
     kiosk_scroll,
-    kiosk_view::{self, KioskState, KioskView},
+    kiosk_view::{self, KioskState, KioskView, MasteryStatus},
     overlay_window, refresh_blocking, reward_capture,
     reward_log::{RewardLogEvent, RewardLogMachine},
     reward_observer::{RewardObservation, RewardObserverState},
@@ -1198,9 +1198,14 @@ pub(crate) fn run(
                     .lock()
                     .map(|runtime| runtime.core.collection_prices())
                     .unwrap_or_default();
-                kiosk_view::build_view(epoch, &frame.cells, &frame.basket, |name| {
-                    kiosk_unit_price(table.as_ref(), &cache, name)
-                })
+                kiosk_view::build_view(
+                    epoch,
+                    &frame.cells,
+                    &frame.basket,
+                    |name| kiosk_unit_price(table.as_ref(), &cache, name),
+                    |_| None,
+                    MasteryStatus::Off,
+                )
             }
         };
         let publish = {
@@ -2837,7 +2842,14 @@ mod tests {
             Arc::new(candidates),
             |epoch, read| {
                 // Price everything so the join keeps the scripted cells visible.
-                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                crate::kiosk_view::build_view(
+                    epoch,
+                    &read.cells,
+                    &read.basket,
+                    |_| Some(1),
+                    |_| None,
+                    MasteryStatus::Off,
+                )
             },
             move |view| sink.lock().expect("published").push(view),
             move |delta| delta_sink.lock().expect("deltas").push(delta),
@@ -2932,7 +2944,14 @@ mod tests {
             },
             Arc::new(Vec::new()),
             |epoch, read| {
-                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                crate::kiosk_view::build_view(
+                    epoch,
+                    &read.cells,
+                    &read.basket,
+                    |_| Some(1),
+                    |_| None,
+                    MasteryStatus::Off,
+                )
             },
             move |view| sink.lock().expect("published").push(view),
             |_| (),
@@ -2968,7 +2987,14 @@ mod tests {
             },
             Arc::new(Vec::new()),
             |epoch, read| {
-                crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                crate::kiosk_view::build_view(
+                    epoch,
+                    &read.cells,
+                    &read.basket,
+                    |_| Some(1),
+                    |_| None,
+                    MasteryStatus::Off,
+                )
             },
             move |view| sink.lock().expect("published").push(view),
             |_| {},
@@ -3712,7 +3738,14 @@ mod tests {
                 },
                 Arc::new(candidates),
                 |epoch, read| {
-                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                    crate::kiosk_view::build_view(
+                        epoch,
+                        &read.cells,
+                        &read.basket,
+                        |_| Some(1),
+                        |_| None,
+                        MasteryStatus::Off,
+                    )
                 },
                 move |view| {
                     // Publish arm mirrors production: the source masks the last view's chips.
@@ -3825,7 +3858,14 @@ mod tests {
                 },
                 Arc::new(candidates),
                 |epoch, read| {
-                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                    crate::kiosk_view::build_view(
+                        epoch,
+                        &read.cells,
+                        &read.basket,
+                        |_| Some(1),
+                        |_| None,
+                        MasteryStatus::Off,
+                    )
                 },
                 move |view| {
                     stash_publish(&mask_feed, view.clone());
@@ -3980,7 +4020,14 @@ mod tests {
                 },
                 Arc::new(candidates),
                 |epoch, read| {
-                    crate::kiosk_view::build_view(epoch, &read.cells, &read.basket, |_| Some(1))
+                    crate::kiosk_view::build_view(
+                        epoch,
+                        &read.cells,
+                        &read.basket,
+                        |_| Some(1),
+                        |_| None,
+                        MasteryStatus::Off,
+                    )
                 },
                 move |view| {
                     // Publish arm mirrors production: the source masks the last view's chips.

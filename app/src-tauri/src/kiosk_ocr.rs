@@ -489,6 +489,7 @@ mod tests {
                 .collect(),
             total_plat: 40,
             scroll_dy: 0,
+            mastery_status: crate::kiosk_view::MasteryStatus::Off,
         };
         crate::kiosk_view::mask_published_chips(&mut image, &view, 0);
         let rows = read_basket(&image, &candidates());
@@ -500,6 +501,96 @@ mod tests {
         assert_eq!(
             stacked.quantity, 2,
             "the game's own stack marker survives the chip mask: {rows:?}"
+        );
+    }
+
+    /// Every label the fixture's grid renders in full, one per tile across its three rows.
+    const GRID_NAMES: [&str; 18] = [
+        "Titania Prime Systems Blueprint",
+        "Trumna Prime Barrel",
+        "Trumna Prime Receiver",
+        "Vadarya Prime Blueprint",
+        "Venato Prime Blade",
+        "Fragor Prime Handle",
+        "Tiberon Prime Barrel",
+        "Wisp Prime Chassis Blueprint",
+        "Afuris Prime Link",
+        "Akbronco Prime Link",
+        "Aksomati Prime Barrel",
+        "Alternox Prime Barrel",
+        "Atlas Prime Chassis Blueprint",
+        "Braton Prime Receiver",
+        "Bronco Prime Barrel",
+        "Burston Prime Barrel",
+        "Caliban Prime Blueprint",
+        "Cedo Prime Receiver",
+    ];
+
+    /// A strip's mask is wider than the price chip's. Painted at both strip widths over a real
+    /// frame, it must leave the locator's answer and the grid read exactly as they were.
+    #[test]
+    fn strip_masks_leave_the_locator_and_the_grid_read_unchanged() {
+        let frame = image::open(FIXTURE).unwrap();
+        let candidates: Vec<RewardCatalogEntry> = GRID_NAMES
+            .iter()
+            .map(|name| RewardCatalogEntry {
+                name: (*name).to_owned(),
+                ducats: 45,
+            })
+            .collect();
+        let profile = |frame: &DynamicImage| {
+            let (x, y, w, h) = crate::kiosk_geometry::grid_strip(frame.width(), frame.height());
+            crate::kiosk_scroll::row_profiles(frame, x, y, w, h)
+        };
+        let locate = |strip: &[f32]| {
+            let at = crate::kiosk_geometry::label_anchors(strip.len());
+            crate::kiosk_scroll::label_offset(strip, at.strip_top, at.first_top, at.pitch, at.band)
+        };
+        let unmasked_strip = profile(&frame);
+        let located = locate(&unmasked_strip).expect("the fixture's labels locate");
+        let read = |frame: &DynamicImage| -> Vec<(usize, usize, String, f32)> {
+            read_grid(frame, &candidates, located.dy)
+                .into_iter()
+                .map(|cell| (cell.col, cell.row, cell.name, cell.score))
+                .collect()
+        };
+        let unmasked = read(&frame);
+
+        let view = crate::kiosk_view::KioskView {
+            cells: unmasked
+                .iter()
+                .map(|(col, row, name, _)| crate::kiosk_view::CellChip {
+                    col: *col as u32,
+                    row: *row as u32,
+                    name: name.clone(),
+                    platinum: Some(10),
+                    // A checkerboard of one- and two-digit badges paints both strip widths.
+                    mastery: Some(warframe_domain::KioskMastery {
+                        held: if (col + row) % 2 == 0 { 1 } else { 12 },
+                        uses: 2,
+                    }),
+                })
+                .collect(),
+            scroll_dy: crate::kiosk_scroll::to_design_px(located.dy, unmasked_strip.len()),
+            mastery_status: crate::kiosk_view::MasteryStatus::Live,
+            ..crate::kiosk_view::KioskView::default()
+        };
+        let mut masked = frame.clone();
+        crate::kiosk_view::mask_published_chips(&mut masked, &view, view.scroll_dy);
+        assert!(
+            masked.to_rgb8() != frame.to_rgb8(),
+            "the strip masks must paint over the frame"
+        );
+
+        assert_eq!(
+            locate(&profile(&masked)),
+            Some(located),
+            "the locator must name the same phase and bands"
+        );
+        assert_eq!(
+            read(&masked),
+            unmasked,
+            "every tile must read the same name at the same score"
         );
     }
 

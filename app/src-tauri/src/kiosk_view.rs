@@ -6,17 +6,30 @@
 //! so they never enter this pipeline. The owned count a player sees is the game's.
 
 use serde::Serialize;
+use warframe_domain::KioskMastery;
 
 use crate::kiosk_ocr::{BasketRow, GridCell};
 
-/// One grid tile's corner chip. Cells the price table cannot price render nothing at all, per the
-/// spec, so a chip existing already says its platinum resolved.
+/// One grid tile's corner chip, kept when its price, its mastery or both resolve. A mastery chip
+/// is drawn as a strip that carries the price as well, or a dash when the tile has none.
 #[derive(Clone, Debug, Serialize)]
 pub struct CellChip {
     pub col: u32,
     pub row: u32,
     pub name: String,
     pub platinum: Option<u32>,
+    pub mastery: Option<KioskMastery>,
+}
+
+/// Whether the kiosk payload may carry mastery strips. Strips need a live inventory; a saved
+/// collection can only say what is mastered, which no strip needs to repeat.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MasteryStatus {
+    #[default]
+    Off,
+    Live,
+    Unavailable,
 }
 
 /// One basket row's platinum value. The game already draws each row's ducats; this only adds
@@ -46,6 +59,9 @@ pub struct KioskView {
     /// Published in the overlay's design-pixel space (the capture-space measurement is
     /// normalized at publication; see `kiosk_scroll::to_design_px`).
     pub scroll_dy: i32,
+    /// Whether this payload may carry mastery strips. The frontend draws its note from this,
+    /// not from the cells.
+    pub mastery_status: MasteryStatus,
 }
 
 /// The active kiosk visit and its latest published view. Session ids make every worker output
@@ -147,25 +163,30 @@ impl KioskState {
     }
 }
 
-/// Join recognized slots against the price table.
-///
-/// `price` is a closure so tests (and the poller, which layers the market cache under the daily
-/// dump) can supply whatever source is live without this module knowing it.
+/// Join recognized slots against the price table and the mastery lookup; a cell survives when
+/// either hits. Both are closures so tests and the poller can supply whichever source is live.
 pub fn build_view(
     epoch: u64,
     cells: &[GridCell],
     basket: &[BasketRow],
     price: impl Fn(&str) -> Option<u32>,
+    mastery: impl Fn(&str) -> Option<KioskMastery>,
+    mastery_status: MasteryStatus,
 ) -> KioskView {
     let cells = cells
         .iter()
         .filter_map(|cell| {
-            let platinum = price(&cell.name)?;
+            let platinum = price(&cell.name);
+            let cell_mastery = mastery(&cell.name);
+            if platinum.is_none() && cell_mastery.is_none() {
+                return None;
+            }
             Some(CellChip {
                 col: cell.col as u32,
                 row: cell.row as u32,
                 name: cell.name.clone(),
-                platinum: Some(platinum),
+                platinum,
+                mastery: cell_mastery,
             })
         })
         .collect();
@@ -198,6 +219,7 @@ pub fn build_view(
         cells,
         basket: basket_chips,
         total_plat,
+        mastery_status,
     }
 }
 
@@ -220,12 +242,20 @@ pub fn mask_published_chips(frame: &mut image::DynamicImage, view: &KioskView, m
     let (width, height) = (frame.width(), frame.height());
     let mut rects = Vec::with_capacity(view.cells.len() + view.basket.len() + 1);
     for cell in &view.cells {
+        // A strip replaces its chip and is wider than it: mask the strip's own width, or
+        // the strip's text reads back into the scroll locator and the quantity OCR.
+        let chip_w_1080 = cell
+            .mastery
+            .map_or(crate::kiosk_geometry::PRICE_CHIP_W_1080, |mastery| {
+                crate::kiosk_geometry::strip_mask_width_1080(mastery.held)
+            });
         if let Some(rect) = crate::kiosk_geometry::grid_chip_mask(
             width,
             height,
             cell.col as usize,
             cell.row as usize,
             mask_dy,
+            chip_w_1080,
         ) {
             rects.push(rect);
         }
@@ -320,9 +350,14 @@ mod tests {
             cell(0, 0, "Tiberon Prime Barrel"),
             cell(1, 0, "Atlas Prime Chassis Blueprint"),
         ];
-        let view = build_view(3, &cells, &[], |name| {
-            (name == "Tiberon Prime Barrel").then_some(12)
-        });
+        let view = build_view(
+            3,
+            &cells,
+            &[],
+            |name| (name == "Tiberon Prime Barrel").then_some(12),
+            |_| None,
+            MasteryStatus::Off,
+        );
         assert_eq!(view.cells.len(), 1);
         assert_eq!(view.cells[0].platinum, Some(12));
     }
@@ -333,11 +368,18 @@ mod tests {
             basket_row(0, "Afentis Prime Blade"),
             basket_row(1, "Fulmin Prime Receiver"),
         ];
-        let view = build_view(1, &[], &basket, |name| match name {
-            "Afentis Prime Blade" => Some(6),
-            "Fulmin Prime Receiver" => Some(20),
-            _ => None,
-        });
+        let view = build_view(
+            1,
+            &[],
+            &basket,
+            |name| match name {
+                "Afentis Prime Blade" => Some(6),
+                "Fulmin Prime Receiver" => Some(20),
+                _ => None,
+            },
+            |_| None,
+            MasteryStatus::Off,
+        );
         assert_eq!(view.basket.len(), 2);
         assert_eq!(view.basket[0].platinum, Some(6));
         assert_eq!(view.basket[1].platinum, Some(20));
@@ -353,9 +395,14 @@ mod tests {
             quantity: 2,
             ..basket_row(0, "Kompressa Prime Barrel")
         }];
-        let view = build_view(1, &[], &basket, |name| {
-            (name == "Kompressa Prime Barrel").then_some(7)
-        });
+        let view = build_view(
+            1,
+            &[],
+            &basket,
+            |name| (name == "Kompressa Prime Barrel").then_some(7),
+            |_| None,
+            MasteryStatus::Off,
+        );
 
         assert_eq!(view.basket[0].platinum, Some(7));
         assert_eq!(view.total_plat, 14);
@@ -364,9 +411,14 @@ mod tests {
     #[test]
     fn a_single_basket_row_keeps_unit_price() {
         let basket = [basket_row(0, "Kompressa Prime Barrel")];
-        let view = build_view(1, &[], &basket, |name| {
-            (name == "Kompressa Prime Barrel").then_some(7)
-        });
+        let view = build_view(
+            1,
+            &[],
+            &basket,
+            |name| (name == "Kompressa Prime Barrel").then_some(7),
+            |_| None,
+            MasteryStatus::Off,
+        );
 
         assert_eq!(view.basket[0].platinum, Some(7));
         assert_eq!(view.total_plat, 7);
@@ -379,10 +431,17 @@ mod tests {
         let cells = [cell(0, 0, "Kompressa Prime Barrel")];
         let mut stacked = basket_row(0, "Kompressa Prime Barrel");
         stacked.quantity = 3;
-        let view = build_view(0, &cells, &[stacked], |name| match name {
-            "Kompressa Prime Barrel" => Some(18),
-            _ => None,
-        });
+        let view = build_view(
+            0,
+            &cells,
+            &[stacked],
+            |name| match name {
+                "Kompressa Prime Barrel" => Some(18),
+                _ => None,
+            },
+            |_| None,
+            MasteryStatus::Off,
+        );
         assert_eq!(view.cells[0].platinum, Some(18));
         assert_eq!(
             view.basket[0].platinum,
@@ -394,8 +453,34 @@ mod tests {
 
     #[test]
     fn the_epoch_passes_through_for_the_frontend_transform_reset() {
-        let view = build_view(42, &[], &[], |_| None);
+        let view = build_view(42, &[], &[], |_| None, |_| None, MasteryStatus::Off);
         assert_eq!(view.epoch, 42);
         assert_eq!(view.total_plat, 0);
+    }
+
+    #[test]
+    fn a_cell_with_mastery_but_no_price_still_becomes_a_chip() {
+        let cells = [cell(0, 0, "Guandao Prime Blade")];
+        let view = build_view(
+            7,
+            &cells,
+            &[],
+            |_| None,
+            |_| Some(KioskMastery { held: 1, uses: 2 }),
+            MasteryStatus::Live,
+        );
+        let chip = &view.cells[0];
+        assert_eq!(
+            (chip.platinum, chip.mastery),
+            (None, Some(KioskMastery { held: 1, uses: 2 }))
+        );
+        assert_eq!(view.mastery_status, MasteryStatus::Live);
+    }
+
+    #[test]
+    fn a_cell_with_neither_price_nor_mastery_is_still_dropped() {
+        let cells = [cell(0, 0, "Forma Blueprint")];
+        let view = build_view(7, &cells, &[], |_| None, |_| None, MasteryStatus::Live);
+        assert!(view.cells.is_empty());
     }
 }
