@@ -165,9 +165,8 @@ const COMPONENT_ORDER: &[&str] = &[
 ///
 /// Matching on the exact string priced 153 of the 596 names a relic can drop (every Warframe
 /// part) at zero ducats and reported them as not owned, while weapon parts, whose two spellings
-/// agree, were right. The trim only ever runs after an exact match fails, so items that really are
-/// named "... Blueprint" in both vocabularies (every prime's own blueprint, Forma) still match
-/// themselves first.
+/// agree, were right. The trim also accepts what a blueprint builds, Forma for "Forma Blueprint",
+/// so a held count, which must not count the built item, uses [`holding_matches_reward`].
 ///
 /// A relic table also puts a stack's count in front of the name: it drops "2X Forma Blueprint",
 /// which the collection holds as "Forma Blueprint". The count is dropped only after both spellings
@@ -187,6 +186,14 @@ pub(crate) fn without_quantity(reward_name: &str) -> Option<&str> {
         .strip_suffix('X')
         .filter(|count| !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()))
         .map(|_| item)
+}
+
+/// Does this held item's name spell the reward itself? The collection spells a held blueprint as
+/// the reward screen does, so only a stack's count is set aside. The blueprint trim in
+/// [`reward_name_matches`] would let what a blueprint builds answer for it: built Forma for a
+/// Forma Blueprint, a built Ash Prime for an Ash Prime Blueprint.
+pub fn holding_matches_reward(held_name: &str, reward_name: &str) -> bool {
+    held_name == reward_name || without_quantity(reward_name) == Some(held_name)
 }
 
 impl CatalogIndex {

@@ -2424,7 +2424,7 @@ fn apply_reward_observations(
                 .items()
                 .iter()
                 .find(|item| {
-                    warframe_acquisition::reward_name_matches(item.name(), &observation.name)
+                    warframe_acquisition::holding_matches_reward(item.name(), &observation.name)
                 })
                 .map_or(0, |item| item.quantity());
             RewardCandidate::new(
@@ -4718,6 +4718,83 @@ mod tests {
             mark(&shared),
             None,
             "marks switched off leave the card as it was before the feature existed"
+        );
+    }
+
+    /// The collection keeps built Forma beside Forma blueprints, and a built Ash Prime beside its
+    /// blueprint. A slip's held count accepted the blueprint trim, so whichever came first by path
+    /// answered for the reward: a Forma Blueprint slip read "Owned ×2" over eleven held blueprints
+    /// and two built Forma (2026-10-02).
+    #[test]
+    fn a_reward_card_counts_the_reward_and_not_what_it_builds() {
+        let directory = tempfile::tempdir().expect("temporary runtime");
+        let shared = crate::tests::test_runtime(directory.path());
+        let held = |path: &str, name: &str, category: Category, quantity: u32| {
+            InventoryEntry::new(
+                CatalogItem::new(ItemId::new(path).expect("item id"), name, category)
+                    .expect("catalog item"),
+                quantity,
+            )
+        };
+        shared
+            .lock()
+            .expect("runtime")
+            .core
+            .apply_inventory_snapshot(
+                InventorySnapshot::coherent(vec![
+                    held(
+                        "/Lotus/Powersuits/Ninja/AshPrime",
+                        "Ash Prime",
+                        Category::Frame,
+                        1,
+                    ),
+                    held(
+                        "/Lotus/Types/Items/MiscItems/Forma",
+                        "Forma",
+                        Category::Resource,
+                        2,
+                    ),
+                    held(
+                        "/Lotus/Types/Recipes/Components/FormaBlueprint",
+                        "Forma Blueprint",
+                        Category::Blueprint,
+                        11,
+                    ),
+                ])
+                .expect("collection"),
+                SnapshotMeta::fake("saved").expect("meta"),
+            )
+            .expect("snapshot applies");
+
+        apply_reward_observations(
+            &shared,
+            &[],
+            &[
+                RewardObservation::certain("Forma Blueprint"),
+                RewardObservation::certain("2X Forma Blueprint"),
+                RewardObservation::certain("Ash Prime Blueprint"),
+            ],
+            &BTreeMap::new(),
+        );
+
+        let owned = shared
+            .lock()
+            .expect("runtime")
+            .core
+            .current_view()
+            .expect("view builds")
+            .reward()
+            .cards()
+            .iter()
+            .map(|card| (card.name.clone(), card.owned))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            owned,
+            [
+                ("Forma Blueprint".to_owned(), 11),
+                ("2X Forma Blueprint".to_owned(), 11),
+                ("Ash Prime Blueprint".to_owned(), 0),
+            ]
         );
     }
 

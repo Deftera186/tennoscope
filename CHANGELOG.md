@@ -59,9 +59,12 @@ see the difference.
   turns a switch light with a dark label, but a switch that was on kept its
   light label, so tabbing to Ducat values while it was on showed a blank light
   block. The label now turns dark whether the switch is on or off.
-- **A stacked Forma reward counts the Forma blueprints you hold.** The relic
-  tables name it "2X Forma Blueprint", which matched nothing in the collection,
-  so its slip read "Not owned" however many Forma blueprints you held.
+- **A blueprint reward counts the blueprints you hold.** The relic tables name a
+  stacked Forma reward "2X Forma Blueprint", which matched nothing in the
+  collection, so its slip read "Not owned" however many Forma blueprints you
+  held. A slip's owned count also took what a blueprint builds for the
+  blueprint, so a Forma Blueprint slip counted your built Forma instead, and
+  with mastery marks off a Prime's blueprint could count the Prime you built.
 - **A reward from a relic with no known drop table gets its own name.** The
   item data lists the current Prime Resurgence relics with no rewards, so a
   squadmate's card from one was matched only against the other relics' rewards
@@ -91,7 +94,6 @@ see the difference.
   it, or a newer build replaces it. Clicking it opens Settings, and the
   AppImage mount check reads your temporary directory instead of assuming
   `/tmp`.
-
 - **An update offer survives a check that cannot run.** With no network the
   automatic check restored the previous phase in silence, so the app went on
   reporting a last-checked time for a check that never ran, and pressing Check
