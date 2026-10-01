@@ -52,8 +52,13 @@ export interface SetupStatus {
   desktop_capture_action_available: boolean
 }
 
-/** One grid tile's corner chip; a chip existing already says its platinum resolved. */
-export interface CellChip { col: number; row: number; name: string; platinum: number | null }
+/**
+ * Copies of a part the recipe takes (`uses`) and copies held. The strip's fraction starts at two
+ * uses: for a part needed once, the game's own owned badge beside the strip already shows the count.
+ */
+export interface KioskMastery { held: number; uses: number }
+/** One grid tile's corner chip, kept when its price, its mastery or both resolve. */
+export interface CellChip { col: number; row: number; name: string; platinum: number | null; mastery: KioskMastery | null }
 /** One basket row's platinum value; the game already draws the row's ducats. */
 export interface BasketChip { index: number; name: string; platinum: number | null }
 /** One poller epoch's whole overlay payload. */
@@ -64,6 +69,8 @@ export interface KioskView {
   basket: BasketChip[]
   total_plat: number
   scroll_dy: number
+  /** `unavailable` is the preference on with no live inventory behind it; the overlay says so once. */
+  mastery_status: 'off' | 'live' | 'unavailable'
 }
 
 export const getView = () => invoke<AppView>('get_view')

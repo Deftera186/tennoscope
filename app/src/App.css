@@ -1389,6 +1389,25 @@ svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
 .kiosk-pair .kiosk-mark { height: calc(18 * var(--h)); align-self: flex-end; }
 .kiosk-total .kiosk-mark { height: calc(19 * var(--h)); }
 
+/* An unmastered part's strip takes the price chip's plate and anchor and grows left up to the owned
+   badge, in the condensed mark face: the register mono cannot fit the worst case in the tile. */
+.kiosk-strip-chip { overflow: hidden; gap: calc(5 * var(--h)); align-items: baseline; }
+/* The fit is measured before the PNG arrives, so the mark's box takes the asset's ratio up front. */
+.kiosk-strip-chip .kiosk-mark { height: calc(14 * var(--h)); aspect-ratio: 163 / 160; }
+.kiosk-fact { font: 700 calc(10 * var(--h))/1 var(--face-mark); text-transform: uppercase; }
+/* Dim, not deep: the plate lets the game show through, and deep fell to 3.6:1 over a light frame. */
+.kiosk-fraction { font: 700 calc(11 * var(--h))/1 var(--face-mark); font-variant-numeric: tabular-nums; color: var(--platinum-dim); }
+.kiosk-strip-chip .kiosk-price { font-size: calc(15 * var(--h)); }
+
+/* Marks are on and no live inventory backs them. The note sits over the pane's header in the chip
+   layer, to fade with it, and in the chips' ink: a muted tone measured 2.9:1 on the header's teal. */
+.kiosk-note {
+  position: absolute;
+  font: 700 calc(10 * var(--h))/1 var(--face-mark);
+  text-transform: uppercase; color: #deecfc; white-space: nowrap;
+  text-shadow: 0 calc(1 * var(--h)) 1px rgb(0 0 0 / 60%);
+}
+
 /* Updates: the masthead mark is a text pill with its own diamond, never the
  * assay-state grammar (ready there means Watching Warframe) and never
  * color-only. The row reuses .setting/.stamp/.band-note; only the download
