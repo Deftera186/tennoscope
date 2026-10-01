@@ -96,6 +96,11 @@ export async function getSetupStatus(attempts = 12, delayMs = 250): Promise<Setu
 export const setAccessMode = (accessMode: AccessMode) => invoke<SetupStatus>('set_access_mode', { accessMode })
 export const authorizeScreenCapture = () => invoke<SetupStatus>('authorize_screen_capture')
 
+/** Overlay preferences the backend owns; the overlays never read browser storage for them. */
+export interface Preferences { mastery_marks: boolean }
+export const getPreferences = () => invoke<Preferences>('get_preferences')
+export const setMasteryMarks = (enabled: boolean) => invoke<Preferences>('set_mastery_marks', { enabled })
+
 export const marketStatus = () => invoke<AppView>('market_status')
 export const marketSignIn = (email: string, password: string) => invoke<AppView>('market_sign_in', { email, password })
 export const marketLinkToken = (token: string) => invoke<AppView>('market_link_token', { token })

@@ -41,6 +41,7 @@ pub mod linux_renderer;
 pub mod market_account;
 pub mod monitor;
 mod overlay_window;
+mod preferences;
 pub mod report;
 pub mod reward_capture;
 mod reward_log;
@@ -58,6 +59,7 @@ pub use kiosk_view::{KioskState, KioskView};
 pub use overlay_window::{
     OverlayGeometry, WindowRect, kiosk_overlay_geometry, placement_notice, reward_overlay_geometry,
 };
+pub use preferences::Preferences;
 pub use reward_capture::x11::{largest_warframe_window, warframe_window_from_xwininfo_tree};
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
@@ -233,12 +235,14 @@ struct StoredAccessMode {
 pub struct LocalPaths {
     pub setup: PathBuf,
     pub database: PathBuf,
+    pub preferences: PathBuf,
 }
 
 pub fn resolve_local_paths(app_data: &Path) -> LocalPaths {
     LocalPaths {
         setup: app_data.join("tennoscope-setup.json"),
         database: app_data.join("tennoscope.sqlite3"),
+        preferences: app_data.join("tennoscope-preferences.json"),
     }
 }
 
@@ -516,6 +520,8 @@ struct Runtime {
     app_data: PathBuf,
     setup_path: PathBuf,
     setup: SetupStatus,
+    preferences: Preferences,
+    preferences_path: PathBuf,
     transition: TransitionGate,
     refresh: RefreshWindow,
     monitor: MonitorLifecycle,
@@ -757,6 +763,47 @@ async fn get_setup_status(state: State<'_, SharedRuntime>) -> Result<SetupStatus
     })
     .await
     .map_err(|_| "setup task failed".to_owned())?
+}
+
+#[tauri::command]
+async fn get_preferences(state: State<'_, SharedRuntime>) -> Result<Preferences, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        Ok(runtime.preferences)
+    })
+    .await
+    .map_err(|_| "preferences task failed".to_owned())?
+}
+
+#[tauri::command]
+async fn set_mastery_marks(
+    state: State<'_, SharedRuntime>,
+    enabled: bool,
+) -> Result<Preferences, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        save_mastery_marks(&mut runtime, enabled)
+    })
+    .await
+    .map_err(|_| "preferences task failed".to_owned())?
+}
+
+fn save_mastery_marks(runtime: &mut Runtime, enabled: bool) -> Result<Preferences, String> {
+    // The file writes first: a failed save leaves both the file and the state unchanged, so
+    // the switch never claims a choice that did not stick.
+    let next = Preferences {
+        mastery_marks: enabled,
+    };
+    preferences::save_preferences(&runtime.preferences_path, next)
+        .map_err(|_| "mastery marks setting could not be saved".to_owned())?;
+    runtime.preferences = next;
+    Ok(next)
 }
 
 fn restore_previous_runtime<F>(
@@ -1751,6 +1798,8 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         app_data,
         setup_path: paths.setup,
         setup,
+        preferences: preferences::load_preferences(&paths.preferences),
+        preferences_path: paths.preferences,
         refresh: RefreshWindow::default(),
         transition: TransitionGate::default(),
         monitor: MonitorLifecycle::default(),
@@ -2129,6 +2178,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_view,
             get_setup_status,
+            get_preferences,
+            set_mastery_marks,
             set_access_mode,
             authorize_screen_capture,
             refresh_inventory,
@@ -2361,6 +2412,8 @@ mod tests {
             app_data: directory.to_path_buf(),
             setup_path: directory.join("setup.json"),
             setup: SetupStatus::default(),
+            preferences: Preferences::default(),
+            preferences_path: directory.join("tennoscope-preferences.json"),
             refresh: RefreshWindow::default(),
             transition: TransitionGate::default(),
             monitor: MonitorLifecycle::default(),
@@ -2370,6 +2423,40 @@ mod tests {
             market: market_account::MarketSession::new(Box::new(MemoryStore::default())),
             presence: PresenceHold::default(),
         }))
+    }
+
+    /// A failed save must not move the switch: the next launch would read the old choice back.
+    #[test]
+    fn the_mastery_marks_switch_moves_only_when_its_save_lands() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        let mut runtime = shared.lock().expect("lock");
+        let regular_file = directory.path().join("not-a-directory");
+        fs::write(&regular_file, b"").expect("regular file");
+        runtime.preferences_path = regular_file.join("tennoscope-preferences.json");
+
+        assert_eq!(
+            save_mastery_marks(&mut runtime, false).err().as_deref(),
+            Some("mastery marks setting could not be saved")
+        );
+        assert!(
+            runtime.preferences.mastery_marks,
+            "a failed save leaves the marks on"
+        );
+
+        let writable = directory.path().join("tennoscope-preferences.json");
+        runtime.preferences_path = writable.clone();
+        assert_eq!(
+            save_mastery_marks(&mut runtime, false),
+            Ok(Preferences {
+                mastery_marks: false
+            })
+        );
+        assert!(!runtime.preferences.mastery_marks);
+        assert!(
+            !preferences::load_preferences(&writable).mastery_marks,
+            "the file holds the new choice"
+        );
     }
 
     /// A refresh that is already running, and one that just finished, are both reasons not to
