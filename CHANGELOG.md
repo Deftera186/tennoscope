@@ -55,6 +55,10 @@ see the difference.
   there, so a read of that tile could match the Harness and show its price.
   The collection listed a held Wings blueprint as Prime Archwing Wings
   Blueprint with no ducat value; it now carries its own name and its ducats.
+- **The Ducat values switch keeps its label under keyboard focus.** Focus
+  turns a switch light with a dark label, but a switch that was on kept its
+  light label, so tabbing to Ducat values while it was on showed a blank light
+  block. The label now turns dark whether the switch is on or off.
 - **An update offer survives a restart.** The daily check throttle skipped the
   network on reopen, so the masthead button vanished on the next launch and
   stayed gone until the next check ran. The offered version is now stored and

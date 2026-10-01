@@ -341,7 +341,8 @@
   transition: color .12s ease, background .12s ease, border-color .12s ease;
 }
 .display-switch:hover { color: var(--platinum-dim); background: var(--plate); }
-.display-switch:focus-visible { outline: none; background: var(--platinum); color: var(--touchstone); border-color: var(--platinum); }
+/* The checked state is listed too: it ties on specificity and comes later, so it would paint the label platinum on platinum. */
+.display-switch:focus-visible, .display-switch[aria-checked="true"]:focus-visible { outline: none; background: var(--platinum); color: var(--touchstone); border-color: var(--platinum); }
 /* A switch waiting on its own backend is disabled, not dead: it keeps its shape and reads as
    pending rather than refusing input the player never asked for. */
 .display-switch:disabled { opacity: .5; cursor: default; }
