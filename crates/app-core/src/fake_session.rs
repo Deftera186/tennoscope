@@ -1,6 +1,7 @@
 use local_store::SnapshotMeta;
 use warframe_domain::{
-    CatalogItem, Category, InventoryEntry, InventorySnapshot, ItemId, RewardCandidate,
+    CatalogItem, Category, InventoryEntry, InventorySnapshot, ItemId, MasteryMark, RewardCandidate,
+    SetPart,
 };
 
 use crate::AppError;
@@ -32,10 +33,44 @@ pub(crate) fn build() -> Result<FakeSession, AppError> {
         )?,
     ])?;
     let rewards = vec![
-        RewardCandidate::new("Forma Blueprint", 12, 25, 0, false, 1.0)?,
-        RewardCandidate::new("Lex Prime Receiver", 8, 15, 0, true, 1.0)?,
-        RewardCandidate::new("Rare Prime Set", 30, 100, 0, false, 0.79)?,
-        RewardCandidate::new("Paris Prime String", 6, 45, 1, false, 1.0)?,
+        RewardCandidate::new("Forma Blueprint", 12, 25, 0, None, 1.0)?,
+        RewardCandidate::new(
+            "Lex Prime Receiver",
+            8,
+            15,
+            0,
+            Some(MasteryMark::Unmastered {
+                subject: None,
+                parts: vec![
+                    SetPart {
+                        name: "Blueprint".into(),
+                        image: Some("blueprint.png".into()),
+                        uses: 1,
+                        held: 1,
+                        this: false,
+                    },
+                    SetPart {
+                        name: "Receiver".into(),
+                        image: Some("GenericGunPrimeReceiver.png".into()),
+                        uses: 1,
+                        held: 0,
+                        this: true,
+                    },
+                    SetPart {
+                        name: "Barrel".into(),
+                        image: Some("GenericGunPrimeBarrel.png".into()),
+                        uses: 1,
+                        held: 1,
+                        this: false,
+                    },
+                ],
+                missing: true,
+                completes: true,
+            }),
+            1.0,
+        )?,
+        RewardCandidate::new("Rare Prime Set", 30, 100, 0, None, 0.79)?,
+        RewardCandidate::new("Paris Prime String", 6, 45, 1, None, 1.0)?,
     ];
     Ok(FakeSession {
         snapshot,

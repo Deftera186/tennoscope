@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 
 use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
-use crate::DomainError;
+use crate::{DomainError, MasteryMark};
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RewardCandidate {
@@ -10,7 +10,8 @@ pub struct RewardCandidate {
     pub platinum: u32,
     pub ducats: u32,
     pub owned: u32,
-    pub mastery_relevant: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mastery: Option<MasteryMark>,
     pub confidence: f32,
 }
 
@@ -20,7 +21,7 @@ impl RewardCandidate {
         platinum: u32,
         ducats: u32,
         owned: u32,
-        mastery_relevant: bool,
+        mastery: Option<MasteryMark>,
         confidence: f32,
     ) -> Result<Self, DomainError> {
         let name = name.into();
@@ -35,7 +36,7 @@ impl RewardCandidate {
             platinum,
             ducats,
             owned,
-            mastery_relevant,
+            mastery,
             confidence,
         })
     }
@@ -47,7 +48,8 @@ struct RewardCandidateDto {
     platinum: u32,
     ducats: u32,
     owned: u32,
-    mastery_relevant: bool,
+    #[serde(default)]
+    mastery: Option<MasteryMark>,
     confidence: f32,
 }
 
@@ -62,7 +64,7 @@ impl<'de> Deserialize<'de> for RewardCandidate {
             dto.platinum,
             dto.ducats,
             dto.owned,
-            dto.mastery_relevant,
+            dto.mastery,
             dto.confidence,
         )
         .map_err(D::Error::custom)

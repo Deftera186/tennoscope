@@ -2390,7 +2390,7 @@ fn apply_reward_observations(
                 prices.get(&observation.name).copied().unwrap_or(0),
                 ducats,
                 owned,
-                false,
+                None,
                 observation.confidence,
             )
             .ok()

@@ -1,8 +1,8 @@
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::json;
 use warframe_domain::{
-    CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId, RewardAdvisor,
-    RewardCandidate,
+    CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId, MasteryMark,
+    RewardAdvisor, RewardCandidate, SetPart,
 };
 
 fn item(id: &str, name: &str) -> CatalogItem {
@@ -64,16 +64,16 @@ fn coherent_snapshot_rejects_duplicate_item_ids() {
 
 #[test]
 fn reward_candidates_validate_names_and_confidence() {
-    assert!(RewardCandidate::new(" ", 1, 1, 0, false, 0.9).is_err());
+    assert!(RewardCandidate::new(" ", 1, 1, 0, None, 0.9).is_err());
     for confidence in [f32::NAN, f32::INFINITY, -0.01, 1.01] {
-        assert!(RewardCandidate::new("Lex", 1, 1, 0, false, confidence).is_err());
+        assert!(RewardCandidate::new("Lex", 1, 1, 0, None, confidence).is_err());
     }
 }
 
 #[test]
 fn uncertain_high_value_reward_is_excluded_from_best_value() {
-    let forma = RewardCandidate::new("Forma", 20, 0, 0, false, 0.40).unwrap();
-    let lex = RewardCandidate::new("Lex", 8, 25, 0, true, 0.99).unwrap();
+    let forma = RewardCandidate::new("Forma", 20, 0, 0, None, 0.40).unwrap();
+    let lex = RewardCandidate::new("Lex", 8, 25, 0, Some(MasteryMark::Unknown), 0.99).unwrap();
 
     let view = RewardAdvisor::advise(vec![forma, lex]);
 
@@ -86,9 +86,9 @@ fn uncertain_high_value_reward_is_excluded_from_best_value() {
 
 #[test]
 fn reward_ties_use_ducats_then_preserve_input_order() {
-    let low_ducats = RewardCandidate::new("A", 10, 15, 0, false, 0.8).unwrap();
-    let first_high = RewardCandidate::new("B", 10, 45, 0, false, 0.8).unwrap();
-    let second_high = RewardCandidate::new("C", 10, 45, 0, false, 1.0).unwrap();
+    let low_ducats = RewardCandidate::new("A", 10, 15, 0, None, 0.8).unwrap();
+    let first_high = RewardCandidate::new("B", 10, 45, 0, None, 0.8).unwrap();
+    let second_high = RewardCandidate::new("C", 10, 45, 0, None, 1.0).unwrap();
 
     let view = RewardAdvisor::advise(vec![low_ducats, first_high, second_high]);
 
@@ -99,8 +99,8 @@ fn reward_ties_use_ducats_then_preserve_input_order() {
 #[test]
 fn all_uncertain_rewards_have_no_best_value() {
     let view = RewardAdvisor::advise(vec![
-        RewardCandidate::new("A", 100, 100, 0, false, 0.79).unwrap(),
-        RewardCandidate::new("B", 1, 1, 0, true, 0.0).unwrap(),
+        RewardCandidate::new("A", 100, 100, 0, None, 0.79).unwrap(),
+        RewardCandidate::new("B", 1, 1, 0, Some(MasteryMark::Unknown), 0.0).unwrap(),
     ]);
 
     assert_eq!(view.best_value_index(), None);
@@ -114,8 +114,8 @@ fn all_uncertain_rewards_have_no_best_value() {
 #[test]
 fn the_ducat_winner_is_reported_even_when_another_card_is_worth_more_platinum() {
     let view = RewardAdvisor::advise(vec![
-        RewardCandidate::new("Pricey Prime Blueprint", 45, 15, 0, false, 1.0).unwrap(),
-        RewardCandidate::new("Cheap Prime Barrel", 6, 100, 0, false, 1.0).unwrap(),
+        RewardCandidate::new("Pricey Prime Blueprint", 45, 15, 0, None, 1.0).unwrap(),
+        RewardCandidate::new("Cheap Prime Barrel", 6, 100, 0, None, 1.0).unwrap(),
     ]);
 
     assert_eq!(view.best_value_name(), Some("Pricey Prime Blueprint"));
@@ -127,8 +127,8 @@ fn the_ducat_winner_is_reported_even_when_another_card_is_worth_more_platinum() 
 #[test]
 fn no_ducat_winner_when_nothing_on_offer_is_worth_ducats() {
     let view = RewardAdvisor::advise(vec![
-        RewardCandidate::new("Forma Blueprint", 12, 0, 0, false, 1.0).unwrap(),
-        RewardCandidate::new("2X Forma Blueprint", 20, 0, 0, false, 1.0).unwrap(),
+        RewardCandidate::new("Forma Blueprint", 12, 0, 0, None, 1.0).unwrap(),
+        RewardCandidate::new("2X Forma Blueprint", 20, 0, 0, None, 1.0).unwrap(),
     ]);
 
     assert_eq!(view.best_value_index(), Some(1));
@@ -167,7 +167,15 @@ fn valid_domain_values_round_trip_through_json() {
         InventoryEntry::new(catalog_item.clone(), 2).with_mastered(true),
     ])
     .unwrap();
-    let reward = RewardCandidate::new("Lex Prime Receiver", 8, 25, 1, true, 0.99).unwrap();
+    let reward = RewardCandidate::new(
+        "Lex Prime Receiver",
+        8,
+        25,
+        1,
+        Some(MasteryMark::Unknown),
+        0.99,
+    )
+    .unwrap();
 
     let id_wire = serde_json::to_value(&id).unwrap();
     let item_wire = serde_json::to_value(&catalog_item).unwrap();
@@ -196,7 +204,7 @@ fn valid_domain_values_round_trip_through_json() {
             "platinum": 8,
             "ducats": 25,
             "owned": 1,
-            "mastery_relevant": true,
+            "mastery": {"state": "unknown"},
             "confidence": 0.99_f32
         })
     );
@@ -248,7 +256,6 @@ fn deserialization_rejects_invalid_reward_candidates() {
             "platinum": 8,
             "ducats": 25,
             "owned": 0,
-            "mastery_relevant": true,
             "confidence": confidence
         })
     };
@@ -261,16 +268,16 @@ fn deserialization_rejects_invalid_reward_candidates() {
 #[test]
 fn reward_view_serializes_derived_selection_without_being_mutable() {
     let view = RewardAdvisor::advise(vec![
-        RewardCandidate::new("Forma", 20, 0, 0, false, 0.4).unwrap(),
-        RewardCandidate::new("Lex", 8, 25, 0, true, 0.99).unwrap(),
+        RewardCandidate::new("Forma", 20, 0, 0, None, 0.4).unwrap(),
+        RewardCandidate::new("Lex", 8, 25, 0, Some(MasteryMark::Unknown), 0.99).unwrap(),
     ]);
 
     assert_eq!(
         serde_json::to_value(&view).unwrap(),
         json!({
             "cards": [
-                {"name": "Forma", "platinum": 20, "ducats": 0, "owned": 0, "mastery_relevant": false, "confidence": 0.4_f32},
-                {"name": "Lex", "platinum": 8, "ducats": 25, "owned": 0, "mastery_relevant": true, "confidence": 0.99_f32}
+                {"name": "Forma", "platinum": 20, "ducats": 0, "owned": 0, "confidence": 0.4_f32},
+                {"name": "Lex", "platinum": 8, "ducats": 25, "owned": 0, "mastery": {"state": "unknown"}, "confidence": 0.99_f32}
             ],
             "best_value_index": 1,
             "best_ducat_index": 1
@@ -338,5 +345,54 @@ fn collection_deserialization_rejects_duplicate_logical_item_ids() {
             }
         }))
         .is_err()
+    );
+}
+
+#[test]
+fn mastery_marks_serialize_with_a_state_tag() {
+    let mark = MasteryMark::Unmastered {
+        subject: None,
+        parts: vec![SetPart {
+            name: "Blade".into(),
+            image: Some("GenericWeaponPrimeBlade.png".into()),
+            uses: 2,
+            held: 1,
+            this: true,
+        }],
+        missing: true,
+        completes: true,
+    };
+    let json = serde_json::to_value(&mark).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"state": "unmastered", "subject": null, "parts": [{"name": "Blade",
+          "image": "GenericWeaponPrimeBlade.png", "uses": 2, "held": 1, "this": true}],
+          "missing": true, "completes": true})
+    );
+    assert_eq!(serde_json::from_value::<MasteryMark>(json).unwrap(), mark);
+    assert_eq!(
+        serde_json::to_value(MasteryMark::Built {
+            rank: 14,
+            max_rank: 30
+        })
+        .unwrap(),
+        serde_json::json!({"state": "built", "rank": 14, "max_rank": 30})
+    );
+    assert_eq!(
+        serde_json::to_value(MasteryMark::InFoundry).unwrap(),
+        serde_json::json!({"state": "in_foundry"})
+    );
+}
+
+#[test]
+fn a_reward_without_a_mastery_mark_omits_the_field_and_reads_back() {
+    let forma = RewardCandidate::new("Forma Blueprint", 0, 0, 3, None, 1.0).unwrap();
+    let json = serde_json::to_value(&forma).unwrap();
+    assert!(json.get("mastery").is_none());
+    assert_eq!(
+        serde_json::from_value::<RewardCandidate>(json)
+            .unwrap()
+            .mastery,
+        None
     );
 }
