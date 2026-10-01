@@ -63,7 +63,7 @@ the next poll retries. This prevents transient unreadable frames from tearing do
 
 ### Data joins
 
-- Ducats: `RewardCatalogEntry.ducats` via `reward_name_matches` (catalog.rs:98).
+- Ducats: not published. The game draws a ducat value on every tile and basket row itself.
 - Platinum: `PriceTable::price_for(name)` (collection_prices.rs:421), daily dump source.
   Fallback: `MarketPriceCache::get`.
 - Owned count: not published. `CellChip` and `BasketChip` carry a name and a platinum figure
