@@ -13,6 +13,7 @@ mod inventory;
 #[cfg(target_os = "linux")]
 mod linux_proc;
 mod market;
+mod mastery;
 mod orchestrator;
 mod relic_catalog;
 mod reward_memory;
@@ -22,8 +23,8 @@ mod windows_proc;
 
 pub use authorization::AuthorizationScanner;
 pub use catalog::{
-    CatalogError, CatalogIndex, CatalogMetadata, DucatTable, RewardCatalogEntry,
-    reward_name_matches,
+    CatalogError, CatalogIndex, CatalogMetadata, ComponentKind, DucatTable, Recipe,
+    RecipeComponent, RewardCatalogEntry, holding_matches_reward, reward_name_matches,
 };
 pub use catalog_cache::{
     CatalogCache, CatalogCacheError, CatalogFetch, CatalogLoad, CatalogLoadSource, CatalogSource,
@@ -37,6 +38,7 @@ pub use collection_prices::{
 };
 pub use inventory::{
     INVENTORY_ENDPOINT, InventoryHttpTransport, InventoryJsonDecoder, MAX_INVENTORY_RESPONSE_BYTES,
+    MasteryFacts, mastery_rank,
 };
 #[cfg(target_os = "linux")]
 pub use linux_proc::LinuxProc;
@@ -44,6 +46,7 @@ pub use market::{
     MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, RequestPacer,
     WarframeMarketHttp, WarmOutcome, lowest_sell_top, market_slug, slug_and_subtype,
 };
+pub use mastery::{Holdings, MasteryEvidence, MasteryLedger};
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 pub use relic_catalog::RelicRewardIndex;
 pub use reward_memory::{
@@ -564,6 +567,7 @@ impl AcquisitionHealth {
 pub struct AcquisitionResult {
     snapshot: InventorySnapshot,
     health: AcquisitionHealth,
+    mastery_facts: MasteryFacts,
 }
 
 impl AcquisitionResult {
@@ -574,7 +578,22 @@ impl AcquisitionResult {
         if !health.is_successful() {
             return Err(AcquisitionError::UnsuccessfulHealth);
         }
-        Ok(Self { snapshot, health })
+        Ok(Self {
+            snapshot,
+            health,
+            mastery_facts: MasteryFacts::default(),
+        })
+    }
+
+    /// The affinity and pending builds the decoded inventory reported. Empty unless set:
+    /// results built without a decode carry no facts.
+    pub fn with_mastery_facts(mut self, facts: MasteryFacts) -> Self {
+        self.mastery_facts = facts;
+        self
+    }
+
+    pub fn mastery_facts(&self) -> &MasteryFacts {
+        &self.mastery_facts
     }
 
     pub fn snapshot(&self) -> &InventorySnapshot {

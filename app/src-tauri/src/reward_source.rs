@@ -44,8 +44,21 @@ pub trait MemoryRewardSource {
     ) -> RewardResolution;
 }
 
+/// What a card's text is matched against. The squad's relic pool is what makes a fuzzy read safe,
+/// so a fuzzy read may only name a pool reward; the rest of the reward catalogue answers only a
+/// near-exact read, which is how a card from a relic our data has no rewards for still gets named.
+#[derive(Clone, Copy, Debug)]
+pub struct CardCandidates<'a> {
+    pub pool: &'a [RewardCatalogEntry],
+    pub catalog: &'a [RewardCatalogEntry],
+}
+
 pub trait VisualRewardSource {
-    fn choices(&mut self, candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str>;
+    /// The cards in screen order, each with the score its read matched at.
+    fn choices(
+        &mut self,
+        candidates: CardCandidates<'_>,
+    ) -> Result<Vec<(String, f32)>, &'static str>;
 }
 
 pub struct RewardSourceCoordinator {
@@ -232,7 +245,7 @@ impl RewardSourceCoordinator {
         memory: &mut dyn MemoryRewardSource,
         visual: &mut dyn VisualRewardSource,
         expected: usize,
-        candidates: &[RewardCatalogEntry],
+        candidates: CardCandidates<'_>,
     ) -> Option<RewardSourceResult> {
         if expected <= 1 {
             return None;
@@ -241,7 +254,7 @@ impl RewardSourceCoordinator {
         match memory.choices(expected) {
             RewardResolution::Confirmed { choices, .. } => {
                 let diagnostic = if self.validation_mode {
-                    match visual.choices(candidates) {
+                    match visual.choices(candidates).map(card_names) {
                         Ok(visual_choices) if visual_choices == choices => {
                             RewardSourceDiagnostic::Agreement
                         }
@@ -264,6 +277,7 @@ impl RewardSourceCoordinator {
             | RewardResolution::TimedOut => visual
                 .choices(candidates)
                 .ok()
+                .map(card_names)
                 .filter(|names| names.len() == expected)
                 .map(|names| RewardSourceResult {
                     choices: RewardChoiceSet {
@@ -275,4 +289,8 @@ impl RewardSourceCoordinator {
                 }),
         }
     }
+}
+
+fn card_names(cards: Vec<(String, f32)>) -> Vec<String> {
+    cards.into_iter().map(|(name, _)| name).collect()
 }

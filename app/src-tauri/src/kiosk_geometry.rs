@@ -140,6 +140,25 @@ pub fn grid_label_rect(
     ))
 }
 
+/// The price chip's width in 1080p design pixels. A mastery strip replaces the chip and is
+/// wider, so the width travels with the call.
+pub const PRICE_CHIP_W_1080: f32 = 100.0;
+/// The game's owned badge ends about 47 design px into a tile with one digit and 59 with two,
+/// so the strip stops 51 or 63 px short of the tile's left edge.
+pub const BADGE_CLEARANCE_1080: f32 = 51.0;
+pub const BADGE_CLEARANCE_TWO_DIGITS_1080: f32 = 63.0;
+
+/// A mastery strip's width in 1080p design pixels: the tile minus the badge clearance for
+/// the count the game is showing.
+pub fn strip_mask_width_1080(held: u32) -> f32 {
+    190.0
+        - if held >= 10 {
+            BADGE_CLEARANCE_TWO_DIGITS_1080
+        } else {
+            BADGE_CLEARANCE_1080
+        }
+}
+
 /// Where a grid chip's top-right corner sits, in pixels.
 ///
 /// The corner is the card border stroke's own position, measured per column off a live
@@ -182,6 +201,7 @@ pub fn grid_chip_mask(
     col: usize,
     row: usize,
     dy: i32,
+    chip_w_1080: f32,
 ) -> Option<(u32, u32, u32, u32)> {
     let (right, top) = tile_anchor(width, height, col, row)?;
     let scale = height as f32;
@@ -191,7 +211,15 @@ pub fn grid_chip_mask(
     if top < ROW_TOPS_MIN_CLIP * scale || top > PANE_BOTTOM * scale {
         return None;
     }
-    Some(mask_box(right, top, 100.0, 34.0, scale, width, height))
+    Some(mask_box(
+        right,
+        top,
+        chip_w_1080,
+        34.0,
+        scale,
+        width,
+        height,
+    ))
 }
 
 /// The mask box for one basket row's chip ([icon][digits] right-aligned on the row's pair
@@ -332,7 +360,8 @@ mod tests {
     #[test]
     fn chip_masks_cover_where_the_overlay_draws() {
         // The grid chip's top-right corner is the tile anchor; the mask spans left of it.
-        let (x, y, w, h) = grid_chip_mask(1920, 1080, 0, 0, 0).expect("a visible tile masks");
+        let (x, y, w, h) =
+            grid_chip_mask(1920, 1080, 0, 0, 0, PRICE_CHIP_W_1080).expect("a visible tile masks");
         let (ax, ay) = tile_anchor(1920, 1080, 0, 0).unwrap();
         let right = (ax.round() as u32 + 3).min(1920);
         assert_eq!(
@@ -349,12 +378,16 @@ mod tests {
             "mask covers icon + four digits: {x},{y},{w},{h}"
         );
         // A scrolled chip rides its row: the dy offset moves the mask with the publish.
-        let scrolled = grid_chip_mask(1920, 1080, 0, 0, 40).expect("scrolled chip masks");
+        let scrolled =
+            grid_chip_mask(1920, 1080, 0, 0, 40, PRICE_CHIP_W_1080).expect("scrolled chip masks");
         assert_eq!(scrolled.1, y + 40);
         // Chips scrolled past the pane's own clip edge are not drawn and not masked.
-        assert_eq!(grid_chip_mask(1920, 1080, 0, 0, 900), None);
+        assert_eq!(
+            grid_chip_mask(1920, 1080, 0, 0, 900, PRICE_CHIP_W_1080),
+            None
+        );
         // Absent tiles do not mask either.
-        assert_eq!(grid_chip_mask(1920, 1080, 6, 0, 0), None);
+        assert_eq!(grid_chip_mask(1920, 1080, 6, 0, 0, PRICE_CHIP_W_1080), None);
 
         // Basket chips right-align on the row's pair edge, above its baseline.
         let (bx, by, bw, bh) = basket_chip_mask(1920, 1080, 1).expect("row 1 masks");
@@ -368,15 +401,36 @@ mod tests {
         assert_eq!(basket_chip_mask(1920, 1080, BASKET_ROWS), None);
         // A scrolled publish shifts masks by design pixels: at 1440p capture scale the
         // +30-design-pixel anchor is +40 capture pixels.
-        let base = grid_chip_mask(2560, 1440, 0, 0, 0).unwrap();
-        let shifted = grid_chip_mask(2560, 1440, 0, 0, 30).unwrap();
+        let base = grid_chip_mask(2560, 1440, 0, 0, 0, PRICE_CHIP_W_1080).unwrap();
+        let shifted = grid_chip_mask(2560, 1440, 0, 0, 30, PRICE_CHIP_W_1080).unwrap();
         assert_eq!(shifted.1 - base.1, 40, "design dy scales to capture px");
         assert_eq!(shifted.0, base.0, "horizontal anchor is scroll-immune");
+        // A strip mask shares the price chip's right edge and spans the strip width.
+        let strip = grid_chip_mask(2560, 1440, 0, 0, 0, strip_mask_width_1080(2)).unwrap();
+        assert_eq!(strip.0 + strip.2, base.0 + base.2);
+        assert_eq!(strip.2, (fx(139.0) * 1440.0).round() as u32);
 
         // The TOTAL row masks outright.
         let total = total_chip_mask(1920, 1080);
         let (_tr, _tb) = total_row_pair(1920, 1080);
         assert!(total.2 >= 120, "the total chip is the widest: {total:?}");
+    }
+
+    /// The strip is the tile minus the game's owned badge: 51 design px clear with a
+    /// one-digit count, 63 with two. Both share the tile's right edge with the price chip.
+    #[test]
+    fn a_strip_mask_starts_past_the_owned_badge_and_ends_at_the_tile_edge() {
+        let (w, h) = (1920, 1080);
+        let price = grid_chip_mask(w, h, 3, 1, 0, PRICE_CHIP_W_1080).unwrap();
+        let strip = grid_chip_mask(w, h, 3, 1, 0, strip_mask_width_1080(2)).unwrap();
+        let wide = grid_chip_mask(w, h, 3, 1, 0, strip_mask_width_1080(12)).unwrap();
+        // All three right-align at the same tile edge.
+        assert_eq!(price.0 + price.2, strip.0 + strip.2);
+        assert_eq!(strip.2, 139);
+        assert_eq!(
+            wide.2, 127,
+            "two digits on the badge narrow the strip by 12"
+        );
     }
 
     #[test]

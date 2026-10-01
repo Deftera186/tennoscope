@@ -34,6 +34,13 @@ impl RelicRewardIndex {
         Ok(Self { rewards })
     }
 
+    /// Every reward a relic in the index can drop, spelled as the relic tables and the reward
+    /// screen spell it: "2X Forma Blueprint", "Lavos Prime Chassis Blueprint". A reward several
+    /// relics share comes once per relic.
+    pub fn reward_names(&self) -> impl Iterator<Item = &str> {
+        self.rewards.values().flatten().map(String::as_str)
+    }
+
     pub fn candidates_for_projection_paths(
         &self,
         projection_paths: &[String],
@@ -66,15 +73,12 @@ fn reward_catalog_paths(name: &str, catalog: &CatalogIndex) -> Vec<String> {
         return exact;
     }
 
-    let without_quantity = name.split_once(' ').and_then(|(quantity, item)| {
-        quantity
-            .strip_suffix('X')
-            .filter(|count| !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()))
-            .map(|_| item)
-    });
-    for alias in [without_quantity, name.strip_suffix(" Blueprint")]
-        .into_iter()
-        .flatten()
+    for alias in [
+        crate::catalog::without_quantity(name),
+        name.strip_suffix(" Blueprint"),
+    ]
+    .into_iter()
+    .flatten()
     {
         let paths = catalog.paths_for_name(alias);
         if !paths.is_empty() {

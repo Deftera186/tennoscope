@@ -10,11 +10,12 @@ use serde::Serialize;
 use thiserror::Error;
 use warframe_acquisition::{
     AcquisitionError, AcquisitionFailure, AcquisitionResult, AcquisitionStage, CatalogIndex,
-    CatalogLoadSource, DucatTable, MarketPriceCache, PriceTable, StageState,
+    CatalogLoadSource, DucatTable, Holdings, MarketPriceCache, MasteryEvidence, MasteryFacts,
+    MasteryLedger, PriceTable, StageState,
 };
 use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot,
-    RewardAdvisor, RewardCandidate, RewardView,
+    KioskMastery, MasteryMark, RewardAdvisor, RewardCandidate, RewardView,
 };
 use warframe_market::{CredentialBacking, MarketItems, MarketOrder, OrderKind};
 use warframe_status::Presence;
@@ -39,6 +40,40 @@ pub struct AppCore {
     pricing: Option<PricingProgress>,
     market_account: MarketAccountView,
     presence: PresenceView,
+    mastery_catalog: Option<Arc<CatalogIndex>>,
+    mastery_facts: Option<MasteryFacts>,
+}
+
+/// A snapshot of what mastery marks may say, taken once per overlay publish.
+pub struct MasteryView {
+    catalog: Option<Arc<CatalogIndex>>,
+    holdings: Holdings,
+    facts: Option<MasteryFacts>,
+}
+
+impl MasteryView {
+    pub fn evidence(&self) -> MasteryEvidence {
+        if self.facts.is_some() {
+            MasteryEvidence::Live
+        } else if !self.holdings.is_empty() {
+            MasteryEvidence::Saved
+        } else {
+            MasteryEvidence::None
+        }
+    }
+
+    /// The mark a reward name carries, or nothing when no catalogue is loaded or the name
+    /// is not a mastery part.
+    pub fn reward_mark(&self, reward_name: &str) -> Option<MasteryMark> {
+        let catalog = self.catalog.as_deref()?;
+        MasteryLedger::new(catalog, &self.holdings, self.facts.as_ref()).reward_mark(reward_name)
+    }
+
+    /// The strip a kiosk tile carries, or nothing without live facts or for mastered parts.
+    pub fn kiosk_mastery(&self, part_name: &str) -> Option<KioskMastery> {
+        let catalog = self.catalog.as_deref()?;
+        MasteryLedger::new(catalog, &self.holdings, self.facts.as_ref()).kiosk_mastery(part_name)
+    }
 }
 
 pub trait AcquisitionPort {
@@ -99,6 +134,35 @@ impl AppCore {
             pricing: None,
             market_account: MarketAccountView::unlinked(),
             presence: PresenceView::default(),
+            mastery_catalog: None,
+            mastery_facts: None,
+        })
+    }
+
+    /// The Prime recipe index, once the catalogue has loaded. Held like the price table:
+    /// mastery marks join rewards against it on every overlay publish.
+    pub fn set_mastery_catalog(&mut self, catalog: Arc<CatalogIndex>) {
+        self.mastery_catalog = Some(catalog);
+    }
+
+    /// This run's inventory facts: affinity per item and pending foundry builds. A
+    /// successful refresh sets them; losing inventory access clears them.
+    pub fn set_mastery_facts(&mut self, facts: MasteryFacts) {
+        self.mastery_facts = Some(facts);
+    }
+
+    pub fn clear_mastery_facts(&mut self) {
+        self.mastery_facts = None;
+    }
+
+    /// A snapshot of what mastery marks may say, taken once per overlay publish. The
+    /// collection loads once here so a reward and a kiosk tile never disagree mid-render.
+    pub fn mastery_view(&self) -> Result<MasteryView, AppError> {
+        let collection = self.store.load_collection()?;
+        Ok(MasteryView {
+            catalog: self.mastery_catalog.clone(),
+            holdings: Holdings::from_entries(collection.entries()),
+            facts: self.mastery_facts.clone(),
         })
     }
 
@@ -407,6 +471,9 @@ impl AppCore {
         match attempt {
             Ok((result, meta)) => {
                 self.store.replace_collection(result.snapshot(), &meta)?;
+                // The inventory did not change when the request failed, so a failed refresh
+                // leaves the previous facts untouched.
+                self.mastery_facts = Some(result.mastery_facts().clone());
                 self.reward = RewardAdvisor::advise(Vec::new());
                 self.health.game_reader = BackendHealth::inventory_sync(&meta)?;
                 self.health.acquisition_stages = result

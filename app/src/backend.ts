@@ -7,7 +7,17 @@ export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 're
 export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; platinum_ceiling?: number; ducats?: number; rank?: number; max_rank?: number; live: boolean; priceable: boolean; monthly_trades?: number }
 /** How far the live pricing pass the player asked for has got. */
 export interface PricingProgress { done: number; total: number }
-export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }
+export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery?: MasteryMark; confidence: number }
+/** One slot of the set a Prime item is built from: the copies the recipe takes, the copies held, and whether this reward is the one that fills it. */
+export interface SetPart { name: string; image: string | null; uses: number; held: number; this: boolean }
+/** Absent for items mastery never touches or while marks are off; `unknown` still replaces the
+ * ownership line, as a dash. `subject` names the consumer a mastered part is still wanted by. */
+export type MasteryMark =
+  | { state: 'mastered' }
+  | { state: 'built'; rank: number; max_rank: number }
+  | { state: 'in_foundry' }
+  | { state: 'unmastered'; subject: string | null; parts: SetPart[]; missing: boolean; completes: boolean }
+  | { state: 'unknown' }
 export type LinkState = 'unlinked' | 'linked' | 'needs_relink'
 export type CredentialBacking = 'keyring' | 'database'
 export type Presence = 'online' | 'ingame' | 'invisible'
@@ -50,8 +60,13 @@ export interface SetupStatus {
   desktop_capture_action_available: boolean
 }
 
-/** One grid tile's corner chip; a chip existing already says its platinum resolved. */
-export interface CellChip { col: number; row: number; name: string; platinum: number | null }
+/**
+ * Copies of a part the recipe takes (`uses`) and copies held. The strip's fraction starts at two
+ * uses: for a part needed once, the game's own owned badge beside the strip already shows the count.
+ */
+export interface KioskMastery { held: number; uses: number }
+/** One grid tile's corner chip, kept when its price, its mastery or both resolve. */
+export interface CellChip { col: number; row: number; name: string; platinum: number | null; mastery: KioskMastery | null }
 /** One basket row's platinum value; the game already draws the row's ducats. */
 export interface BasketChip { index: number; name: string; platinum: number | null }
 /** One poller epoch's whole overlay payload. */
@@ -62,6 +77,8 @@ export interface KioskView {
   basket: BasketChip[]
   total_plat: number
   scroll_dy: number
+  /** `unavailable` is the preference on with no live inventory behind it; the overlay says so once. */
+  mastery_status: 'off' | 'live' | 'unavailable'
 }
 
 export const getView = () => invoke<AppView>('get_view')
@@ -95,6 +112,11 @@ export async function getSetupStatus(attempts = 12, delayMs = 250): Promise<Setu
 }
 export const setAccessMode = (accessMode: AccessMode) => invoke<SetupStatus>('set_access_mode', { accessMode })
 export const authorizeScreenCapture = () => invoke<SetupStatus>('authorize_screen_capture')
+
+/** Overlay preferences the backend owns; the overlays never read browser storage for them. */
+export interface Preferences { mastery_marks: boolean }
+export const getPreferences = () => invoke<Preferences>('get_preferences')
+export const setMasteryMarks = (enabled: boolean) => invoke<Preferences>('set_mastery_marks', { enabled })
 
 export const marketStatus = () => invoke<AppView>('market_status')
 export const marketSignIn = (email: string, password: string) => invoke<AppView>('market_sign_in', { email, password })

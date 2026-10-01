@@ -41,6 +41,7 @@ pub mod linux_renderer;
 pub mod market_account;
 pub mod monitor;
 mod overlay_window;
+mod preferences;
 pub mod report;
 pub mod reward_capture;
 mod reward_log;
@@ -58,24 +59,25 @@ pub use kiosk_view::{KioskState, KioskView};
 pub use overlay_window::{
     OverlayGeometry, WindowRect, kiosk_overlay_geometry, placement_notice, reward_overlay_geometry,
 };
+pub use preferences::Preferences;
 pub use reward_capture::x11::{largest_warframe_window, warframe_window_from_xwininfo_tree};
 pub use reward_log::{RewardLogEvent, RewardLogMachine};
 pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
 pub use reward_ocr::{
-    MAX_CARDS, ScreenRewardSource, TESSERACT_EXECUTABLE, best_match, card_block_left,
-    card_block_width, luma, normalize_contrast, ocr_crop, prepare_crop, read_cards, read_cards_in,
-    tesseract_program, threshold_inverted,
+    MAX_CARDS, ScreenRewardSource, TESSERACT_EXECUTABLE, best_card_match, best_match,
+    card_block_left, card_block_width, luma, normalize_contrast, ocr_crop, prepare_crop,
+    read_cards, read_cards_in, tesseract_program, threshold_inverted,
 };
 pub use reward_recognition::{
     FailureTrace, RecognitionTiming, RecognitionUpdate, RecognizedRewards, RewardPublication,
     RewardRecognition,
 };
 pub use reward_source::{
-    BoundMemoryRewardSource, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSet,
-    RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic, RewardSourceResult,
-    VisualRewardSource,
+    BoundMemoryRewardSource, CardCandidates, LiveMemoryRewardState, MemoryRewardSource,
+    RewardChoiceSet, RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic,
+    RewardSourceResult, VisualRewardSource,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -233,12 +235,14 @@ struct StoredAccessMode {
 pub struct LocalPaths {
     pub setup: PathBuf,
     pub database: PathBuf,
+    pub preferences: PathBuf,
 }
 
 pub fn resolve_local_paths(app_data: &Path) -> LocalPaths {
     LocalPaths {
         setup: app_data.join("tennoscope-setup.json"),
         database: app_data.join("tennoscope.sqlite3"),
+        preferences: app_data.join("tennoscope-preferences.json"),
     }
 }
 
@@ -516,6 +520,8 @@ struct Runtime {
     app_data: PathBuf,
     setup_path: PathBuf,
     setup: SetupStatus,
+    preferences: Preferences,
+    preferences_path: PathBuf,
     transition: TransitionGate,
     refresh: RefreshWindow,
     monitor: MonitorLifecycle,
@@ -759,6 +765,47 @@ async fn get_setup_status(state: State<'_, SharedRuntime>) -> Result<SetupStatus
     .map_err(|_| "setup task failed".to_owned())?
 }
 
+#[tauri::command]
+async fn get_preferences(state: State<'_, SharedRuntime>) -> Result<Preferences, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        Ok(runtime.preferences)
+    })
+    .await
+    .map_err(|_| "preferences task failed".to_owned())?
+}
+
+#[tauri::command]
+async fn set_mastery_marks(
+    state: State<'_, SharedRuntime>,
+    enabled: bool,
+) -> Result<Preferences, String> {
+    let shared = Arc::clone(state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut runtime = shared
+            .lock()
+            .map_err(|_| "application state is unavailable".to_owned())?;
+        save_mastery_marks(&mut runtime, enabled)
+    })
+    .await
+    .map_err(|_| "preferences task failed".to_owned())?
+}
+
+fn save_mastery_marks(runtime: &mut Runtime, enabled: bool) -> Result<Preferences, String> {
+    // The file writes first: a failed save leaves both the file and the state unchanged, so
+    // the switch never claims a choice that did not stick.
+    let next = Preferences {
+        mastery_marks: enabled,
+    };
+    preferences::save_preferences(&runtime.preferences_path, next)
+        .map_err(|_| "mastery marks setting could not be saved".to_owned())?;
+    runtime.preferences = next;
+    Ok(next)
+}
+
 fn restore_previous_runtime<F>(
     shared: &SharedRuntime,
     previous_setup: SetupStatus,
@@ -787,6 +834,12 @@ where
     let mut runtime = shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?;
+    // A fallback to Companion loses inventory access as surely as a chosen downgrade does.
+    let installed = effective_setup
+        .access_mode
+        .map(AccessMode::policy)
+        .unwrap_or_else(|| AccessMode::Companion.policy());
+    retire_mastery_facts(&mut runtime, &installed);
     runtime.setup = effective_setup;
     runtime.monitor = lifecycle;
     persistence_restore.and(restart_result)
@@ -881,9 +934,18 @@ fn transition_monitor(
     let mut runtime = shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?;
+    retire_mastery_facts(&mut runtime, &policy);
     runtime.setup = stored.clone();
     runtime.monitor = lifecycle;
     Ok(current_setup_status(stored, runtime.game_running))
+}
+
+/// Drop this run's inventory facts once the mode can no longer read the inventory: they were
+/// read under the old mode's permission, and marks fall back to what a saved collection proves.
+fn retire_mastery_facts(runtime: &mut Runtime, policy: &AccessPolicy) {
+    if !policy.acquire_inventory {
+        runtime.core.clear_mastery_facts();
+    }
 }
 
 #[tauri::command]
@@ -1751,6 +1813,8 @@ fn initialize_runtime(app: &AppHandle) -> Result<SharedRuntime, Box<dyn std::err
         app_data,
         setup_path: paths.setup,
         setup,
+        preferences: preferences::load_preferences(&paths.preferences),
+        preferences_path: paths.preferences,
         refresh: RefreshWindow::default(),
         transition: TransitionGate::default(),
         monitor: MonitorLifecycle::default(),
@@ -2129,6 +2193,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_view,
             get_setup_status,
+            get_preferences,
+            set_mastery_marks,
             set_access_mode,
             authorize_screen_capture,
             refresh_inventory,
@@ -2226,6 +2292,7 @@ mod live_bench {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+    use warframe_acquisition::{MasteryEvidence, MasteryFacts};
     use warframe_domain::{
         CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
     };
@@ -2361,6 +2428,8 @@ mod tests {
             app_data: directory.to_path_buf(),
             setup_path: directory.join("setup.json"),
             setup: SetupStatus::default(),
+            preferences: Preferences::default(),
+            preferences_path: directory.join("tennoscope-preferences.json"),
             refresh: RefreshWindow::default(),
             transition: TransitionGate::default(),
             monitor: MonitorLifecycle::default(),
@@ -2370,6 +2439,64 @@ mod tests {
             market: market_account::MarketSession::new(Box::new(MemoryStore::default())),
             presence: PresenceHold::default(),
         }))
+    }
+
+    /// Losing inventory access retires the facts, not just the marks drawn from them; a policy
+    /// that still reads the inventory keeps them.
+    #[test]
+    fn losing_inventory_access_retires_live_mastery_facts() {
+        let directory = tempfile::tempdir().expect("temporary runtime");
+        let shared = test_runtime(directory.path());
+        let mut runtime = shared.lock().expect("runtime");
+        runtime.core.set_mastery_facts(MasteryFacts::default());
+
+        retire_mastery_facts(&mut runtime, &AccessMode::Full.policy());
+        assert_eq!(
+            runtime.core.mastery_view().expect("view").evidence(),
+            MasteryEvidence::Live,
+            "a policy that still acquires the inventory keeps the facts it read"
+        );
+
+        retire_mastery_facts(&mut runtime, &AccessMode::Overlay.policy());
+        assert_ne!(
+            runtime.core.mastery_view().expect("view").evidence(),
+            MasteryEvidence::Live,
+            "an overlay-only policy must not answer from live inventory reads"
+        );
+    }
+
+    /// A failed save must not move the switch: the next launch would read the old choice back.
+    #[test]
+    fn the_mastery_marks_switch_moves_only_when_its_save_lands() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        let mut runtime = shared.lock().expect("lock");
+        let regular_file = directory.path().join("not-a-directory");
+        fs::write(&regular_file, b"").expect("regular file");
+        runtime.preferences_path = regular_file.join("tennoscope-preferences.json");
+
+        assert_eq!(
+            save_mastery_marks(&mut runtime, false).err().as_deref(),
+            Some("mastery marks setting could not be saved")
+        );
+        assert!(
+            runtime.preferences.mastery_marks,
+            "a failed save leaves the marks on"
+        );
+
+        let writable = directory.path().join("tennoscope-preferences.json");
+        runtime.preferences_path = writable.clone();
+        assert_eq!(
+            save_mastery_marks(&mut runtime, false),
+            Ok(Preferences {
+                mastery_marks: false
+            })
+        );
+        assert!(!runtime.preferences.mastery_marks);
+        assert!(
+            !preferences::load_preferences(&writable).mastery_marks,
+            "the file holds the new choice"
+        );
     }
 
     /// A refresh that is already running, and one that just finished, are both reasons not to
@@ -2457,6 +2584,61 @@ mod tests {
         assert!(runtime.setup.setup_complete);
         assert_eq!(runtime.setup.access_mode, Some(AccessMode::Companion));
         assert!(runtime.monitor.policy().is_none());
+    }
+
+    /// A rollback that lands on Companion has lost inventory access, so the facts go with it.
+    /// One that restores Full keeps them.
+    #[test]
+    fn a_rollback_that_falls_back_to_companion_retires_live_mastery_facts() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        shared
+            .lock()
+            .expect("lock")
+            .core
+            .set_mastery_facts(MasteryFacts::default());
+        let full = SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Full),
+            ..SetupStatus::default()
+        };
+        let installed = |shared: &SharedRuntime| {
+            let runtime = shared.lock().expect("lock");
+            (
+                runtime.setup.access_mode,
+                runtime.core.mastery_view().expect("view").evidence(),
+            )
+        };
+
+        restore_previous_runtime(
+            &shared,
+            full.clone(),
+            MonitorLifecycle::default(),
+            Ok(()),
+            |_, _| Ok(()),
+        )
+        .expect("the previous monitor restarts");
+        assert_eq!(
+            installed(&shared),
+            (Some(AccessMode::Full), MasteryEvidence::Live),
+            "restoring Full keeps the facts it read"
+        );
+
+        restore_previous_runtime(
+            &shared,
+            full,
+            MonitorLifecycle::default(),
+            Ok(()),
+            |_, _| Err("game monitor could not be started".to_owned()),
+        )
+        .expect_err("the previous monitor stays down");
+        let (mode, evidence) = installed(&shared);
+        assert_eq!(mode, Some(AccessMode::Companion));
+        assert_ne!(
+            evidence,
+            MasteryEvidence::Live,
+            "Companion must not answer from live inventory reads"
+        );
     }
 
     #[test]

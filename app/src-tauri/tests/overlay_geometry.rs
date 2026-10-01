@@ -10,14 +10,14 @@ fn reward_overlay_sits_under_the_game_reward_cards() {
     assert_eq!((hd.x, hd.width), (478, 966), "must span the card block");
     assert_eq!(
         (hd.y, hd.height),
-        (530, 156),
+        (530, 180),
         "must sit just below the cards"
     );
 
     // Same screen, second monitor: the block is offset but keeps its size.
     let offset = reward_overlay_geometry(1920, 1080, 1920, 0, MAX_CARDS);
     assert_eq!((offset.x, offset.y), (2398, 530));
-    assert_eq!((offset.width, offset.height), (966, 156));
+    assert_eq!((offset.width, offset.height), (966, 180));
 
     // Scaling is by height and centred, with no clamp to break the alignment. On a 21:9 screen a
     // width-based block would be 1731px wide -- 443px wider than the cards it is meant to sit
@@ -25,13 +25,13 @@ fn reward_overlay_sits_under_the_game_reward_cards() {
     // background.
     let ultrawide = reward_overlay_geometry(3440, 1440, 1920, 0, MAX_CARDS);
     assert_eq!((ultrawide.x, ultrawide.width), (2997, 1288));
-    assert_eq!((ultrawide.y, ultrawide.height), (707, 208));
+    assert_eq!((ultrawide.y, ultrawide.height), (707, 240));
 
     // A Steam Deck's native 16:10. The cards are 966/1080 of the height wide, wherever the extra
     // 160px of a 16:9 window went.
     let deck = reward_overlay_geometry(1280, 800, 0, 0, MAX_CARDS);
     assert_eq!((deck.x, deck.width), (283, 716));
-    assert_eq!(deck.y, 393);
+    assert_eq!((deck.y, deck.height), (393, 133));
 }
 
 /// Warframe centres the card block on the number of cards, so a smaller squad's cards are both

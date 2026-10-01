@@ -4,7 +4,7 @@ use serde_json::json;
 use tempfile::tempdir;
 use warframe_acquisition::CatalogIndex;
 use warframe_domain::{
-    CatalogItem, Category, InventoryEntry, InventorySnapshot, ItemId, RewardCandidate,
+    CatalogItem, Category, InventoryEntry, InventorySnapshot, ItemId, MasteryMark, RewardCandidate,
 };
 
 fn entry(id: &str, name: &str, category: Category, quantity: u32) -> InventoryEntry {
@@ -174,7 +174,7 @@ fn fake_session_is_deterministic_and_uses_domain_ranking() {
         .iter()
         .find(|card| card.name == "Lex Prime Receiver")
         .unwrap();
-    assert!(lex.mastery_relevant);
+    assert!(matches!(lex.mastery, Some(MasteryMark::Unmastered { .. })));
     assert!(view.reward().cards().iter().any(|card| {
         card.platinum > 12 && card.confidence < 0.80 && card.name != "Forma Blueprint"
     }));
@@ -283,10 +283,10 @@ fn a_live_snapshot_replaces_fake_reader_health_metadata() {
 fn reward_application_preserves_source_order_and_domain_tie_breaking() {
     let mut core = AppCore::in_memory().unwrap();
     let rewards = vec![
-        RewardCandidate::new("Low Ducats", 10, 15, 0, false, 0.8).unwrap(),
-        RewardCandidate::new("First High", 10, 45, 0, false, 0.8).unwrap(),
-        RewardCandidate::new("Uncertain", 100, 100, 0, false, 0.79).unwrap(),
-        RewardCandidate::new("Second High", 10, 45, 0, false, 1.0).unwrap(),
+        RewardCandidate::new("Low Ducats", 10, 15, 0, None, 0.8).unwrap(),
+        RewardCandidate::new("First High", 10, 45, 0, None, 0.8).unwrap(),
+        RewardCandidate::new("Uncertain", 100, 100, 0, None, 0.79).unwrap(),
+        RewardCandidate::new("Second High", 10, 45, 0, None, 1.0).unwrap(),
     ];
 
     let view = core.apply_reward_candidates(rewards).unwrap();
@@ -358,10 +358,10 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
             },
             "reward": {
                 "cards": [
-                    {"name": "Forma Blueprint", "platinum": 12, "ducats": 25, "owned": 0, "mastery_relevant": false, "confidence": 1.0},
-                    {"name": "Lex Prime Receiver", "platinum": 8, "ducats": 15, "owned": 0, "mastery_relevant": true, "confidence": 1.0},
-                    {"name": "Rare Prime Set", "platinum": 30, "ducats": 100, "owned": 0, "mastery_relevant": false, "confidence": 0.79_f32},
-                    {"name": "Paris Prime String", "platinum": 6, "ducats": 45, "owned": 1, "mastery_relevant": false, "confidence": 1.0}
+                    {"name": "Forma Blueprint", "platinum": 12, "ducats": 25, "owned": 0, "confidence": 1.0},
+                    {"name": "Lex Prime Receiver", "platinum": 8, "ducats": 15, "owned": 0, "mastery": {"state": "unmastered", "subject": null, "parts": [{"name": "Blueprint", "image": "blueprint.png", "uses": 1, "held": 1, "this": false}, {"name": "Receiver", "image": "GenericGunPrimeReceiver.png", "uses": 1, "held": 0, "this": true}, {"name": "Barrel", "image": "GenericGunPrimeBarrel.png", "uses": 1, "held": 1, "this": false}], "missing": true, "completes": true}, "confidence": 1.0},
+                    {"name": "Rare Prime Set", "platinum": 30, "ducats": 100, "owned": 0, "confidence": 0.79_f32},
+                    {"name": "Paris Prime String", "platinum": 6, "ducats": 45, "owned": 1, "confidence": 1.0}
                 ],
                 "best_value_index": 0,
                 "best_ducat_index": 3

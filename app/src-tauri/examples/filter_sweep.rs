@@ -32,7 +32,11 @@ fn main() {
                 ducats: 0,
             })
             .collect();
-        match app_lib::read_cards(&dir.join(fixture), &pool) {
+        let candidates = app_lib::CardCandidates {
+            pool: &pool,
+            catalog: &[],
+        };
+        match app_lib::read_cards(&dir.join(fixture), candidates) {
             Ok(cards) => {
                 for (name, score) in cards {
                     println!("  {name:36} {score:.4}");

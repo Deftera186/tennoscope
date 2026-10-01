@@ -1,3 +1,4 @@
+import { StrictMode } from 'react'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -17,7 +18,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import { AppRoute } from './Root'
 import { routeForPath } from './routing'
-import type { KioskView } from './backend'
+import type { CellChip, KioskView } from './backend'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -31,8 +32,8 @@ const sampleView: KioskView = {
   session: 7,
   epoch: 3,
   cells: [
-    { col: 0, row: 0, name: 'Titania Prime Systems Blueprint', platinum: 30 },
-    { col: 5, row: 2, name: 'Tiberon Prime Barrel', platinum: 12 },
+    { col: 0, row: 0, name: 'Titania Prime Systems Blueprint', platinum: 30, mastery: null },
+    { col: 5, row: 2, name: 'Tiberon Prime Barrel', platinum: 12, mastery: null },
   ],
   basket: [
     { index: 0, name: 'Afentis Prime Blade', platinum: 6 },
@@ -40,6 +41,23 @@ const sampleView: KioskView = {
   ],
   total_plat: 6,
   scroll_dy: 0,
+  mastery_status: 'off',
+}
+
+/** A grid-only view: the mastery cases below are about one tile, and a basket would only add
+ * rows that none of their assertions is about. */
+function kioskView(overrides: Partial<KioskView>): KioskView {
+  return { ...sampleView, cells: [], basket: [], total_plat: 0, ...overrides }
+}
+
+function tile(over: Partial<CellChip>): CellChip {
+  return { col: 0, row: 0, name: 'Part', platinum: null, mastery: null, ...over }
+}
+
+async function renderKiosk(view: KioskView) {
+  backend.getKioskView.mockResolvedValue(view)
+  render(<AppRoute pathname="/kiosk" />)
+  return screen.findByRole('main', { name: 'Kiosk overlay' })
 }
 
 describe('kiosk overlay route', () => {
@@ -343,5 +361,125 @@ describe('kiosk overlay route', () => {
     events.listeners['kiosk-updated']?.({ payload: 7 })
     await waitFor(() => expect(strip).not.toHaveClass('kiosk-faded'))
     expect(await screen.findByTitle('Titania Prime Systems Blueprint')).toBeInTheDocument()
+  })
+
+  it('replaces the price chip with one mastery strip for an unmastered part', async () => {
+    const shell = await renderKiosk(kioskView({
+      cells: [tile({ name: 'Lex Prime Barrel', platinum: 7, mastery: { held: 0, uses: 1 } })],
+      mastery_status: 'live',
+    }))
+    const strip = within(shell).getByTestId('kiosk-mastery-strip')
+    expect(strip).toHaveTextContent('Unmastered')
+    expect(strip).toHaveTextContent('7p')
+    // Nothing overflows here, so the strip keeps its first tier and the platinum mark with it.
+    expect(strip).toHaveAttribute('data-tier', '1')
+    expect(within(strip).getByTestId('plat-mark')).toBeInTheDocument()
+    expect(strip).not.toHaveTextContent('/')
+    // One strip stands in for the chip rather than joining it: a tile's top-right corner has
+    // room for one reading, not two.
+    expect(within(shell).queryByTestId('kiosk-grid-chip')).toBeNull()
+  })
+
+  it('shows held of uses only when a build uses the part twice, and a dash when unpriced', async () => {
+    const shell = await renderKiosk(kioskView({
+      cells: [tile({ name: 'Guandao Prime Blade', platinum: null, mastery: { held: 1, uses: 2 } })],
+      mastery_status: 'live',
+    }))
+    const strip = within(shell).getByTestId('kiosk-mastery-strip')
+    expect(strip).toHaveTextContent('1/2')
+    // The same em dash the basket rows spend on an unresolved price, so one glance reads
+    // "not priced" the same way in both panes.
+    expect(strip).toHaveTextContent('—')
+  })
+
+  it('keeps clear of the owned badge, narrower for a two-digit count', async () => {
+    const shell = await renderKiosk(kioskView({
+      cells: [
+        tile({ name: 'A', platinum: 5, mastery: { held: 2, uses: 1 } }),
+        tile({ name: 'B', col: 1, platinum: 5, mastery: { held: 12, uses: 1 } }),
+      ],
+      mastery_status: 'live',
+    }))
+    const [one, two] = within(shell).getAllByTestId('kiosk-mastery-strip')
+    // The game draws its own owned badge in the tile's top-left corner, and a second digit in
+    // that count widens it, so the strip gives that corner back 51 then 63 of the tile.
+    expect(one.style.maxWidth).toBe('calc(139 * var(--h))')
+    expect(two.style.maxWidth).toBe('calc(127 * var(--h))')
+  })
+
+  it('drops the mark, then the fraction, when the strip overflows', async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(200)
+    const client = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(120)
+    const shell = await renderKiosk(kioskView({
+      cells: [tile({ name: 'Guandao Prime Blade', platinum: 1200, mastery: { held: 1, uses: 2 } })],
+      mastery_status: 'live',
+    }))
+    const strip = within(shell).getByTestId('kiosk-mastery-strip')
+    expect(strip).toHaveAttribute('data-tier', '3')
+    expect(within(strip).queryByTestId('plat-mark')).toBeNull()
+    expect(strip).not.toHaveTextContent('1/2')
+    // What the part is and what it sells for are the strip's reason to exist; the mark and
+    // the fraction are what it spends when the installed fonts leave it no other room.
+    expect(strip).toHaveTextContent('Unmastered')
+    expect(strip).toHaveTextContent('1200p')
+    scroll.mockRestore()
+    client.mockRestore()
+  })
+
+  it('steps down one tier per measurement even when the effect runs twice', async () => {
+    // Only the full strip overflows, so the second tier is the one that fits.
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.tier === '1' ? 200 : 120
+    })
+    const client = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(120)
+    backend.getKioskView.mockResolvedValue(kioskView({
+      cells: [tile({ name: 'Guandao Prime Blade', platinum: 12, mastery: { held: 1, uses: 2 } })],
+      mastery_status: 'live',
+    }))
+    // StrictMode runs a mount's layout effects a second time for the same render.
+    render(<StrictMode><AppRoute pathname="/kiosk" /></StrictMode>)
+    const strip = await screen.findByTestId('kiosk-mastery-strip')
+    expect(strip).toHaveAttribute('data-tier', '2')
+    expect(strip).toHaveTextContent('1/2')
+    scroll.mockRestore()
+    client.mockRestore()
+  })
+
+  it('says so once when mastery has no live inventory', async () => {
+    await renderKiosk(kioskView({ mastery_status: 'unavailable' }))
+    expect(screen.getByText('Mastery: no live inventory')).toBeInTheDocument()
+    // With the preference off that note would report a feature the player never asked for,
+    // so the only one on screen is the previous render's.
+    backend.getKioskView.mockResolvedValue(kioskView({ mastery_status: 'off' }))
+    render(<AppRoute pathname="/kiosk" />)
+    await screen.findAllByRole('main', { name: 'Kiosk overlay' })
+    expect(screen.getAllByText('Mastery: no live inventory')).toHaveLength(1)
+  })
+
+  it('measures the strip again when its reading changes', async () => {
+    let overflowing = true
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(() => overflowing ? 200 : 120)
+    const client = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(120)
+    const first = kioskView({
+      cells: [tile({ name: 'Lex Prime Barrel', platinum: 1200, mastery: { held: 1, uses: 2 } })],
+      mastery_status: 'live',
+    })
+    const shell = await renderKiosk(first)
+    const strip = within(shell).getByTestId('kiosk-mastery-strip')
+    expect(strip).toHaveAttribute('data-tier', '3')
+
+    // A tier is a verdict about one reading. A new price is a new reading, and a strip that
+    // kept the old verdict would sit at a degraded size for the rest of the session.
+    overflowing = false
+    backend.getKioskView.mockResolvedValue({
+      ...first,
+      cells: [tile({ name: 'Lex Prime Barrel', platinum: 900, mastery: { held: 1, uses: 2 } })],
+    })
+    events.listeners['kiosk-updated']?.({ payload: 7 })
+    await screen.findByText('900p')
+    expect(strip).toHaveAttribute('data-tier', '1')
+    expect(strip).toHaveTextContent('1/2')
+    scroll.mockRestore()
+    client.mockRestore()
   })
 })

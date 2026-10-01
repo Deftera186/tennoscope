@@ -9,7 +9,7 @@
 /* carry every value: platinum (#e8ebef) for platinum, gold (#d8b04a) for the */
 /* ducat. Marks are condensed grotesque caps at display scale; every label is */
 /* tracked monospace. Badges are house-shaped hallmark cartouches, never pills. */
-/* Radius 0. No glow, no float, no blur outside the overlay plate. */
+/* Radius 0. No glow, no float, no blur. */
 /* STORY: The player sees that this thing weighs and certifies. Two metals, */
 /* appraised at equal weight, because the best card by plat is often not the */
 /* best by ducats. Numbers it does not know are struck as a dash, never guessed. */
@@ -341,7 +341,12 @@
   transition: color .12s ease, background .12s ease, border-color .12s ease;
 }
 .display-switch:hover { color: var(--platinum-dim); background: var(--plate); }
-.display-switch:focus-visible { outline: none; background: var(--platinum); color: var(--touchstone); border-color: var(--platinum); }
+/* The checked state is listed too: it ties on specificity and comes later, so it would paint the label platinum on platinum. */
+.display-switch:focus-visible, .display-switch[aria-checked="true"]:focus-visible { outline: none; background: var(--platinum); color: var(--touchstone); border-color: var(--platinum); }
+/* A switch waiting on its own backend is disabled, not dead: it keeps its shape and reads as
+   pending rather than refusing input the player never asked for. */
+.display-switch:disabled { opacity: .5; cursor: default; }
+.display-switch:disabled:hover { color: var(--platinum-deep); background: transparent; }
 .display-face { display: inline-flex; align-items: center; gap: .34rem; }
 .display-switch .metal-mark { height: 1.15rem; width: auto; opacity: .68; }
 .display-switch[aria-checked="true"] { color: var(--platinum); }
@@ -543,6 +548,33 @@
 }
 .metal.plat .metal-hallmark { background: var(--platinum); color: var(--touchstone); }
 .metal.ducat .metal-hallmark { background: var(--gold); color: var(--touchstone); }
+
+/* The set behind a reward: the game's own part art as one-metal silhouettes, so the shapes are ones the
+   player already knows. Solid is held, faint is not; the tick marks this slot, and wrapped rows clear it. */
+.set-row { display: inline-flex; flex-wrap: wrap; align-items: flex-end; gap: var(--tight) .19rem; margin: 0 0 0 auto; padding: 0; list-style: none; color: var(--platinum); }
+.set-slot { position: relative; display: flex; }
+.set-glyph { display: block; flex: none; width: 1.75rem; height: 1.75rem; background-color: currentColor;
+  -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
+.set-glyph[data-held="false"] { opacity: .4; }
+.set-glyph + .set-glyph { margin-left: -1.125rem; } /* a pair: the second copy rides 10px over the first */
+.set-slot[data-this]::after { content: ''; position: absolute; left: .19rem; right: .19rem; bottom: -.25rem; height: 2px; background: currentColor; }
+.set-count { margin-left: .125rem; font: 600 .56rem/1 var(--face-register); color: var(--platinum-deep); }
+
+/* What the collection knows about the item this reward builds, wrapping inside its slip. The
+   padding reserves the room the set row's tick hangs into, below the row's own box. */
+.ledger { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--hair); min-width: 0; padding-bottom: .25rem; }
+/* Same face, weight, and tracking as `.hallmark`, so a ledger word reads as one of the slip's marks. */
+.ledger-word { font: 700 .56rem/1 var(--face-register); letter-spacing: .1em; text-transform: uppercase; color: var(--platinum-deep); }
+.ledger[data-tone="loud"] .ledger-word { color: var(--platinum); }
+/* The chip inverts onto platinum rather than gaining a hue. It is scoped under `.ledger` because
+   the loud tone above would otherwise repaint the ink of a word whose ground is already platinum. */
+.ledger .ledger-word.inverted { padding: .19rem .32rem .19rem .38rem; background: var(--platinum); color: var(--touchstone); }
+/* A part an unmastered, unbuilt item still lacks rules the slip; the last one double-rules it. Both
+   selectors are named so the rule replaces the overlay slip's faint frame instead of stacking. */
+.slip.ruled, .overlay-rewards .slip.ruled { box-shadow: inset 0 0 0 1px var(--platinum); }
+.slip.ruled-double, .overlay-rewards .slip.ruled-double { box-shadow: inset 0 0 0 1px var(--platinum), inset 0 0 0 3px var(--touchstone), inset 0 0 0 4px var(--platinum); }
 
 /* the assay procedure */
 
@@ -878,12 +910,13 @@
 
 .overlay-rewards .slip {
   gap: .3rem; padding: .55rem .7rem; animation: none;
-  /* Opaque enough to survive arbitrary game imagery underneath. Legibility here
-     is a product constraint, not a taste call. The blur is doing work, not decoration. */
-  background: rgb(11 12 14 / 93%);
+  /* The slip keeps the base slip's opaque touchstone. The overlay is a window of its own over the
+     game, so a backdrop blur has no game pixels to soften, and any see-through share lets the
+     text under the cards, including squadmates' names, show through the slip. */
   box-shadow: inset 0 0 0 1px rgb(232 235 239 / 16%);
-  -webkit-backdrop-filter: blur(14px) saturate(112%);
-  backdrop-filter: blur(14px) saturate(112%);
+  /* The window's size is fixed, so this stops a line that outgrows its column from painting over
+     the next slip; the ledger wraps inside the column long before that. */
+  overflow: hidden;
 }
 .overlay-rewards .slip { grid-template-rows: auto 1fr auto; }
 .overlay-rewards .slip-lot { display: none; }
@@ -897,12 +930,17 @@
 /* Never let the reading we distrust be the mark that falls off the end. */
 .overlay-rewards .hallmark.doubt { order: -1; }
 .overlay-rewards .hallmark { padding: .2rem .38rem .42rem; font-size: .48rem; }
+/* A 1080p overlay is 180px tall, which leaves no room for a ledger on two lines: the word stacks
+   beside its set row instead, and a five-part set draws its shapes 2px smaller to fit the width. */
+@media (max-height: 190px) {
+  .overlay-rewards .ledger:has(.set-row) .ledger-word { width: min-content; }
+  .overlay-rewards .ledger:has(.set-slot:nth-child(5)) .set-glyph { width: 1.625rem; height: 1.625rem; }
+  .overlay-rewards .ledger:has(.set-slot:nth-child(5)) .set-glyph + .set-glyph { margin-left: -1rem; }
+}
 
 .overlay-empty {
   display: grid; place-content: center; justify-items: center; gap: .3rem; height: 100vh;
-  background: rgb(11 12 14 / 93%); box-shadow: inset 0 0 0 1px rgb(232 235 239 / 16%);
-  -webkit-backdrop-filter: blur(14px) saturate(112%);
-  backdrop-filter: blur(14px) saturate(112%);
+  background: var(--touchstone); box-shadow: inset 0 0 0 1px rgb(232 235 239 / 16%);
   font-family: var(--face-register); font-size: .6rem; letter-spacing: .12em;
   text-transform: uppercase; color: var(--platinum-deep); text-align: center;
 }
@@ -1375,6 +1413,25 @@
 .kiosk-chip .kiosk-mark { height: calc(12 * var(--h)); }
 .kiosk-pair .kiosk-mark { height: calc(18 * var(--h)); align-self: flex-end; }
 .kiosk-total .kiosk-mark { height: calc(19 * var(--h)); }
+
+/* An unmastered part's strip takes the price chip's plate and anchor and grows left up to the owned
+   badge, in the condensed mark face: the register mono cannot fit the worst case in the tile. */
+.kiosk-strip-chip { overflow: hidden; gap: calc(5 * var(--h)); align-items: baseline; }
+/* The fit is measured before the PNG arrives, so the mark's box takes the asset's ratio up front. */
+.kiosk-strip-chip .kiosk-mark { height: calc(14 * var(--h)); aspect-ratio: 163 / 160; }
+.kiosk-fact { font: 700 calc(10 * var(--h))/1 var(--face-mark); text-transform: uppercase; }
+/* Dim, not deep: the plate lets the game show through, and deep fell to 3.6:1 over a light frame. */
+.kiosk-fraction { font: 700 calc(11 * var(--h))/1 var(--face-mark); font-variant-numeric: tabular-nums; color: var(--platinum-dim); }
+.kiosk-strip-chip .kiosk-price { font-size: calc(15 * var(--h)); }
+
+/* Marks are on and no live inventory backs them. The note sits over the pane's header in the chip
+   layer, to fade with it, and in the chips' ink: a muted tone measured 2.9:1 on the header's teal. */
+.kiosk-note {
+  position: absolute;
+  font: 700 calc(10 * var(--h))/1 var(--face-mark);
+  text-transform: uppercase; color: #deecfc; white-space: nowrap;
+  text-shadow: 0 calc(1 * var(--h)) 1px rgb(0 0 0 / 60%);
+}
 
 /* Updates: the masthead mark is a text pill with its own diamond, never the
  * assay-state grammar (ready there means Watching Warframe) and never

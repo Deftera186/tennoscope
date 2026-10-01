@@ -14,8 +14,79 @@ see the difference.
 
 ## [Unreleased]
 
+### Added
+
+- **Reward slips show whether you have mastered the Prime each part builds.** Each
+  Prime part's slip on the reward overlay and the Rewards page ends in a mastery mark:
+  mastered, built and at what rank, in the foundry, or unmastered, and a dash where the
+  app cannot tell. An unmastered slip draws the Prime's set as part silhouettes, held
+  copies solid and missing ones dimmed, and rules its edge when you are short of the
+  part, twice when it is the last part the set needs. Akbronco, Aklex, Akmagnus and
+  Akvasto Prime each take two of their single Prime, so once you have mastered or
+  built a Lex Prime, its parts still count while you hold fewer than two and have
+  neither mastered nor built the Aklex: their slips read "Unmastered Aklex", draw the
+  Aklex's set and never rule twice. Mastery is permanent but held, built and pending
+  parts are not, so the marks are read from this run's inventory: on Overlay access,
+  or before the first Full sync of a session, only "mastered" can appear and every
+  other mark is a dash.
+- **Kiosk tiles mark parts of items you have not mastered.** A tile for a part of an
+  item you have not mastered, built or started building gives its price chip over to
+  one strip that says the item is unmastered and what the part sells for, adding how
+  many of the part you hold against how many you need when you need it more than once
+  and the strip has room for it. The strip keeps clear of the game's own owned badge,
+  gives up a further 12px for a held count of ten or more, and drops its detail until
+  the word and the price both fit. With no live inventory no strip is drawn at all and
+  one line over the grid reads "Mastery: no live inventory".
+- **A switch for the mastery marks.** Settings > Preferences carries "Mastery marks
+  on overlays", on by default. Turning it off stops both overlays drawing marks from
+  their next update, without a restart.
+
+### Changed
+
+- **The reward overlay is 24px taller.** Its window was 156 of 1080 design pixels and
+  is now 180, which is what the set row at the foot of a slip needs. The window still
+  hangs directly below the game's reward cards, so the extra height never covers them.
+
 ### Fixed
 
+- **Odonata Prime Wings Blueprint is named correctly.** The Ducat Kiosk
+  recognises a tile against the names it expects to find, and the Wings
+  blueprint was missing from them while the Harness and Systems blueprints were
+  there, so a read of that tile could match the Harness and show its price.
+  The collection listed a held Wings blueprint as Prime Archwing Wings
+  Blueprint with no ducat value; it now carries its own name and its ducats.
+- **The Ducat values switch keeps its label under keyboard focus.** Focus
+  turns a switch light with a dark label, but a switch that was on kept its
+  light label, so tabbing to Ducat values while it was on showed a blank light
+  block. The label now turns dark whether the switch is on or off.
+- **A blueprint reward counts the blueprints you hold.** The relic tables name a
+  stacked Forma reward "2X Forma Blueprint", which matched nothing in the
+  collection, so its slip read "Not owned" however many Forma blueprints you
+  held. A slip's owned count also took what a blueprint builds for the
+  blueprint, so a Forma Blueprint slip counted your built Forma instead, and
+  with mastery marks off a Prime's blueprint could count the Prime you built.
+- **A reward from a relic with no known drop table gets its own name.** The
+  item data lists the current Prime Resurgence relics with no rewards, so a
+  squadmate's card from one was matched only against the other relics' rewards
+  and took the closest of their names: a Baza Prime Blueprint read cleanly and
+  showed as a Burston Prime Blueprint, with a mastery mark for the wrong item. A
+  card read near-exactly is now named even when no known relic lists it, and a
+  squad whose relics are all unknown is read the same way instead of getting no
+  overlay at all.
+- **A doubtful card read says so.** Every card read off the screen reached its
+  slip as certain, so the slip's "Uncertain" mark, which also withholds the Top
+  plat and Top ducats marks and the mastery rule and set, never appeared for
+  one. A card matched below 80% now carries it.
+- **A misread of your own reward is read again instead of shown.** The game
+  logs which reward is yours, and a read of the screen that leaves it out is
+  dropped and taken again. That check never ran when your reward was a
+  blueprint, about half of what relics drop, or came from a relic with no
+  known drop table. It now runs for both. A Forma blueprint is still not
+  checked.
+- **Game text no longer shows through the reward overlay.** Its slips let 7%
+  of the game through, and the blur meant to hide it cannot sample the game
+  window underneath, so the text under the reward cards, including squadmates'
+  names, showed faintly through them. The slips are opaque now.
 - **An update offer survives a restart.** The daily check throttle skipped the
   network on reopen, so the masthead button vanished on the next launch and
   stayed gone until the next check ran. The offered version is now stored and
@@ -23,7 +94,6 @@ see the difference.
   it, or a newer build replaces it. Clicking it opens Settings, and the
   AppImage mount check reads your temporary directory instead of assuming
   `/tmp`.
-
 - **An update offer survives a check that cannot run.** With no network the
   automatic check restored the previous phase in silence, so the app went on
   reporting a last-checked time for a check that never ran, and pressing Check
