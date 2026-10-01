@@ -17,6 +17,7 @@
 //! so a new epoch can never keep an old source or match pool.
 
 use std::{
+    collections::BTreeSet,
     sync::{
         Arc, Condvar, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -27,7 +28,11 @@ use std::{
 
 use warframe_acquisition::{CatalogIndex, RelicRewardIndex, RewardCatalogEntry, RewardNeedle};
 
-use crate::{reward_log::RewardLogEvent, reward_source::VisualRewardSource};
+use crate::{
+    reward_log::RewardLogEvent,
+    reward_observer::RewardObservation,
+    reward_source::{CardCandidates, VisualRewardSource},
+};
 
 /// Public timing, matching the existing rates: two-second search cadence, 400ms watch
 /// cadence after the cards are found, 45-minute watch lifetime, and 200ms/8s
@@ -87,7 +92,8 @@ pub struct RecognitionUpdate {
 /// A recognized card set with its one-shot initial-publication token.
 #[derive(Clone, Debug)]
 pub struct RecognizedRewards {
-    pub names: Vec<String>,
+    /// The cards in screen order; each card's confidence is the score its read matched at.
+    pub cards: Vec<RewardObservation>,
     pub elapsed: Duration,
     pub publication: RewardPublication,
 }
@@ -151,7 +157,8 @@ where
     ///
     /// `catalog`/`relics` derive the per-squad candidate pool on each baseline; `rewards`
     /// is the reward catalog used to translate candidates into OCR-match entries and to
-    /// expose the pool through [`RewardRecognition::pool_entries`].
+    /// expose the pool through [`RewardRecognition::pool_entries`]. With every name the relic
+    /// tables list, it is also what a near-exact read may name a card from when the pool lacks it.
     pub fn new(
         catalog: Option<CatalogIndex>,
         relics: Option<RelicRewardIndex>,
@@ -175,10 +182,12 @@ where
         });
         let resolved_epoch = Arc::new(AtomicU64::new(0));
 
+        let card_catalogue = card_catalogue(&rewards, relics.as_ref());
         let shared = Arc::new(Shared {
             catalog,
             relics,
             rewards,
+            card_catalogue,
             timing,
             epoch: epoch.clone(),
             revision: revision.clone(),
@@ -286,6 +295,9 @@ where
         self.wake_worker();
     }
 
+    /// Only a pool reward can be named from the log's path. With a pool that lacks the local
+    /// reward, an empty pool included, a read publishes without this check, which the catalogue
+    /// tolerates because it answers only a near-exact read of a card's whole title.
     fn local_reward_name(&self, local_reward_path: &Option<String>) -> Option<String> {
         let path = local_reward_path.as_deref()?;
         let pool = lock(&self.shared.pool);
@@ -395,7 +407,7 @@ where
             return RecognitionUpdate::default();
         }
         match delivery.kind {
-            DeliveryKind::Recognized { names, elapsed } => {
+            DeliveryKind::Recognized { cards, elapsed } => {
                 if self.resolved_epoch.load(Ordering::Acquire) == current_epoch {
                     return RecognitionUpdate::default();
                 }
@@ -403,14 +415,14 @@ where
                 let context = constraint.context.as_ref();
                 let expected = context.and_then(|c| c.expected_choices);
                 if let Some(expected) = expected
-                    && names.len() != expected
+                    && cards.len() != expected
                 {
                     // The screen has a different number of cards than the log asserts.
                     // Do not publish a known-mismatched set.
                     return RecognitionUpdate::default();
                 }
                 if let Some(local) = context.and_then(|c| c.local_reward.as_deref())
-                    && !names.iter().any(|name| name == local)
+                    && !cards.iter().any(|card| card.name == local)
                 {
                     // The read did not include the reward EE.log already confirmed for the
                     // local player; drop it rather than show something wrong.
@@ -419,7 +431,7 @@ where
                 self.resolved_epoch.store(current_epoch, Ordering::Release);
                 RecognitionUpdate {
                     recognized: Some(RecognizedRewards {
-                        names,
+                        cards,
                         elapsed,
                         publication: RewardPublication {
                             epoch: current_epoch,
@@ -495,6 +507,8 @@ struct Shared {
     catalog: Option<CatalogIndex>,
     relics: Option<RelicRewardIndex>,
     rewards: Vec<RewardCatalogEntry>,
+    /// What a near-exact read may name outside the pool. See [`card_catalogue`].
+    card_catalogue: Vec<RewardCatalogEntry>,
     timing: RecognitionTiming,
     epoch: Arc<AtomicU64>,
     revision: Arc<AtomicU64>,
@@ -549,7 +563,7 @@ struct Delivery {
 #[derive(Clone, Debug)]
 enum DeliveryKind {
     Recognized {
-        names: Vec<String>,
+        cards: Vec<RewardObservation>,
         elapsed: Duration,
     },
     Failed {
@@ -602,9 +616,9 @@ fn derive_candidates(shared: &Shared, relic_paths: &[String]) -> Vec<RewardNeedl
     relics.candidates_for_projection_paths(relic_paths, catalog)
 }
 
-/// The narrow relic pool as catalog entries, so the visual source matches exactly the
-/// rewards this squad's relics can produce. Duplicate choices (two relics with the same
-/// reward) appear once.
+/// The narrow relic pool as catalog entries, so a fuzzy read can only name a reward this
+/// squad's relics can produce. Duplicate choices (two relics with the same reward) appear
+/// once.
 fn pool_entries(
     candidates: &[RewardNeedle],
     rewards: &[RewardCatalogEntry],
@@ -628,6 +642,35 @@ fn pool_entries(
         });
     }
     entries
+}
+
+/// What a near-exact read may name outside the squad's pool: every Prime part the item catalogue
+/// knows, and every reward the relic tables list. Forma is not a Prime part, so only the relic
+/// tables spell it the way a card does.
+fn card_catalogue(
+    rewards: &[RewardCatalogEntry],
+    relics: Option<&RelicRewardIndex>,
+) -> Vec<RewardCatalogEntry> {
+    let mut seen = BTreeSet::new();
+    let mut catalogue = Vec::with_capacity(rewards.len());
+    for entry in rewards {
+        if seen.insert(entry.name.as_str()) {
+            catalogue.push(entry.clone());
+        }
+    }
+    for name in relics.into_iter().flat_map(RelicRewardIndex::reward_names) {
+        if seen.insert(name) {
+            let ducats = rewards
+                .iter()
+                .find(|entry| warframe_acquisition::reward_name_matches(&entry.name, name))
+                .map_or(0, |entry| entry.ducats);
+            catalogue.push(RewardCatalogEntry {
+                name: name.to_owned(),
+                ducats,
+            });
+        }
+    }
+    catalogue
 }
 
 /// Map a log reward path onto the matching candidate's choice name.
@@ -746,10 +789,15 @@ fn worker_loop(shared: Arc<Shared>) {
             continue;
         }
 
-        let entries = lock(&shared.pool).entries.clone();
-        if entries.is_empty() {
-            // No pool: nothing to match against. Do not capture; a later non-empty pool
-            // (next baseline) wakes the worker.
+        let (entries, relics_named) = {
+            let pool = lock(&shared.pool);
+            (pool.entries.clone(), !pool.relics.is_empty())
+        };
+        // WFCD lists some live relics with no rewards, so a baseline can name relics and still
+        // leave the pool empty while their cards are on screen. The catalogue can name those.
+        let readable = !entries.is_empty() || (relics_named && !shared.card_catalogue.is_empty());
+        if !readable {
+            // Nothing to match against. Do not capture; the next baseline wakes the worker.
             let _ = wait_for_wake(&shared, Some(shared.timing.interval));
             continue;
         }
@@ -789,8 +837,12 @@ fn worker_loop(shared: Arc<Shared>) {
         drop(constraint);
         let capture_epoch = shared.epoch.load(Ordering::Acquire);
 
+        let candidates = CardCandidates {
+            pool: &entries,
+            catalog: &shared.card_catalogue,
+        };
         let started = Instant::now();
-        let outcome = source.as_mut().map(|source| source.choices(&entries));
+        let outcome = source.as_mut().map(|source| source.choices(candidates));
         let elapsed = started.elapsed();
 
         let deliver = |kind: DeliveryKind| {
@@ -820,11 +872,15 @@ fn worker_loop(shared: Arc<Shared>) {
 
         // Returns true when this attempt recognized cards.
         let recognized = match outcome {
-            Some(Ok(names)) if names.len() >= 2 => {
-                let size_mismatch = expected.is_some_and(|expected| names.len() != expected);
+            Some(Ok(read)) if read.len() >= 2 => {
+                let cards = read
+                    .into_iter()
+                    .map(|(name, confidence)| RewardObservation { name, confidence })
+                    .collect::<Vec<_>>();
+                let size_mismatch = expected.is_some_and(|expected| cards.len() != expected);
                 let local_mismatch = local
                     .as_deref()
-                    .is_some_and(|local| !names.iter().any(|name| name == local));
+                    .is_some_and(|local| !cards.iter().any(|card| card.name == local));
                 if local_mismatch {
                     let reason = "the reward screen did not show the logged reward";
                     last_reason = Some(reason.into());
@@ -872,11 +928,12 @@ fn worker_loop(shared: Arc<Shared>) {
                     }
                     false
                 } else {
-                    // Retain the exact pool alongside the published names in the capture trace.
+                    // Retain the exact pool alongside the published cards in the capture trace.
                     // At Info, so a stable build keeps it: a confident wrong read otherwise
-                    // leaves no line saying which fissure the pool belonged to. Once per screen:
-                    // later duplicates are dropped by resolved-once at poll time, so logging
-                    // them would spam one line per watch interval while the screen stays up.
+                    // leaves no line saying which fissure the pool belonged to, and each card's
+                    // score shows a weak read for what it was. Once per screen: later duplicates
+                    // are dropped by resolved-once at poll time, so logging them would spam one
+                    // line per watch interval while the screen stays up.
                     if !found {
                         let pool = lock(&shared.pool);
                         let relics = pool
@@ -884,15 +941,20 @@ fn worker_loop(shared: Arc<Shared>) {
                             .iter()
                             .map(|path| path.rsplit('/').next().unwrap_or(path))
                             .collect::<Vec<_>>();
+                        let scored = cards
+                            .iter()
+                            .map(|card| format!("{:?} {:.2}", card.name, card.confidence))
+                            .collect::<Vec<_>>()
+                            .join(", ");
                         log::info!(
-                            "reward: published cards={names:?} pool={} relics={relics:?}",
+                            "reward: published cards=[{scored}] pool={} relics={relics:?}",
                             pool.entries.len(),
                         );
                         drop(pool);
                     }
                     warn_reason = None;
                     warn_streak = 0;
-                    deliver(DeliveryKind::Recognized { names, elapsed });
+                    deliver(DeliveryKind::Recognized { cards, elapsed });
                     found = true;
                     missed = 0;
                     fast_deadline = None;

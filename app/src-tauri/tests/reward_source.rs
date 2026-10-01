@@ -9,8 +9,8 @@ use app_lib::monitor::{
     scan_player_record_until_ready, store_player_record_if_current,
 };
 use app_lib::{
-    LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSource, RewardSourceCoordinator,
-    RewardSourceDiagnostic, VisualRewardSource,
+    CardCandidates, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSource,
+    RewardSourceCoordinator, RewardSourceDiagnostic, VisualRewardSource,
 };
 
 mod common;
@@ -75,9 +75,14 @@ struct Visual {
 }
 
 impl VisualRewardSource for Visual {
-    fn choices(&mut self, _candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
+    fn choices(
+        &mut self,
+        _candidates: CardCandidates<'_>,
+    ) -> Result<Vec<(String, f32)>, &'static str> {
         self.calls += 1;
-        self.names.clone()
+        self.names
+            .clone()
+            .map(|names| names.into_iter().map(|name| (name, 1.0)).collect())
     }
 }
 
@@ -97,6 +102,10 @@ fn catalog() -> Vec<RewardCatalogEntry> {
             ducats: 0,
         })
         .collect()
+}
+
+fn pool_only(pool: &[RewardCatalogEntry]) -> CardCandidates<'_> {
+    CardCandidates { pool, catalog: &[] }
 }
 
 #[test]
@@ -119,7 +128,7 @@ fn confirmed_memory_wins_without_invoking_ocr() {
 
     coordinator.baseline(&mut memory, &candidates());
     let result = coordinator
-        .choices(&mut memory, &mut visual, 4, &catalog())
+        .choices(&mut memory, &mut visual, 4, pool_only(&catalog()))
         .unwrap();
 
     assert_eq!(memory.baselines, 1);
@@ -277,7 +286,7 @@ fn incomplete_memory_falls_back_to_ocr() {
     };
 
     let result = RewardSourceCoordinator::new(false)
-        .choices(&mut memory, &mut visual, 4, &catalog())
+        .choices(&mut memory, &mut visual, 4, pool_only(&catalog()))
         .unwrap();
 
     assert_eq!(result.choices.source, RewardChoiceSource::Ocr);
@@ -300,7 +309,7 @@ fn ocr_accepts_the_rendered_three_choice_count() {
     };
 
     let result = RewardSourceCoordinator::new(false)
-        .choices(&mut memory, &mut visual, 3, &catalog())
+        .choices(&mut memory, &mut visual, 3, pool_only(&catalog()))
         .unwrap();
 
     assert_eq!(result.choices.names.len(), 3);
@@ -321,8 +330,12 @@ fn incomplete_ocr_is_not_published_as_a_reward_set() {
         calls: 0,
     };
 
-    let result =
-        RewardSourceCoordinator::new(false).choices(&mut memory, &mut visual, 4, &catalog());
+    let result = RewardSourceCoordinator::new(false).choices(
+        &mut memory,
+        &mut visual,
+        4,
+        pool_only(&catalog()),
+    );
 
     assert!(result.is_none());
     assert_eq!(visual.calls, 1);
@@ -346,7 +359,7 @@ fn validation_mode_reports_memory_and_ocr_disagreement() {
     };
 
     let result = RewardSourceCoordinator::new(true)
-        .choices(&mut memory, &mut visual, 4, &catalog())
+        .choices(&mut memory, &mut visual, 4, pool_only(&catalog()))
         .unwrap();
 
     assert_eq!(result.choices.source, RewardChoiceSource::Memory);
@@ -368,8 +381,12 @@ fn solo_choice_events_invoke_neither_source() {
         calls: 0,
     };
 
-    let result =
-        RewardSourceCoordinator::new(false).choices(&mut memory, &mut visual, 1, &catalog());
+    let result = RewardSourceCoordinator::new(false).choices(
+        &mut memory,
+        &mut visual,
+        1,
+        pool_only(&catalog()),
+    );
 
     assert!(result.is_none());
     assert_eq!(memory.choices, 0);

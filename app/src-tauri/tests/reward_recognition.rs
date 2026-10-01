@@ -4,7 +4,7 @@
 //! Main removes with this cutover; their live-fissure regressions are ported here against
 //! `RewardRecognition` with the same scripted-screen technique, now driven by channels and
 //! barriers, and any assertion failure still lets the worker finish. One bounded 80ms sleep
-//! remains for the empty-pool case, as deadlock protection while the worker idles.
+//! remains for the no-relics baseline, as deadlock protection while the worker idles.
 //!
 //! Ownership rules this file relies on (from the shared plan):
 //! - the worker constructs, reuses and drops its own capture adapter (never `Send`), one per
@@ -34,7 +34,9 @@ use std::{
 };
 
 use app_lib::reward_recognition::{RecognitionTiming, RecognizedRewards, RewardRecognition};
-use app_lib::{RewardLogEvent, VisualRewardSource};
+use app_lib::{
+    CardCandidates, RewardLogEvent, RewardObservation, VisualRewardSource, best_card_match,
+};
 use warframe_acquisition::{CatalogIndex, RelicRewardIndex, RewardCatalogEntry};
 
 // ---------------------------------------------------------------------------
@@ -75,12 +77,16 @@ const RELICS_JSON: &str = r#"[
   {"uniqueName":"/Lotus/Types/Game/Projections/T1VoidProjectionLaterBronze","name":"Lith L1 Intact","rewards":[
     {"item":{"name":"Burston Prime Receiver"}},
     {"item":{"name":"Xaku Prime Neuroptics Blueprint"}}
-  ]}
+  ]},
+  {"uniqueName":"/Lotus/Types/Game/Projections/T2VoidProjectionProteaIvaraVaultAPlatinum","name":"Meso I3 Radiant","rewards":[]}
 ]"#;
 
 const EARLY_RELIC: &str = "/Lotus/Types/Game/Projections/T1VoidProjectionEarlyBronze";
 const GROWN_RELIC: &str = "/Lotus/Types/Game/Projections/T1VoidProjectionGrownBronze";
 const LATER_RELIC: &str = "/Lotus/Types/Game/Projections/T1VoidProjectionLaterBronze";
+/// A live Prime Resurgence relic that WFCD lists with an empty rewards array.
+const REWARDLESS_RELIC: &str =
+    "/Lotus/Types/Game/Projections/T2VoidProjectionProteaIvaraVaultAPlatinum";
 
 fn catalog() -> CatalogIndex {
     CatalogIndex::from_wfcd_json(CATALOG_JSON.as_bytes()).expect("catalog fixture parses")
@@ -107,6 +113,14 @@ fn timing() -> RecognitionTiming {
 
 fn names(entries: &[RewardCatalogEntry]) -> Vec<String> {
     entries.iter().map(|entry| entry.name.clone()).collect()
+}
+
+fn card_names(recognized: &RecognizedRewards) -> Vec<String> {
+    recognized
+        .cards
+        .iter()
+        .map(|card| card.name.clone())
+        .collect()
 }
 
 fn entry(name: &str) -> RewardCatalogEntry {
@@ -136,7 +150,10 @@ fn choices_ready(expected: usize, local: Option<&str>) -> RewardLogEvent {
 // ---------------------------------------------------------------------------
 
 enum Frame {
+    /// Every card read exactly.
     Names(Vec<String>),
+    /// Each card read at the given score.
+    Cards(Vec<(String, f32)>),
     Blank,
     /// Signal start, then wait on the gate before returning `frame`.
     Gated(Box<Frame>),
@@ -160,7 +177,7 @@ struct ScriptedSource {
 }
 
 impl ScriptedSource {
-    /// Pop the next scripted frame; a leftover `Names`/`Blank` frame repeats so
+    /// Pop the next scripted frame; a leftover `Names`/`Cards`/`Blank` frame repeats so
     /// a screen reads the same cards until the script moves on. Gated frames
     /// are one-shot: the gate is what paces them.
     fn next_frame(&self) -> Option<Frame> {
@@ -175,6 +192,11 @@ impl ScriptedSource {
                     drop(script);
                     return Some(Frame::Names(names));
                 }
+                Frame::Cards(cards) => {
+                    let cards = cards.clone();
+                    drop(script);
+                    return Some(Frame::Cards(cards));
+                }
                 Frame::Blank => {
                     drop(script);
                     return Some(Frame::Blank);
@@ -187,7 +209,10 @@ impl ScriptedSource {
 }
 
 impl VisualRewardSource for ScriptedSource {
-    fn choices(&mut self, _candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
+    fn choices(
+        &mut self,
+        candidates: CardCandidates<'_>,
+    ) -> Result<Vec<(String, f32)>, &'static str> {
         self.coordination.captures.fetch_add(1, Ordering::AcqRel);
         // The test thread reads `captures` and gates; the signal is a hint it
         // may have already left during teardown, so a missing listener is fine.
@@ -197,6 +222,10 @@ impl VisualRewardSource for ScriptedSource {
             .lock()
             .expect("capture signal lock")
             .send(());
+        // What the screen reader answers when it is handed nothing to match against.
+        if candidates.pool.is_empty() && candidates.catalog.is_empty() {
+            return Err("no reward candidates");
+        }
         match self.next_frame() {
             Some(Frame::Gated(frame)) => {
                 let gate = self
@@ -217,9 +246,10 @@ impl VisualRewardSource for ScriptedSource {
 }
 
 impl ScriptedSource {
-    fn frame_result(&mut self, frame: Frame) -> Result<Vec<String>, &'static str> {
+    fn frame_result(&mut self, frame: Frame) -> Result<Vec<(String, f32)>, &'static str> {
         match frame {
-            Frame::Names(names) => Ok(names),
+            Frame::Names(names) => Ok(names.into_iter().map(|name| (name, 1.0)).collect()),
+            Frame::Cards(cards) => Ok(cards),
             Frame::Blank => Err("a reward card read as blank"),
             Frame::Gated(_) => unreachable!("Gated frames are unwrapped before frame_result"),
         }
@@ -316,11 +346,8 @@ fn wait_for_capture(coordination: &Coordination, expected: usize) {
 }
 
 /// Poll until the next recognized set or five seconds of deadlock protection.
-fn drain_recognized(
-    recognition: &mut RewardRecognition<
-        ScriptedSource,
-        impl Fn() -> ScriptedSource + Send + Sync + 'static,
-    >,
+fn drain_recognized<S: VisualRewardSource + 'static>(
+    recognition: &mut RewardRecognition<S, impl Fn() -> S + Send + Sync + 'static>,
 ) -> RecognizedRewards {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -400,7 +427,7 @@ fn a_read_of_two_three_or_four_cards_publishes_without_log_constraints() {
         let mut recognition = recognition(&coordination);
         recognition.observe(&baseline(&[EARLY_RELIC]));
         let update = drain_recognized(&mut recognition);
-        assert_eq!(update.names, expected);
+        assert_eq!(card_names(&update), expected);
         assert!(
             update.elapsed < Duration::from_secs(2),
             "elapsed must be the real capture time, not fabricated"
@@ -424,7 +451,7 @@ fn a_blank_first_read_retries_until_the_cards_are_painted() {
     recognition.observe(&baseline(&[EARLY_RELIC]));
     let update = drain_recognized(&mut recognition);
     assert_eq!(
-        update.names,
+        card_names(&update),
         names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")]),
         "a later attempt must see the painted cards"
     );
@@ -463,10 +490,10 @@ fn duplicate_baselines_reuse_the_single_capture_source() {
     );
 }
 
-/// An empty pool means the closed-set match has nothing to match against, so
-/// nothing captures; the later non-empty baseline starts the reader.
+/// A baseline that names no relics leaves nothing to match against, so
+/// nothing captures; the later baseline that names one starts the reader.
 #[test]
-fn an_empty_pool_does_not_capture_until_a_baseline_populates_it() {
+fn a_baseline_naming_no_relics_does_not_capture_until_one_does() {
     let coordination = coordination(vec![Frame::Names(names(&[
         entry("Perigale Prime Receiver"),
         entry("Vasto Prime Stock"),
@@ -475,12 +502,12 @@ fn an_empty_pool_does_not_capture_until_a_baseline_populates_it() {
     recognition.observe(&baseline(&[]));
     assert!(
         coordination.captures.load(Ordering::Acquire) == 0,
-        "an empty pool must not capture"
+        "a baseline naming no relics must not capture"
     );
     std::thread::sleep(Duration::from_millis(80)); // several cadence intervals
     assert!(
         coordination.captures.load(Ordering::Acquire) == 0,
-        "an empty pool must not capture across cadence intervals"
+        "a baseline naming no relics must not capture across cadence intervals"
     );
     assert!(
         recognition.candidates().is_empty(),
@@ -490,8 +517,104 @@ fn an_empty_pool_does_not_capture_until_a_baseline_populates_it() {
     recognition.observe(&baseline(&[EARLY_RELIC]));
     let update = drain_recognized(&mut recognition);
     assert_eq!(
-        update.names,
+        card_names(&update),
         names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")])
+    );
+    recognition.shutdown();
+}
+
+/// WFCD lists some live relics with no rewards at all, so a squad that opened
+/// only those has an empty pool while its cards are on screen. The reward
+/// catalogue can still name a near-exact read, so the reader must capture
+/// rather than wait for a pool that never fills.
+#[test]
+fn a_baseline_whose_relics_have_no_known_rewards_still_publishes_a_read() {
+    let coordination = coordination(vec![Frame::Names(names(&[
+        entry("Perigale Prime Receiver"),
+        entry("Vasto Prime Stock"),
+    ]))]);
+    let mut recognition = recognition(&coordination);
+    recognition.observe(&baseline(&[REWARDLESS_RELIC]));
+    assert!(
+        recognition.pool_entries().is_empty(),
+        "the relic's rewards are unknown, so the pool stays empty"
+    );
+    let update = drain_recognized(&mut recognition);
+    assert_eq!(
+        card_names(&update),
+        names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")])
+    );
+    recognition.shutdown();
+}
+
+/// Matches each scripted card text the way the screen reader does, against whatever the worker
+/// hands it, so a test sees what those candidates can name.
+struct MatchingSource {
+    texts: &'static [&'static str],
+}
+
+impl VisualRewardSource for MatchingSource {
+    fn choices(
+        &mut self,
+        candidates: CardCandidates<'_>,
+    ) -> Result<Vec<(String, f32)>, &'static str> {
+        self.texts
+            .iter()
+            .map(|text| best_card_match(text, candidates).ok_or("no match"))
+            .collect()
+    }
+}
+
+/// Forma, the commonest card a relic drops, is not a Prime part, so the item catalogue does not
+/// list it. A squad whose relics all lack known rewards has no pool either, and only the relic
+/// tables, which spell every card a relic can drop, let the reader name its Forma card.
+#[test]
+fn a_forma_card_is_named_when_no_relic_of_the_squad_resolved() {
+    assert!(
+        !names(&rewards())
+            .iter()
+            .any(|name| name == "Forma Blueprint"),
+        "the item catalogue must not already name the card, or this tests nothing"
+    );
+    let mut recognition =
+        RewardRecognition::new(Some(catalog()), Some(relics()), rewards(), timing(), || {
+            MatchingSource {
+                texts: &["Forma Blueprint", "Perigale Prime Receiver"],
+            }
+        });
+    recognition.observe(&baseline(&[REWARDLESS_RELIC]));
+    let update = drain_recognized(&mut recognition);
+    assert_eq!(
+        card_names(&update),
+        ["Forma Blueprint", "Perigale Prime Receiver"]
+    );
+    recognition.shutdown();
+}
+
+/// A weak read has to reach the overlay as a weak read: a card under 0.8 is
+/// shown as uncertain and never crowned, which only works if the score each
+/// card was read at survives to publication.
+#[test]
+fn a_published_read_keeps_the_score_each_card_was_read_at() {
+    let coordination = coordination(vec![Frame::Cards(vec![
+        ("Perigale Prime Receiver".to_owned(), 1.0),
+        ("Vasto Prime Stock".to_owned(), 0.71),
+    ])]);
+    let mut recognition = recognition(&coordination);
+    recognition.observe(&baseline(&[EARLY_RELIC]));
+    let update = drain_recognized(&mut recognition);
+    assert_eq!(
+        update.cards,
+        vec![
+            RewardObservation {
+                name: "Perigale Prime Receiver".to_owned(),
+                confidence: 1.0,
+            },
+            RewardObservation {
+                name: "Vasto Prime Stock".to_owned(),
+                confidence: 0.71,
+            },
+        ]
     );
     recognition.shutdown();
 }
@@ -509,7 +632,7 @@ fn a_relic_that_loads_after_the_baseline_still_grows_the_pool() {
     recognition.observe(&baseline(&[EARLY_RELIC]));
     let first = drain_recognized(&mut recognition);
     assert_eq!(
-        first.names,
+        card_names(&first),
         names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")])
     );
 
@@ -635,7 +758,7 @@ fn known_constraints_reject_mismatched_reads() {
             let update = recognition.poll();
             if let Some(recognized) = update.recognized {
                 assert_eq!(
-                    recognized.names,
+                    card_names(&recognized),
                     names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")]),
                     "unexpected accepted read"
                 );
@@ -688,7 +811,7 @@ fn choices_ready_count_outranks_the_roster_size() {
     recognition.observe(&choices_ready(2, None));
     let update = drain_recognized(&mut recognition);
     assert_eq!(
-        update.names,
+        card_names(&update),
         names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")]),
         "the roster's size must not outrank ChoicesReady's rendered count"
     );
@@ -738,7 +861,7 @@ fn suspend_preserves_the_pool_across_a_transient_process_loss() {
     recognition.resume();
     let update = drain_recognized(&mut recognition);
     assert_eq!(
-        update.names,
+        card_names(&update),
         names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")])
     );
     recognition.shutdown();
@@ -764,7 +887,7 @@ fn suspend_at_cold_start_does_not_suppress_the_first_screen() {
     recognition.observe(&baseline(&[EARLY_RELIC]));
     let update = drain_recognized(&mut recognition);
     assert_eq!(
-        update.names,
+        card_names(&update),
         names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")]),
         "the first screen after a cold-start suspend must publish, not be dropped as a duplicate"
     );
@@ -810,7 +933,7 @@ fn two_misses_close_the_screen_without_a_one_blank_flicker() {
     recognition.observe(&baseline(&[EARLY_RELIC]));
     let update = drain_recognized(&mut recognition);
     assert_eq!(
-        update.names,
+        card_names(&update),
         names(&[entry("Perigale Prime Receiver"), entry("Vasto Prime Stock")])
     );
 
@@ -952,15 +1075,16 @@ fn publication_gate_accepts_the_current_token_and_declines_retired_duplicates() 
 }
 
 /// A published read records the pool it was matched against at a level a
-/// stable build keeps (Info or below), naming the relics and the pool size.
-/// The assertion is built on the public interface (`pool_entries`) and only
-/// checks for the presence of a concise provenance line, never raw wording.
+/// stable build keeps (Info or below), naming the relics, the pool size and
+/// each card's score, so a weak read is visible in a user's log. The assertion
+/// is built on the public interface (`pool_entries`) and only checks for the
+/// presence of a concise provenance line, never raw wording.
 #[test]
 fn a_recognized_read_logs_its_pool_provenance() {
-    let coordination = coordination(vec![Frame::Names(names(&[
-        entry("Perigale Prime Receiver"),
-        entry("Vasto Prime Stock"),
-    ]))]);
+    let coordination = coordination(vec![Frame::Cards(vec![
+        ("Perigale Prime Receiver".to_owned(), 1.0),
+        ("Vasto Prime Stock".to_owned(), 0.42),
+    ])]);
     let mut recognition = recognition(&coordination);
     let provenance = capture_log(|| {
         recognition.observe(&baseline(&[EARLY_RELIC]));
@@ -968,13 +1092,15 @@ fn a_recognized_read_logs_its_pool_provenance() {
         names(&recognition.pool_entries());
     });
     // Other tests in this binary publish concurrently with the same card names; disambiguate
-    // by this test's relic and pool size rather than taking the first provenance line.
+    // by this test's relic, pool size and weak score rather than taking the first provenance line.
     let pool_line = provenance.iter().find(|(_, line)| {
         line.contains("Perigale Prime Receiver")
             && line.contains("pool=2")
             && line.contains("T1VoidProjectionEarlyBronze")
+            && line.contains("0.42")
     });
-    let (level, line) = pool_line.expect("a published read must log its pool provenance");
+    let (level, line) =
+        pool_line.expect("a published read must log its pool provenance and each card's score");
     assert!(
         *level <= log::Level::Info,
         "pool provenance must survive a stable build's file filter: {line}"

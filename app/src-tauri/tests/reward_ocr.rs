@@ -1,10 +1,26 @@
-use app_lib::best_match;
+use app_lib::{CardCandidates, best_card_match, best_match};
 use warframe_acquisition::RewardCatalogEntry;
 
 mod common;
 
 fn names(cards: Vec<(String, f32)>) -> Vec<String> {
     cards.into_iter().map(|(name, _)| name).collect()
+}
+
+/// The relic pool alone, with no catalogue to fall back on: what every read had before a card
+/// could be named from outside the pool.
+fn pool_only(pool: &[RewardCatalogEntry]) -> CardCandidates<'_> {
+    CardCandidates { pool, catalog: &[] }
+}
+
+fn entries(names: &[&str]) -> Vec<RewardCatalogEntry> {
+    names
+        .iter()
+        .map(|name| RewardCatalogEntry {
+            name: (*name).to_owned(),
+            ducats: 0,
+        })
+        .collect()
 }
 
 fn pool() -> Vec<RewardCatalogEntry> {
@@ -78,6 +94,139 @@ fn text_from_outside_the_pool_scores_below_the_floor() {
     assert!(score < 0.6, "unrelated text scored {score}");
 }
 
+/// The pool of the live run that named a card wrongly: Meso K8's six rewards. The squad's other
+/// relic, Meso I3 Radiant, is listed by WFCD with no rewards at all, so none of its rewards
+/// reached the pool.
+fn meso_k8_pool() -> Vec<RewardCatalogEntry> {
+    entries(&[
+        "Kestrel Prime Grip",
+        "Alternox Prime Barrel",
+        "2X Forma Blueprint",
+        "Xaku Prime Neuroptics Blueprint",
+        "Burston Prime Blueprint",
+        "Lex Prime Barrel",
+    ])
+}
+
+/// That pool plus the card it was missing and the neighbours a looser match could drift to.
+fn meso_k8_catalogue() -> Vec<RewardCatalogEntry> {
+    let mut catalogue = meso_k8_pool();
+    catalogue.extend(entries(&[
+        "Baza Prime Blueprint",
+        "Burston Prime Barrel",
+        "Burston Prime Receiver",
+        "Burston Prime Stock",
+        "Braton Prime Blueprint",
+        "Braton Prime Barrel",
+        "Braton Prime Receiver",
+        "Braton Prime Stock",
+        "Forma Blueprint",
+    ]));
+    catalogue
+}
+
+/// The live misread: Tesseract read the card cleanly, but the card came from the relic WFCD lists
+/// with no rewards, so the pool alone could only offer its nearest name, `Burston Prime Blueprint`
+/// at 0.714, and that was published. The catalogue holds the real card, and an exact read of it
+/// outranks a fuzzy pool name.
+#[test]
+fn a_card_missing_from_the_pool_is_named_by_an_exact_catalogue_read() {
+    let pool = meso_k8_pool();
+    let catalog = meso_k8_catalogue();
+    assert_eq!(
+        best_card_match(
+            "Baza Prime Blueprint\n",
+            CardCandidates {
+                pool: &pool,
+                catalog: &catalog,
+            },
+        ),
+        Some(("Baza Prime Blueprint".to_owned(), 1.0))
+    );
+}
+
+/// Only the pool knows which part of a Prime this squad can drop, so a fuzzy read has to stay in
+/// it even where a catalogue name is nearer. This title wrapped and its second line was cut short,
+/// the shape of a live `"Xaku Prime\n\nBlue"` read, and what survived is a closer spelling of
+/// `Burston Prime Barrel` than of the pool's `Burston Prime Blueprint`.
+#[test]
+fn a_fuzzy_read_never_names_a_reward_outside_the_pool() {
+    let pool = meso_k8_pool();
+    let catalog = meso_k8_catalogue();
+    let read = "Burston Prime\n\nBlue";
+    // Otherwise the catalogue would merely agree with the pool and this would test nothing.
+    assert_eq!(
+        best_match(read, &catalog).map(|(name, _)| name).as_deref(),
+        Some("Burston Prime Barrel"),
+    );
+    let (name, _) = best_card_match(
+        read,
+        CardCandidates {
+            pool: &pool,
+            catalog: &catalog,
+        },
+    )
+    .expect("a pool read always scores");
+    assert_eq!(name, "Burston Prime Blueprint");
+}
+
+/// A pool read good enough to trust stands. A relic drops Forma as `2X Forma Blueprint`, which a
+/// `Forma Blueprint` read reaches at 0.875, while the catalogue holds `Forma Blueprint` itself at
+/// 1.0. Letting the catalogue outbid a trusted pool read would rename what the relic drops.
+#[test]
+fn a_trusted_pool_read_is_not_outbid_by_the_catalogue() {
+    let pool = meso_k8_pool();
+    let catalog = meso_k8_catalogue();
+    let (name, _) = best_card_match(
+        "Forma Blueprint",
+        CardCandidates {
+            pool: &pool,
+            catalog: &catalog,
+        },
+    )
+    .expect("a pool read always scores");
+    assert_eq!(name, "2X Forma Blueprint");
+}
+
+/// The item catalogue lists a Warframe part's component, `Lavos Prime Chassis`, beside the
+/// blueprint the card offers. A wrapped title whose second line read one letter off still names
+/// the blueprint: the catalogue answers the card's whole text, so the exact first line cannot
+/// name the component on its own.
+#[test]
+fn a_wrapped_frame_part_outside_the_pool_keeps_its_blueprint_name() {
+    let pool = meso_k8_pool();
+    let catalog = entries(&["Lavos Prime Chassis", "Lavos Prime Chassis Blueprint"]);
+    let (name, score) = best_card_match(
+        "Lavos Prime Chassis\n\nBluepr1nt",
+        CardCandidates {
+            pool: &pool,
+            catalog: &catalog,
+        },
+    )
+    .expect("a near-exact read names the card");
+    assert_eq!(name, "Lavos Prime Chassis Blueprint");
+    assert!(score >= 0.9, "scored {score}");
+}
+
+/// The card says `Forma Blueprint` while the relic drops `2X Forma Blueprint`. One letter read
+/// wrong drops the pool's score under the trusted floor (0.81) while the catalogue's `Forma
+/// Blueprint` still reads near-exactly (0.93), and the catalogue must not strip the count the
+/// relic drops: it names the same item, so the pool's spelling stands.
+#[test]
+fn a_garbled_stacked_read_keeps_the_count_the_relic_drops() {
+    let pool = meso_k8_pool();
+    let catalog = meso_k8_catalogue();
+    let (name, _) = best_card_match(
+        "Forma Bluepr1nt",
+        CardCandidates {
+            pool: &pool,
+            catalog: &catalog,
+        },
+    )
+    .expect("a near-exact read names the card");
+    assert_eq!(name, "2X Forma Blueprint");
+}
+
 /// `fixtures/reward-screen-1920x1080.png` is a real captured reward screen with everything outside
 /// the card title band blanked, which keeps the 1920x1080 geometry exact while shrinking the file.
 /// The user confirmed the cards left to right as Braton Prime Blueprint, 2 X Forma Blueprint,
@@ -90,7 +239,7 @@ fn the_calibrated_geometry_reads_a_real_reward_screen() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/reward-screen-1920x1080.png");
     assert_eq!(
-        names(app_lib::read_cards(&fixture, &pool()).unwrap()),
+        names(app_lib::read_cards(&fixture, pool_only(&pool())).unwrap()),
         vec![
             "Braton Prime Blueprint",
             "2X Forma Blueprint",
@@ -118,7 +267,7 @@ fn a_16_10_screen_is_read_where_a_16_10_screen_actually_sits() {
     common::isolate_debug_log();
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/reward-screen-1280x800.png");
-    let cards = app_lib::read_cards(&fixture, &pool()).unwrap();
+    let cards = app_lib::read_cards(&fixture, pool_only(&pool())).unwrap();
     assert_eq!(
         names(cards.clone()),
         vec![
@@ -153,7 +302,7 @@ fn a_three_card_screen_is_read_where_a_three_card_screen_actually_sits() {
     common::isolate_debug_log();
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/reward-screen-three-cards.png");
-    let cards = app_lib::read_cards(&fixture, &pool()).unwrap();
+    let cards = app_lib::read_cards(&fixture, pool_only(&pool())).unwrap();
     assert_eq!(
         names(cards.clone()),
         vec![
@@ -190,7 +339,20 @@ fn a_four_card_screen_is_not_mistaken_for_a_narrower_one() {
     common::isolate_debug_log();
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/reward-screen-1920x1080.png");
-    assert_eq!(app_lib::read_cards(&fixture, &pool()).unwrap().len(), 4);
+    assert_eq!(
+        app_lib::read_cards(&fixture, pool_only(&pool()))
+            .unwrap()
+            .len(),
+        4
+    );
+}
+
+/// Only the screen's middle two cards, as if the relics behind the outer two never resolved.
+fn gap_pool() -> Vec<RewardCatalogEntry> {
+    pool()
+        .into_iter()
+        .filter(|entry| ["2X Forma Blueprint", "Burston Prime Stock"].contains(&&*entry.name))
+        .collect()
 }
 
 /// Trying narrower layouts must not turn a pool gap into a half-answer. A squadmate's relic that
@@ -200,18 +362,66 @@ fn a_four_card_screen_is_not_mistaken_for_a_narrower_one() {
 ///
 /// Publishing those two as the whole screen would advise on half a screen while looking certain.
 /// No answer is the right answer here, and it is what this did before it had layouts to choose
-/// between.
+/// between. The catalogue is left empty, so nothing else can name the missing cards.
 #[test]
 fn a_reward_missing_from_the_pool_still_fails_closed() {
     common::isolate_debug_log();
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/reward-screen-1920x1080.png");
-    let gap = pool()
-        .into_iter()
-        .filter(|entry| ["2X Forma Blueprint", "Burston Prime Stock"].contains(&&*entry.name))
-        .collect::<Vec<_>>();
     assert!(
-        app_lib::read_cards(&fixture, &gap).is_err(),
+        app_lib::read_cards(&fixture, pool_only(&gap_pool())).is_err(),
+        "read two of four cards as a whole two-card screen"
+    );
+}
+
+/// The same gap with the reward catalogue behind it. The outer two cards come from a relic the
+/// pool knows nothing about, but each reads exactly, which is what lets the catalogue name them,
+/// so the whole screen reads instead of failing closed.
+#[test]
+fn a_reward_missing_from_the_pool_is_named_from_the_catalogue() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-1920x1080.png");
+    let gap = gap_pool();
+    let catalog = pool();
+    let cards = app_lib::read_cards(
+        &fixture,
+        CardCandidates {
+            pool: &gap,
+            catalog: &catalog,
+        },
+    )
+    .expect("the catalogue names the cards the pool is missing");
+    assert_eq!(
+        names(cards),
+        vec![
+            "Braton Prime Blueprint",
+            "2X Forma Blueprint",
+            "Burston Prime Stock",
+            "Trumna Prime Blueprint",
+        ]
+    );
+}
+
+/// A baseline whose relics have no known rewards leaves the pool empty and the catalogue as the
+/// only thing to match against. A first card the catalogue cannot name is then no match at all,
+/// and that must still fail the screen rather than pass for a blank one, or the middle two read
+/// as a whole two-card screen exactly as in the pool-gap case above.
+#[test]
+fn an_unnamed_card_fails_closed_when_the_pool_is_empty() {
+    common::isolate_debug_log();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/reward-screen-1920x1080.png");
+    let catalog = gap_pool();
+    assert!(
+        app_lib::read_cards(
+            &fixture,
+            CardCandidates {
+                pool: &[],
+                catalog: &catalog,
+            },
+        )
+        .is_err(),
         "read two of four cards as a whole two-card screen"
     );
 }
@@ -288,7 +498,7 @@ fn a_title_that_wraps_to_two_lines_is_not_clipped() {
     common::isolate_debug_log();
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/reward-screen-wrapped-title.png");
-    let cards = app_lib::read_cards(&fixture, &wrapped_pool()).unwrap();
+    let cards = app_lib::read_cards(&fixture, pool_only(&wrapped_pool())).unwrap();
     assert_eq!(
         names(cards.clone()),
         vec![
@@ -329,7 +539,7 @@ fn concurrent_reads_do_not_corrupt_each_other() {
     let readers = (0..8)
         .map(|_| {
             let fixture = fixture.clone();
-            std::thread::spawn(move || app_lib::read_cards(&fixture, &pool()))
+            std::thread::spawn(move || app_lib::read_cards(&fixture, pool_only(&pool())))
         })
         .collect::<Vec<_>>();
 
@@ -352,8 +562,10 @@ fn concurrent_reads_do_not_corrupt_each_other() {
 #[ignore = "needs a running Warframe window"]
 fn live_capture_reaches_the_game_window() {
     let mut source = app_lib::ScreenRewardSource::new();
-    let outcome =
-        <app_lib::ScreenRewardSource as app_lib::VisualRewardSource>::choices(&mut source, &pool());
+    let outcome = <app_lib::ScreenRewardSource as app_lib::VisualRewardSource>::choices(
+        &mut source,
+        pool_only(&pool()),
+    );
     println!("live capture outcome: {outcome:?}");
     assert_ne!(
         outcome,
@@ -488,7 +700,11 @@ fn a_capture_at_the_wrong_scale_must_be_resampled_before_it_reads() {
     let mut clipped = image::RgbaImage::new(1920, 1080);
     image::imageops::replace(&mut clipped, &scaled.to_rgba8(), 0, 0);
     assert!(
-        app_lib::read_cards_in(&image::DynamicImage::ImageRgba8(clipped), &pool()).is_err(),
+        app_lib::read_cards_in(
+            &image::DynamicImage::ImageRgba8(clipped),
+            pool_only(&pool())
+        )
+        .is_err(),
         "an unresampled 1.5x capture must not read"
     );
     let restored = image::DynamicImage::ImageRgba8(image::imageops::resize(
@@ -498,7 +714,7 @@ fn a_capture_at_the_wrong_scale_must_be_resampled_before_it_reads() {
         image::imageops::FilterType::Lanczos3,
     ));
     assert_eq!(
-        names(app_lib::read_cards_in(&restored, &pool()).unwrap()).len(),
+        names(app_lib::read_cards_in(&restored, pool_only(&pool())).unwrap()).len(),
         4
     );
 }

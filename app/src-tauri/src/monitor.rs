@@ -975,16 +975,12 @@ impl RewardSession {
         generation: &MonitorGeneration,
     ) {
         let publication = recognized.publication.clone();
-        let names = recognized.names;
+        let cards = recognized.cards;
         let elapsed = recognized.elapsed;
         // Only the first publication for this epoch runs; late duplicates and stale
         // delayed effects are declined by the same gate.
         publication.publish(|| {
-            let observations = names
-                .into_iter()
-                .map(RewardObservation::certain)
-                .collect::<Vec<_>>();
-            let transition = self.observer.observe(observations);
+            let transition = self.observer.observe(cards);
             let mut overlay_notice = None;
             if transition.publish {
                 apply_reward_observations(

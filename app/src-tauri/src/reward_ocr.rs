@@ -10,7 +10,8 @@
 //! order. It is not general OCR either: EE.log names the squad's relics before the screen renders,
 //! so each card only has to be matched to the nearest of roughly two dozen known rewards. A
 //! garbled read still lands on the right item, which is what makes this trustworthy enough to be
-//! published rather than guessed at.
+//! published rather than guessed at. Only a near-exact read may name a reward outside that pool,
+//! which is how a card from a relic with no known rewards still gets named.
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -23,7 +24,10 @@ use image::{DynamicImage, GenericImageView, GrayImage};
 
 use warframe_acquisition::RewardCatalogEntry;
 
-use crate::{overlay_window::WindowRect, reward_source::VisualRewardSource};
+use crate::{
+    overlay_window::WindowRect,
+    reward_source::{CardCandidates, VisualRewardSource},
+};
 
 static LATEST_MATCHED_RECT: std::sync::Mutex<Option<WindowRect>> = std::sync::Mutex::new(None);
 
@@ -159,11 +163,13 @@ impl ScreenRewardSource {
 }
 
 impl VisualRewardSource for ScreenRewardSource {
-    fn choices(&mut self, candidates: &[RewardCatalogEntry]) -> Result<Vec<String>, &'static str> {
+    fn choices(
+        &mut self,
+        candidates: CardCandidates<'_>,
+    ) -> Result<Vec<(String, f32)>, &'static str> {
         let frames = self.capture.capture_candidates()?;
         read_capture_candidates(&frames, &LATEST_MATCHED_RECT, |frame| {
             read_cards_in(frame, candidates)
-                .map(|cards| cards.into_iter().map(|(name, _)| name).collect())
         })
     }
 }
@@ -186,12 +192,12 @@ fn read_capture_candidates<T>(
     Err(last_reason)
 }
 
-/// Read the card titles out of a reward-screen image and match each to the relic pool.
+/// Read the card titles out of a reward-screen image and match each with [`best_card_match`].
 ///
-/// Returns each card with the score it matched at. Callers only need the names, but the score is
-/// what makes the crop geometry testable: a box that clips the title still lands on the right
-/// reward through the closed-set match, so a name-only assertion passes against a misaligned crop
-/// and proves nothing.
+/// Returns each card with the score it matched at. The score is published as the card's
+/// confidence, and it is what makes the crop geometry testable: a box that clips the title still
+/// lands on the right reward through the closed-set match, so a name-only assertion passes
+/// against a misaligned crop and proves nothing.
 ///
 /// How many cards there are is not knowable ahead of time. It is the squad size, and EE.log only
 /// says so after the screen has already come and gone, so the layouts are simply tried. Each
@@ -207,7 +213,7 @@ fn read_capture_candidates<T>(
 /// only against a live game.
 pub fn read_cards(
     image: &Path,
-    candidates: &[RewardCatalogEntry],
+    candidates: CardCandidates<'_>,
 ) -> Result<Vec<(String, f32)>, &'static str> {
     let frame = image::open(image).map_err(|_| "capture could not be decoded")?;
     read_cards_in(&frame, candidates)
@@ -217,9 +223,9 @@ pub fn read_cards(
 /// capture stays in memory.
 pub fn read_cards_in(
     image: &DynamicImage,
-    candidates: &[RewardCatalogEntry],
+    candidates: CardCandidates<'_>,
 ) -> Result<Vec<(String, f32)>, &'static str> {
-    if candidates.is_empty() {
+    if candidates.pool.is_empty() && candidates.catalog.is_empty() {
         return Err("no reward candidates");
     }
     let (width, height) = image.dimensions();
@@ -262,7 +268,7 @@ fn read_cards_at(
     width: u32,
     height: u32,
     cards: usize,
-    candidates: &[RewardCatalogEntry],
+    candidates: CardCandidates<'_>,
 ) -> Result<Vec<(String, f32)>, (usize, &'static str)> {
     let left = card_block_left(cards, width, height);
     let mut read = Vec::with_capacity(cards);
@@ -275,7 +281,7 @@ fn read_cards_at(
             (TITLE_HEIGHT * height as f32) as u32,
         )
         .map_err(|reason| (slot, reason))?;
-        let matched = best_match(&text, candidates);
+        let matched = best_card_match(&text, candidates);
         // Without the raw text a failed read is unattributable: reading the wrong place, reading a
         // screen that is not the reward screen, and reading a card whose name is not in the pool
         // all surface as the same error. The text alone is not enough either: a misplaced crop
@@ -298,11 +304,16 @@ fn read_cards_at(
         if !keep_crop {
             let _ = std::fs::remove_file(&crop);
         }
-        let (name, score) = matched.ok_or((slot, BLANK_CARD))?;
-        if score < MATCH_FLOOR {
-            return Err((slot, "reward card text did not match the relic pool"));
+        // Blank means no text, not no match: with an empty pool an unmatched card has no match
+        // either, and taking it for blank would let `read_cards_in` read a four-card screen's
+        // middle two as a whole two-card screen.
+        if normalise(&text).is_empty() {
+            return Err((slot, BLANK_CARD));
         }
-        read.push((name, score));
+        let Some(card) = matched.filter(|(_, score)| *score >= MATCH_FLOOR) else {
+            return Err((slot, "reward card text did not match the relic pool"));
+        };
+        read.push(card);
     }
     Ok(read)
 }
@@ -570,6 +581,13 @@ fn normalise(text: &str) -> String {
 /// scored, and 0.64 and accepted after. A fragment has to be a near-exact match to speak.
 const PARTIAL_MATCH_FLOOR: f32 = 0.85;
 
+/// How near-exact a read must be to name a reward from outside the squad's pool.
+///
+/// The pool is a couple of dozen rewards, so a garbled read still has one clear nearest name.
+/// Outside it there are hundreds of near neighbours, every part of every Prime, so only a
+/// near-exact read may name one.
+const CATALOG_MATCH_FLOOR: f32 = 0.9;
+
 /// The card's text split on blank lines, each group's own lines rejoined with a space.
 ///
 /// Blank means whitespace-only rather than exactly `"\n\n"`: tesseract's stdout is passed through
@@ -598,7 +616,7 @@ fn text_groups(text: &str) -> Vec<String> {
     groups
 }
 
-/// The best pool match for a card.
+/// The best match for a card among `candidates`.
 ///
 /// Two thresholds, because the two kinds of read carry different weight. The whole text is what
 /// the card actually said, so it is scored without a floor here; `read_cards_at` applies
@@ -608,8 +626,9 @@ fn text_groups(text: &str) -> Vec<String> {
 /// recovers `Forma Blueprint` from under three specks of noise (0.64 -> 1.0) without letting a
 /// lone `Blueprint` name a card it cannot identify.
 ///
-/// Still a closed-set match: it returns the nearest pool name, never "not in the pool", so
-/// the floors are the only guard against a confident wrong answer.
+/// Still a closed-set match: it returns the nearest of `candidates`, never "none of these", so the
+/// floors are the only guard against a confident wrong answer. Which names a card may reach at
+/// all is [`best_card_match`]'s call.
 pub fn best_match(text: &str, candidates: &[RewardCatalogEntry]) -> Option<(String, f32)> {
     let whole = best_match_of(text, candidates);
     let groups = text_groups(text);
@@ -648,7 +667,44 @@ pub fn best_match(text: &str, candidates: &[RewardCatalogEntry]) -> Option<(Stri
     }
 }
 
-/// One read against the pool. This is the whole of what `best_match` used to be.
+/// The best match for a card against the squad's pool, falling back to the reward catalogue.
+///
+/// A pool read at `PARTIAL_MATCH_FLOOR` or better stands untouched, so `Forma Blueprint` still
+/// names the pool's `2X Forma Blueprint` rather than the catalogue's `Forma Blueprint`. Below that
+/// the catalogue's answer counts only at `CATALOG_MATCH_FLOOR`, so it can name a card the pool is
+/// missing but never redirect a fuzzy read. A relic WFCD lists with no rewards left `Baza Prime
+/// Blueprint` out of a live pool, and its clean read was published as `Burston Prime Blueprint`.
+///
+/// The catalogue is scored on the card's whole text, never on a fragment of it. It lists a
+/// Warframe part's component beside its blueprint, so a wrapped `Lavos Prime Chassis Blueprint`
+/// whose second line read badly would otherwise be named `Lavos Prime Chassis` from its first.
+/// A catalogue answer the pool also lists under the relic table's spelling takes that spelling:
+/// a garbled `Forma Blueprint` read still names what the relic drops, `2X Forma Blueprint`.
+pub fn best_card_match(text: &str, candidates: CardCandidates<'_>) -> Option<(String, f32)> {
+    let pool = best_match(text, candidates.pool);
+    if pool
+        .as_ref()
+        .is_some_and(|(_, score)| *score >= PARTIAL_MATCH_FLOOR)
+    {
+        return pool;
+    }
+    let catalog = best_match_of(text, candidates.catalog)
+        .filter(|(_, score)| *score >= CATALOG_MATCH_FLOOR)
+        .map(|(name, score)| {
+            let spelling = candidates
+                .pool
+                .iter()
+                .find(|entry| warframe_acquisition::reward_name_matches(&name, &entry.name))
+                .map_or(name, |entry| entry.name.clone());
+            (spelling, score)
+        });
+    match (pool, catalog) {
+        (Some(pool), Some(catalog)) => Some(if catalog.1 > pool.1 { catalog } else { pool }),
+        (pool, catalog) => pool.or(catalog),
+    }
+}
+
+/// One read against `candidates`. This is the whole of what `best_match` used to be.
 fn best_match_of(text: &str, candidates: &[RewardCatalogEntry]) -> Option<(String, f32)> {
     let read = normalise(text);
     if read.is_empty() {

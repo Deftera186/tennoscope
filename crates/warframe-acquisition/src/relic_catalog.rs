@@ -34,6 +34,13 @@ impl RelicRewardIndex {
         Ok(Self { rewards })
     }
 
+    /// Every reward a relic in the index can drop, spelled as the relic tables and the reward
+    /// screen spell it: "2X Forma Blueprint", "Lavos Prime Chassis Blueprint". A reward several
+    /// relics share comes once per relic.
+    pub fn reward_names(&self) -> impl Iterator<Item = &str> {
+        self.rewards.values().flatten().map(String::as_str)
+    }
+
     pub fn candidates_for_projection_paths(
         &self,
         projection_paths: &[String],

@@ -66,18 +66,18 @@ pub use reward_observer::{
     RewardObservation, RewardObserverState, match_reward_text, normalize_ocr,
 };
 pub use reward_ocr::{
-    MAX_CARDS, ScreenRewardSource, TESSERACT_EXECUTABLE, best_match, card_block_left,
-    card_block_width, luma, normalize_contrast, ocr_crop, prepare_crop, read_cards, read_cards_in,
-    tesseract_program, threshold_inverted,
+    MAX_CARDS, ScreenRewardSource, TESSERACT_EXECUTABLE, best_card_match, best_match,
+    card_block_left, card_block_width, luma, normalize_contrast, ocr_crop, prepare_crop,
+    read_cards, read_cards_in, tesseract_program, threshold_inverted,
 };
 pub use reward_recognition::{
     FailureTrace, RecognitionTiming, RecognitionUpdate, RecognizedRewards, RewardPublication,
     RewardRecognition,
 };
 pub use reward_source::{
-    BoundMemoryRewardSource, LiveMemoryRewardState, MemoryRewardSource, RewardChoiceSet,
-    RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic, RewardSourceResult,
-    VisualRewardSource,
+    BoundMemoryRewardSource, CardCandidates, LiveMemoryRewardState, MemoryRewardSource,
+    RewardChoiceSet, RewardChoiceSource, RewardSourceCoordinator, RewardSourceDiagnostic,
+    RewardSourceResult, VisualRewardSource,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]

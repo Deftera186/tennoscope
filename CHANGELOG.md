@@ -62,6 +62,18 @@ see the difference.
 - **A stacked Forma reward counts the Forma blueprints you hold.** The relic
   tables name it "2X Forma Blueprint", which matched nothing in the collection,
   so its slip read "Not owned" however many Forma blueprints you held.
+- **A reward from a relic with no known drop table gets its own name.** The
+  item data lists the current Prime Resurgence relics with no rewards, so a
+  squadmate's card from one was matched only against the other relics' rewards
+  and took the closest of their names: a Baza Prime Blueprint read cleanly and
+  showed as a Burston Prime Blueprint, with a mastery mark for the wrong item. A
+  card read near-exactly is now named even when no known relic lists it, and a
+  squad whose relics are all unknown is read the same way instead of getting no
+  overlay at all.
+- **A doubtful card read says so.** Every card read off the screen reached its
+  slip as certain, so the slip's "Uncertain" mark, which also withholds the Top
+  plat and Top ducats marks and the mastery rule and set, never appeared for
+  one. A card matched below 80% now carries it.
 - **An update offer survives a restart.** The daily check throttle skipped the
   network on reopen, so the masthead button vanished on the next launch and
   stayed gone until the next check ran. The offered version is now stored and

@@ -129,7 +129,12 @@ portal. Capture writes PPM rather than PNG: the frame is discarded after four cr
 PNG-encoding 1920x1080 costs 1.9s against 0.04s.
 
 This is not general OCR. EE.log names the squad's relics before the screen renders, so each card is
-matched to the nearest of roughly two dozen known rewards by normalised edit distance.
+matched to the nearest of roughly two dozen known rewards by normalised edit distance. A relic WFCD
+lists with no rewards, as it lists the current Prime Resurgence relics, leaves that pool short. So
+a card that matches no pool reward closely may also be named from the whole reward catalogue and
+the relic tables, but only by a near-exact read of its whole title (90% or better). A garbled read
+stays inside the pool, and each card is published with the score it matched at as its confidence,
+so a card that matched below 80% shows as uncertain.
 
 ### Separating the title from the card art
 
