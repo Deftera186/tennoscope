@@ -9,7 +9,7 @@
 /* carry every value: platinum (#e8ebef) for platinum, gold (#d8b04a) for the */
 /* ducat. Marks are condensed grotesque caps at display scale; every label is */
 /* tracked monospace. Badges are house-shaped hallmark cartouches, never pills. */
-/* Radius 0. No glow, no float, no blur outside the overlay plate. */
+/* Radius 0. No glow, no float, no blur. */
 /* STORY: The player sees that this thing weighs and certifies. Two metals, */
 /* appraised at equal weight, because the best card by plat is often not the */
 /* best by ducats. Numbers it does not know are struck as a dash, never guessed. */
@@ -910,12 +910,10 @@ svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
 
 .overlay-rewards .slip {
   gap: .3rem; padding: .55rem .7rem; animation: none;
-  /* Opaque enough to survive arbitrary game imagery underneath. Legibility here
-     is a product constraint, not a taste call. The blur is doing work, not decoration. */
-  background: rgb(11 12 14 / 93%);
+  /* The slip keeps the base slip's opaque touchstone. The overlay is a window of its own over the
+     game, so a backdrop blur has no game pixels to soften, and any see-through share lets the
+     text under the cards, including squadmates' names, show through the slip. */
   box-shadow: inset 0 0 0 1px rgb(232 235 239 / 16%);
-  -webkit-backdrop-filter: blur(14px) saturate(112%);
-  backdrop-filter: blur(14px) saturate(112%);
   /* The window's size is fixed, so this stops a line that outgrows its column from painting over
      the next slip; the ledger wraps inside the column long before that. */
   overflow: hidden;
@@ -942,9 +940,7 @@ svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
 
 .overlay-empty {
   display: grid; place-content: center; justify-items: center; gap: .3rem; height: 100vh;
-  background: rgb(11 12 14 / 93%); box-shadow: inset 0 0 0 1px rgb(232 235 239 / 16%);
-  -webkit-backdrop-filter: blur(14px) saturate(112%);
-  backdrop-filter: blur(14px) saturate(112%);
+  background: var(--touchstone); box-shadow: inset 0 0 0 1px rgb(232 235 239 / 16%);
   font-family: var(--face-register); font-size: .6rem; letter-spacing: .12em;
   text-transform: uppercase; color: var(--platinum-deep); text-align: center;
 }

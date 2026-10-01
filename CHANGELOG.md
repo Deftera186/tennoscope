@@ -80,6 +80,10 @@ see the difference.
   blueprint, about half of what relics drop, or came from a relic with no
   known drop table. It now runs for both. A Forma blueprint is still not
   checked.
+- **Game text no longer shows through the reward overlay.** Its slips let 7%
+  of the game through, and the blur meant to hide it cannot sample the game
+  window underneath, so the text under the reward cards, including squadmates'
+  names, showed faintly through them. The slips are opaque now.
 - **An update offer survives a restart.** The daily check throttle skipped the
   network on reopen, so the masthead button vanished on the next launch and
   stayed gone until the next check ran. The offered version is now stored and
