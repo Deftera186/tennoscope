@@ -13,6 +13,7 @@ mod inventory;
 #[cfg(target_os = "linux")]
 mod linux_proc;
 mod market;
+mod mastery;
 mod orchestrator;
 mod relic_catalog;
 mod reward_memory;
@@ -45,6 +46,7 @@ pub use market::{
     MARKET_MIN_GAP, MarketPriceCache, MarketPriceSource, PriceLookup, RequestPacer,
     WarframeMarketHttp, WarmOutcome, lowest_sell_top, market_slug, slug_and_subtype,
 };
+pub use mastery::{Holdings, MasteryEvidence, MasteryLedger};
 pub use orchestrator::{AcquisitionFailure, InventoryAcquirer};
 pub use relic_catalog::RelicRewardIndex;
 pub use reward_memory::{
