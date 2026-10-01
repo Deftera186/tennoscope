@@ -295,13 +295,25 @@ where
         self.wake_worker();
     }
 
-    /// Only a pool reward can be named from the log's path. With a pool that lacks the local
-    /// reward, an empty pool included, a read publishes without this check, which the catalogue
-    /// tolerates because it answers only a near-exact read of a card's whole title.
+    /// The local player's reward as the item catalogue names it. EE.log logs it by its StoreItems
+    /// path and the catalogue keys most items under Types, so both are looked up. The pool cannot
+    /// answer this: a pool reward carries the paths of the item its name strips to, and a
+    /// blueprint's name strips to its weapon or part rather than to the recipe the log names. A
+    /// path the catalogue does not know, Forma's blueprint among them, leaves the read unchecked.
     fn local_reward_name(&self, local_reward_path: &Option<String>) -> Option<String> {
         let path = local_reward_path.as_deref()?;
-        let pool = lock(&self.shared.pool);
-        reward_from_path(path, &pool.candidates)
+        let catalog = self.shared.catalog.as_ref()?;
+        let types_path = path
+            .strip_prefix("/Lotus/StoreItems")
+            .map(|suffix| format!("/Lotus{suffix}"));
+        catalog
+            .resolve(path)
+            .or_else(|| {
+                types_path
+                    .as_deref()
+                    .and_then(|types| catalog.resolve(types))
+            })
+            .map(|metadata| metadata.name().to_owned())
     }
 
     /// Nonblocking close: invalidate the active epoch, pending reads, constraints and
@@ -422,7 +434,9 @@ where
                     return RecognitionUpdate::default();
                 }
                 if let Some(local) = context.and_then(|c| c.local_reward.as_deref())
-                    && !cards.iter().any(|card| card.name == local)
+                    && !cards
+                        .iter()
+                        .any(|card| names_logged_reward(&card.name, local))
                 {
                     // The read did not include the reward EE.log already confirmed for the
                     // local player; drop it rather than show something wrong.
@@ -538,7 +552,7 @@ struct PoolSnapshot {
 struct ConstraintContext {
     /// The number of cards EE.log expects on screen, once it has said so.
     expected_choices: Option<usize>,
-    /// The local player's reward choice name, once EE.log stated it.
+    /// The local player's reward as the item catalogue names it, once EE.log stated it.
     local_reward: Option<String>,
 }
 
@@ -673,28 +687,12 @@ fn card_catalogue(
     catalogue
 }
 
-/// Map a log reward path onto the matching candidate's choice name.
-///
-/// `EE.log` announces rewards with StoreItems-style paths while the catalog stores
-/// Types-style paths, so the equivalence is checked explicitly.
-fn reward_from_path(path: &str, candidates: &[RewardNeedle]) -> Option<String> {
-    candidates
-        .iter()
-        .find(|needle| {
-            needle.internal_paths().iter().any(|candidate| {
-                std::str::from_utf8(candidate)
-                    .ok()
-                    .is_some_and(|catalog_path| reward_path_matches(path, catalog_path))
-            })
-        })
-        .map(|needle| needle.choice_name().to_owned())
-}
-
-fn reward_path_matches(log_path: &str, catalog_path: &str) -> bool {
-    log_path == catalog_path
-        || log_path
-            .strip_prefix("/Lotus/StoreItems")
-            .is_some_and(|suffix| catalog_path == format!("/Lotus{suffix}"))
+/// Whether a card is the reward EE.log logged. The log's reward takes the catalogue's spelling and
+/// a card the relic table's, which can add a count or a trailing "Blueprint": the card "1200X
+/// Kuva" is the logged "Kuva".
+fn names_logged_reward(card: &str, logged: &str) -> bool {
+    warframe_acquisition::reward_name_matches(logged, card)
+        || warframe_acquisition::reward_name_matches(card, logged)
 }
 
 fn worker_loop(shared: Arc<Shared>) {
@@ -878,9 +876,11 @@ fn worker_loop(shared: Arc<Shared>) {
                     .map(|(name, confidence)| RewardObservation { name, confidence })
                     .collect::<Vec<_>>();
                 let size_mismatch = expected.is_some_and(|expected| cards.len() != expected);
-                let local_mismatch = local
-                    .as_deref()
-                    .is_some_and(|local| !cards.iter().any(|card| card.name == local));
+                let local_mismatch = local.as_deref().is_some_and(|local| {
+                    !cards
+                        .iter()
+                        .any(|card| names_logged_reward(&card.name, local))
+                });
                 if local_mismatch {
                     let reason = "the reward screen did not show the logged reward";
                     last_reason = Some(reason.into());

@@ -191,7 +191,9 @@ text alone: the geometry one was only found because an unrelated capture script 
 screenshot.
 
 Two guards keep a bad read off the screen: anything below the match floor is dropped, and a read
-that does not contain the log's local reward is discarded.
+that does not contain the log's local reward is discarded. The log names that reward by path, which
+is looked up in the item catalogue rather than the pool: a blueprint's pool entry carries the paths
+of the weapon or part it builds, never the recipe path the log names.
 
 ## Watching for the screen instead of being told about it
 

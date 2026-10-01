@@ -74,6 +74,12 @@ see the difference.
   slip as certain, so the slip's "Uncertain" mark, which also withholds the Top
   plat and Top ducats marks and the mastery rule and set, never appeared for
   one. A card matched below 80% now carries it.
+- **A misread of your own reward is read again instead of shown.** The game
+  logs which reward is yours, and a read of the screen that leaves it out is
+  dropped and taken again. That check never ran when your reward was a
+  blueprint, about half of what relics drop, or came from a relic with no
+  known drop table. It now runs for both. A Forma blueprint is still not
+  checked.
 - **An update offer survives a restart.** The daily check throttle skipped the
   network on reopen, so the masthead button vanished on the next launch and
   stayed gone until the next check ran. The offered version is now stored and

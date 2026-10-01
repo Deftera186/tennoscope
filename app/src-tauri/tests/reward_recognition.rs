@@ -46,6 +46,7 @@ use warframe_acquisition::{CatalogIndex, RelicRewardIndex, RewardCatalogEntry};
 
 const CATALOG_JSON: &str = r#"[
   {"uniqueName":"/Lotus/Weapons/Tenno/Primary/PerigalePrime","name":"Perigale Prime","type":"Primary","category":"Primary","masterable":true,"components":[
+    {"uniqueName":"/Lotus/Types/Recipes/Weapons/PerigalePrimeBlueprint","name":"Blueprint","tradable":true,"ducats":45,"primeSellingPrice":45},
     {"uniqueName":"/Lotus/Types/Recipes/Weapons/PerigalePrimeBarrelComponent","name":"Barrel","tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"PerigalePrimeBarrel.png"},
     {"uniqueName":"/Lotus/Types/Recipes/Weapons/PerigalePrimeReceiverComponent","name":"Receiver","tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"PerigalePrimeReceiver.png"},
     {"uniqueName":"/Lotus/Types/Recipes/Weapons/PerigalePrimeStockComponent","name":"Stock","tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"PerigalePrimeStock.png"}
@@ -62,7 +63,8 @@ const CATALOG_JSON: &str = r#"[
   ]},
   {"uniqueName":"/Lotus/Powersuits/BrokenFrame/XakuPrime","name":"Xaku Prime","type":"Warframe","category":"Warframes","masterable":true,"components":[
     {"uniqueName":"/Lotus/Types/Recipes/Warframes/XakuPrimeHelmetComponent","name":"Neuroptics","tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"XakuPrimeHelmet.png"}
-  ]}
+  ]},
+  {"uniqueName":"/Lotus/Types/Items/MiscItems/Kuva","name":"Kuva","type":"Resource","category":"Resources"}
 ]"#;
 
 const RELICS_JSON: &str = r#"[
@@ -78,12 +80,22 @@ const RELICS_JSON: &str = r#"[
     {"item":{"name":"Burston Prime Receiver"}},
     {"item":{"name":"Xaku Prime Neuroptics Blueprint"}}
   ]},
+  {"uniqueName":"/Lotus/Types/Game/Projections/T1VoidProjectionBlueprintBronze","name":"Lith B1 Intact","rewards":[
+    {"item":{"name":"Perigale Prime Blueprint"}},
+    {"item":{"name":"Vasto Prime Stock"}}
+  ]},
+  {"uniqueName":"/Lotus/Types/Game/Projections/T5VoidProjectionKuvaBronze","name":"Requiem I Intact","rewards":[
+    {"item":{"name":"1200X Kuva"}},
+    {"item":{"name":"Vasto Prime Stock"}}
+  ]},
   {"uniqueName":"/Lotus/Types/Game/Projections/T2VoidProjectionProteaIvaraVaultAPlatinum","name":"Meso I3 Radiant","rewards":[]}
 ]"#;
 
 const EARLY_RELIC: &str = "/Lotus/Types/Game/Projections/T1VoidProjectionEarlyBronze";
 const GROWN_RELIC: &str = "/Lotus/Types/Game/Projections/T1VoidProjectionGrownBronze";
 const LATER_RELIC: &str = "/Lotus/Types/Game/Projections/T1VoidProjectionLaterBronze";
+const BLUEPRINT_RELIC: &str = "/Lotus/Types/Game/Projections/T1VoidProjectionBlueprintBronze";
+const REQUIEM_RELIC: &str = "/Lotus/Types/Game/Projections/T5VoidProjectionKuvaBronze";
 /// A live Prime Resurgence relic that WFCD lists with an empty rewards array.
 const REWARDLESS_RELIC: &str =
     "/Lotus/Types/Game/Projections/T2VoidProjectionProteaIvaraVaultAPlatinum";
@@ -772,6 +784,73 @@ fn known_constraints_reject_mismatched_reads() {
         }
         assert!(saw_withheld, "the mismatched read must be observed");
     }
+}
+
+/// Opens a screen on `relic` whose first capture is held until EE.log has named the local
+/// player's reward at `local_path`, so every read after it is judged against that reward. The
+/// next read shows `missing`, which lacks it, and the one after shows `showing`. Returns the
+/// first read that publishes.
+fn first_read_published_after_the_logged_reward(
+    relic: &str,
+    local_path: &str,
+    missing: &[&str],
+    showing: &[&str],
+) -> Vec<String> {
+    let frame = |cards: &[&str]| Frame::Names(cards.iter().map(|&card| card.to_owned()).collect());
+    let coordination = coordination(vec![
+        Frame::Gated(Box::new(Frame::Blank)),
+        frame(missing),
+        frame(showing),
+    ]);
+    let mut gate = GateGuard(Some(coordination.stack_gate()));
+    let mut recognition = recognition(&coordination);
+    recognition.observe(&baseline(&[relic]));
+    wait_for_capture(&coordination, 1);
+    recognition.observe(&choices_ready(2, Some(local_path)));
+    gate.release();
+    let published = card_names(&drain_recognized(&mut recognition));
+    recognition.shutdown();
+    published
+}
+
+/// A squad whose relics WFCD lists with no rewards has no pool, and the card for the local
+/// player's reward is named from the catalogue alone. A read without it is still withheld.
+#[test]
+fn a_read_missing_the_logged_reward_is_withheld_when_no_relic_resolved() {
+    let published = first_read_published_after_the_logged_reward(
+        REWARDLESS_RELIC,
+        "/Lotus/StoreItems/Types/Recipes/Weapons/PerigalePrimeReceiverComponent",
+        &["Vasto Prime Stock", "Burston Prime Receiver"],
+        &["Perigale Prime Receiver", "Vasto Prime Stock"],
+    );
+    assert_eq!(published, ["Perigale Prime Receiver", "Vasto Prime Stock"]);
+}
+
+/// EE.log names a blueprint reward by its recipe path. The pool's entry for "Perigale Prime
+/// Blueprint" carries the weapon's path, so the log's path was matched to no reward and a read
+/// that misread the blueprint card published.
+#[test]
+fn a_read_missing_a_logged_blueprint_is_withheld() {
+    let published = first_read_published_after_the_logged_reward(
+        BLUEPRINT_RELIC,
+        "/Lotus/StoreItems/Types/Recipes/Weapons/PerigalePrimeBlueprint",
+        &["Vasto Prime Stock", "Perigale Prime Receiver"],
+        &["Perigale Prime Blueprint", "Vasto Prime Stock"],
+    );
+    assert_eq!(published, ["Perigale Prime Blueprint", "Vasto Prime Stock"]);
+}
+
+/// The catalogue names the logged item "Kuva" and the card names the stack the relic drops,
+/// "1200X Kuva". Both are the same reward, so the read that shows it publishes.
+#[test]
+fn a_stacked_card_satisfies_the_logged_item() {
+    let published = first_read_published_after_the_logged_reward(
+        REQUIEM_RELIC,
+        "/Lotus/StoreItems/Types/Items/MiscItems/Kuva",
+        &["Vasto Prime Stock", "Perigale Prime Receiver"],
+        &["1200X Kuva", "Vasto Prime Stock"],
+    );
+    assert_eq!(published, ["1200X Kuva", "Vasto Prime Stock"]);
 }
 
 /// `ChoicesReady`'s card count outranks the `ResponsesComplete` roster size:
