@@ -58,10 +58,11 @@ repository root from its own path, so the working directory does not matter. It 
 `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings` and `pnpm check`;
 `--skip-gates` drops those three, which is what the release workflow passes because it refuses to
 start until CI has passed on the same commit. Prefer it over calling
-`pnpm tauri build --bundles appimage` directly: the AppImage needs two post-processing steps Tauri
+`pnpm tauri build --bundles appimage` directly: the AppImage needs three post-processing steps Tauri
 does not perform on its own. The generated desktop entry is rewritten to a PATH-resolved
-`Exec=tennoscope` with the KWin permission key stripped, and `usr/lib/libwayland-client.so.0` is
-deleted from the AppDir before linuxdeploy repackages it. See [appimage.md](appimage.md).
+`Exec=tennoscope` with the KWin permission key stripped, `usr/lib/libwayland-client.so.0` is
+deleted from the AppDir, and world permission bits are normalized across it before
+linuxdeploy repackages it. See [appimage.md](appimage.md).
 
 Generated files appear beneath `target/release/bundle/` in target-specific directories.
 

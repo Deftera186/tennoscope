@@ -248,6 +248,8 @@ assert_appimage_runs_on_x11() {
 # EGL vendor cannot use that older bundled copy, so remove it before the one
 # repack operation. The AppImage also needs a PATH-resolved Exec command: the
 # absolute path required by installed packages does not exist on another host.
+# And every payload entry needs its world bits, because the catalog runs the
+# artifact sandboxed as neither owner nor group.
 patch_and_repack_appimage() {
   bundle_dir="$repo_root/target/release/bundle/appimage"
   appdir="$bundle_dir/TennoScope.AppDir"
@@ -293,6 +295,15 @@ patch_and_repack_appimage() {
     "the generated AppImage icon"
 
   rm -f "$appdir/usr/lib/libwayland-client.so.0"
+  # The catalog runs the AppImage sandboxed as a user that is neither the file
+  # owner nor its group, so every payload entry needs its world bits: v0.12.0
+  # shipped AppRun.wrapped at 770 and died on exec with "Permission denied"
+  # under firejail. Add only, never remove: o+rX grants world read everywhere
+  # and world execute exactly where someone can already execute.
+  chmod -R o+rX "$appdir" || {
+    echo "could not normalize the AppDir world permissions" >&2
+    exit 1
+  }
   (cd "$bundle_dir" && APPIMAGE_EXTRACT_AND_RUN=1 OUTPUT="$built" \
     "$packer" --appdir "$appdir") || {
     echo "failed to repack the patched AppImage" >&2
@@ -320,8 +331,48 @@ patch_and_repack_appimage() {
     "the final AppImage launch command"
   assert_exact_desktop_field "$extracted_desktop" "Icon=" "$appimage_icon_line" \
     "the final AppImage icon"
+  # v0.12.0 proved the outer +x check is not enough: its AppRun.wrapped was
+  # 770, unexecutable to anyone but owner and group, and the catalog sandbox
+  # runs as neither. Check the extracted payload, which is what ships, so a
+  # packer-introduced mode cannot slip through either.
+  assert_payload_world_accessible "$appimage_extract_tmp/squashfs-root"
+
   rm -rf "$appimage_extract_tmp"
   appimage_extract_tmp=
+}
+
+# A `find` that cannot read the payload returns nothing, which inside a command
+# substitution is indistinguishable from a payload that is clean. Capture the
+# status so a gate that never looked reports failure instead of passing.
+assert_payload_world_accessible() {
+  payload_root=$1
+  payload_offenders=$(find "$payload_root" -type d ! -perm -005 -print -quit) || {
+    echo "could not inspect the directories in the final AppImage payload" >&2
+    exit 1
+  }
+  [ -z "$payload_offenders" ] || {
+    echo "the final AppImage contains a directory without world access:" >&2
+    find "$payload_root" -type d ! -perm -005 -printf '  %m %p\n' >&2
+    exit 1
+  }
+  payload_offenders=$(find "$payload_root" -type f ! -perm -004 -print -quit) || {
+    echo "could not inspect the files in the final AppImage payload" >&2
+    exit 1
+  }
+  [ -z "$payload_offenders" ] || {
+    echo "the final AppImage contains a file without world read permission:" >&2
+    find "$payload_root" -type f ! -perm -004 -printf '  %m %p\n' >&2
+    exit 1
+  }
+  payload_offenders=$(find "$payload_root" -type f -perm -100 ! -perm -001 -print -quit) || {
+    echo "could not inspect the executables in the final AppImage payload" >&2
+    exit 1
+  }
+  [ -z "$payload_offenders" ] || {
+    echo "the final AppImage contains an executable without world execute permission:" >&2
+    find "$payload_root" -type f -perm -100 ! -perm -001 -printf '  %m %p\n' >&2
+    exit 1
+  }
 }
 
 assert_deb_artifact() {

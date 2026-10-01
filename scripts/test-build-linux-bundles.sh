@@ -84,6 +84,15 @@ cat >"$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh" <<'HOOK'
 export GDK_BACKEND=x11 # required by the reward overlay
 HOOK
 : >"$appdir/usr/lib/libwayland-client.so.0"
+cat >"$appdir/AppRun.wrapped" <<'WRAPPED'
+#!/bin/sh
+exit 0
+WRAPPED
+# The mode v0.12.0 actually shipped. The AppImage catalog runs the artifact sandboxed as a user
+# who is neither this file's owner nor its group, so anything less than world execute here is the
+# whole failure: `AppRun` execs this binary and dies with EACCES before a window exists.
+chmod 770 "$appdir/AppRun.wrapped"
+
 
 cat >"$appimage_dir/TennoScope-test.AppImage" <<EOF
 #!/bin/sh
@@ -135,5 +144,21 @@ artifact_exec=$(awk '/^Exec=/ { matches++; value = $0 } END { if (matches != 1) 
   "$artifact_extract/squashfs-root/TennoScope.desktop")
 [ "$artifact_exec" = "Exec=tennoscope" ] || {
   echo "repacked AppImage must contain its bundled launch command, found '$artifact_exec'" >&2
+  exit 1
+}
+
+# The invariant that v0.12.0 broke, asserted on the artifact rather than on the AppDir: the
+# catalog runs this image sandboxed as a user who is neither owner nor group, so an executable
+# without world execute is a crash before any window exists. Checking the extracted payload
+# means this fails if the normalization is removed, not only if the builder's own gates are.
+artifact_root="$artifact_extract/squashfs-root"
+unreadable=$(find "$artifact_root" ! -perm -004 -print -quit)
+[ -z "$unreadable" ] || {
+  echo "repacked AppImage payload is not world-readable at '$unreadable'" >&2
+  exit 1
+}
+unexecutable=$(find "$artifact_root" -type f -perm -100 ! -perm -001 -print -quit)
+[ -z "$unexecutable" ] || {
+  echo "repacked AppImage ships an executable only its owner can run: '$unexecutable'" >&2
   exit 1
 }

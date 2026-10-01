@@ -16,14 +16,18 @@ chmod +x TennoScope_*_amd64.AppImage
 ./TennoScope_*_amd64.AppImage
 ```
 
-The helper does two things to this artifact that Tauri does not. The generated
+The helper does three things to this artifact that Tauri does not. The generated
 desktop entry is rewritten to a PATH-resolved `Exec=tennoscope`, because the
 `/usr/bin/tennoscope` the native desktop template needs does not exist on another host, and
 the KWin permission key is stripped out of it. `usr/lib/libwayland-client.so.0` is then
 deleted from the AppDir: Tauri pins a 2024 linuxdeploy whose excludelist predates that
-library, and the older bundled copy cannot drive the host's Mesa EGL vendor. linuxdeploy
-then repacks the AppDir, and the helper extracts the result again to check that the
-rewritten desktop entry is the one that shipped. It also refuses to continue if the GTK
+library, and the older bundled copy cannot drive the host's Mesa EGL vendor. World
+permission bits are normalized across the AppDir before the repack (`chmod -R o+rX`):
+v0.12.0 shipped `AppRun.wrapped` at 770, which a sandbox running as neither owner nor
+group could not execute, and the catalog test runs exactly that way. linuxdeploy
+then repacks the AppDir, and the helper extracts the result again: it checks that the
+rewritten desktop entry is the one that shipped, and it fails if any directory, file, or
+executable in the extracted payload lacks its world bits. It also refuses to continue if the GTK
 plugin's generated launcher stops forcing `GDK_BACKEND=x11`, which is what the reward
 overlay needs: that environment variable would override the backend the app requests for
 itself. Build AppImages through the helper rather than invoking

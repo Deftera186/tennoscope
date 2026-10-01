@@ -115,6 +115,11 @@ see the difference.
   hides the game from the ordinary window search, so the X11 path walks an
   `xwininfo` tree to find it. The deb, rpm and COPR now recommend it beside
   tesseract, and the Gentoo overlay names it at install time.
+- **The AppImage starts outside the account that built it.** Its
+  `AppRun.wrapped` shipped at 770, so a sandbox running as neither owner nor
+  group could not execute it and the app quit on launch, which the catalog's
+  firejail test caught. World permission bits are normalized across the AppDir
+  before the repack, and the extracted result is checked for the same.
 
 ## [0.12.1-rc1] - 2026-09-29
 
