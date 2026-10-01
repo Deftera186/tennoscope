@@ -8,6 +8,8 @@ export interface CollectionItem { id: string; name: string; category: ItemCatego
 /** How far the live pricing pass the player asked for has got. */
 export interface PricingProgress { done: number; total: number }
 export interface RewardCard { name: string; platinum: number; ducats: number; owned: number; mastery_relevant: boolean; confidence: number }
+/** One slot of the set a Prime item is built from: the copies the recipe takes, the copies held, and whether this reward is the one that fills it. */
+export interface SetPart { name: string; image: string | null; uses: number; held: number; this: boolean }
 export type LinkState = 'unlinked' | 'linked' | 'needs_relink'
 export type CredentialBacking = 'keyring' | 'database'
 export type Presence = 'online' | 'ingame' | 'invisible'

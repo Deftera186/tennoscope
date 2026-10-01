@@ -25,6 +25,10 @@ Warframe names, artwork, and game data are associated with Digital Extremes. Thi
 
 They are used unaltered in form, for identification of the currency they depict, in a tool that reads prices in those currencies. Digital Extremes retains all rights in them; they are not covered by this project's GPL-3.0-only license and are not the project's to relicense. A distributor that cannot carry third-party game art should replace or remove them: nothing else in the interface depends on them, and every figure they mark is also named in text beside it.
 
+## Prime part silhouettes
+
+`app/src/assets/parts/*.png` are Digital Extremes' generic Prime part icons, taken from the [WFCD warframe-items](https://github.com/WFCD/warframe-items) image set (`data/img`) and reduced to 64px single-colour silhouettes, so the reward overlay can show which parts make up a set. They are bundled rather than fetched because a slip drawn over the running game must render whether or not the network does. The art belongs to Digital Extremes and is not covered by this project's license. Distributors who remove these files lose nothing else: the set row falls back to an authored glyph.
+
 ## Acquisition research and prior art
 
 The Linux and Windows acquisition implementations were written for this project behind its own bounded process-reader and decoder interfaces. The following projects informed the feasibility study and algorithm design:

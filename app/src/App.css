@@ -544,6 +544,19 @@
 .metal.plat .metal-hallmark { background: var(--platinum); color: var(--touchstone); }
 .metal.ducat .metal-hallmark { background: var(--gold); color: var(--touchstone); }
 
+/* The set behind a reward: the game's own part art as one-metal silhouettes, so the shapes are ones the
+   player already knows. Solid is held, faint is not; the tick marks this slot, and wrapped rows clear it. */
+.set-row { display: inline-flex; flex-wrap: wrap; align-items: flex-end; gap: var(--tight) .19rem; margin: 0 0 0 auto; padding: 0; list-style: none; color: var(--platinum); }
+.set-slot { position: relative; display: flex; }
+.set-glyph { display: block; flex: none; width: 1.75rem; height: 1.75rem; background-color: currentColor;
+  -webkit-mask-position: center; mask-position: center; -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; }
+svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
+.set-glyph[data-held="false"] { opacity: .4; }
+.set-glyph + .set-glyph { margin-left: -1.125rem; } /* a pair: the second copy rides 10px over the first */
+.set-slot[data-this]::after { content: ''; position: absolute; left: .19rem; right: .19rem; bottom: -.25rem; height: 2px; background: currentColor; }
+.set-count { margin-left: .125rem; font: 600 .56rem/1 var(--face-register); color: var(--platinum-deep); }
+
 /* the assay procedure */
 
 .procedure-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--step); flex-wrap: wrap; padding-bottom: var(--step); border-bottom: 1px solid var(--rule); }
