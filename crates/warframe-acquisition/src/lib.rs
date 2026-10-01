@@ -37,6 +37,7 @@ pub use collection_prices::{
 };
 pub use inventory::{
     INVENTORY_ENDPOINT, InventoryHttpTransport, InventoryJsonDecoder, MAX_INVENTORY_RESPONSE_BYTES,
+    MasteryFacts, mastery_rank,
 };
 #[cfg(target_os = "linux")]
 pub use linux_proc::LinuxProc;
@@ -564,6 +565,7 @@ impl AcquisitionHealth {
 pub struct AcquisitionResult {
     snapshot: InventorySnapshot,
     health: AcquisitionHealth,
+    mastery_facts: MasteryFacts,
 }
 
 impl AcquisitionResult {
@@ -574,7 +576,22 @@ impl AcquisitionResult {
         if !health.is_successful() {
             return Err(AcquisitionError::UnsuccessfulHealth);
         }
-        Ok(Self { snapshot, health })
+        Ok(Self {
+            snapshot,
+            health,
+            mastery_facts: MasteryFacts::default(),
+        })
+    }
+
+    /// The affinity and pending builds the decoded inventory reported. Empty unless set:
+    /// results built without a decode carry no facts.
+    pub fn with_mastery_facts(mut self, facts: MasteryFacts) -> Self {
+        self.mastery_facts = facts;
+        self
+    }
+
+    pub fn mastery_facts(&self) -> &MasteryFacts {
+        &self.mastery_facts
     }
 
     pub fn snapshot(&self) -> &InventorySnapshot {

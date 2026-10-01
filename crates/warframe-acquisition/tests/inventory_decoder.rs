@@ -1,4 +1,6 @@
-use warframe_acquisition::{AcquisitionError, CatalogIndex, InventoryJsonDecoder, SnapshotDecoder};
+use warframe_acquisition::{
+    AcquisitionError, CatalogIndex, InventoryJsonDecoder, SnapshotDecoder, mastery_rank,
+};
 use warframe_domain::Category;
 
 fn complete_payload() -> Vec<u8> {
@@ -498,4 +500,29 @@ fn mastery_catalog() -> CatalogIndex {
         ]"#,
     )
     .unwrap()
+}
+
+#[test]
+fn decoding_with_facts_keeps_affinity_and_pending_builds() {
+    let payload = complete_payload();
+    let (_, facts) = InventoryJsonDecoder::default()
+        .decode_with_facts(&payload)
+        .expect("decodes");
+    assert_eq!(facts.xp("/Lotus/Powersuits/Excalibur/Excalibur"), 900_000);
+    assert_eq!(facts.xp("/Lotus/Not/In/The/Payload"), 0);
+    assert_eq!(
+        facts.pending("/Lotus/Types/Recipes/Weapons/LexPrimeBlueprint"),
+        1
+    );
+}
+
+#[test]
+fn mastery_rank_follows_the_affinity_curve_and_caps_at_max_rank() {
+    assert_eq!(mastery_rank(Category::Weapon, 0, 30), Some(0));
+    assert_eq!(mastery_rank(Category::Weapon, 449_999, 30), Some(29));
+    assert_eq!(mastery_rank(Category::Weapon, 450_000, 30), Some(30));
+    assert_eq!(mastery_rank(Category::Weapon, 9_999_999, 30), Some(30));
+    assert_eq!(mastery_rank(Category::Weapon, 800_000, 40), Some(40));
+    assert_eq!(mastery_rank(Category::Frame, 196_000, 30), Some(14));
+    assert_eq!(mastery_rank(Category::PrimePart, 10, 30), None);
 }

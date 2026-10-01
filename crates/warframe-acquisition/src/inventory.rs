@@ -100,6 +100,37 @@ impl<'a> InventoryJsonDecoder<'a> {
     }
 }
 
+/// What the inventory says that the snapshot does not keep: affinity per item, and builds
+/// waiting in the foundry. Held in memory for this run only; never persisted.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MasteryFacts {
+    xp: BTreeMap<String, u64>,
+    pending: BTreeMap<String, u32>,
+}
+
+impl MasteryFacts {
+    pub fn from_parts(xp: BTreeMap<String, u64>, pending: BTreeMap<String, u32>) -> Self {
+        Self { xp, pending }
+    }
+
+    /// The affinity the inventory reports for an item, or 0 when it reports none.
+    pub fn xp(&self, item: &str) -> u64 {
+        self.xp.get(item).copied().unwrap_or(0)
+    }
+
+    /// How many builds of a recipe are waiting in the foundry, or 0 when none are.
+    pub fn pending(&self, recipe: &str) -> u32 {
+        self.pending.get(recipe).copied().unwrap_or(0)
+    }
+}
+
+/// The rank an item's affinity reaches, capped at its max rank; `None` for categories without
+/// mastery. Rank r costs r² times the rank-1 threshold that `mastery_threshold` defines.
+pub fn mastery_rank(category: Category, xp: u64, max_rank: u32) -> Option<u32> {
+    let affinity_per_rank_squared = mastery_threshold(category, 1)?;
+    Some(max_rank.min((xp / affinity_per_rank_squared).isqrt() as u32))
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct RawEntry {
@@ -268,6 +299,18 @@ struct AccumulatedEntry {
 
 impl SnapshotDecoder for InventoryJsonDecoder<'_> {
     fn decode(&self, response: &[u8]) -> Result<InventorySnapshot, AcquisitionError> {
+        self.decode_with_facts(response)
+            .map(|(snapshot, _)| snapshot)
+    }
+}
+
+impl InventoryJsonDecoder<'_> {
+    /// The snapshot plus the affinity and pending builds it does not keep. The raw payload
+    /// is parsed once; callers that only need holdings use `decode`.
+    pub fn decode_with_facts(
+        &self,
+        response: &[u8],
+    ) -> Result<(InventorySnapshot, MasteryFacts), AcquisitionError> {
         let raw: RawInventory = match serde_json::from_slice(response) {
             Ok(raw) => raw,
             Err(error) => {
@@ -337,6 +380,22 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
             self.catalog,
             report,
         );
+        // Pending builds run through the same section as the recipes, so the two counts agree
+        // by construction; a scratch report keeps those rows out of the real one.
+        let mut pending_holdings = BTreeMap::<String, AccumulatedEntry>::new();
+        add_stackable_section(
+            &mut pending_holdings,
+            raw.pending_recipes.clone(),
+            Category::Blueprint,
+            1,
+            None,
+            &mut DecodeReport::default(),
+        );
+        let pending = pending_holdings
+            .into_iter()
+            .map(|(path, accumulated)| (path, accumulated.quantity.max(0) as u32))
+            .collect::<BTreeMap<_, _>>();
+
         add_stackable_section(
             &mut entries,
             raw.pending_recipes,
@@ -414,16 +473,24 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
             report,
         );
 
+        let mut affinity = BTreeMap::<String, u64>::new();
         for row in raw.xp_info {
             report.rows_seen += 1;
-            let Ok(xp) = serde_json::from_value::<RawXpEntry>(row.clone()) else {
+            let Ok(xp_row) = serde_json::from_value::<RawXpEntry>(row.clone()) else {
                 report.skip("row does not have an item type and XP", &row);
                 continue;
             };
-            if !validate_item_type(&xp.item_type) {
+            if !validate_item_type(&xp_row.item_type) {
                 report.skip("item path is not canonical", &row);
                 continue;
             }
+            // A repeated path keeps the larger affinity: the facts answer "how much", and the
+            // larger reading is the one the game last wrote.
+            affinity
+                .entry(xp_row.item_type.clone())
+                .and_modify(|kept| *kept = (*kept).max(xp_row.xp))
+                .or_insert(xp_row.xp);
+            let xp = xp_row;
             let path = xp.item_type;
             let fallback = category_from_path(&path);
             let entry = entries
@@ -459,7 +526,9 @@ impl SnapshotDecoder for InventoryJsonDecoder<'_> {
         if report.rows_skipped != 0 {
             trace_decode(&format!("[decode] tolerated: {}", report.summary()));
         }
-        InventorySnapshot::coherent(domain_entries).map_err(|_| AcquisitionError::SnapshotInvalid)
+        let snapshot = InventorySnapshot::coherent(domain_entries)
+            .map_err(|_| AcquisitionError::SnapshotInvalid)?;
+        Ok((snapshot, MasteryFacts::from_parts(affinity, pending)))
     }
 }
 

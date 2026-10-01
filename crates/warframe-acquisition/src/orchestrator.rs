@@ -1,7 +1,7 @@
 use crate::{
     AcquisitionDiagnostic, AcquisitionError, AcquisitionHealth, AcquisitionResult,
     AuthorizationScanner, CatalogIndex, InventoryJsonDecoder, InventoryTransport, MemoryReader,
-    ProcessDiscovery, SnapshotDecoder, StageHealth,
+    ProcessDiscovery, StageHealth,
 };
 
 const SCAN_CHUNK_BYTES: usize = 1024 * 1024;
@@ -49,14 +49,15 @@ where
             .fetch(&authorization)
             .map_err(AcquisitionFailure::from_error)?;
         log::info!("acquisition: fetch ok bytes={}", body.len());
-        let snapshot = InventoryJsonDecoder::with_catalog(catalog)
-            .decode(&body)
+        let (snapshot, facts) = InventoryJsonDecoder::with_catalog(catalog)
+            .decode_with_facts(&body)
             .map_err(AcquisitionFailure::from_error)?;
         log::info!(
             "acquisition: decode ok entries={}",
             snapshot.entries().len()
         );
         AcquisitionResult::new(snapshot, AcquisitionHealth::successful())
+            .map(|result| result.with_mastery_facts(facts))
             .map_err(AcquisitionFailure::from_error)
     }
 
