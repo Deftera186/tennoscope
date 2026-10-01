@@ -378,6 +378,16 @@ fn warframe_part_blueprints_find_their_ducat_value() {
     assert_eq!(ducats("Ayatan Amber Star"), None);
 }
 
+/// A relic table names a stacked reward with its count, "2X Forma Blueprint", and the collection
+/// holds the blueprint as "Forma Blueprint". Comparing the spellings as given made the reward slip
+/// read "Not owned" over a stack of held Forma blueprints (2026-10-01).
+#[test]
+fn a_stacked_reward_matches_the_item_it_stacks() {
+    assert!(reward_name_matches("Forma Blueprint", "2X Forma Blueprint"));
+    // A count is digits then X; a first word that only ends in X is part of the name.
+    assert!(!reward_name_matches("Forma Blueprint", "X Forma Blueprint"));
+}
+
 /// The kiosk reads the game's own labels and joins prices against warframe.market's, and both
 /// spell a prime Frame's tradable part by its blueprint: "Styanax Prime Neuroptics Blueprint".
 /// The component loop named it after the part the blueprint builds, so the kiosk's closed-set

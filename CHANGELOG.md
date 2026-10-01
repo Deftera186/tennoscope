@@ -59,6 +59,9 @@ see the difference.
   turns a switch light with a dark label, but a switch that was on kept its
   light label, so tabbing to Ducat values while it was on showed a blank light
   block. The label now turns dark whether the switch is on or off.
+- **A stacked Forma reward counts the Forma blueprints you hold.** The relic
+  tables name it "2X Forma Blueprint", which matched nothing in the collection,
+  so its slip read "Not owned" however many Forma blueprints you held.
 - **An update offer survives a restart.** The daily check throttle skipped the
   network on reopen, so the masthead button vanished on the next launch and
   stayed gone until the next check ran. The offered version is now stored and

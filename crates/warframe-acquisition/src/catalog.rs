@@ -168,8 +168,25 @@ const COMPONENT_ORDER: &[&str] = &[
 /// agree, were right. The trim only ever runs after an exact match fails, so items that really are
 /// named "... Blueprint" in both vocabularies (every prime's own blueprint, Forma) still match
 /// themselves first.
+///
+/// A relic table also puts a stack's count in front of the name: it drops "2X Forma Blueprint",
+/// which the collection holds as "Forma Blueprint". The count is dropped only after both spellings
+/// fail as given.
 pub fn reward_name_matches(catalog_name: &str, reward_name: &str) -> bool {
-    catalog_name == reward_name || reward_name.strip_suffix(" Blueprint") == Some(catalog_name)
+    let names = |reward: &str| {
+        catalog_name == reward || reward.strip_suffix(" Blueprint") == Some(catalog_name)
+    };
+    names(reward_name) || without_quantity(reward_name).is_some_and(names)
+}
+
+/// The item a relic table's stacked reward names, "Forma Blueprint" for "2X Forma Blueprint". None
+/// when the first word is not a count: digits, then X.
+pub(crate) fn without_quantity(reward_name: &str) -> Option<&str> {
+    let (quantity, item) = reward_name.split_once(' ')?;
+    quantity
+        .strip_suffix('X')
+        .filter(|count| !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()))
+        .map(|_| item)
 }
 
 impl CatalogIndex {

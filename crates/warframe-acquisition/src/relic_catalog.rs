@@ -66,15 +66,12 @@ fn reward_catalog_paths(name: &str, catalog: &CatalogIndex) -> Vec<String> {
         return exact;
     }
 
-    let without_quantity = name.split_once(' ').and_then(|(quantity, item)| {
-        quantity
-            .strip_suffix('X')
-            .filter(|count| !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()))
-            .map(|_| item)
-    });
-    for alias in [without_quantity, name.strip_suffix(" Blueprint")]
-        .into_iter()
-        .flatten()
+    for alias in [
+        crate::catalog::without_quantity(name),
+        name.strip_suffix(" Blueprint"),
+    ]
+    .into_iter()
+    .flatten()
     {
         let paths = catalog.paths_for_name(alias);
         if !paths.is_empty() {
