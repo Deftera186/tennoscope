@@ -30,7 +30,7 @@ inventory Full access syncs, so on Overlay access a slip can vouch only for what
 already mastered and shows a dash otherwise. It prices the whole squad's relic pool using
 sellers who are in game right now, without taking focus from the game.
 
-![The reward overlay on a Warframe Void Fissure reward screen, with a platinum figure, a ducat figure and an owned or not owned line under each card](docs/screenshots/reward-overlay.png)
+![The reward overlay on a Warframe Void Fissure reward screen: platinum and ducat figures under each card, an Unmastered mark with the set's parts as silhouettes on the Braton Prime and Perigale Prime blueprints, a ruled edge on the Perigale blueprint you are missing, and an owned count on the two Forma Blueprints](docs/screenshots/reward-overlay.png)
 
 <div align="center">
 
