@@ -834,6 +834,12 @@ where
     let mut runtime = shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?;
+    // A fallback to Companion loses inventory access as surely as a chosen downgrade does.
+    let installed = effective_setup
+        .access_mode
+        .map(AccessMode::policy)
+        .unwrap_or_else(|| AccessMode::Companion.policy());
+    retire_mastery_facts(&mut runtime, &installed);
     runtime.setup = effective_setup;
     runtime.monitor = lifecycle;
     persistence_restore.and(restart_result)
@@ -928,9 +934,18 @@ fn transition_monitor(
     let mut runtime = shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?;
+    retire_mastery_facts(&mut runtime, &policy);
     runtime.setup = stored.clone();
     runtime.monitor = lifecycle;
     Ok(current_setup_status(stored, runtime.game_running))
+}
+
+/// Drop this run's inventory facts once the mode can no longer read the inventory: they were
+/// read under the old mode's permission, and marks fall back to what a saved collection proves.
+fn retire_mastery_facts(runtime: &mut Runtime, policy: &AccessPolicy) {
+    if !policy.acquire_inventory {
+        runtime.core.clear_mastery_facts();
+    }
 }
 
 #[tauri::command]
@@ -2277,6 +2292,7 @@ mod live_bench {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+    use warframe_acquisition::{MasteryEvidence, MasteryFacts};
     use warframe_domain::{
         CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
     };
@@ -2425,6 +2441,30 @@ mod tests {
         }))
     }
 
+    /// Losing inventory access retires the facts, not just the marks drawn from them; a policy
+    /// that still reads the inventory keeps them.
+    #[test]
+    fn losing_inventory_access_retires_live_mastery_facts() {
+        let directory = tempfile::tempdir().expect("temporary runtime");
+        let shared = test_runtime(directory.path());
+        let mut runtime = shared.lock().expect("runtime");
+        runtime.core.set_mastery_facts(MasteryFacts::default());
+
+        retire_mastery_facts(&mut runtime, &AccessMode::Full.policy());
+        assert_eq!(
+            runtime.core.mastery_view().expect("view").evidence(),
+            MasteryEvidence::Live,
+            "a policy that still acquires the inventory keeps the facts it read"
+        );
+
+        retire_mastery_facts(&mut runtime, &AccessMode::Overlay.policy());
+        assert_ne!(
+            runtime.core.mastery_view().expect("view").evidence(),
+            MasteryEvidence::Live,
+            "an overlay-only policy must not answer from live inventory reads"
+        );
+    }
+
     /// A failed save must not move the switch: the next launch would read the old choice back.
     #[test]
     fn the_mastery_marks_switch_moves_only_when_its_save_lands() {
@@ -2544,6 +2584,61 @@ mod tests {
         assert!(runtime.setup.setup_complete);
         assert_eq!(runtime.setup.access_mode, Some(AccessMode::Companion));
         assert!(runtime.monitor.policy().is_none());
+    }
+
+    /// A rollback that lands on Companion has lost inventory access, so the facts go with it.
+    /// One that restores Full keeps them.
+    #[test]
+    fn a_rollback_that_falls_back_to_companion_retires_live_mastery_facts() {
+        let directory = tempfile::tempdir().expect("temp dir");
+        let shared = test_runtime(directory.path());
+        shared
+            .lock()
+            .expect("lock")
+            .core
+            .set_mastery_facts(MasteryFacts::default());
+        let full = SetupStatus {
+            setup_complete: true,
+            access_mode: Some(AccessMode::Full),
+            ..SetupStatus::default()
+        };
+        let installed = |shared: &SharedRuntime| {
+            let runtime = shared.lock().expect("lock");
+            (
+                runtime.setup.access_mode,
+                runtime.core.mastery_view().expect("view").evidence(),
+            )
+        };
+
+        restore_previous_runtime(
+            &shared,
+            full.clone(),
+            MonitorLifecycle::default(),
+            Ok(()),
+            |_, _| Ok(()),
+        )
+        .expect("the previous monitor restarts");
+        assert_eq!(
+            installed(&shared),
+            (Some(AccessMode::Full), MasteryEvidence::Live),
+            "restoring Full keeps the facts it read"
+        );
+
+        restore_previous_runtime(
+            &shared,
+            full,
+            MonitorLifecycle::default(),
+            Ok(()),
+            |_, _| Err("game monitor could not be started".to_owned()),
+        )
+        .expect_err("the previous monitor stays down");
+        let (mode, evidence) = installed(&shared);
+        assert_eq!(mode, Some(AccessMode::Companion));
+        assert_ne!(
+            evidence,
+            MasteryEvidence::Live,
+            "Companion must not answer from live inventory reads"
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use super::{
-    AccessPolicy, SharedRuntime, apply_outcome, kiosk_geometry, kiosk_log,
+    AccessPolicy, Runtime, SharedRuntime, apply_outcome, kiosk_geometry, kiosk_log,
     kiosk_ocr::{self, BasketRow, GridCell},
     kiosk_scroll,
     kiosk_view::{self, KioskState, KioskView, MasteryStatus},
@@ -10,7 +10,7 @@ use super::{
     reward_recognition::{RecognitionTiming, RecognizedRewards, RewardRecognition},
     reward_source::LiveMemoryRewardState,
 };
-use app_core::InventoryRefreshOutcome;
+use app_core::{InventoryRefreshOutcome, MasteryView};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -28,9 +28,9 @@ use warframe_acquisition::LinuxProc as ProcessObserver;
 #[cfg(windows)]
 use warframe_acquisition::WindowsProc as ProcessObserver;
 use warframe_acquisition::{
-    AcquisitionError, CatalogCache, CatalogIndex, GameProcess, MarketPriceCache, MemoryReader,
-    PriceTable, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex, RewardCatalogEntry,
-    RewardMemoryScanner, WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp,
+    AcquisitionError, CatalogCache, CatalogIndex, GameProcess, MarketPriceCache, MasteryEvidence,
+    MemoryReader, PriceTable, ProcessDiscovery, RelicCatalogCache, RelicRewardIndex,
+    RewardCatalogEntry, RewardMemoryScanner, WarmOutcome, WfcdCatalogHttp, WfcdRelicCatalogHttp,
 };
 use warframe_domain::RewardCandidate;
 
@@ -1133,6 +1133,52 @@ fn join_price(
         .or_else(|| cache.get(name))
 }
 
+/// Reads the preference first, so a player who turned marks off is never told data is missing.
+/// Only live facts back a strip: a saved collection proves mastery, never a missing part.
+fn kiosk_mastery_source(runtime: &Runtime) -> (Option<MasteryView>, MasteryStatus) {
+    if !runtime.preferences.mastery_marks {
+        return (None, MasteryStatus::Off);
+    }
+    let Ok(view) = runtime.core.mastery_view() else {
+        return (None, MasteryStatus::Unavailable);
+    };
+    match view.evidence() {
+        MasteryEvidence::Live => (Some(view), MasteryStatus::Live),
+        MasteryEvidence::Saved | MasteryEvidence::None => (None, MasteryStatus::Unavailable),
+    }
+}
+
+/// The price table and mastery snapshot come from one lock hold, so a tile's figure and its strip
+/// agree; the per-tile view is built after the lock is released, so the UI never waits on it.
+fn kiosk_join(
+    shared: &SharedRuntime,
+    cache: &MarketPriceCache,
+    epoch: u64,
+    frame: &KioskRead,
+) -> KioskView {
+    let (table, mastery, status) = match shared.lock() {
+        Ok(runtime) => {
+            let (mastery, status) = kiosk_mastery_source(&runtime);
+            (runtime.core.collection_prices(), mastery, status)
+        }
+        // A poisoned lock is not a reason to publish nothing: the grid still has cells, and
+        // an unpriced one is one the overlay already knows how to leave out.
+        Err(_) => (None, None, MasteryStatus::Off),
+    };
+    kiosk_view::build_view(
+        epoch,
+        &frame.cells,
+        &frame.basket,
+        |name| kiosk_unit_price(table.as_ref(), cache, name),
+        |name| {
+            mastery
+                .as_ref()
+                .and_then(|mastery| mastery.kiosk_mastery(name))
+        },
+        status,
+    )
+}
+
 pub(crate) fn run(
     shared: SharedRuntime,
     app: AppHandle,
@@ -1175,6 +1221,9 @@ pub(crate) fn run(
         runtime
             .core
             .set_collection_ducats(Arc::new(catalog.ducat_table()));
+        // A clone of the index reward recognition keeps, so a mark and a price never answer
+        // from two parses of the catalogue.
+        runtime.core.set_mastery_catalog(Arc::new(catalog.clone()));
         let _ = runtime.core.enrich_collection_from_catalog(catalog);
     }
     let reward_catalog = catalog
@@ -1191,22 +1240,7 @@ pub(crate) fn run(
         let joiner = {
             let shared = Arc::clone(&shared);
             let cache = price_cache.clone();
-            move |epoch: u64, frame: &KioskRead| {
-                // Take the join inputs under one short lock hold, then build outside it: the
-                // OCR thread never makes the UI wait on a lock it does not need.
-                let table = shared
-                    .lock()
-                    .map(|runtime| runtime.core.collection_prices())
-                    .unwrap_or_default();
-                kiosk_view::build_view(
-                    epoch,
-                    &frame.cells,
-                    &frame.basket,
-                    |name| kiosk_unit_price(table.as_ref(), &cache, name),
-                    |_| None,
-                    MasteryStatus::Off,
-                )
-            }
+            move |epoch: u64, frame: &KioskRead| kiosk_join(&shared, &cache, epoch, frame)
         };
         let publish = {
             let app = app.clone();
@@ -2373,6 +2407,13 @@ fn apply_reward_observations(
     let Ok(view) = runtime.core.current_view() else {
         return;
     };
+    // One snapshot per publish, so two cards of one item cannot disagree. Taken only while marks
+    // are on; a failed lookup costs the cards nothing rather than leaving one half-joined.
+    let marks = runtime
+        .preferences
+        .mastery_marks
+        .then(|| runtime.core.mastery_view().ok())
+        .flatten();
     let candidates = observations
         .iter()
         .filter_map(|observation| {
@@ -2395,7 +2436,9 @@ fn apply_reward_observations(
                 prices.get(&observation.name).copied().unwrap_or(0),
                 ducats,
                 owned,
-                None,
+                marks
+                    .as_ref()
+                    .and_then(|marks| marks.reward_mark(&observation.name)),
                 observation.confidence,
             )
             .ok()
@@ -2654,8 +2697,13 @@ pub fn spawn_generation_worker(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use local_store::SnapshotMeta;
     use std::sync::Mutex as StdMutex;
     use std::sync::atomic::AtomicBool;
+    use warframe_acquisition::MasteryFacts;
+    use warframe_domain::{
+        CatalogItem, Category, InventoryEntry, InventorySnapshot, ItemId, KioskMastery, MasteryMark,
+    };
 
     /// A scripted screen for the kiosk poller: each `pop` is one look, so a test can stage
     /// capture loss, occlusions and scrolls without playing the game.
@@ -4594,6 +4642,150 @@ mod tests {
             kiosk_unit_price(Some(&table), &cache, "Khora Prime Neuroptics"),
             Some(7),
             "the fallback only fires where the exact join is silent"
+        );
+    }
+
+    /// The smallest catalogue that still exercises every mark the ledger can return: a
+    /// blueprint, a blade two builds need, and a handle.
+    const GUANDAO_JSON: &str = r#"[{"uniqueName": "/Lotus/Weapons/Tenno/Melee/Polearms/GuandaoPrime",
+  "name": "Guandao Prime", "category": "Melee", "type": "Melee", "masterable": true,
+  "tradable": false, "masteryReq": 12, "maxLevelCap": 30, "components": [
+  {"uniqueName": "/Lotus/Types/Recipes/Weapons/GuandaoPrimeBlueprint", "name": "Blueprint",
+   "itemCount": 1, "tradable": true, "ducats": 45, "imageName": "blueprint.png"},
+  {"uniqueName": "/Lotus/Types/Recipes/Weapons/WeaponParts/GuandaoPrimeBlade", "name": "Blade",
+   "itemCount": 2, "tradable": true, "ducats": 15, "imageName": "GenericWeaponPrimeBlade.png"},
+  {"uniqueName": "/Lotus/Types/Recipes/Weapons/WeaponParts/GuandaoPrimeHandle", "name": "Handle",
+   "itemCount": 1, "tradable": true, "ducats": 100, "imageName": "GenericWeaponPrimeHandle.png"}]}]"#;
+
+    fn guandao_catalog() -> CatalogIndex {
+        CatalogIndex::from_wfcd_json(GUANDAO_JSON.as_bytes()).expect("Guandao catalogue parses")
+    }
+
+    /// A runtime whose core holds the Guandao recipes; each test sets the facts and preference
+    /// a mark is built on. The directory comes back too, because the store lives in it.
+    fn mastery_runtime() -> (tempfile::TempDir, SharedRuntime) {
+        let directory = tempfile::tempdir().expect("temporary runtime");
+        let shared = crate::tests::test_runtime(directory.path());
+        shared
+            .lock()
+            .expect("runtime")
+            .core
+            .set_mastery_catalog(Arc::new(guandao_catalog()));
+        (directory, shared)
+    }
+
+    /// A reward card carries its set only while marks are on, and one publish reads one
+    /// snapshot, so two cards of the same item never disagree.
+    #[test]
+    fn reward_cards_carry_mastery_marks_only_while_the_preference_is_on() {
+        let (_directory, shared) = mastery_runtime();
+        let observation = RewardObservation::certain("Guandao Prime Blade");
+        let mark = |shared: &SharedRuntime| {
+            shared
+                .lock()
+                .expect("runtime")
+                .core
+                .current_view()
+                .expect("view builds")
+                .reward()
+                .cards()
+                .first()
+                .expect("the observation became a card")
+                .mastery
+                .clone()
+        };
+        shared
+            .lock()
+            .expect("runtime")
+            .core
+            .set_mastery_facts(MasteryFacts::default());
+
+        apply_reward_observations(
+            &shared,
+            &[],
+            std::slice::from_ref(&observation),
+            &BTreeMap::new(),
+        );
+        assert!(
+            matches!(mark(&shared), Some(MasteryMark::Unmastered { .. })),
+            "live facts name the set the blade belongs to"
+        );
+
+        shared.lock().expect("runtime").preferences.mastery_marks = false;
+        apply_reward_observations(
+            &shared,
+            &[],
+            std::slice::from_ref(&observation),
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            mark(&shared),
+            None,
+            "marks switched off leave the card as it was before the feature existed"
+        );
+    }
+
+    /// One collection row that is not a Guandao part: it makes the evidence saved, as for a
+    /// player who ran Full and dropped to Overlay, without deciding the mark itself.
+    fn unrelated_holding() -> InventoryEntry {
+        InventoryEntry::new(
+            CatalogItem::new(
+                ItemId::new("/Lotus/Weapons/PC/Recon/Rail").expect("item id"),
+                "Cobra Prime",
+                Category::Weapon,
+            )
+            .expect("catalog item"),
+            2,
+        )
+    }
+
+    /// A saved collection proves what is mastered, never what is missing, so it backs no strip.
+    /// `Unavailable` tells the frontend why, and a tile with no price is dropped from the payload.
+    #[test]
+    fn kiosk_mastery_strips_appear_only_from_live_facts_and_only_while_the_preference_is_on() {
+        let (_directory, shared) = mastery_runtime();
+        let frame = KioskRead {
+            cells: vec![scripted_cell("Guandao Prime Blade")],
+            basket: Vec::new(),
+        };
+        let cache = MarketPriceCache::new();
+        shared
+            .lock()
+            .expect("runtime")
+            .core
+            .apply_inventory_snapshot(
+                InventorySnapshot::coherent(vec![unrelated_holding()]).expect("collection"),
+                SnapshotMeta::fake("saved").expect("meta"),
+            )
+            .expect("snapshot applies");
+
+        let saved = kiosk_join(&shared, &cache, 7, &frame);
+        assert_eq!(saved.mastery_status, MasteryStatus::Unavailable);
+        assert!(
+            saved.cells.is_empty(),
+            "a saved collection cannot say what the blade is still missing"
+        );
+
+        shared
+            .lock()
+            .expect("runtime")
+            .core
+            .set_mastery_facts(MasteryFacts::default());
+        let live = kiosk_join(&shared, &cache, 7, &frame);
+        assert_eq!(live.mastery_status, MasteryStatus::Live);
+        let chip = live.cells.first().expect("the strip keeps the tile");
+        assert_eq!(
+            (chip.platinum, chip.mastery),
+            (None, Some(KioskMastery { held: 0, uses: 2 })),
+            "the blade needs two, and the strip is the only reason this tile survives"
+        );
+
+        shared.lock().expect("runtime").preferences.mastery_marks = false;
+        let off = kiosk_join(&shared, &cache, 7, &frame);
+        assert_eq!(off.mastery_status, MasteryStatus::Off);
+        assert!(
+            off.cells.is_empty(),
+            "a player who turned marks off is not told the data is missing"
         );
     }
 }
