@@ -1,9 +1,9 @@
 Name:           tennoscope
-# Pinned to the newest stable tag, not the workspace version. v0.12.1 was
-# never tagged, so Source0 has no tarball to fetch, and v0.12.1-rc1 sorts
-# above 0.12.0 (rpm.vercmp), which would make dnf serve a release candidate
+# Tracks the newest stable tag, never a prerelease. Source0 fetches that tag's
+# tarball, so an untagged version has nothing to build, and rpm.vercmp sorts
+# v0.12.1-rc1 above v0.12.0, which would have dnf serving a release candidate
 # as the newest build in a channel documented as the stable install path.
-Version:        0.12.0
+Version:        0.13.0
 Release:        1%{?dist}
 Summary:        Local-first Warframe collection and relic companion
 License:        GPL-3.0-only
@@ -104,6 +104,8 @@ pnpm --dir app check
 %{_datadir}/doc/%{name}/THIRD_PARTY_NOTICES.md
 
 %changelog
+* Fri Oct 02 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.13.0-1
+- Track the newest stable tag, v0.13.0
 * Wed Sep 30 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.12.0-1
 - Track the newest stable tag, v0.12.0
 * Tue Sep 22 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.11.0-1

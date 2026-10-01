@@ -14,6 +14,8 @@ see the difference.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-02
+
 ### Added
 
 - **Reward slips show whether you have mastered the Prime each part builds.** Each
@@ -753,7 +755,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.12.1-rc1...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/Deftera186/tennoscope/compare/v0.12.1-rc1...v0.13.0
 [0.12.1-rc1]: https://github.com/Deftera186/tennoscope/compare/v0.12.0...v0.12.1-rc1
 [0.12.0]: https://github.com/Deftera186/tennoscope/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/Deftera186/tennoscope/compare/v0.10.0...v0.11.0
