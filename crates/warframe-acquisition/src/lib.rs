@@ -22,8 +22,8 @@ mod windows_proc;
 
 pub use authorization::AuthorizationScanner;
 pub use catalog::{
-    CatalogError, CatalogIndex, CatalogMetadata, DucatTable, RewardCatalogEntry,
-    reward_name_matches,
+    CatalogError, CatalogIndex, CatalogMetadata, ComponentKind, DucatTable, Recipe,
+    RecipeComponent, RewardCatalogEntry, reward_name_matches,
 };
 pub use catalog_cache::{
     CatalogCache, CatalogCacheError, CatalogFetch, CatalogLoad, CatalogLoadSource, CatalogSource,

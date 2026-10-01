@@ -1,5 +1,9 @@
+mod common;
+
+use common::recipes::*;
 use warframe_acquisition::{
-    CatalogIndex, InventoryJsonDecoder, PriceTable, SnapshotDecoder, reward_name_matches,
+    CatalogIndex, ComponentKind, InventoryJsonDecoder, PriceTable, SnapshotDecoder,
+    reward_name_matches,
 };
 use warframe_domain::Category;
 
@@ -486,4 +490,97 @@ fn archon_shards_lose_the_icon_tag_and_keep_the_crystal_in_view() {
             .image_name(),
         Some("ArchonShardGreen.png")
     );
+}
+
+#[test]
+fn a_recipe_keeps_per_build_counts_in_canonical_order() {
+    let catalog = catalog();
+    let recipe = catalog.recipe(GUANDAO).expect("Guandao Prime has a recipe");
+    let slots: Vec<_> = recipe
+        .components
+        .iter()
+        .map(|c| (c.name.as_str(), c.per_build, c.kind))
+        .collect();
+    assert_eq!(
+        slots,
+        vec![
+            ("Blueprint", 1, ComponentKind::Blueprint),
+            ("Blade", 2, ComponentKind::Part),
+            ("Handle", 1, ComponentKind::Part),
+        ],
+        "resources are not slots, and the blueprint always leads"
+    );
+    assert_eq!(recipe.parent_name, "Guandao Prime");
+}
+
+#[test]
+fn a_warframe_part_resolves_from_its_component_and_its_blueprint() {
+    let catalog = catalog();
+    let (recipe, chassis) = catalog.part_parent(REVENANT_CHASSIS).expect("component");
+    assert_eq!(
+        (recipe.parent.as_str(), chassis.name.as_str()),
+        (REVENANT, "Chassis")
+    );
+    let (same, slot) = catalog
+        .part_parent(REVENANT_CHASSIS_BP)
+        .expect("blueprint sibling");
+    assert_eq!(
+        (same.parent.as_str(), slot.path.as_str()),
+        (REVENANT, REVENANT_CHASSIS)
+    );
+    let order: Vec<_> = recipe.components.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(order, vec!["Blueprint", "Neuroptics", "Chassis", "Systems"]);
+}
+
+#[test]
+fn a_duplicated_ingredient_sums_into_one_slot_and_indexes_its_consumer() {
+    let catalog = catalog();
+    let recipe = catalog
+        .recipe(AKBRONCO)
+        .expect("Akbronco Prime has a recipe");
+    let slots: Vec<_> = recipe
+        .components
+        .iter()
+        .map(|c| (c.name.as_str(), c.per_build, c.kind))
+        .collect();
+    assert_eq!(
+        slots,
+        vec![
+            ("Blueprint", 1, ComponentKind::Blueprint),
+            ("Link", 1, ComponentKind::Part),
+            ("Bronco Prime", 2, ComponentKind::Ingredient),
+        ],
+        "ingredients come last"
+    );
+    assert_eq!(catalog.consumers_of(BRONCO), &[(AKBRONCO.to_owned(), 2)]);
+    assert!(catalog.consumers_of(AKBRONCO).is_empty());
+}
+
+#[test]
+fn resources_and_non_prime_items_have_no_recipe_relation() {
+    let catalog = catalog();
+    assert!(catalog.part_parent(OROKIN_CELL).is_none());
+    assert!(catalog.part_parent(FORMA_BP).is_none());
+    assert!(
+        catalog.part_parent(BRONCO).is_none(),
+        "an ingredient is not a part of its consumer"
+    );
+}
+
+#[test]
+fn reward_names_resolve_to_parts_with_a_recipe_relation() {
+    let catalog = catalog();
+    assert_eq!(
+        catalog.part_path_for_reward("Guandao Prime Blade"),
+        Some(GUANDAO_BLADE)
+    );
+    let chassis = catalog
+        .part_path_for_reward("Revenant Prime Chassis Blueprint")
+        .expect("the relic names the blueprint");
+    assert_eq!(
+        catalog.part_parent(chassis).map(|(r, _)| r.parent.as_str()),
+        Some(REVENANT)
+    );
+    assert_eq!(catalog.part_path_for_reward("Forma Blueprint"), None);
+    assert_eq!(catalog.part_path_for_reward("Not An Item"), None);
 }

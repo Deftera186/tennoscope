@@ -59,6 +59,9 @@ pub enum CatalogError {
 #[derive(Clone, Debug, Default)]
 pub struct CatalogIndex {
     items: BTreeMap<String, CatalogMetadata>,
+    recipes: BTreeMap<String, Recipe>,
+    part_parents: BTreeMap<String, (String, usize)>,
+    consumers: BTreeMap<String, Vec<(String, u32)>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,6 +85,76 @@ impl DucatTable {
         self.entries.get(catalog_path).copied()
     }
 }
+
+/// What a Prime item is built from, so mastery marks know which parts a reward belongs to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Recipe {
+    /// The parent item's uniqueName.
+    pub parent: String,
+    /// The parent item's display name: "Akbronco Prime".
+    pub parent_name: String,
+    /// Blueprint first, then parts in foundry order, then whole-item ingredients last.
+    pub components: Vec<RecipeComponent>,
+}
+
+/// One slot of a Prime recipe: a blueprint, a tradable part, or a whole item another Prime
+/// consumes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecipeComponent {
+    /// The component's uniqueName.
+    pub path: String,
+    /// WFCD's component name: "Blueprint", "Chassis", "Blade", "Bronco Prime".
+    pub name: String,
+    /// WFCD's imageName, e.g. "GenericWeaponPrimeBlade.png".
+    pub image_name: Option<String>,
+    /// Guandao Prime takes two Blades. Missing and complete counts depend on this, so it is
+    /// never assumed to be 1.
+    pub per_build: u32,
+    pub kind: ComponentKind,
+}
+
+/// Whether a recipe slot is the build's blueprint, one of its tradable parts, or a whole
+/// masterable item consumed by the build.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComponentKind {
+    Blueprint,
+    Part,
+    Ingredient,
+}
+
+/// The order the game's foundry lists parts in. A part this list does not know sorts after
+/// the known ones, by name.
+const COMPONENT_ORDER: &[&str] = &[
+    "Blueprint",
+    "Neuroptics",
+    "Cerebrum",
+    "Chassis",
+    "Carapace",
+    "Systems",
+    "Harness",
+    "Wings",
+    "Barrel",
+    "Receiver",
+    "Stock",
+    "Grip",
+    "Upper Limb",
+    "Lower Limb",
+    "String",
+    "Blade",
+    "Blades",
+    "Head",
+    "Handle",
+    "Hilt",
+    "Guard",
+    "Disc",
+    "Chain",
+    "Gauntlet",
+    "Boot",
+    "Ornament",
+    "Pouch",
+    "Stars",
+    "Link",
+];
 
 /// Does this catalog entry name the item the reward screen is offering?
 ///
@@ -189,8 +262,95 @@ impl CatalogIndex {
                     }
                 }
             }
+            index.index_recipe(parent)?;
         }
         Ok(index)
+    }
+
+    /// The recipe behind one Prime parent: its blueprint, tradable parts and consumed whole
+    /// items. Resources such as Orokin Cells are skipped, since no mastery mark needs them.
+    fn index_recipe(&mut self, parent: &WfcdItem) -> Result<(), CatalogError> {
+        let mut grouped: BTreeMap<&str, (u32, &WfcdComponent)> = BTreeMap::new();
+        for component in &parent.components {
+            grouped
+                .entry(component.unique_name.as_str())
+                .and_modify(|(count, _)| *count += component.item_count.unwrap_or(1))
+                .or_insert((component.item_count.unwrap_or(1), component));
+        }
+        let mut slots = Vec::with_capacity(grouped.len());
+        for (path, (per_build, first)) in &grouped {
+            let name = validated_name(&first.name)?;
+            let kind = if name == "Blueprint" {
+                ComponentKind::Blueprint
+            } else if self
+                .items
+                .get(*path)
+                .is_some_and(CatalogMetadata::masterable)
+            {
+                ComponentKind::Ingredient
+            } else if first.tradable
+                && (first.ducats.is_some() || first.prime_selling_price.is_some())
+            {
+                ComponentKind::Part
+            } else {
+                continue;
+            };
+            slots.push(RecipeComponent {
+                path: (*path).to_owned(),
+                name,
+                image_name: first.image_name.clone(),
+                per_build: (*per_build).max(1),
+                kind,
+            });
+        }
+        slots.sort_by(|a, b| {
+            (
+                a.kind == ComponentKind::Ingredient,
+                component_order(&a.name),
+                &a.name,
+            )
+                .cmp(&(
+                    b.kind == ComponentKind::Ingredient,
+                    component_order(&b.name),
+                    &b.name,
+                ))
+        });
+        if !slots
+            .iter()
+            .any(|slot| slot.kind != ComponentKind::Ingredient)
+        {
+            return Ok(());
+        }
+        let parent_path = parent.unique_name.clone();
+        for (slot_index, slot) in slots.iter().enumerate() {
+            match slot.kind {
+                ComponentKind::Blueprint | ComponentKind::Part => {
+                    self.part_parents
+                        .insert(slot.path.clone(), (parent_path.clone(), slot_index));
+                    // Relics drop the blueprint, and the player may hold either spelling. Key
+                    // both at the same slot.
+                    if let Some(stem) = slot.path.strip_suffix("Component") {
+                        self.part_parents.insert(
+                            format!("{stem}Blueprint"),
+                            (parent_path.clone(), slot_index),
+                        );
+                    }
+                }
+                ComponentKind::Ingredient => {
+                    self.consumers
+                        .entry(slot.path.clone())
+                        .or_default()
+                        .push((parent_path.clone(), slot.per_build));
+                }
+            }
+        }
+        let recipe = Recipe {
+            parent: parent_path.clone(),
+            parent_name: validated_name(&parent.name)?,
+            components: slots,
+        };
+        self.recipes.insert(parent_path, recipe);
+        Ok(())
     }
 
     pub fn resolve(&self, unique_name: &str) -> Option<&CatalogMetadata> {
@@ -216,6 +376,47 @@ impl CatalogIndex {
             .filter(|(_, metadata)| metadata.name == name)
             .map(|(path, _)| path.clone())
             .collect()
+    }
+
+    /// The Prime recipe for a parent item's path, if the catalogue knows one.
+    pub fn recipe(&self, parent: &str) -> Option<&Recipe> {
+        self.recipes.get(parent)
+    }
+
+    /// The recipe a tradable part or blueprint fills, and its slot there. A part's `…Blueprint`
+    /// sibling gets the same slot: relics drop the blueprint, and the player may hold either.
+    pub fn part_parent(&self, part: &str) -> Option<(&Recipe, &RecipeComponent)> {
+        let (parent, slot_index) = self.part_parents.get(part)?;
+        let recipe = self.recipes.get(parent)?;
+        recipe
+            .components
+            .get(*slot_index)
+            .map(|slot| (recipe, slot))
+    }
+
+    /// The recipes that consume an item whole, with how many copies each build takes. Empty
+    /// when nothing consumes it.
+    pub fn consumers_of(&self, item: &str) -> &[(String, u32)] {
+        self.consumers.get(item).map_or(&[], Vec::as_slice)
+    }
+
+    /// The path a reward name refers to, among paths with a recipe. An exact name beats the
+    /// blueprint-suffix trim, and the first exact spelling in catalogue order beats a later one.
+    pub fn part_path_for_reward(&self, reward_name: &str) -> Option<&str> {
+        let mut suffix_match = None;
+        for path in self.part_parents.keys() {
+            let name = match self.items.get(path.as_str()) {
+                Some(metadata) => metadata.name(),
+                None => continue,
+            };
+            if name == reward_name {
+                return Some(path);
+            }
+            if suffix_match.is_none() && reward_name_matches(name, reward_name) {
+                suffix_match = Some(path);
+            }
+        }
+        suffix_match.map(String::as_str)
     }
 
     /// The catalogue's ducat values as a join table. Only entries with ducats to their name: zero
@@ -293,6 +494,10 @@ struct WfcdComponent {
     prime_selling_price: Option<u32>,
     #[serde(default)]
     image_name: Option<String>,
+    /// How many copies one build takes. WFCD repeats the entry instead for some ingredients
+    /// (Akbronco lists Bronco Prime twice), so this is summed per path, never read raw.
+    #[serde(default)]
+    item_count: Option<u32>,
 }
 
 fn classify_item(item: &WfcdItem) -> Option<Category> {
@@ -385,6 +590,13 @@ fn catalog_max_rank(name: &str) -> u32 {
     } else {
         30
     }
+}
+
+fn component_order(name: &str) -> usize {
+    COMPONENT_ORDER
+        .iter()
+        .position(|known| *known == name)
+        .unwrap_or(COMPONENT_ORDER.len())
 }
 
 fn is_prime_parent(name: &str) -> bool {
