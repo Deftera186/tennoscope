@@ -21,9 +21,14 @@ No Overwolf, no account, no telemetry.**
 
 See platinum and ducats under each reward the moment it appears. TennoScope sees the
 reward arrive in `EE.log`, reads the cards with Tesseract and draws the values under the
-row. It also marks what you own, what you are missing and what you still need for mastery.
-It prices the whole squad's relic pool using sellers who are in game right now, without
-taking focus from the game.
+row. Each Prime part's slip also shows whether you have mastered the Prime it builds:
+mastered, built and at what rank, in the foundry, or still unmastered, with the set behind
+it drawn as part silhouettes and a ruled edge on the parts you are missing. A Lex, Bronco,
+Magnus or Vasto Prime part keeps counting toward the Ak pistol that takes two of them, so
+after you master a Lex Prime its parts can read "Unmastered Aklex". Those marks need the
+inventory Full access syncs, so on Overlay access a slip can vouch only for what you have
+already mastered and shows a dash otherwise. It prices the whole squad's relic pool using
+sellers who are in game right now, without taking focus from the game.
 
 ![The reward overlay on a Warframe Void Fissure reward screen, with a platinum figure, a ducat figure and an owned or not owned line under each card](docs/screenshots/reward-overlay.png)
 
@@ -35,9 +40,13 @@ taking focus from the game.
 
 Before you trade a Prime part for ducats, check what it is worth in platinum. TennoScope
 puts a platinum figure on every tile of the grid, carries each pick into the sell list, and
-totals the sell list as it fills.
+totals the sell list as it fills. On a tile for a part of an item you have not mastered,
+built or started building, the figure gives way to one strip: that the item is unmastered
+and what the part sells for, plus, when you need the part more than once and the strip has
+room, how many you hold against how many you need. Strips come from the same live
+inventory, so on Overlay access every tile keeps its plain price.
 
-![The Ducat Kiosk overlay, with a platinum figure on every Prime part tile, the picked items and their values in a sell list on the right, and a running total at the bottom](docs/screenshots/ducat-kiosk.png)
+![The Ducat Kiosk overlay: a platinum figure on each Prime part tile, an Unmastered strip with the price on tiles for parts of items not yet mastered, the picked items and their values in a sell list on the right, and a running total at the bottom](docs/screenshots/ducat-kiosk.png)
 
 <div align="center">
 
@@ -83,6 +92,10 @@ reading for the reward advisor, or go Full for automatic inventory sync. Nothing
 starts until you confirm, and no mode ever writes to the game, automates input,
 or sends telemetry. Change your mind later and the lower mode retires everything it
 no longer permits before the switch completes.
+
+Mastery marks on the reward and kiosk overlays are a separate switch in Settings, on by
+default. Turn them off and reward slips go back to their owned line and kiosk tiles to
+their plain price.
 
 ![The one-time setup screen, with Companion, Overlay and Full as the three access levels, Full selected, and the list of what Full adds](docs/screenshots/warframe-access.png)
 

@@ -352,11 +352,6 @@ Paris Prime Lower Limb is `PrimeBowLowerLimb`, Orthos Prime Blade is `PrimePolea
 Neuroptics is `XakuPrimeHelmet`, Fang Prime Handle is `PrimeFangHandle`, Vadarya Prime Stock is
 `PrimeLightningGunStock`.
 
-## Still open
-
-- `mastery_relevant` on a reward card is always false. Doing it properly needs mastery tracking the
-  app does not collect.
-
 ## Settled
 
 - The chain published a correct overlay on a live reward screen on 2026-07-27, after the poller
@@ -370,4 +365,12 @@ Neuroptics is `XakuPrimeHelmet`, Fang Prime Handle is `PrimeFangHandle`, Vadarya
 - Separating the title from the card art with `-normalize -threshold 74% -negate` takes all twelve
   labelled cards to an exact read. The earlier claim that thresholding made things worse was wrong;
   it was tried without `-normalize`, which is the step that makes one cutoff hold across card art.
+- `mastery_relevant` on a reward card was always false, and doing it properly did need mastery
+  tracking the app did not collect. It does now: the Prime recipe index
+  (`crates/warframe-acquisition/src/catalog.rs`) says which slot of a build each part fills and how
+  many copies a build takes, and the mastery ledger
+  (`crates/warframe-acquisition/src/mastery.rs`) joins that against holdings and this run's facts to
+  answer with a mark per card: mastered, built at a rank, in the foundry, unmastered with the set
+  behind it, or unknown. Mastery is permanent and every other state is not, so a saved collection
+  can prove a card's item is mastered and can never prove it still needs parts.
 

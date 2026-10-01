@@ -14,6 +14,39 @@ see the difference.
 
 ## [Unreleased]
 
+### Added
+
+- **Reward slips show whether you have mastered the Prime each part builds.** Each
+  Prime part's slip on the reward overlay and the Rewards page ends in a mastery mark:
+  mastered, built and at what rank, in the foundry, or unmastered, and a dash where the
+  app cannot tell. An unmastered slip draws the Prime's set as part silhouettes, held
+  copies solid and missing ones dimmed, and rules its edge when you are short of the
+  part, twice when it is the last part the set needs. Akbronco, Aklex, Akmagnus and
+  Akvasto Prime each take two of their single Prime, so once you have mastered or
+  built a Lex Prime, its parts still count while you hold fewer than two and have
+  neither mastered nor built the Aklex: their slips read "Unmastered Aklex", draw the
+  Aklex's set and never rule twice. Mastery is permanent but held, built and pending
+  parts are not, so the marks are read from this run's inventory: on Overlay access,
+  or before the first Full sync of a session, only "mastered" can appear and every
+  other mark is a dash.
+- **Kiosk tiles mark parts of items you have not mastered.** A tile for a part of an
+  item you have not mastered, built or started building gives its price chip over to
+  one strip that says the item is unmastered and what the part sells for, adding how
+  many of the part you hold against how many you need when you need it more than once
+  and the strip has room for it. The strip keeps clear of the game's own owned badge,
+  gives up a further 12px for a held count of ten or more, and drops its detail until
+  the word and the price both fit. With no live inventory no strip is drawn at all and
+  one line over the grid reads "Mastery: no live inventory".
+- **A switch for the mastery marks.** Settings > Preferences carries "Mastery marks
+  on overlays", on by default. Turning it off stops both overlays drawing marks from
+  their next update, without a restart.
+
+### Changed
+
+- **The reward overlay is 24px taller.** Its window was 156 of 1080 design pixels and
+  is now 180, which is what the set row at the foot of a slip needs. The window still
+  hangs directly below the game's reward cards, so the extra height never covers them.
+
 ### Fixed
 
 - **An update offer survives a restart.** The daily check throttle skipped the
