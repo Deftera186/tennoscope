@@ -243,14 +243,13 @@ impl CatalogIndex {
                 };
                 index.insert(&component.unique_name, metadata.clone(), true)?;
 
-                // Inventory stores Prime Warframe part recipes as `...Blueprint`, while WFCD
-                // publishes their trade metadata on deterministic `...Component` siblings. Keep
-                // the component identity for relic rewards and add the recipe identity used by
-                // collection rows. Helmet is the canonical path name for Neuroptics.
+                // Inventory stores a part's recipe as `…Blueprint`; WFCD lists the `…Component`.
+                // The paths spell Neuroptics as Helmet and an Archwing's Harness as Chassis.
                 for (component_suffix, recipe_suffix) in [
                     ("ChassisComponent", "ChassisBlueprint"),
                     ("SystemsComponent", "SystemsBlueprint"),
                     ("HelmetComponent", "HelmetBlueprint"),
+                    ("WingsComponent", "WingsBlueprint"),
                 ] {
                     if let Some(stem) = component.unique_name.strip_suffix(component_suffix) {
                         let mut recipe = metadata.clone();

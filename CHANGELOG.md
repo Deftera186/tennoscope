@@ -49,6 +49,12 @@ see the difference.
 
 ### Fixed
 
+- **Odonata Prime Wings Blueprint is named correctly.** The Ducat Kiosk
+  recognises a tile against the names it expects to find, and the Wings
+  blueprint was missing from them while the Harness and Systems blueprints were
+  there, so a read of that tile could match the Harness and show its price.
+  The collection listed a held Wings blueprint as Prime Archwing Wings
+  Blueprint with no ducat value; it now carries its own name and its ducats.
 - **An update offer survives a restart.** The daily check throttle skipped the
   network on reopen, so the masthead button vanished on the next launch and
   stayed gone until the next check ran. The offered version is now stored and

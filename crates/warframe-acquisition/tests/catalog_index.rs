@@ -411,6 +411,37 @@ fn a_prime_frames_components_are_named_by_their_blueprint() {
     assert!(!names.iter().any(|name| name == "Lavos Prime Chassis"));
 }
 
+/// The kiosk reads an Archwing's Wings tile by its blueprint name. Without that name in the closed
+/// set, a clean read lands on the Harness Blueprint and the tile shows the Harness price.
+#[test]
+fn an_archwings_wings_are_named_by_their_blueprint() {
+    const WINGS_BP: &str =
+        "/Lotus/Types/Recipes/ArchwingRecipes/PrimeArchwing/PrimeArchwingWingsBlueprint";
+    let catalog = CatalogIndex::from_wfcd_json(
+        br#"[{
+          "uniqueName":"/Lotus/Powersuits/Archwing/PrimeJetPack/PrimeJetPack","name":"Odonata Prime",
+          "type":"Archwing","category":"Archwing","masterable":true,
+          "components":[
+            {"uniqueName":"/Lotus/Types/Recipes/ArchwingRecipes/PrimeArchwing/PrimeArchwingBlueprint","name":"Blueprint","itemCount":1,"tradable":true,"ducats":45,"primeSellingPrice":45,"imageName":"blueprint.png"},
+            {"uniqueName":"/Lotus/Types/Recipes/ArchwingRecipes/PrimeArchwing/PrimeArchwingChassisComponent","name":"Harness","itemCount":1,"tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"GenericArchwingHarnessPrime.png"},
+            {"uniqueName":"/Lotus/Types/Recipes/ArchwingRecipes/PrimeArchwing/PrimeArchwingSystemsComponent","name":"Systems","itemCount":1,"tradable":true,"ducats":15,"primeSellingPrice":15,"imageName":"GenericArchwingSystemsPrime.png"},
+            {"uniqueName":"/Lotus/Types/Recipes/ArchwingRecipes/PrimeArchwing/PrimeArchwingWingsComponent","name":"Wings","itemCount":1,"tradable":true,"ducats":65,"primeSellingPrice":65,"imageName":"GenericArchwingWingsPrime.png"}
+          ]
+        }]"#,
+    )
+    .unwrap();
+    let names: Vec<_> = catalog
+        .reward_entries()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    assert!(names.contains(&"Odonata Prime Wings Blueprint".to_owned()));
+    assert_eq!(
+        catalog.part_path_for_reward("Odonata Prime Wings Blueprint"),
+        Some(WINGS_BP)
+    );
+}
+
 /// The collection joins ducats onto its rows by catalog path, the same route enrichment already
 /// takes, so the index hands over a table keyed that way. Prime parents and plain equipment
 /// resolve in the index but hold no ducats of their own: only the components do.
