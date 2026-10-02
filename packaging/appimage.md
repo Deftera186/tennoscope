@@ -26,8 +26,11 @@ permission bits are normalized across the AppDir before the repack (`chmod -R o+
 v0.12.0 shipped `AppRun.wrapped` at 770, which a sandbox running as neither owner nor
 group could not execute, and the catalog test runs exactly that way. linuxdeploy
 then repacks the AppDir, and the helper extracts the result again: it checks that the
-rewritten desktop entry is the one that shipped, and it fails if any directory, file, or
-executable in the extracted payload lacks its world bits. It also refuses to continue if the GTK
+rewritten desktop entry is the one that shipped, and it fails if any file or executable in
+the extracted payload lacks its world bits. Directories are checked on the AppDir instead,
+before packing, because `--appimage-extract` creates every directory 700 whatever the image
+stores; mounting the artifact shows 755 everywhere, and the mount is what a sandboxed user
+traverses. It also refuses to continue if the GTK
 plugin's generated launcher stops forcing `GDK_BACKEND=x11`, which is what the reward
 overlay needs: that environment variable would override the backend the app requests for
 itself. Build AppImages through the helper rather than invoking

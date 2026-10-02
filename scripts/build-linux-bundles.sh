@@ -304,6 +304,7 @@ patch_and_repack_appimage() {
     echo "could not normalize the AppDir world permissions" >&2
     exit 1
   }
+  assert_world_accessible "$appdir"
   (cd "$bundle_dir" && APPIMAGE_EXTRACT_AND_RUN=1 OUTPUT="$built" \
     "$packer" --appdir "$appdir") || {
     echo "failed to repack the patched AppImage" >&2
@@ -333,44 +334,82 @@ patch_and_repack_appimage() {
     "the final AppImage icon"
   # v0.12.0 proved the outer +x check is not enough: its AppRun.wrapped was
   # 770, unexecutable to anyone but owner and group, and the catalog sandbox
-  # runs as neither. Check the extracted payload, which is what ships, so a
-  # packer-introduced mode cannot slip through either.
-  assert_payload_world_accessible "$appimage_extract_tmp/squashfs-root"
+  # runs as neither. Check the payload that actually ships, so a
+  # packer-introduced mode cannot slip through either -- but only for files.
+  #
+  # Directory modes are checked on the AppDir instead, before packing, because
+  # extraction cannot be trusted to report them: `--appimage-extract` creates
+  # every directory 700 whatever the image stores, while files keep their stored
+  # mode. Asserting directories on the extract failed the whole 0.13.0 build
+  # against an image that mounts 755 everywhere. Mounting the artifact shows
+  # what a sandboxed user actually traverses, and that is the check that counts.
+  assert_world_readable_files "$appimage_extract_tmp/squashfs-root"
 
   rm -rf "$appimage_extract_tmp"
   appimage_extract_tmp=
 }
 
-# A `find` that cannot read the payload returns nothing, which inside a command
-# substitution is indistinguishable from a payload that is clean. Capture the
-# status so a gate that never looked reports failure instead of passing.
-assert_payload_world_accessible() {
-  payload_root=$1
-  payload_offenders=$(find "$payload_root" -type d ! -perm -005 -print -quit) || {
-    echo "could not inspect the directories in the final AppImage payload" >&2
+# A `find` that cannot read the tree returns nothing, which inside a command
+# substitution is indistinguishable from a tree that is clean. Capture the status
+# so a check that never looked reports failure instead of passing.
+first_offender() {
+  find_root=$1
+  shift
+  find "$find_root" "$@" -print -quit
+}
+
+# Directories need read and execute to be traversable, files need read, and an
+# executable needs execute for anyone who is neither owner nor group.
+assert_world_accessible() {
+  tree_root=$1
+  offenders=$(first_offender "$tree_root" -type d ! -perm -005) || {
+    echo "could not inspect the directories in $tree_root" >&2
     exit 1
   }
-  [ -z "$payload_offenders" ] || {
-    echo "the final AppImage contains a directory without world access:" >&2
-    find "$payload_root" -type d ! -perm -005 -printf '  %m %p\n' >&2
+  [ -z "$offenders" ] || {
+    echo "$tree_root contains a directory without world access:" >&2
+    find "$tree_root" -type d ! -perm -005 -printf '  %m %p\n' >&2
     exit 1
   }
-  payload_offenders=$(find "$payload_root" -type f ! -perm -004 -print -quit) || {
-    echo "could not inspect the files in the final AppImage payload" >&2
+  offenders=$(first_offender "$tree_root" -type f ! -perm -004) || {
+    echo "could not inspect the files in $tree_root" >&2
     exit 1
   }
-  [ -z "$payload_offenders" ] || {
-    echo "the final AppImage contains a file without world read permission:" >&2
-    find "$payload_root" -type f ! -perm -004 -printf '  %m %p\n' >&2
+  [ -z "$offenders" ] || {
+    echo "$tree_root contains a file without world read permission:" >&2
+    find "$tree_root" -type f ! -perm -004 -printf '  %m %p\n' >&2
     exit 1
   }
-  payload_offenders=$(find "$payload_root" -type f -perm -100 ! -perm -001 -print -quit) || {
-    echo "could not inspect the executables in the final AppImage payload" >&2
+  offenders=$(first_offender "$tree_root" -type f -perm -100 ! -perm -001) || {
+    echo "could not inspect the executables in $tree_root" >&2
     exit 1
   }
-  [ -z "$payload_offenders" ] || {
-    echo "the final AppImage contains an executable without world execute permission:" >&2
-    find "$payload_root" -type f -perm -100 ! -perm -001 -printf '  %m %p\n' >&2
+  [ -z "$offenders" ] || {
+    echo "$tree_root contains an executable without world execute permission:" >&2
+    find "$tree_root" -type f -perm -100 ! -perm -001 -printf '  %m %p\n' >&2
+    exit 1
+  }
+}
+
+# The extraction half: files only, for the reason above.
+assert_world_readable_files() {
+  tree_root=$1
+  offenders=$(first_offender "$tree_root" -type f ! -perm -004) || {
+    echo "could not inspect the files in $tree_root" >&2
+    exit 1
+  }
+  [ -z "$offenders" ] || {
+    echo "$tree_root contains a file without world read permission:" >&2
+    find "$tree_root" -type f ! -perm -004 -printf '  %m %p\n' >&2
+    exit 1
+  }
+  offenders=$(first_offender "$tree_root" -type f -perm -100 ! -perm -001) || {
+    echo "could not inspect the executables in $tree_root" >&2
+    exit 1
+  }
+  [ -z "$offenders" ] || {
+    echo "$tree_root contains an executable without world execute permission:" >&2
+    find "$tree_root" -type f -perm -100 ! -perm -001 -printf '  %m %p\n' >&2
     exit 1
   }
 }

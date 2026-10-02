@@ -151,8 +151,12 @@ artifact_exec=$(awk '/^Exec=/ { matches++; value = $0 } END { if (matches != 1) 
 # catalog runs this image sandboxed as a user who is neither owner nor group, so an executable
 # without world execute is a crash before any window exists. Checking the extracted payload
 # means this fails if the normalization is removed, not only if the builder's own gates are.
+#
+# Files only. A real `--appimage-extract` creates every directory 700 whatever the image
+# stores, so a directory here would report a mode no sandboxed user ever sees; the builder
+# checks directories on the AppDir instead, where the filesystem reports them truthfully.
 artifact_root="$artifact_extract/squashfs-root"
-unreadable=$(find "$artifact_root" ! -perm -004 -print -quit)
+unreadable=$(find "$artifact_root" -type f ! -perm -004 -print -quit)
 [ -z "$unreadable" ] || {
   echo "repacked AppImage payload is not world-readable at '$unreadable'" >&2
   exit 1
