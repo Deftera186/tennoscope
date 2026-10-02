@@ -29,7 +29,7 @@ makedepends=('cargo' 'clang' 'libglvnd' 'libpipewire' 'nodejs' 'pnpm')
 # check() runs the reward-reader tests, which shell out to tesseract for real.
 checkdepends=('tesseract' 'tesseract-data-eng')
 source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('1c9e52e2b829aaf1cbfb765392f02c4d4656e590cd79d666e7c6e8cb51032f09')
+sha256sums=('8ccbaafc6aee5ebb3ab3b71854ec8ee8a216f053be85c224d54c5ff5e145e9cf')
 
 # makepkg.conf ships `lto` in OPTIONS by default, which puts -flto=auto in CFLAGS. That applies to
 # the C rusqlite bundles (sqlite3.c), and GCC then emits .gnu.lto_* IR instead of machine code.

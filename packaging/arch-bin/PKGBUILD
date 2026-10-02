@@ -25,7 +25,7 @@ optdepends=(
 # Binary repack of the release .deb: installs in seconds with no toolchain, for users who
 # just want to run it. Mirrors games-util/tennoscope-bin on Gentoo.
 source=("TennoScope_${pkgver}_amd64.deb::${url}/releases/download/v${pkgver}/TennoScope_${pkgver}_amd64.deb")
-sha256sums=('44ebe8ddf4cabd0c5905b102f26e3a331e482e94f800ca0fd520a209d796bd09')
+sha256sums=('66249ab831bdce7744535057bfe81a45bbe9f40061514af2d3eaa8c4fa997a7e')
 
 package() {
   # No makedepends: bsdtar ships with pacman (libarchive), so unpacking the deb data
