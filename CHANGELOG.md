@@ -14,6 +14,8 @@ see the difference.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-11
+
 ### Fixed
 
 - **The item catalog loads again.** The WFCD items catalog that `api.warframestat.us/items`
@@ -772,7 +774,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.13.1...HEAD
+[0.13.1]: https://github.com/Deftera186/tennoscope/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/Deftera186/tennoscope/compare/v0.12.1-rc1...v0.13.0
 [0.12.1-rc1]: https://github.com/Deftera186/tennoscope/compare/v0.12.0...v0.12.1-rc1
 [0.12.0]: https://github.com/Deftera186/tennoscope/compare/v0.11.0...v0.12.0
