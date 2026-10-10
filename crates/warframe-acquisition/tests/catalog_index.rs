@@ -625,3 +625,84 @@ fn reward_names_resolve_to_parts_with_a_recipe_relation() {
     assert_eq!(catalog.part_path_for_reward("Forma Blueprint"), None);
     assert_eq!(catalog.part_path_for_reward("Not An Item"), None);
 }
+
+/// Padding is a difference, not a list: what the catalogue calls masterable minus what the
+/// account has on record, at any quantity. A held path at quantity 0 is a mastered-and-sold
+/// item, and that is the account's own row, not something to double up.
+#[test]
+fn unowned_masterables_are_the_equipment_the_account_has_never_ranked() {
+    let catalog = CatalogIndex::from_wfcd_json(&wfcd_fixture()).unwrap();
+
+    let padding = catalog
+        .unowned_masterables(["/Lotus/Weapons/Tenno/Rifle/Braton"])
+        .unwrap();
+
+    let names: Vec<&str> = padding
+        .iter()
+        .map(|entry| entry.item.name.as_str())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "Smeeta Kavat",
+            "Adarza Kavat",
+            "Bad Baby",
+            "Kuva Chakkhurr",
+            "Paracesis",
+            "Balla",
+            "Catchmoon",
+            "Agkuza",
+            "Arbucep",
+            "Paris Prime",
+        ],
+        "every masterable item but the held Braton, in catalog-path order; mods, arcanes, \
+         resources and the unmasterable Kavasa collar are not equipment to master"
+    );
+    for entry in &padding {
+        assert_eq!(entry.quantity, 0, "{} is not owned", entry.item.name);
+        assert!(!entry.mastered, "{} has never been ranked", entry.item.name);
+        assert_eq!(entry.rank, None, "equipment carries no fusion rank");
+    }
+
+    let by_name = |name: &str| {
+        padding
+            .iter()
+            .find(|entry| entry.item.name == name)
+            .unwrap_or_else(|| panic!("{name} is padded in"))
+    };
+    assert_eq!(by_name("Smeeta Kavat").item.category, Category::Companion);
+    assert_eq!(by_name("Bad Baby").item.category, Category::Vehicle);
+    assert_eq!(by_name("Balla").item.category, Category::Weapon);
+    assert_eq!(
+        by_name("Paris Prime").item.id.as_str(),
+        "/Lotus/Weapons/Tenno/Bows/PrimeHuntingBow",
+        "the entry's id is the catalog path, which is what the inventory decoder uses too"
+    );
+    assert_eq!(
+        by_name("Paris Prime").item.image_name.as_deref(),
+        Some("ParisPrime.png"),
+        "artwork travels with the entry the same way enrichment carries it"
+    );
+}
+
+/// WFCD flags an Amp masterable, and the game does rank Amps, but the index gates the flag on an
+/// equipment category it can classify, so an Amp is not padded in. Holding everything else
+/// leaves nothing: the method is a difference against the account, not a catalogue listing.
+#[test]
+fn everything_held_or_unmasterable_leaves_nothing_to_pad() {
+    let catalog = CatalogIndex::from_wfcd_json(br#"[
+      {"uniqueName":"/Lotus/Weapons/Tenno/Rifle/Braton","name":"Braton","type":"Rifle","category":"Primary","masterable":true},
+      {"uniqueName":"/Lotus/Weapons/Sentients/OperatorAmplifiers/SentTrainingAmplifier/SentAmpTrainingWeapon","name":"Mote Amp","type":"Amp","category":"Misc","masterable":true},
+      {"uniqueName":"/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod","name":"Serration","type":"Rifle Mod","category":"Mods","masterable":false}
+    ]"#).unwrap();
+
+    let padding = catalog
+        .unowned_masterables(["/Lotus/Weapons/Tenno/Rifle/Braton"])
+        .unwrap();
+
+    assert!(
+        padding.is_empty(),
+        "Braton is held, Serration earns no mastery, and the Amp is not equipment the index \
+         can classify: {padding:?}"
+    );
+}
