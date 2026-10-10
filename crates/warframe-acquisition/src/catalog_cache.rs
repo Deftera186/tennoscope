@@ -15,7 +15,8 @@ use crate::{CatalogIndex, RelicRewardIndex};
 
 pub const WFCD_ALL_JSON_URL: &str = "https://api.warframestat.us/items";
 pub const WFCD_RELICS_JSON_URL: &str = "https://raw.githubusercontent.com/WFCD/warframe-items/81c893536dee6de23fbf114cf52d1b01d23bd65d/data/json/Relics.json";
-const MAX_CATALOG_BYTES: usize = 64 * 1024 * 1024;
+// Raised from 64 MiB: the WFCD items catalog passed 64 MiB in October 2026.
+const MAX_CATALOG_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogFetch {
