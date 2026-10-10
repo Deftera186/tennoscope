@@ -56,6 +56,7 @@ fn equipment_the_account_has_never_ranked_is_listed_as_missing_and_unmastered() 
         item(LATO, "Lato", 0).with_mastered(true),
     ]);
     core.set_mastery_catalog(catalog());
+    core.set_reads_inventory(true);
 
     let view = core.current_view().expect("view builds");
 
@@ -106,6 +107,7 @@ fn equipment_the_account_has_never_ranked_is_listed_as_missing_and_unmastered() 
 fn nothing_is_padded_before_an_inventory_has_been_read() {
     let mut core = AppCore::in_memory().expect("in-memory core");
     core.set_mastery_catalog(catalog());
+    core.set_reads_inventory(true);
 
     let view = core.current_view().expect("view builds");
 
@@ -115,4 +117,27 @@ fn nothing_is_padded_before_an_inventory_has_been_read() {
         view.collection().items()
     );
     assert_eq!(view.collection().total_entries(), 0);
+}
+
+/// Companion and Overlay access show a saved snapshot and call every row a saved record, with the
+/// ownership filters hidden. Padding is a claim about the account as it stands, and only the mode
+/// that reads the inventory gets to make it.
+#[test]
+fn nothing_is_padded_when_the_access_mode_cannot_read_the_inventory() {
+    let mut core = synced_core(vec![item(BRATON, "Braton", 1).with_mastered(true)]);
+    core.set_mastery_catalog(catalog());
+
+    let view = core.current_view().expect("view builds");
+
+    let ids: Vec<&str> = view
+        .collection()
+        .items()
+        .iter()
+        .map(|item| item.id())
+        .collect();
+    assert_eq!(
+        ids,
+        [BRATON],
+        "a snapshot shown without inventory access is only itself"
+    );
 }
