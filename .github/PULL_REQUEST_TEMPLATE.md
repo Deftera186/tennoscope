@@ -26,7 +26,8 @@ with a real `windows-latest` runner instead.
 ## Checks
 
 - [ ] There is a test that fails without this change, or there cannot be one and you say why.
-- [ ] `CHANGELOG.md` has an entry under `## [Unreleased]`, or the change is invisible to a user.
+- [ ] `CHANGELOG.md` has an entry under `## [Unreleased]`, or the change is invisible to a user,
+      with attribution for whoever reported or fixed it when they want it.
 - [ ] No account identifier, nonce, player handle, absolute local path, or raw capture is in the
       diff, including inside any image.
 - [ ] Every memory path this touches is still read-only.
