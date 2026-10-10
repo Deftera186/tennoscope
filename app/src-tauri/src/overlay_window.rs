@@ -259,6 +259,24 @@ pub fn configure_kiosk_overlay(window: &WebviewWindow) -> tauri::Result<()> {
     Ok(())
 }
 
+/// The X11 geometry expressed in the units GTK's `move_` and `resize` take.
+///
+/// `geometry` is in physical pixels: it comes from the game's X11 rectangle. GTK positions and
+/// sizes windows in logical pixels, so on a HiDPI session (Xft.dpi 192, GDK scale factor 2)
+/// handing it the physical values put the strip twice as far from the origin and twice as
+/// large: a 2880x1800 panel below a 4K monitor had the strip at y=6086 on a 3960-pixel-tall
+/// screen, created and shown and entirely off it. A scale below 1 is treated as 1 so a
+/// backend that reports nothing cannot zero the rect.
+fn logical_for_gtk(geometry: OverlayGeometry, scale_factor: i32) -> OverlayGeometry {
+    let scale = scale_factor.max(1);
+    OverlayGeometry {
+        x: geometry.x / scale,
+        y: geometry.y / scale,
+        width: geometry.width / u32::try_from(scale).unwrap_or(1),
+        height: geometry.height / u32::try_from(scale).unwrap_or(1),
+    }
+}
+
 /// Put the overlay above the game on any window manager or compositor.
 ///
 /// The window is made *override-redirect*, which takes it out of the window manager's hands
@@ -306,26 +324,20 @@ fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
     // Stops wlroots compositors (sway) from handing this window keyboard focus/activation on map
     // See the doc comment above for why that matters beyond just stealing input.
     gdk_window.set_type_hint(gtk::gdk::WindowTypeHint::Utility);
-    // `geometry` is in physical pixels: it comes from the game's X11 rectangle. GTK's move and
-    // resize take logical pixels, so on a HiDPI session (Xft.dpi 192, scale factor 2) passing the
-    // physical values put the strip twice as far from the origin and twice as large, which on a
-    // 2880x1800 panel below a 4K monitor landed it entirely off-screen.
-    let scale = gdk_window.scale_factor().max(1);
-    let width = i32::try_from(geometry.width).unwrap_or(966) / scale;
-    let height = i32::try_from(geometry.height).unwrap_or(180) / scale;
-    let x = geometry.x / scale;
-    let y = geometry.y / scale;
+    let logical = logical_for_gtk(geometry, gdk_window.scale_factor());
+    let width = i32::try_from(logical.width).unwrap_or(966);
+    let height = i32::try_from(logical.height).unwrap_or(180);
     // The overlay is one column per card, sized to the game's own card block, so extra width is
     // shared out and every column renders wider than the reward it sits under. `set_default_size`
     // is only a hint; `set_size_request` is the part that pins it.
     gtk_window.set_size_request(width, height);
     gtk_window.resize(width, height);
-    gtk_window.move_(x, y);
+    gtk_window.move_(logical.x, logical.y);
     gtk_window.show_all();
     // Nothing else will restack us, so raising is ours to do, and the move is reissued because a
     // position set before the window is on screen is not always the one it keeps.
     gdk_window.raise();
-    gtk_window.move_(x, y);
+    gtk_window.move_(logical.x, logical.y);
     // Click-through is the property that is felt: without it the strip is an input-grabbing surface
     // over the game and the pointer catches on it for as long as the overlay is up.
     let _ = window.set_ignore_cursor_events(true);
@@ -439,8 +451,8 @@ pub fn hide_kiosk_overlay(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        GameRectOrigin, WindowRect, kiosk_geometry_from_sources, placement_notice,
-        preferred_game_rect,
+        GameRectOrigin, OverlayGeometry, WindowRect, kiosk_geometry_from_sources, logical_for_gtk,
+        placement_notice, preferred_game_rect,
     };
     use crate::overlay_window::kiosk_overlay_geometry;
     use crate::reward_capture::SessionKind;
@@ -504,6 +516,55 @@ mod tests {
         let lower = notice.to_lowercase();
         assert!(lower.contains("borderless"), "notice was: {notice}");
         assert!(lower.contains("fullscreen"), "notice was: {notice}");
+    }
+
+    /// The strip is placed from the game's X11 rectangle, which is physical pixels, through GTK
+    /// calls that take logical ones. At scale 2 the physical rect must halve or the strip maps
+    /// off-screen: the numbers are the live case, a 2880x1800 panel at 544,2160 under a 4K
+    /// monitor, where the unscaled strip landed at y=6086 on a 3960-pixel-tall screen.
+    #[test]
+    fn a_hidpi_scale_halves_the_physical_rect_for_gtk() {
+        let physical = OverlayGeometry {
+            x: 1180,
+            y: 3042,
+            width: 1610,
+            height: 300,
+        };
+        assert_eq!(
+            logical_for_gtk(physical, 2),
+            OverlayGeometry {
+                x: 590,
+                y: 1521,
+                width: 805,
+                height: 150,
+            }
+        );
+    }
+
+    /// Scale 1 is the only case the overlay was ever verified on before, and it must stay
+    /// byte-for-byte what it was.
+    #[test]
+    fn scale_one_leaves_the_rect_alone() {
+        let physical = OverlayGeometry {
+            x: 477,
+            y: 605,
+            width: 966,
+            height: 180,
+        };
+        assert_eq!(logical_for_gtk(physical, 1), physical);
+    }
+
+    /// A backend that reports no scale must not collapse the strip to nothing.
+    #[test]
+    fn a_missing_scale_is_treated_as_one() {
+        let physical = OverlayGeometry {
+            x: 477,
+            y: 605,
+            width: 966,
+            height: 180,
+        };
+        assert_eq!(logical_for_gtk(physical, 0), physical);
+        assert_eq!(logical_for_gtk(physical, -1), physical);
     }
 
     #[test]
