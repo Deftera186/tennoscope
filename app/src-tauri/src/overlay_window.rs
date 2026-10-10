@@ -267,6 +267,10 @@ pub fn configure_kiosk_overlay(window: &WebviewWindow) -> tauri::Result<()> {
 /// large: a 2880x1800 panel below a 4K monitor had the strip at y=6086 on a 3960-pixel-tall
 /// screen, created and shown and entirely off it. A scale below 1 is treated as 1 so a
 /// backend that reports nothing cannot zero the rect.
+///
+/// Only `show_over_game` calls it and that is Linux-only, so outside Linux it is compiled for
+/// tests alone; otherwise the Windows build fails on dead code under `-D warnings`.
+#[cfg(any(target_os = "linux", test))]
 fn logical_for_gtk(geometry: OverlayGeometry, scale_factor: i32) -> OverlayGeometry {
     let scale = scale_factor.max(1);
     OverlayGeometry {
