@@ -23,6 +23,14 @@ see the difference.
   last cached catalog as stale. The limit is now 256 MiB. Reported and fixed by
   [@NekoRem](https://github.com/NekoRem).
 
+- **The reward overlay appears on HiDPI Linux desktops.** On a session with a GDK scale
+  factor above 1 (for example Xft.dpi 192 on KDE Plasma) the strip was created and shown
+  but placed at twice its intended offset and size, which on a 2880x1800 panel below a 4K
+  monitor put it entirely off-screen. The X11 game rectangle is physical pixels and GTK
+  positions windows in logical ones; the rect is now divided by the window's scale factor
+  before it is handed to GTK. Scale 1 is unchanged. Reported and fixed by
+  [@NekoRem](https://github.com/NekoRem).
+
 ## [0.13.0] - 2026-10-02
 
 ### Added
