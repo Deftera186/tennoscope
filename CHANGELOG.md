@@ -14,6 +14,17 @@ see the difference.
 
 ## [Unreleased]
 
+### Added
+
+- **The collection lists every masterable item, not only the ones the account has seen.**
+  Once an inventory has been read and the item catalog has loaded, each piece of masterable
+  equipment the account has never ranked appears at quantity 0 and unmastered (803 items in
+  the WFCD catalog on 2026-10-10: frames, weapons, companions, Archwings, K-Drives and
+  Necramechs), so the Missing filter and the mastered percentage read as a mastery
+  checklist. Modular Amps are all but absent because the catalog flags one as masterable, and
+  Founders items are listed like any other. Suggested and implemented by
+  [@NekoRem](https://github.com/NekoRem).
+
 ## [0.13.1] - 2026-10-11
 
 ### Changed

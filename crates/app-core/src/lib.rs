@@ -295,8 +295,24 @@ impl AppCore {
 
     pub fn current_view(&self) -> Result<AppView, AppError> {
         let collection = self.store.load_collection()?;
+        let snapshot = self.store.latest_snapshot_meta()?;
+        // Every piece of masterable equipment the account has never ranked, so the page reads as
+        // a checklist and not only as a ledger of what was seen. Only once an inventory has
+        // actually been read: before that "missing" would mean "unknown", and the collection
+        // would be the catalogue wearing the account's name. Chained at view time rather than
+        // stored, because the stored collection is the record of the account, and a catalogue
+        // that reloads under it should move the padding without rewriting that record.
+        let padding = match (&self.mastery_catalog, &snapshot) {
+            (Some(catalog), Some(_)) => catalog.unowned_masterables(
+                collection
+                    .entries()
+                    .map(|entry| entry.item.id.catalog_path()),
+            )?,
+            _ => Vec::new(),
+        };
         let mut items = collection
             .entries()
+            .chain(padding.iter())
             .map(|entry| {
                 // Mastery is not ownership. An item at quantity 0 is not in the inventory
                 // and must not carry a price or contribute to the collection's worth.
@@ -368,7 +384,6 @@ impl AppCore {
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));
         let total_entries = items.len();
-        let snapshot = self.store.latest_snapshot_meta()?;
         let mut health = self.health.clone();
         health.database = BackendHealth::ready("SQLite database available", None)?;
         Ok(AppView {

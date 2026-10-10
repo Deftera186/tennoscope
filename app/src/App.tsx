@@ -637,13 +637,13 @@ function CollectionPage({ view, effectiveMode, pricing, onPriceLive, priceFloor,
   return <section className="page" aria-labelledby="collection-title">
     <div className="mark-head">
       <h1 id="collection-title" className="mark">{snapshotOnly ? 'Saved snapshot' : 'Your collection'}</h1>
-      <p className="prose">{snapshotOnly ? 'Your stored collection remains available for reference, valuation, and planning.' : 'Canonical equipment, parts and relics observed on this account. Read only, held locally.'}</p>
+      <p className="prose">{snapshotOnly ? 'Your stored collection remains available for reference, valuation, and planning.' : 'Canonical equipment, parts and relics observed on this account, and every masterable item it has never ranked. Read only, held locally.'}</p>
     </div>
 
     <div className={`assay-band${showDucats ? ' with-ducats' : ''}`}>
       <BandCell kind="items" value={view.collection.total_entries} label={snapshotOnly ? 'Saved entries' : 'Items tracked'} note={snapshotOnly ? 'Entries retained in the saved snapshot' : `${owned} currently owned`}/>
       <BandCell kind="mastered" value={mastered} label={snapshotOnly ? 'Mastery records' : 'Mastered'} note={snapshotOnly ? 'Historical snapshot; current mastery is unverifiable' : masteryEligible ? `${Math.round(mastered / masteryEligible * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
-      <BandCell kind="missing" value={missing} label={snapshotOnly ? 'Zero-quantity records' : 'Missing'} note={snapshotOnly ? 'Historical snapshot; current ownership is unverifiable' : 'From known collection data'}/>
+      <BandCell kind="missing" value={missing} label={snapshotOnly ? 'Zero-quantity records' : 'Missing'} note={snapshotOnly ? 'Historical snapshot; current ownership is unverifiable' : 'Not held on this account, including masterable equipment it has never ranked'}/>
       {/* Two figures and the one clause that qualifies them. The cell had five numbers in it and
           read as an argument about the collection rather than a valuation of it; the live-pass count
           was a second copy of the register line below, and the priced-item count mostly measured how
