@@ -474,11 +474,14 @@ impl CatalogIndex {
         let held: BTreeSet<&str> = held.into_iter().collect();
         self.items
             .iter()
-            .filter(|(path, _)| !held.contains(path.as_str()))
+            // Masterable first: it keeps 803 of 17,672 entries, so the set lookup runs for those
+            // alone. Against the 2026-10-10 catalog with 2,415 held paths, best of 20: 3.2 ms
+            // with the lookup first, 0.33 ms this way round. The view is rebuilt every 2.5 s.
             .filter_map(|(path, metadata)| {
                 let category = metadata.category.filter(|_| metadata.masterable)?;
                 Some((path, metadata, category))
             })
+            .filter(|(path, _, _)| !held.contains(path.as_str()))
             .map(|(path, metadata, category)| {
                 let item = CatalogItem::new(ItemId::new(path.as_str())?, &metadata.name, category)?;
                 let item = match &metadata.image_name {
