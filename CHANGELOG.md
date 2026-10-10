@@ -22,8 +22,8 @@ see the difference.
   unmastered (frames, weapons, companions, Archwings, K-Drives and Necramechs; the WFCD
   catalog flagged 803 items masterable on 2026-10-10, of which the app keeps those it can
   classify as equipment), so the Missing filter and the mastered percentage read as a mastery
-  checklist. Companion and Overlay access show the saved snapshot as before. Amps are absent,
-  because the app does not classify them as equipment; a modular item built but never ranked
+  checklist. Companion and Overlay access show the saved snapshot as before. Operator Amps are
+  absent, because the catalog flags none of them masterable; a modular item built but never ranked
   (a Zaw, Kitgun, K-Drive, MOA or Hound) is listed as missing until it earns affinity; and
   Founders items are listed like any other. Suggested and implemented by
   [@NekoRem](https://github.com/NekoRem).
