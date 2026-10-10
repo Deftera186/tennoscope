@@ -14,6 +14,15 @@ see the difference.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The item catalog loads again.** The WFCD items catalog that `api.warframestat.us/items`
+  serves is now larger than the 64 MiB the app allowed (68,640,011 bytes on 2026-10-10), so
+  every download was refused as too large: a fresh install reported "No valid WFCD catalog is
+  available" and never populated the collection, and an existing install kept serving its
+  last cached catalog as stale. The limit is now 256 MiB. Reported and fixed by
+  [@NekoRem](https://github.com/NekoRem).
+
 ## [0.13.0] - 2026-10-02
 
 ### Added

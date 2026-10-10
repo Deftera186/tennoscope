@@ -55,15 +55,7 @@ impl CatalogSource for WfcdCatalogHttp {
         if !response.status().is_success() {
             return Err(CatalogFetch::Unavailable);
         }
-        let mut bytes = Vec::new();
-        response
-            .take((MAX_CATALOG_BYTES + 1) as u64)
-            .read_to_end(&mut bytes)
-            .map_err(|_| CatalogFetch::Unavailable)?;
-        if bytes.len() > MAX_CATALOG_BYTES {
-            return Err(CatalogFetch::TooLarge);
-        }
-        Ok(bytes)
+        read_bounded(response)
     }
 }
 
@@ -302,9 +294,17 @@ fn fetch_bounded(client: &Client, url: &str) -> Result<Vec<u8>, CatalogFetch> {
     if !response.status().is_success() {
         return Err(CatalogFetch::Unavailable);
     }
+    read_bounded(response)
+}
+
+/// Read a response body up to `MAX_CATALOG_BYTES`, refusing anything longer.
+///
+/// Reads one byte past the limit rather than the limit itself so an oversize body is told apart
+/// from one that is exactly the limit, and it is read through `Take` so an oversize body never
+/// costs more than the limit plus one byte of memory before it is refused.
+fn read_bounded(body: impl Read) -> Result<Vec<u8>, CatalogFetch> {
     let mut bytes = Vec::new();
-    response
-        .take((MAX_CATALOG_BYTES + 1) as u64)
+    body.take((MAX_CATALOG_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .map_err(|_| CatalogFetch::Unavailable)?;
     if bytes.len() > MAX_CATALOG_BYTES {
@@ -325,4 +325,39 @@ fn generation_hash(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+
+    use super::{CatalogFetch, MAX_CATALOG_BYTES, read_bounded};
+
+    /// `https://api.warframestat.us/items` as measured on 2026-10-10: 17,672 entries. It passed
+    /// the old 64 MiB limit (67,108,864) at some point before then, after which every fetch was
+    /// refused as `TooLarge` and a fresh install had no catalog at all.
+    const LIVE_WFCD_ITEMS_BYTES: usize = 68_640_011;
+
+    fn body(length: usize) -> impl Read {
+        std::io::repeat(b' ').take(length as u64)
+    }
+
+    #[test]
+    fn the_live_wfcd_items_catalog_is_within_the_limit() {
+        let bytes =
+            read_bounded(body(LIVE_WFCD_ITEMS_BYTES)).expect("the live catalog size is accepted");
+        assert_eq!(bytes.len(), LIVE_WFCD_ITEMS_BYTES);
+    }
+
+    #[test]
+    fn a_body_at_the_limit_is_accepted_and_one_byte_over_is_refused() {
+        assert_eq!(
+            read_bounded(body(MAX_CATALOG_BYTES)).map(|bytes| bytes.len()),
+            Ok(MAX_CATALOG_BYTES)
+        );
+        assert_eq!(
+            read_bounded(body(MAX_CATALOG_BYTES + 1)).map(|bytes| bytes.len()),
+            Err(CatalogFetch::TooLarge)
+        );
+    }
 }
