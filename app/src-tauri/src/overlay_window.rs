@@ -306,19 +306,26 @@ fn show_over_game(window: &WebviewWindow, geometry: OverlayGeometry) -> bool {
     // Stops wlroots compositors (sway) from handing this window keyboard focus/activation on map
     // See the doc comment above for why that matters beyond just stealing input.
     gdk_window.set_type_hint(gtk::gdk::WindowTypeHint::Utility);
-    let width = i32::try_from(geometry.width).unwrap_or(966);
-    let height = i32::try_from(geometry.height).unwrap_or(180);
+    // `geometry` is in physical pixels: it comes from the game's X11 rectangle. GTK's move and
+    // resize take logical pixels, so on a HiDPI session (Xft.dpi 192, scale factor 2) passing the
+    // physical values put the strip twice as far from the origin and twice as large, which on a
+    // 2880x1800 panel below a 4K monitor landed it entirely off-screen.
+    let scale = gdk_window.scale_factor().max(1);
+    let width = i32::try_from(geometry.width).unwrap_or(966) / scale;
+    let height = i32::try_from(geometry.height).unwrap_or(180) / scale;
+    let x = geometry.x / scale;
+    let y = geometry.y / scale;
     // The overlay is one column per card, sized to the game's own card block, so extra width is
     // shared out and every column renders wider than the reward it sits under. `set_default_size`
     // is only a hint; `set_size_request` is the part that pins it.
     gtk_window.set_size_request(width, height);
     gtk_window.resize(width, height);
-    gtk_window.move_(geometry.x, geometry.y);
+    gtk_window.move_(x, y);
     gtk_window.show_all();
     // Nothing else will restack us, so raising is ours to do, and the move is reissued because a
     // position set before the window is on screen is not always the one it keeps.
     gdk_window.raise();
-    gtk_window.move_(geometry.x, geometry.y);
+    gtk_window.move_(x, y);
     // Click-through is the property that is felt: without it the strip is an input-grabbing surface
     // over the game and the pointer catches on it for as long as the overlay is up.
     let _ = window.set_ignore_cursor_events(true);
