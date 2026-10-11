@@ -8,7 +8,7 @@ UpgradeBehavior: install
 Installers:
 - Architecture: x64
   InstallerUrl: https://github.com/Deftera186/tennoscope/releases/download/v0.13.1/TennoScope_0.13.1_x64-setup.exe
-  InstallerSha256: 539DB88302ADEBB244585B7B57C068991EBC1167340E81D44672F74ECA1EFE88
+  InstallerSha256: 1AAB453EC205EAEBFE4E20E8095B524ADB90D874062059F4DF66CA8FE1606F61
   InstallerSwitches:
     Silent: /S
     SilentWithProgress: /S
