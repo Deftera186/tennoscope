@@ -82,7 +82,7 @@
       "deb": {
         "desktopTemplate": "tennoscope.desktop.hbs",
         "depends": [
-          "libpipewire-0.3-0"
+          "libpipewire-0.3-0 | libpipewire-0.3-0t64"
         ],
         "recommends": [
           "tesseract-ocr",
