@@ -5,20 +5,20 @@ Origin: TennoScope
 Label: TennoScope
 Suite: stable
 Codename: stable
-Date: Fri, 02 Oct 2026 00:45:16 GMT
+Date: Sun, 11 Oct 2026 02:09:20 GMT
 Architectures: amd64
 Components: main
 Description: Local-first Warframe collection and relic companion
 MD5Sum:
- d8423a63c66607365adaa5a8e0116b09            20781 main/binary-amd64/Packages
- cf51ce5f2749459ab6162cb65bbe40a9             3151 main/binary-amd64/Packages.gz
+ a2f881b75715b8f171eae8feed5a66e4            21685 main/binary-amd64/Packages
+ 17fa2f10baf2bd0510cdcc7feaedb030             3272 main/binary-amd64/Packages.gz
 SHA256:
- d48fe1853c3bb6843e571533e2a612e9b4bcb445ce51e808c9357194b19aaec8            20781 main/binary-amd64/Packages
- db16cef2e57a087e76a26100db70b30fb4ba9c3bbee2a960be5dc8c29fe63e64             3151 main/binary-amd64/Packages.gz
+ afdacb4b2033a121e62b66bb1080f8929f157632c9d367edc34c61cb1af8f030            21685 main/binary-amd64/Packages
+ 6e68605820944aa5481529270313169e37df8dc4e66dc07600bb02ab155ab78b             3272 main/binary-amd64/Packages.gz
 -----BEGIN PGP SIGNATURE-----
 
-iHUEARYKAB0WIQT+NnT1TGWyee9cXo7uFgf4Wp64AgUCar7+nAAKCRDuFgf4Wp64
-AtwbAP9ytHz54mFe/r33lC58TzsSA8ZBiJVeuO55+ezkEEa8YgEA+Gdv7Lur2pdW
-bR/VtYy6oHrY8jDpemqWvFpd3/Jh2Qk=
-=uR+9
+iHUEARYKAB0WIQT+NnT1TGWyee9cXo7uFgf4Wp64AgUCasrv0AAKCRDuFgf4Wp64
+AoYdAP9WNlA8wb7DR8F1/fDald03a28MtkjzhQzAzxVByUrzfAEAof8+pA/uli/D
+Y+sCcAMvqPXkeARaJSytasXAuPIc5Ag=
+=NjYS
 -----END PGP SIGNATURE-----
