@@ -68,6 +68,13 @@ sudo apt install tenno-scope
 Prereleases reach neither the pool nor `releases/latest`, so the manual download below is a
 stable release.
 
+> [!NOTE]
+> **The `.deb` and the `.rpm` are built on Ubuntu 24.04**, so their binaries need glibc 2.39
+> and run on Ubuntu 24.04, Debian 13, Fedora 40 and newer. On Ubuntu 22.04 and Debian 12
+> (glibc 2.35 and 2.36) the package installs but the binary will not start with
+> `version GLIBC_2.39 not found`. On those two, use the [AppImage](#anything-else-appimage),
+> which is built on Ubuntu 22.04 and references nothing past glibc 2.35.
+
 Fedora uses the [COPR](../packaging/copr/README.md):
 
 ```bash

@@ -16,6 +16,16 @@ see the difference.
 
 ## [0.13.1] - 2026-10-11
 
+### Changed
+
+- **The Linux packages and the AppImage are built on different Ubuntu releases.** The
+  `.deb` and the `.rpm` are built on 24.04, so their binaries need glibc 2.39 and run on
+  Ubuntu 24.04, Debian 13 and Fedora 40 or newer; on Ubuntu 22.04 and Debian 12 they
+  install but the binary will not start. The AppImage is built on 22.04 again and
+  references nothing past glibc 2.35, so it runs on both, and it is the one to use on
+  22.04 and Debian 12. The `.deb` also names both PipeWire package generations, so `apt`
+  can resolve its dependency on 24.04 at all.
+
 ### Fixed
 
 - **The item catalog loads again.** The WFCD items catalog that `api.warframestat.us/items`
