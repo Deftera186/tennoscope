@@ -104,7 +104,7 @@ pnpm --dir app check
 %{_datadir}/doc/%{name}/THIRD_PARTY_NOTICES.md
 
 %changelog
-* Sat Oct 11 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.13.1-1
+* Sun Oct 11 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.13.1-1
 - Track the newest stable tag, v0.13.1
 * Fri Oct 02 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.13.0-1
 - Track the newest stable tag, v0.13.0
