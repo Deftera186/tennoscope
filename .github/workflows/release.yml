@@ -110,7 +110,7 @@ jobs:
     # and only tag builds reach these jobs (see the gate). Branch
     # `workflow_dispatch` runs never see the private key.
     environment: release
-    # Only the `release` job writes anything. These two build from a shared cache, so the
+    # Only the `release` job writes anything. These three build from a shared cache, so the
     # narrower token is worth the two lines.
     permissions:
       contents: read
@@ -179,17 +179,216 @@ jobs:
             target/release/bundle/nsis/*-setup.exe
             target/release/bundle/nsis/*.sig
 
+  # The AppImage is its own job, and the only one still pinned to jammy.
+  #
+  # `code/check-libc.sh` in the catalog's own repo (AppImage/appimage.github.io#6700) opens the
+  # submitted artifact and rejects it if any ELF in the AppDir references a GLIBC newer than the
+  # oldest supported Ubuntu LTS -- jammy's 2.35. So this image has to be built on jammy: a 24.04
+  # host bakes GLIBC_2.38/2.39 into the binary and into every library linuxdeploy bundles
+  # next to it, and the loader refuses the lot on a 22.04 player's machine. Revisit when the
+  # harness moves off jammy.
+  #
+  # Jammy's own pipewire cannot build this app's pipewire bindings, which is why the job builds
+  # the pinned pipewire itself and why the installable packages left for 24.04. Built here, on
+  # the jammy toolchain, what linuxdeploy bundles therefore still references nothing past
+  # glibc 2.35 -- which is the whole point of the split.
+  appimage:
+    needs: gate
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    # Same secret scoping as the Windows job above. `createUpdaterArtifacts` signs every bundle
+    # Tauri produces, so the AppImage's `.sig` can only be made here.
+    environment: release
+    # Only the `release` job writes anything. These three build from a shared cache, so the
+    # narrower token is worth the two lines.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      # Everything but pipewire. Jammy's is 0.3.48, which predates `spa_meta_bitmap_is_valid`
+      # becoming an inline function (pipewire 853c4783), and the libspa bindings this app
+      # compiles against assume it is one. The pinned pipewire below installs
+      # `libspa-0.2.pc`/`libpipewire-0.3.pc` into a private prefix, and the distro's stale copy
+      # has to go: pkg-config would otherwise find it there (it drags `libspa-0.2-dev` in behind
+      # it), and it is the copy the loader would answer with when linuxdeploy bundles. `rpm`
+      # was the rpm bundle's inspector and this job builds only the AppImage. `gettext` is
+      # pipewire's, not the app's: `subdir('po')` is not optional and needs msgfmt at configure
+      # time.
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            libclang-dev \
+            libgbm-dev \
+            libegl-dev \
+            libwayland-dev \
+            libxcb1-dev \
+            libarchive-tools \
+            meson \
+            ninja-build \
+            gettext \
+            tesseract-ocr \
+            tesseract-ocr-eng
+
+      # 1.0.0 is the oldest 1.x release, which buys two things: it is past the inline-function
+      # floor above, and it asks meson for >= 0.61.1, one jammy's own meson already satisfies --
+      # so no pip toolchain has to appear on the runner to build it. `auto_features=disabled`
+      # strips every `auto` dependency (udev, sdl2, sndfile, alsa, bluez5, x11, vulkan, jack,
+      # avahi, libcamera ...). It does not touch options that default to *enabled*, so those are
+      # disabled by hand: dbus pulls libdbus-1-dev, flatpak pulls glib, and the jack/v4l2/alsa
+      # bridges build a library each that this job will never ship. `spa-plugins` must stay
+      # enabled -- disabling it makes configure fail outright on an undefined
+      # `audioconvert_dep`.
+      #
+      # What is left is headers the app compiles against plus the one library it links:
+      # libspa stopped shipping a `.so` once its last function became an inline one, so
+      # `libpipewire-0.3.so.0` is all there is to bundle. The daemon and the tools still compile,
+      # against nothing but libc.
+      #
+      # The tarball is pinned by digest: a release must not take a binary dependency from a
+      # URL that changed underneath it, and this one is served by an upstream GitLab rather
+      # than a signed distribution repository.
+      - name: Build the PipeWire client libraries
+        env:
+          PIPEWIRE_VERSION: '1.0.0'
+          PIPEWIRE_SHA256: f91ef1d1161b37aae6e21b9671917d97097e2664c83d919ba3a0793d6fbc543d
+        run: |
+          set -eu
+          archive="/tmp/pipewire-${PIPEWIRE_VERSION}.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://gitlab.freedesktop.org/pipewire/pipewire/-/archive/${PIPEWIRE_VERSION}/pipewire-${PIPEWIRE_VERSION}.tar.gz"
+          echo "${PIPEWIRE_SHA256}  $archive" | sha256sum --check
+          tar --extract --gzip --file "$archive" --directory /tmp
+          cd "/tmp/pipewire-${PIPEWIRE_VERSION}"
+          meson setup build --prefix="$HOME/pw/prefix" \
+            -Dauto_features=disabled \
+            -Ddbus=disabled \
+            -Dflatpak=disabled \
+            -Dpipewire-alsa=disabled \
+            -Dpipewire-jack=disabled \
+            -Dpipewire-v4l2=disabled \
+            -Dexamples=disabled \
+            -Dtests=disabled \
+            -Dman=disabled \
+            -Ddocs=disabled \
+            '-Dsession-managers=[]'
+          meson compile -C build
+          meson install -C build
+          # Ubuntu's meson patches libdir to the multiarch directory, so do not hardcode
+          # `lib/x86_64-linux-gnu`: ask the installed tree where it actually landed.
+          pc_dir=$(dirname "$(find "$HOME/pw/prefix" -name 'libspa-0.2.pc' -print -quit)")
+          [ -f "$pc_dir/libspa-0.2.pc" ] || {
+            echo "no libspa-0.2.pc was installed into $HOME/pw/prefix" >&2
+            exit 1
+          }
+          lib_dir=$(dirname "$pc_dir")
+          # pkg-config reads PKG_CONFIG_PATH ahead of the system directories, so the linker and
+          # the bindgen build scripts see the prefix's headers and libraries.
+          echo "PKG_CONFIG_PATH=$lib_dir/pkgconfig:${PKG_CONFIG_PATH:-}" >>"$GITHUB_ENV"
+          # The .pc files are versioned by ABI, not by release (`libspa-0.2.pc` says
+          # `Version: 0.2` on jammy and on 1.0.0 alike), so `--modversion` cannot tell the two
+          # apart and only the include path can. Cheap to check, and the alternative is a
+          # release built against headers the prefix was fetched to replace.
+          cflags=$(PKG_CONFIG_PATH="$lib_dir/pkgconfig" pkg-config --cflags libspa-0.2)
+          case "$cflags" in
+            *"$HOME"/pw/prefix/*) ;;
+            *) echo "libspa-0.2 resolves outside the pipewire prefix: $cflags" >&2; exit 1 ;;
+          esac
+          # linuxdeploy bundles whatever `ldd` resolves each NEEDED name to while it runs. Left
+          # to itself the loader answers with the system 0.3.48 -- the very version the prefix
+          # exists to replace -- so the AppImage would ship that `libpipewire-0.3.so.0` next to
+          # a binary compiled against 1.0.0 headers.
+          echo "LD_LIBRARY_PATH=$lib_dir:${LD_LIBRARY_PATH:-}" >>"$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Matches CI's `Rust` job. See the Windows job for why release never saves.
+          shared-key: linux
+          save-if: false
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: app/package.json
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: app/.node-version
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+
+      # `--skip-gates` drops the test suite, clippy and `pnpm check` -- CI ran all three against
+      # this commit and the gate job refused to get here until they passed. What the script still
+      # does is the part CI cannot: it asserts the AppImage it just produced forces
+      # `GDK_BACKEND=x11`, the property the reward overlay depends on, and repacks the AppDir.
+      # That runs against the artifact users actually download. `appimage` is also the script's
+      # default format, so naming it here changes nothing -- it is what a bare
+      # `--skip-gates` would build, and what the packages job does not ask for.
+      - run: ./scripts/build-linux-bundles.sh --skip-gates appimage
+        env:
+          # See the Windows job.
+          CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
+          TENNOSCOPE_CHANNEL: ${{ contains(github.ref_name, '-') && 'beta' || 'stable' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+
+      # The bundle helper repacks the AppImage AFTER `tauri build`, so the
+      # build-time `.sig` covers pre-patch bytes. Re-sign the final file: a
+      # stale signature would fail verification on every Linux self-update.
+      # The CLI prompts for a key password when none is configured; with the empty
+      # variable plus `< /dev/null` a future passworded key fails (exit 6) rather
+      # than hanging the runner on a prompt.
+      - name: Re-sign final AppImage
+        working-directory: app
+        run: |
+          appimage=$(ls ../target/release/bundle/appimage/*.AppImage | grep -v '\.sig$' | head -1)
+          pnpm tauri signer sign "$appimage" < /dev/null
+          ls "$appimage.sig"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+
+      # Only the AppImage: the whole artifact is what was repacked and re-signed above.
+      # `upload-artifact` roots a multi-path artifact at the least common ancestor of its
+      # globs, so with nothing else in the bundle directory this artifact is flat -- which
+      # is the layout the `release` job's globs expect.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/appimage/*.sig
+
   bundles:
     needs: gate
     if: startsWith(github.ref, 'refs/tags/v')
-    # Pinned to 22.04, not latest: the AppImage declares Libc=host and the
-    # catalog executes it on 22.04 (glibc 2.35). A 24.04 build host bakes
-    # GLIBC_2.38/2.39 needs into the binary and every bundled lib, which the
-    # loader rejects at startup. Revisit when the harness moves off jammy.
-    runs-on: ubuntu-22.04
+    # 24.04, not the jammy pin above: the deb and the rpm are installable packages, not
+    # self-contained images. Tauri's Linux packages bundle no libraries of their own -- they
+    # declare what they need (`libpipewire-0.3-0`, `pipewire-libs`, webkit, gtk) and the
+    # player's system supplies it -- so nothing about them is tied to one libc floor, and this
+    # is where the distro's own pipewire (1.0.5) is new enough to build the app's bindings.
+    # What does move with the image is the binaries' own GLIBC requirement: built here they
+    # need 2.39 rather than jammy's 2.35, so a 22.04 user needs the AppImage, not the deb.
+    #
+    # The split also makes an old packaging wrinkle visible: the deb still declares the jammy
+    # package name `libpipewire-0.3-0` (app/src-tauri/tauri.conf.json, asserted by
+    # `build-linux-bundles.sh`), and noble renamed that package `libpipewire-0.3-0t64`. So the
+    # .deb built here satisfies its own `Depends` on 22.04 and Debian 12, where its binary no
+    # longer runs, and satisfies it nowhere it does. Fixing that is a `deb.depends`/`rpm.depends`
+    # change, not a runner change -- worth doing in the same commit as this split.
+    runs-on: ubuntu-24.04
     # Same secret scoping as the Windows job above.
     environment: release
-    # Only the `release` job writes anything. These two build from a shared cache, so the
+    # Only the `release` job writes anything. These three build from a shared cache, so the
     # narrower token is worth the two lines.
     permissions:
       contents: read
@@ -238,10 +437,12 @@ jobs:
 
       # `--skip-gates` drops the test suite, clippy and `pnpm check` -- CI ran all three against
       # this commit and the gate job refused to get here until they passed. What the script still
-      # does is the part CI cannot: it asserts the AppImage it just produced forces
-      # `GDK_BACKEND=x11`, the property the reward overlay depends on, and repacks the AppDir.
-      # That runs against the artifact users actually download.
-      - run: ./scripts/build-linux-bundles.sh --skip-gates appimage deb rpm
+      # does is the part CI cannot: it asserts each package's metadata (one desktop entry, the
+      # Exec the installed launcher needs, and the system pipewire dependency Tauri was
+      # configured with) against the packages that were just built. `GDK_BACKEND=x11` and the
+      # AppDir repack that used to share this step belong to the AppImage and are asserted in
+      # the job above, against the AppImage.
+      - run: ./scripts/build-linux-bundles.sh --skip-gates deb rpm
         env:
           # See the Windows job.
           CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS: ${{ contains(github.ref_name, '-') }}
@@ -249,37 +450,24 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
 
-      # The bundle helper repacks the AppImage AFTER `tauri build`, so the
-      # build-time `.sig` covers pre-patch bytes. Re-sign the final file: a
-      # stale signature would fail verification on every Linux self-update.
-      # The CLI prompts for a key password when none is configured; with the empty
-      # variable plus `< /dev/null` a future passworded key fails (exit 6) rather
-      # than hanging the runner on a prompt.
-      - name: Re-sign final AppImage
-        working-directory: app
-        run: |
-          appimage=$(ls ../target/release/bundle/appimage/*.AppImage | grep -v '\.sig$' | head -1)
-          pnpm tauri signer sign "$appimage" < /dev/null
-          ls "$appimage.sig"
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
-
+      # `upload-artifact` roots a multi-path artifact at the least common ancestor of its globs
+      # -- `target/release/bundle` -- so the per-format subdirectories survive the trip. The
+      # `.sig` files Tauri writes beside these two bundles are not uploaded: the updater feed
+      # only ever carries the AppImage and the Windows installer (see `build-update-feed.sh`).
       - uses: actions/upload-artifact@v4
         with:
           name: linux-bundles
           path: |
-            target/release/bundle/appimage/*.AppImage
-            target/release/bundle/appimage/*.sig
             target/release/bundle/deb/*.deb
             target/release/bundle/rpm/*.rpm
 
-  # Publishing is its own job so the two builds can run at once. Previously the Linux job attached
+  # Publishing is its own job so the three builds can run at once. Previously the Linux job attached
   # the release, which forced it to wait for the Windows installer to exist -- an artifact
-  # dependency that serialised two builds sharing no other reason to be ordered.
+  # dependency that serialised two builds sharing no other reason to be ordered. The Linux halves
+  # were one job until the AppImage needed jammy and the packages did not, so now it is three.
   release:
     name: Draft release
-    needs: [windows, bundles]
+    needs: [windows, appimage, bundles]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -316,12 +504,14 @@ jobs:
           fail_on_unmatched_files: true
           # `download-artifact` puts each artifact under a directory named after it, and
           # `upload-artifact` roots a multi-path artifact at the least common ancestor of its
-          # globs -- `target/release/bundle` -- so the per-format subdirectories survive the trip.
+          # globs. The two Linux jobs are separate, so the AppImage artifact is rooted at
+          # `target/release/bundle/appimage` (flat, one format) while the packages artifact keeps
+          # `target/release/bundle` and its per-format subdirectories.
           # `fail_on_unmatched_files` is what turns a wrong guess about that into a failed release
           # rather than a draft quietly missing the Linux downloads.
           files: |
-            artifacts/linux-bundles/appimage/*.AppImage
-            artifacts/linux-bundles/appimage/*.sig
+            artifacts/linux-appimage/*.AppImage
+            artifacts/linux-appimage/*.sig
             artifacts/linux-bundles/deb/*.deb
             artifacts/linux-bundles/rpm/*.rpm
             artifacts/windows-installer/*.exe
