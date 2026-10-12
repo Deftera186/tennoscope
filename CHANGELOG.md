@@ -14,6 +14,22 @@ see the difference.
 
 ## [Unreleased]
 
+### Added
+
+- **The collection lists every masterable item, not only the ones the account has seen.**
+  Under Full access, once an inventory has been read and the item catalog has loaded, each
+  piece of masterable equipment the account has never ranked appears at quantity 0 and
+  unmastered (frames, weapons, companions, Archwings, K-Drives and Necramechs; the WFCD
+  catalog flagged 803 items masterable on 2026-10-10, of which the app keeps those it can
+  classify as equipment), so the Missing filter and the mastered percentage read as a mastery
+  checklist, and a new **Unmastered first** sort puts the equipment still to master ahead of
+  the mastered and of everything that earns none. Companion and Overlay access show the saved
+  snapshot as before. Operator Amps are
+  absent, because the catalog flags none of them masterable; a modular item built but never ranked
+  (a Zaw, Kitgun, K-Drive, MOA or Hound) is listed as missing until it earns affinity; and
+  Founders items are listed like any other. Suggested and implemented by
+  [@NekoRem](https://github.com/NekoRem).
+
 ## [0.13.1] - 2026-10-11
 
 ### Changed

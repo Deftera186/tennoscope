@@ -928,6 +928,29 @@ describe('MVP desktop interface', () => {
     expect(await screen.findByText('50% of mastery-eligible items')).toBeInTheDocument()
   })
 
+  it('orders unmastered equipment first, then mastered, then what earns no mastery', async () => {
+    backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
+    backend.getView.mockResolvedValue({
+      ...view,
+      collection: {
+        total_entries: 4,
+        items: [
+          { id: 'zenith', name: 'Zenith', category: 'weapon', quantity: 1, mastered: true, live: false },
+          { id: 'braton', name: 'Braton', category: 'weapon', quantity: 0, mastered: false, live: false },
+          { id: 'akbronco', name: 'Akbronco', category: 'weapon', quantity: 1, mastered: false, live: false },
+          { id: 'serration', name: 'Serration', category: 'mod', quantity: 12, mastered: false, live: false },
+        ],
+      },
+    })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(within(screen.getByRole('group', { name: 'Sort collection' })).getByRole('button', { name: 'Unmastered first' }))
+    const names = screen.getAllByRole('article')
+      .filter(node => node.closest('[aria-label="Collection items"]'))
+      .map(node => node.getAttribute('aria-label'))
+    expect(names).toEqual(['Akbronco', 'Braton', 'Zenith', 'Serration'])
+  })
+
   it('renders canonical artwork, sync freshness, and only one 48-item page', async () => {
     backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
     backend.getView.mockResolvedValue({

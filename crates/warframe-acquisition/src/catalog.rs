@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, btree_map::Entry};
+use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
 use serde::Deserialize;
 use thiserror::Error;
-use warframe_domain::Category;
+use warframe_domain::{CatalogItem, Category, DomainError, InventoryEntry, ItemId};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogMetadata {
@@ -454,6 +454,43 @@ impl CatalogIndex {
                 .map(|(path, metadata)| (path.clone(), metadata.ducats))
                 .collect(),
         }
+    }
+
+    /// The masterable equipment `held` does not account for, as the unowned, unmastered rows a
+    /// collection pads itself with so it reads as a checklist and not only as a ledger.
+    ///
+    /// `held` is catalog paths at any quantity: a mastered-and-sold item is on the account's
+    /// record at zero, and that row is the account's own. A ranked row's id carries its rank, so
+    /// callers reduce ids with `ItemId::catalog_path` first. Equipment only, by construction:
+    /// `masterable` was set at parse time from WFCD's flag gated on a classified equipment
+    /// category, which is what keeps mods, arcanes and Amps out. The category is read through
+    /// the same gate rather than unwrapped, so the two cannot drift apart. Every path here passed
+    /// `valid_unique_name` at insert and every name passed `validated_name`, so the `?`s surface
+    /// a corrupt index rather than a case to handle.
+    pub fn unowned_masterables<'a>(
+        &self,
+        held: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Vec<InventoryEntry>, DomainError> {
+        let held: BTreeSet<&str> = held.into_iter().collect();
+        self.items
+            .iter()
+            // Masterable first: it keeps 803 of 17,672 entries, so the set lookup runs for those
+            // alone. Against the 2026-10-10 catalog with 2,415 held paths, best of 20: 3.2 ms
+            // with the lookup first, 0.33 ms this way round. The view is rebuilt every 2.5 s.
+            .filter_map(|(path, metadata)| {
+                let category = metadata.category.filter(|_| metadata.masterable)?;
+                Some((path, metadata, category))
+            })
+            .filter(|(path, _, _)| !held.contains(path.as_str()))
+            .map(|(path, metadata, category)| {
+                let item = CatalogItem::new(ItemId::new(path.as_str())?, &metadata.name, category)?;
+                let item = match &metadata.image_name {
+                    Some(image_name) => item.with_image_name(image_name)?,
+                    None => item,
+                };
+                Ok(InventoryEntry::new(item, 0))
+            })
+            .collect()
     }
 
     fn insert(

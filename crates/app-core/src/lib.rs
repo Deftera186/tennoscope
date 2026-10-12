@@ -42,6 +42,11 @@ pub struct AppCore {
     presence: PresenceView,
     mastery_catalog: Option<Arc<CatalogIndex>>,
     mastery_facts: Option<MasteryFacts>,
+    /// Whether the installed access mode reads the inventory. Companion and Overlay show a
+    /// saved snapshot and the page calls every row a saved record, so the catalogue padding,
+    /// which is a claim about the account as it stands, is only made under a mode that can
+    /// stand behind it.
+    reads_inventory: bool,
 }
 
 /// A snapshot of what mastery marks may say, taken once per overlay publish.
@@ -136,6 +141,7 @@ impl AppCore {
             presence: PresenceView::default(),
             mastery_catalog: None,
             mastery_facts: None,
+            reads_inventory: false,
         })
     }
 
@@ -153,6 +159,12 @@ impl AppCore {
 
     pub fn clear_mastery_facts(&mut self) {
         self.mastery_facts = None;
+    }
+
+    /// Whether the installed access mode reads the inventory; set with every mode change, so a
+    /// downgrade withdraws the catalogue padding as it retires the facts.
+    pub fn set_reads_inventory(&mut self, reads_inventory: bool) {
+        self.reads_inventory = reads_inventory;
     }
 
     /// A snapshot of what mastery marks may say, taken once per overlay publish. The
@@ -295,8 +307,27 @@ impl AppCore {
 
     pub fn current_view(&self) -> Result<AppView, AppError> {
         let collection = self.store.load_collection()?;
+        let snapshot = self.store.latest_snapshot_meta()?;
+        // Every piece of masterable equipment the account has never ranked, so the page reads as
+        // a checklist and not only as a ledger of what was seen. Only once an inventory has
+        // actually been read: before that "missing" would mean "unknown", and the collection
+        // would be the catalogue wearing the account's name. And only under a mode that reads
+        // the inventory: Companion and Overlay present the same rows as a saved snapshot, with
+        // the ownership filters hidden, and a snapshot does not get to claim what it never held.
+        // Chained at view time rather than stored, because the stored collection is the record
+        // of the account, and a catalogue that reloads under it should move the padding without
+        // rewriting that record.
+        let padding = match (&self.mastery_catalog, &snapshot) {
+            (Some(catalog), Some(_)) if self.reads_inventory => catalog.unowned_masterables(
+                collection
+                    .entries()
+                    .map(|entry| entry.item.id.catalog_path()),
+            )?,
+            _ => Vec::new(),
+        };
         let mut items = collection
             .entries()
+            .chain(padding.iter())
             .map(|entry| {
                 // Mastery is not ownership. An item at quantity 0 is not in the inventory
                 // and must not carry a price or contribute to the collection's worth.
@@ -368,7 +399,6 @@ impl AppCore {
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));
         let total_entries = items.len();
-        let snapshot = self.store.latest_snapshot_meta()?;
         let mut health = self.health.clone();
         health.database = BackendHealth::ready("SQLite database available", None)?;
         Ok(AppView {

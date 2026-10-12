@@ -38,7 +38,7 @@ import { MetalMark } from './MetalMark'
 import { OrdersView } from './OrdersView'
 import { isListable, listedLabel, listedOrderFor } from './orders'
 import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
-import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, stackValue } from './collection'
+import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, masteryOrder, pageCount, pageItems, pageNumbers, rankLabel, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, readShowDucats, writePriceFloor, writeShowDucats } from './settings'
 import { snapshotFreshness, stampReading } from './freshness'
 import { bootUpdateChecks } from './updateStore'
@@ -50,7 +50,7 @@ import { accessMode } from './access'
 
 type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
-type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'platinum-desc' | 'ducats-desc'
+type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'mastery-asc' | 'platinum-desc' | 'ducats-desc'
 
 const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: string }> = [
   { value: 'all', label: 'All categories', tally: '✳' },
@@ -73,6 +73,7 @@ const sortOptions: Array<{ value: Sort; label: string; metal?: 'plat' | 'ducat' 
   { value: 'name-asc', label: 'Name A–Z' },
   { value: 'quantity-desc', label: 'Quantity' },
   { value: 'category-asc', label: 'Category' },
+  { value: 'mastery-asc', label: 'Unmastered first' },
   { value: 'platinum-desc', label: 'Platinum', metal: 'plat' },
   { value: 'ducats-desc', label: 'Ducats', metal: 'ducat' },
 ]
@@ -598,11 +599,13 @@ function CollectionPage({ view, effectiveMode, pricing, onPriceLive, priceFloor,
         ? right.quantity - left.quantity || left.name.localeCompare(right.name)
         : sort === 'category-asc'
           ? left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
-          : sort === 'platinum-desc'
-            ? (right.platinum ?? -1) - (left.platinum ?? -1) || left.name.localeCompare(right.name)
-            : sort === 'ducats-desc'
-              ? (right.ducats ?? -1) - (left.ducats ?? -1) || left.name.localeCompare(right.name)
-              : left.name.localeCompare(right.name))
+          : sort === 'mastery-asc'
+            ? masteryOrder(left) - masteryOrder(right) || left.name.localeCompare(right.name)
+            : sort === 'platinum-desc'
+              ? (right.platinum ?? -1) - (left.platinum ?? -1) || left.name.localeCompare(right.name)
+              : sort === 'ducats-desc'
+                ? (right.ducats ?? -1) - (left.ducats ?? -1) || left.name.localeCompare(right.name)
+                : left.name.localeCompare(right.name))
   }, [view.collection.items, search, category, ownership, sort])
   const totalPages = pageCount(filtered.length)
   const currentPage = clampPage(page, filtered.length)
@@ -637,13 +640,13 @@ function CollectionPage({ view, effectiveMode, pricing, onPriceLive, priceFloor,
   return <section className="page" aria-labelledby="collection-title">
     <div className="mark-head">
       <h1 id="collection-title" className="mark">{snapshotOnly ? 'Saved snapshot' : 'Your collection'}</h1>
-      <p className="prose">{snapshotOnly ? 'Your stored collection remains available for reference, valuation, and planning.' : 'Canonical equipment, parts and relics observed on this account. Read only, held locally.'}</p>
+      <p className="prose">{snapshotOnly ? 'Your stored collection remains available for reference, valuation, and planning.' : 'Canonical equipment, parts and relics observed on this account, and every masterable item it has never ranked. Read only, held locally.'}</p>
     </div>
 
     <div className={`assay-band${showDucats ? ' with-ducats' : ''}`}>
       <BandCell kind="items" value={view.collection.total_entries} label={snapshotOnly ? 'Saved entries' : 'Items tracked'} note={snapshotOnly ? 'Entries retained in the saved snapshot' : `${owned} currently owned`}/>
       <BandCell kind="mastered" value={mastered} label={snapshotOnly ? 'Mastery records' : 'Mastered'} note={snapshotOnly ? 'Historical snapshot; current mastery is unverifiable' : masteryEligible ? `${Math.round(mastered / masteryEligible * 100)}% of mastery-eligible items` : 'No mastery-eligible items'}/>
-      <BandCell kind="missing" value={missing} label={snapshotOnly ? 'Zero-quantity records' : 'Missing'} note={snapshotOnly ? 'Historical snapshot; current ownership is unverifiable' : 'From known collection data'}/>
+      <BandCell kind="missing" value={missing} label={snapshotOnly ? 'Zero-quantity records' : 'Missing'} note={snapshotOnly ? 'Historical snapshot; current ownership is unverifiable' : 'Not held on this account, including masterable equipment it has never ranked'}/>
       {/* Two figures and the one clause that qualifies them. The cell had five numbers in it and
           read as an argument about the collection rather than a valuation of it; the live-pass count
           was a second copy of the register line below, and the priced-item count mostly measured how
