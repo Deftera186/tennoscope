@@ -38,7 +38,7 @@ import { MetalMark } from './MetalMark'
 import { OrdersView } from './OrdersView'
 import { isListable, listedLabel, listedOrderFor } from './orders'
 import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
-import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, stackValue } from './collection'
+import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, masteryOrder, pageCount, pageItems, pageNumbers, rankLabel, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, readShowDucats, writePriceFloor, writeShowDucats } from './settings'
 import { snapshotFreshness, stampReading } from './freshness'
 import { bootUpdateChecks } from './updateStore'
@@ -50,7 +50,7 @@ import { accessMode } from './access'
 
 type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
-type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'platinum-desc' | 'ducats-desc'
+type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'mastery-asc' | 'platinum-desc' | 'ducats-desc'
 
 const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: string }> = [
   { value: 'all', label: 'All categories', tally: '✳' },
@@ -73,6 +73,7 @@ const sortOptions: Array<{ value: Sort; label: string; metal?: 'plat' | 'ducat' 
   { value: 'name-asc', label: 'Name A–Z' },
   { value: 'quantity-desc', label: 'Quantity' },
   { value: 'category-asc', label: 'Category' },
+  { value: 'mastery-asc', label: 'Unmastered first' },
   { value: 'platinum-desc', label: 'Platinum', metal: 'plat' },
   { value: 'ducats-desc', label: 'Ducats', metal: 'ducat' },
 ]
@@ -598,11 +599,13 @@ function CollectionPage({ view, effectiveMode, pricing, onPriceLive, priceFloor,
         ? right.quantity - left.quantity || left.name.localeCompare(right.name)
         : sort === 'category-asc'
           ? left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
-          : sort === 'platinum-desc'
-            ? (right.platinum ?? -1) - (left.platinum ?? -1) || left.name.localeCompare(right.name)
-            : sort === 'ducats-desc'
-              ? (right.ducats ?? -1) - (left.ducats ?? -1) || left.name.localeCompare(right.name)
-              : left.name.localeCompare(right.name))
+          : sort === 'mastery-asc'
+            ? masteryOrder(left) - masteryOrder(right) || left.name.localeCompare(right.name)
+            : sort === 'platinum-desc'
+              ? (right.platinum ?? -1) - (left.platinum ?? -1) || left.name.localeCompare(right.name)
+              : sort === 'ducats-desc'
+                ? (right.ducats ?? -1) - (left.ducats ?? -1) || left.name.localeCompare(right.name)
+                : left.name.localeCompare(right.name))
   }, [view.collection.items, search, category, ownership, sort])
   const totalPages = pageCount(filtered.length)
   const currentPage = clampPage(page, filtered.length)

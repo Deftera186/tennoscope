@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { atMaxRank, collectionTotals, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
+import { atMaxRank, collectionTotals, masteryOrder, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 
 describe('collection pagination', () => {
   it('renders at most 48 items and returns the expected range', () => {
@@ -127,5 +127,20 @@ describe('rank marks', () => {
   it('shows a rank with no known ceiling without claiming one', () => {
     expect(rankLabel({ rank: 3 })).toBe('Rank 3')
     expect(atMaxRank({ rank: 3 })).toBeNull()
+  })
+})
+
+describe('masteryOrder', () => {
+  it('puts unmastered equipment first, mastered equipment next, and everything else last', () => {
+    expect(masteryOrder({ category: 'weapon', mastered: false })).toBe(0)
+    expect(masteryOrder({ category: 'frame', mastered: false })).toBe(0)
+    expect(masteryOrder({ category: 'companion', mastered: true })).toBe(1)
+    expect(masteryOrder({ category: 'vehicle', mastered: true })).toBe(1)
+  })
+
+  it('ranks what earns no mastery last whatever its flag says', () => {
+    expect(masteryOrder({ category: 'mod', mastered: false })).toBe(2)
+    expect(masteryOrder({ category: 'prime_part', mastered: false })).toBe(2)
+    expect(masteryOrder({ category: 'relic', mastered: true })).toBe(2)
   })
 })
