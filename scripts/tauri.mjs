@@ -8,6 +8,7 @@
 // Native screen capture builds PipeWire bindings through bindgen. Some Linux
 // distributions keep libclang in a versioned LLVM slot outside the dynamic
 // loader's search path, so the helper resolves that slot through llvm-config.
+// The same slot also provides bindgen's resource dir, so split layouts keep builtin headers.
 //
 // Both defaults are Linux-only. Explicit caller values always win; release
 // scripts and configured development shells therefore retain control.

@@ -4,6 +4,12 @@ import path from 'node:path'
 
 const DEFAULT_LLVM_ROOTS = ['/usr/lib/llvm', '/usr/lib64/llvm']
 const LIBCLANG_NAME = /^libclang(?!-cpp)(?:-[^.]+)?\.so(?:\..+)?$/
+const LIBCLANG_FILE = /^libclang[^/]*\.so/
+const BINDGEN_KEYS = [
+  'BINDGEN_EXTRA_CLANG_ARGS',
+  'BINDGEN_EXTRA_CLANG_ARGS_x86_64_unknown_linux_gnu',
+  'BINDGEN_EXTRA_CLANG_ARGS_x86_64-unknown-linux-gnu'
+]
 
 function containsLibclang(directory) {
   try {
@@ -11,6 +17,43 @@ function containsLibclang(directory) {
   } catch {
     return false
   }
+}
+
+// Builtin headers sit next to the driver, not next to libclang, on split layouts.
+function readable(directory) {
+  try {
+    accessSync(directory, constants.R_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function clangResourceDir(slotDir) {
+  try {
+    const resource = execFileSync(path.join(slotDir, 'bin', 'clang'), ['--print-resource-dir'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim()
+    if (resource !== '' && readable(resource)) return path.normalize(resource)
+  } catch {
+    // This LLVM slot has no usable clang driver.
+  }
+  return undefined
+}
+
+function resolveBindgenResourceDir(libclangPath) {
+  const libdir = LIBCLANG_FILE.test(path.basename(libclangPath))
+    ? path.dirname(libclangPath)
+    : libclangPath
+  const slotDir = path.dirname(libdir)
+  const slot = path.basename(slotDir)
+  const fromDriver = clangResourceDir(slotDir)
+  if (fromDriver !== undefined) return fromDriver
+  for (const candidate of [path.join(slotDir, 'lib', 'clang', slot), path.join('/usr/lib/clang', slot)]) {
+    if (readable(candidate)) return candidate
+  }
+  return undefined
 }
 
 function versionedLlvmConfigs(roots) {
@@ -68,6 +111,11 @@ export function configureTauriEnvironment(
   if (env.LIBCLANG_PATH === undefined) {
     const libclangPath = discoverLibclang(env, llvmRoots)
     if (libclangPath !== undefined) env.LIBCLANG_PATH = libclangPath
+  }
+  // libclang alone cannot see builtin headers on split layouts, so bindgen fails on stdbool.h.
+  if (env.LIBCLANG_PATH !== undefined && BINDGEN_KEYS.every((key) => env[key] === undefined)) {
+    const resourceDir = resolveBindgenResourceDir(env.LIBCLANG_PATH)
+    if (resourceDir !== undefined) env.BINDGEN_EXTRA_CLANG_ARGS = `-resource-dir=${resourceDir}`
   }
   return env
 }
