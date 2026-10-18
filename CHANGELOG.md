@@ -16,31 +16,19 @@ see the difference.
 
 ### Added
 
-- **The collection lists every masterable item, not only the ones the account has seen.**
-  Under Full access, once an inventory has been read and the item catalog has loaded, each
-  piece of masterable equipment the account has never ranked appears at quantity 0 and
-  unmastered (frames, weapons, companions, Archwings, K-Drives and Necramechs; the WFCD
-  catalog flagged 803 items masterable on 2026-10-10, of which the app keeps those it can
-  classify as equipment), so the Missing filter and the mastered percentage read as a mastery
-  checklist, and a new **Unmastered first** sort puts the equipment still to master ahead of
-  the mastered and of everything that earns none. Companion and Overlay access show the saved
-  snapshot as before. Operator Amps are
-  absent, because the catalog flags none of them masterable; a modular item built but never ranked
-  (a Zaw, Kitgun, K-Drive, MOA or Hound) is listed as missing until it earns affinity; and
-  Founders items are listed like any other. Suggested and implemented by
-  [@NekoRem](https://github.com/NekoRem).
-
-## [0.13.1] - 2026-10-11
-
-### Changed
-
-- **The Linux packages and the AppImage are built on different Ubuntu releases.** The
-  `.deb` and the `.rpm` are built on 24.04, so their binaries need glibc 2.39 and run on
-  Ubuntu 24.04, Debian 13 and Fedora 40 or newer; on Ubuntu 22.04 and Debian 12 they
-  install but the binary will not start. The AppImage is built on 22.04 again and
-  references nothing past glibc 2.35, so it runs on both, and it is the one to use on
-  22.04 and Debian 12. The `.deb` also names both PipeWire package generations, so `apt`
-  can resolve its dependency on 24.04 at all.
+- **A Mastery tab lists every masterable item the account has yet to master.** Under Full
+  access, once an inventory has been read and the item catalog has loaded, the tab shows
+  mastery-eligible equipment the account has never mastered. What it holds but has not ranked,
+  and what it has never held (the WFCD catalog flagged 803 items masterable on 2026-10-10, of
+  which the app keeps those it can classify as frame, weapon, companion or vehicle). Progress
+  reads across the top, overall and per category, counting mastered items the account has since
+  sold the way the game's profile does; category chips filter, and the default order puts what
+  is in the arsenal first. The Collection tab still lists only what the account holds, and gains
+  an **Unmastered first** sort for the gear it does hold; on both tabs a card the account does
+  not hold is drawn dimmed. Operator Amps are absent, because the catalog flags none of them
+  masterable; a modular item built but never ranked (a Zaw, Kitgun, K-Drive, MOA or Hound) is
+  listed until it earns affinity; Founders items are listed like any other. Suggested and
+  implemented by [@NekoRem](https://github.com/NekoRem).
 
 ### Fixed
 

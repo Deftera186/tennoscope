@@ -60,6 +60,20 @@ const view: AppView = {
     ],
     total_entries: 8,
   },
+  mastery: {
+    available: true,
+    items: [
+      { id: 'excalibur', name: 'Excalibur', category: 'frame', quantity: 0, mastered: false, live: false, priceable: false },
+      { id: 'skana', name: 'Skana', category: 'weapon', quantity: 1, mastered: false, live: false, priceable: false },
+      { id: 'furis', name: 'Furis', category: 'weapon', quantity: 0, mastered: false, live: false, priceable: false },
+    ],
+    totals: [
+      { category: 'frame', mastered: 0, total: 1 },
+      { category: 'weapon', mastered: 2, total: 4 },
+      { category: 'companion', mastered: 0, total: 0 },
+      { category: 'vehicle', mastered: 0, total: 0 },
+    ],
+  },
   reward: {
     cards: [
       { name: 'Forma Blueprint', platinum: 12, ducats: 25, owned: 0, confidence: 1 },
@@ -679,7 +693,7 @@ describe('MVP desktop interface', () => {
     await screen.findByRole('heading', { name: 'Your collection' })
 
     const navigation = screen.getByRole('navigation', { name: 'Primary' })
-    expect(within(navigation).getAllByRole('button')).toHaveLength(6)
+    expect(within(navigation).getAllByRole('button')).toHaveLength(7)
     expect(within(navigation).queryByRole('button', { name: 'Refresh inventory' })).not.toBeInTheDocument()
     const operations = screen.getByRole('region', { name: 'Runtime operations' })
     expect(within(operations).getByRole('button', { name: 'Refresh inventory' })).toBeInTheDocument()
@@ -949,6 +963,42 @@ describe('MVP desktop interface', () => {
       .filter(node => node.closest('[aria-label="Collection items"]'))
       .map(node => node.getAttribute('aria-label'))
     expect(names).toEqual(['Akbronco', 'Braton', 'Zenith', 'Serration'])
+  })
+
+  it('marks a card the account does not hold so it can be drawn dimmed', async () => {
+    backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    expect(screen.getByRole('article', { name: 'Forma Blueprint' })).toHaveAttribute('data-held', 'false')
+    expect(screen.getByRole('article', { name: 'Rhino' })).toHaveAttribute('data-held', 'true')
+  })
+
+  it('opens the mastery tab with the checklist in arsenal-first order and the progress strip', async () => {
+    backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Your collection' })
+    await userEvent.click(screen.getByRole('button', { name: 'Mastery' }))
+    expect(screen.getByRole('heading', { name: 'Mastery' })).toBeInTheDocument()
+    const names = screen.getAllByRole('article')
+      .filter(node => node.closest('[aria-label="Mastery items"]'))
+      .map(node => node.getAttribute('aria-label'))
+    expect(names).toEqual(['Skana', 'Excalibur', 'Furis'])
+    expect(screen.getByText('2', { selector: '[data-summary="mastered"] *' })).toBeInTheDocument()
+    expect(screen.getByText('40% of 5 masterable items')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Weapon 2/4' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Frame 0/1' }))
+    expect(screen.queryByRole('article', { name: 'Skana' })).not.toBeInTheDocument()
+    expect(screen.getByRole('article', { name: 'Excalibur' })).toHaveAttribute('data-held', 'false')
+  })
+
+  it('the mastery page says what it needs when the backend has no checklist', async () => {
+    backend.getSetupStatus.mockResolvedValue({ setup_complete: true, access_mode: 'overlay', desktop_capture_action_available: false })
+    backend.getView.mockResolvedValue({ ...view, mastery: { available: false, items: [], totals: [] } })
+    render(<App />)
+    await screen.findByRole('heading', { name: 'Saved snapshot' })
+    await userEvent.click(screen.getByRole('button', { name: 'Mastery' }))
+    expect(await screen.findByText('Mastery needs an inventory read under Full access')).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: 'Mastery items' })).not.toBeInTheDocument()
   })
 
   it('renders canonical artwork, sync freshness, and only one 48-item page', async () => {

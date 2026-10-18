@@ -417,6 +417,13 @@
 .entry-cat { font-family: var(--face-register); font-size: .54rem; font-weight: 600; letter-spacing: .15em; text-transform: uppercase; color: var(--platinum-deep); }
 .entry-name { margin: 0; overflow: hidden; font-family: var(--face-mark); font-size: 1.05rem; font-weight: 700; letter-spacing: -.01em; line-height: 1.1; text-transform: uppercase; color: var(--platinum); text-overflow: ellipsis; white-space: nowrap; }
 
+/* A card the account does not hold is drawn dimmed: desaturated art, a plain well, a quieter
+   name. The state is still carried in words by the card's own "Missing" line; this only makes
+   the sheet scan faster. */
+.entry[data-held="false"] .entry-well img { filter: grayscale(1); opacity: .55; }
+.entry[data-held="false"] .entry-well { box-shadow: var(--strike-deep), inset 0 0 0 1px var(--rule); }
+.entry[data-held="false"] .entry-name { color: var(--platinum-dim); }
+
 /* Struck hallmarks. Colour never carries a state alone. */
 .marks { display: flex; flex-wrap: wrap; align-content: end; gap: var(--hair); }
 .hallmark {

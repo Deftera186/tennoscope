@@ -32,6 +32,7 @@ import type { AppView } from './backend'
 function makeView(health: AppView['health']): AppView {
   return {
     collection: { items: [], total_entries: 0, snapshot: null },
+    mastery: { available: false, items: [], totals: [] },
     reward: { cards: [], best_value_index: null, best_ducat_index: null },
     market_account: {
       link: 'unlinked', orders: [], listed_platinum: 0, flagged: 0, listable: [],
