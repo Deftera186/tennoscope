@@ -356,6 +356,7 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
                 },
                 "pricing": null
             },
+            "mastery": {"available": false, "items": [], "totals": []},
             "reward": {
                 "cards": [
                     {"name": "Forma Blueprint", "platinum": 12, "ducats": 25, "owned": 0, "confidence": 1.0},
