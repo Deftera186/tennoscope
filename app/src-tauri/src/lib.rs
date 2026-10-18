@@ -2478,10 +2478,11 @@ mod tests {
         );
     }
 
-    /// The catalogue padding is a claim about the account as it stands, so it goes with inventory
-    /// access the way the facts do: Companion and Overlay show the saved snapshot as itself.
+    /// The mastery checklist is a claim about the account as it stands, so it goes with inventory
+    /// access the way the facts do: Companion and Overlay get no checklist, and the collection is
+    /// the saved snapshot either way.
     #[test]
-    fn losing_inventory_access_withdraws_the_catalogue_padding() {
+    fn losing_inventory_access_withdraws_the_mastery_checklist() {
         let directory = tempfile::tempdir().expect("temporary runtime");
         let shared = test_runtime(directory.path());
         let mut runtime = shared.lock().expect("runtime");
@@ -2505,28 +2506,33 @@ mod tests {
             )
             .expect("catalogue parses"),
         ));
-        let listed = |runtime: &Runtime| {
-            runtime
-                .core
-                .current_view()
-                .expect("view")
-                .collection()
+        let checklist = |runtime: &Runtime| {
+            let view = runtime.core.current_view().expect("view");
+            let ids: Vec<String> = view
+                .mastery()
                 .items()
-                .len()
+                .iter()
+                .map(|item| item.id().to_owned())
+                .collect();
+            (
+                view.mastery().available(),
+                ids,
+                view.collection().items().len(),
+            )
         };
 
         apply_inventory_access(&mut runtime, &AccessMode::Full.policy());
         assert_eq!(
-            listed(&runtime),
-            2,
-            "Full access lists the never-ranked Lato beside the held Braton"
+            checklist(&runtime),
+            (true, vec!["/Lotus/Weapons/Tenno/Pistol/Lato".to_owned()], 1),
+            "Full access lists the never-ranked Lato to master; the collection stays the held Braton"
         );
 
         apply_inventory_access(&mut runtime, &AccessMode::Overlay.policy());
         assert_eq!(
-            listed(&runtime),
-            1,
-            "an overlay-only policy shows the saved snapshot as itself"
+            checklist(&runtime),
+            (false, Vec::new(), 1),
+            "an overlay-only policy gets no checklist and shows the saved snapshot as itself"
         );
     }
 
