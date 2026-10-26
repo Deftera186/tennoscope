@@ -81,10 +81,10 @@ virtual-desktop mode reaches it, so the recipe recommends it rather than requiri
 `check()` does need tesseract, so `tesseract` and `tesseract-data-eng` are in `checkdepends`; skip
 that step with `makepkg --nocheck` if you would rather not pull them in to build.
 
-## Three things the source recipe has to do that are not obvious
+## Two things the source recipe has to do that are not obvious
 
-None of them show up on a developer machine that already runs a desktop, which is why all three
-only surfaced in a clean container.
+Neither shows up on a developer machine that already runs a desktop, which is why both only
+surfaced in a clean container.
 
 **`libpipewire` and `clang` in `makedepends`.** A clean chroot has neither of them before
 `build()` runs, and without them the build dies in `libspa-sys`'s build script with
@@ -97,14 +97,6 @@ pipewire unconditionally for the portal route and generates its bindings with bi
 IR instead of machine code, and `rustc` links with `ld.lld`, which cannot read those sections: the
 link fails with ~20 undefined `sqlite3_*` symbols. Rust's own LTO comes from the Cargo profile, not
 `CFLAGS`, so nothing is lost. The Gentoo ebuild filters the same flag for the same reason.
-
-**One test is skipped in `check()`.** `a_16_10_screen_is_read_where_a_16_10_screen_actually_sits`
-asserts every card reads at >= 0.9. `tesseract-data-eng` ships upstream's combined legacy+LSTM
-`tessdata` (23MB), and on that fixture `2X Forma Blueprint` reads 0.875; Gentoo's `tessdata_fast`
-(4MB) and CI's both clear the floor. That is a traineddata difference, not misplaced geometry, and
-0.875 is still well above the 0.6 the reader actually publishes at, so the card reads normally on
-Arch. Skipped rather than loosened, because that floor is what proves the crop geometry everywhere
-else.
 
 Before any AUR submission: add a `.SRCINFO` per recipe (`makepkg --printsrcinfo`
 in each directory, needs an Arch box).

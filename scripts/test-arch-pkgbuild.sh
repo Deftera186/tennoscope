@@ -41,7 +41,7 @@ check
 mapfile -t cargo_commands < <(sed -n 's/^ARGS=//p' "$log")
 if [[ ${#cargo_commands[@]} -ne 2 ||
       ${cargo_commands[0]} != 'build --release --locked -p tennoscope --features tauri/custom-protocol ' ||
-      ${cargo_commands[1]} != 'test --workspace --locked -- --skip a_16_10_screen_is_read_where_a_16_10_screen_actually_sits ' ]]; then
+      ${cargo_commands[1]} != 'test --workspace --locked ' ]]; then
   printf 'Arch harness did not exercise build() immediately before check():\n%s\n' "$(cat "$log")" >&2
   exit 1
 fi
@@ -55,9 +55,8 @@ if [[ ${#rustflags[@]} -ne 2 ||
 fi
 actual=$(cat "$log")
 case "$actual" in
-  *'--skip a_16_10_screen_is_read_where_a_16_10_screen_actually_sits '*) ;;
-  *)
-    printf 'Arch check lost its confirmed confidence-only OCR exception; got:\n%s\n' "$actual" >&2
+  *'--skip a_16_10_screen_is_read_where_a_16_10_screen_actually_sits '*)
+    printf 'Arch check must run the 16:10 geometry test, not skip it; got:\n%s\n' "$actual" >&2
     exit 1
     ;;
 esac

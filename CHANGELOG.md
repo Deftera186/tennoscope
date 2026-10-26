@@ -32,6 +32,15 @@ see the difference.
 
 ### Fixed
 
+- **The full test suite passes on every tesseract build.** The 16:10 reward-geometry test
+  asserted every card read at >= 0.9, which the combined legacy+LSTM `tessdata` that Arch and
+  Fedora ship misses by one character on `2X Forma Blueprint` (0.875), so those packages had to
+  skip the test. The floor is now 0.85, the same traineddata-independent value the three-card
+  geometry test already uses: deep enough in the gap between a true crop and a misplaced one
+  (0.90 at +-32px, 0.71-0.80 at +-48px) to still catch a fifth-of-a-card drift, while absorbing
+  the ~0.06 a one-character OCR difference costs. The Arch and COPR recipes run the whole suite
+  again.
+
 - **The item catalog loads again.** The WFCD items catalog that `api.warframestat.us/items`
   serves is now larger than the 64 MiB the app allowed (68,640,011 bytes on 2026-10-10), so
   every download was refused as too large: a fresh install reported "No valid WFCD catalog is

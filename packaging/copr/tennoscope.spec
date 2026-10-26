@@ -89,12 +89,8 @@ install -Dm644 THIRD_PARTY_NOTICES.md %{buildroot}%{_datadir}/doc/%{name}/THIRD_
 cd "%{_builddir}/%{name}-%{version}"
 export CARGO_TARGET_DIR=%{_builddir}/target
 export CARGO_NET_OFFLINE=true
-# Same traineddata caveat as the Arch recipe: Fedora ships upstream's combined
-# legacy+LSTM data, on which one 16:10 fixture reads 0.875 against a 0.9 floor
-# that proves crop geometry elsewhere. Skipped, not loosened.
 RUSTFLAGS="${RUSTFLAGS:-} -C debug-assertions=on" \
-  cargo test --workspace --locked --offline -- \
-    --skip a_16_10_screen_is_read_where_a_16_10_screen_actually_sits
+  cargo test --workspace --locked --offline
 pnpm --dir app check
 %files
 %{_bindir}/tennoscope

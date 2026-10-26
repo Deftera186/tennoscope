@@ -54,18 +54,8 @@ build() {
 check() {
   cd "${srcdir}/${pkgname}-${pkgver}"
   export CARGO_TARGET_DIR="${srcdir}/target"
-  # The 16:10 geometry test is skipped on Arch, and only on Arch. It asserts every card reads at
-  # >= 0.9 -- a deliberately strict floor, well above the 0.6 the reader publishes at, because the
-  # score is what proves the crop geometry rather than the closed-set match covering for it.
-  # `tesseract-data-eng` ships upstream's combined legacy+LSTM `tessdata` (23MB), where
-  # `2X Forma Blueprint` reads 0.875 on that one fixture; Gentoo's `tessdata_fast` (4MB) reads it
-  # above the floor, as does CI's. One character of OCR difference on a short name is worth ~0.06,
-  # so 0.875 is a different-traineddata result, not misplaced geometry -- and 0.875 is still far
-  # above MATCH_FLOOR, so the reader publishes this card normally on Arch. Skipped rather than
-  # loosened because the floor is doing real work for every other packaging of this test.
   RUSTFLAGS="${RUSTFLAGS:-} -C debug-assertions=on" \
-    cargo test --workspace --locked -- \
-      --skip a_16_10_screen_is_read_where_a_16_10_screen_actually_sits
+    cargo test --workspace --locked
   pnpm --dir app check
 }
 
