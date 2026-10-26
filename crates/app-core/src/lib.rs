@@ -42,6 +42,11 @@ pub struct AppCore {
     presence: PresenceView,
     mastery_catalog: Option<Arc<CatalogIndex>>,
     mastery_facts: Option<MasteryFacts>,
+    /// Whether the installed access mode reads the inventory. Companion and Overlay show a
+    /// saved snapshot and the page calls every row a saved record, so the catalogue padding,
+    /// which is a claim about the account as it stands, is only made under a mode that can
+    /// stand behind it.
+    reads_inventory: bool,
 }
 
 /// A snapshot of what mastery marks may say, taken once per overlay publish.
@@ -136,6 +141,7 @@ impl AppCore {
             presence: PresenceView::default(),
             mastery_catalog: None,
             mastery_facts: None,
+            reads_inventory: false,
         })
     }
 
@@ -153,6 +159,12 @@ impl AppCore {
 
     pub fn clear_mastery_facts(&mut self) {
         self.mastery_facts = None;
+    }
+
+    /// Whether the installed access mode reads the inventory; set with every mode change, so a
+    /// downgrade withdraws the catalogue padding as it retires the facts.
+    pub fn set_reads_inventory(&mut self, reads_inventory: bool) {
+        self.reads_inventory = reads_inventory;
     }
 
     /// A snapshot of what mastery marks may say, taken once per overlay publish. The
@@ -295,6 +307,8 @@ impl AppCore {
 
     pub fn current_view(&self) -> Result<AppView, AppError> {
         let collection = self.store.load_collection()?;
+        let snapshot = self.store.latest_snapshot_meta()?;
+        let mastery = self.mastery_checklist(&collection, snapshot.is_some())?;
         let mut items = collection
             .entries()
             .map(|entry| {
@@ -368,7 +382,6 @@ impl AppCore {
             .collect::<Vec<_>>();
         items.sort_by(|left, right| left.id.cmp(&right.id));
         let total_entries = items.len();
-        let snapshot = self.store.latest_snapshot_meta()?;
         let mut health = self.health.clone();
         health.database = BackendHealth::ready("SQLite database available", None)?;
         Ok(AppView {
@@ -378,12 +391,91 @@ impl AppCore {
                 snapshot,
                 pricing: self.pricing,
             },
+            mastery,
             reward: self.reward.clone(),
             health,
             market_account: MarketAccountView {
                 presence: self.presence,
                 ..self.market_account.clone()
             },
+        })
+    }
+
+    /// What is left to master, and how far along the account is, for the Mastery tab.
+    ///
+    /// The list is the catalogue's masterable equipment minus what the account has mastered:
+    /// rows the store holds unmastered at any quantity (an item sold before it was ranked is
+    /// still to do) and the catalogue's items the store has never seen. Mastered rows are
+    /// progress whether or not they are still held, which is how the game's profile counts.
+    /// Totals are the catalogue's masterable set per category, so a held row the catalogue
+    /// cannot resolve is neither listed nor counted: the checklist is the catalogue's word,
+    /// and the collection still shows the row.
+    ///
+    /// Only once an inventory has actually been read: before that "never mastered" would mean
+    /// "unknown". And only under a mode that reads the inventory: Companion and Overlay present
+    /// a saved snapshot, and a snapshot does not get to say what the account never held. Built
+    /// at view time rather than stored, so a catalogue that reloads under the snapshot moves
+    /// the list without rewriting the record of the account.
+    fn mastery_checklist(
+        &self,
+        collection: &Collection,
+        inventory_read: bool,
+    ) -> Result<MasteryChecklistView, AppError> {
+        const CATEGORIES: [Category; 4] = [
+            Category::Frame,
+            Category::Weapon,
+            Category::Companion,
+            Category::Vehicle,
+        ];
+        let Some(catalog) = self.mastery_catalog.as_deref() else {
+            return Ok(MasteryChecklistView::unavailable());
+        };
+        if !(self.reads_inventory && inventory_read) {
+            return Ok(MasteryChecklistView::unavailable());
+        }
+        let slot = |category: Category| CATEGORIES.iter().position(|known| *known == category);
+        // (mastered, total) per category, in CATEGORIES order.
+        let mut counts = [(0usize, 0usize); CATEGORIES.len()];
+        let mut held = Vec::new();
+        let mut items = Vec::new();
+        for entry in collection.entries() {
+            let path = entry.item.id.catalog_path();
+            // Masterable implies an equipment category at parse time, so a `None` here is a row
+            // the catalogue does not call masterable, not a gap to paper over.
+            let Some(index) = catalog
+                .resolve(path)
+                .and_then(|metadata| metadata.category().filter(|_| metadata.masterable()))
+                .and_then(slot)
+            else {
+                continue;
+            };
+            held.push(path);
+            counts[index].1 += 1;
+            if entry.mastered {
+                counts[index].0 += 1;
+            } else {
+                items.push(CollectionItemView::from(entry));
+            }
+        }
+        for entry in catalog.unowned_masterables(held.iter().copied())? {
+            let index = slot(entry.item.category)
+                .expect("unowned_masterables yields equipment categories only");
+            counts[index].1 += 1;
+            items.push(CollectionItemView::from(&entry));
+        }
+        items.sort_by(|left, right| left.id.cmp(&right.id));
+        Ok(MasteryChecklistView {
+            available: true,
+            items,
+            totals: CATEGORIES
+                .iter()
+                .zip(counts)
+                .map(|(category, (mastered, total))| MasteryCategoryTotal {
+                    category: *category,
+                    mastered,
+                    total,
+                })
+                .collect(),
         })
     }
 
@@ -746,6 +838,7 @@ impl AppCore {
 #[derive(Clone, Debug, Serialize)]
 pub struct AppView {
     collection: CollectionView,
+    mastery: MasteryChecklistView,
     reward: RewardView,
     health: HealthView,
     market_account: MarketAccountView,
@@ -754,6 +847,10 @@ pub struct AppView {
 impl AppView {
     pub fn collection(&self) -> &CollectionView {
         &self.collection
+    }
+
+    pub fn mastery(&self) -> &MasteryChecklistView {
+        &self.mastery
     }
 
     pub fn reward(&self) -> &RewardView {
@@ -776,6 +873,47 @@ pub struct CollectionView {
     snapshot: Option<SnapshotMeta>,
     /// A live pricing pass in flight: the player asked about the page in front of them.
     pricing: Option<PricingProgress>,
+}
+
+/// What is left to master, and how far along the account is. `available` is false until an
+/// inventory has been read under a mode that reads it and the catalogue has loaded; the page
+/// says so instead of showing an empty list that would mean "unknown".
+#[derive(Clone, Debug, Serialize)]
+pub struct MasteryChecklistView {
+    available: bool,
+    items: Vec<CollectionItemView>,
+    totals: Vec<MasteryCategoryTotal>,
+}
+
+impl MasteryChecklistView {
+    fn unavailable() -> Self {
+        Self {
+            available: false,
+            items: Vec::new(),
+            totals: Vec::new(),
+        }
+    }
+
+    pub fn available(&self) -> bool {
+        self.available
+    }
+
+    pub fn items(&self) -> &[CollectionItemView] {
+        &self.items
+    }
+
+    pub fn totals(&self) -> &[MasteryCategoryTotal] {
+        &self.totals
+    }
+}
+
+/// Mastered and total for one equipment category, counted the way the game's profile counts:
+/// an item mastered and since sold is still mastered.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MasteryCategoryTotal {
+    pub category: Category,
+    pub mastered: usize,
+    pub total: usize,
 }
 
 /// How far a live pricing pass has got. One statement for the whole page, whoever asked for it:

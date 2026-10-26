@@ -38,7 +38,7 @@ import { MetalMark } from './MetalMark'
 import { OrdersView } from './OrdersView'
 import { isListable, listedLabel, listedOrderFor } from './orders'
 import { SellForm, type SellHandler, type UpdateHandler } from './SellForm'
-import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, pageCount, pageItems, pageNumbers, rankLabel, stackValue } from './collection'
+import { atMaxRank, clampPage, collectionTotals, COLLECTION_PAGE_SIZE, masteryOrder, pageCount, pageItems, pageNumbers, rankLabel, stackValue } from './collection'
 import { MAX_PRICE_FLOOR, readPriceFloor, readShowDucats, writePriceFloor, writeShowDucats } from './settings'
 import { snapshotFreshness, stampReading } from './freshness'
 import { bootUpdateChecks } from './updateStore'
@@ -48,9 +48,9 @@ import { reportBlockVisible } from './reportable'
 import { AccessSelector } from './AccessSelector'
 import { accessMode } from './access'
 
-type Page = 'collection' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
+type Page = 'collection' | 'mastery' | 'rewards' | 'orders' | 'diagnostics' | 'settings' | 'about'
 type Ownership = 'all' | 'owned' | 'mastered' | 'missing' | 'tradeable'
-type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'platinum-desc' | 'ducats-desc'
+type Sort = 'name-asc' | 'quantity-desc' | 'category-asc' | 'mastery-asc' | 'platinum-desc' | 'ducats-desc'
 
 const categories: Array<{ value: ItemCategory | 'all'; label: string; tally: string }> = [
   { value: 'all', label: 'All categories', tally: '✳' },
@@ -73,6 +73,7 @@ const sortOptions: Array<{ value: Sort; label: string; metal?: 'plat' | 'ducat' 
   { value: 'name-asc', label: 'Name A–Z' },
   { value: 'quantity-desc', label: 'Quantity' },
   { value: 'category-asc', label: 'Category' },
+  { value: 'mastery-asc', label: 'Unmastered first' },
   { value: 'platinum-desc', label: 'Platinum', metal: 'plat' },
   { value: 'ducats-desc', label: 'Ducats', metal: 'ducat' },
 ]
@@ -90,6 +91,7 @@ function shortDumpDate(isoDate: string): string {
 
 const pageLabel: Record<Page, string> = {
   collection: 'Collection',
+  mastery: 'Mastery',
   rewards: 'Rewards',
   orders: 'Orders',
   diagnostics: 'Diagnostics',
@@ -104,6 +106,8 @@ const pageLabel: Record<Page, string> = {
 function Mark({ name, className = 'punch-glyph' }: { name: Page | 'refresh' | 'search'; className?: string }) {
   const paths = {
     collection: <><path d="M3 4h18M3 10h13M3 16h18M3 22h9"/></>,
+    // A ledger with its ticks: three rules, each struck off where the account has mastered it.
+    mastery: <><path d="M3 5.5l2.5 2.5L10 3.5M13 6h8"/><path d="M3 13l2.5 2.5L10 11M13 13.5h8"/><path d="M3 20.5l2.5 2.5L10 18.5M13 21h8"/></>,
     rewards: <><circle cx="12" cy="14.5" r="7.5"/><path d="M12 7V1.5M9 4h6"/></>,
     orders: <><path d="M3 3h18v6H3z"/><path d="M6 9v12h12V9M10 13h4"/></>,
     diagnostics: <><path d="M2 21h20M6 21 14 3M11 21 19 3"/></>,
@@ -459,7 +463,7 @@ function App() {
       </div>
       <div className="masthead-work">
         <nav className="hallmark-row" aria-label="Primary">
-          {(['collection', 'rewards', 'orders', 'diagnostics', 'settings', 'about'] as const).map(item => <button
+          {(['collection', 'mastery', 'rewards', 'orders', 'diagnostics', 'settings', 'about'] as const).map(item => <button
             key={item}
             type="button"
             aria-label={pageLabel[item]}
@@ -508,6 +512,7 @@ function App() {
             return !current
           })
         }} onSell={ordersSell} onUpdate={ordersUpdate} ordersBusy={ordersBusy}/>}
+        {page === 'mastery' && <MasteryPage view={view} onSell={ordersSell} onUpdate={ordersUpdate} ordersBusy={ordersBusy}/>}
         {page === 'rewards' && <RewardPage view={view} effectiveMode={effectiveMode}/>}
         {page === 'orders' && <OrdersView
           account={view.market_account}
@@ -598,11 +603,13 @@ function CollectionPage({ view, effectiveMode, pricing, onPriceLive, priceFloor,
         ? right.quantity - left.quantity || left.name.localeCompare(right.name)
         : sort === 'category-asc'
           ? left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
-          : sort === 'platinum-desc'
-            ? (right.platinum ?? -1) - (left.platinum ?? -1) || left.name.localeCompare(right.name)
-            : sort === 'ducats-desc'
-              ? (right.ducats ?? -1) - (left.ducats ?? -1) || left.name.localeCompare(right.name)
-              : left.name.localeCompare(right.name))
+          : sort === 'mastery-asc'
+            ? masteryOrder(left) - masteryOrder(right) || left.name.localeCompare(right.name)
+            : sort === 'platinum-desc'
+              ? (right.platinum ?? -1) - (left.platinum ?? -1) || left.name.localeCompare(right.name)
+              : sort === 'ducats-desc'
+                ? (right.ducats ?? -1) - (left.ducats ?? -1) || left.name.localeCompare(right.name)
+                : left.name.localeCompare(right.name))
   }, [view.collection.items, search, category, ownership, sort])
   const totalPages = pageCount(filtered.length)
   const currentPage = clampPage(page, filtered.length)
@@ -768,6 +775,117 @@ function figure(value: number): string {
 // The worth cell sits in a row of plain counts, where a bare number reads as one more count.
 // `aside` takes the slot the other cells put their note in, so four labels still strike one line
 // across the band: a second figure wedged between mark and label would drop this label alone.
+type MasterySort = 'arsenal-first' | 'name-asc' | 'category-asc'
+
+// What is held can be ranked tonight; what was never held is a hunt. The default order says so.
+const masterySortOptions: Array<{ value: MasterySort; label: string }> = [
+  { value: 'arsenal-first', label: 'In arsenal first' },
+  { value: 'name-asc', label: 'Name A–Z' },
+  { value: 'category-asc', label: 'Category' },
+]
+
+function MasteryPage({ view, onSell, onUpdate, ordersBusy }: { view: AppView; onSell: SellHandler; onUpdate: UpdateHandler; ordersBusy: boolean }) {
+  const [search, setSearch] = useState('')
+  const [category, setCategory] = useState<ItemCategory | 'all'>('all')
+  const [sort, setSort] = useState<MasterySort>('arsenal-first')
+  const [page, setPage] = useState(1)
+  const { available, items, totals } = view.mastery
+  const mastered = totals.reduce((sum, entry) => sum + entry.mastered, 0)
+  const total = totals.reduce((sum, entry) => sum + entry.total, 0)
+  const inArsenal = items.filter(item => item.quantity > 0).length
+  const filtered = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase()
+    return items
+      .filter(item => !query || item.name.toLocaleLowerCase().includes(query))
+      .filter(item => category === 'all' || item.category === category)
+      .toSorted((left, right) => sort === 'arsenal-first'
+        ? Number(right.quantity > 0) - Number(left.quantity > 0) || left.name.localeCompare(right.name)
+        : sort === 'category-asc'
+          ? left.category.localeCompare(right.category) || left.name.localeCompare(right.name)
+          : left.name.localeCompare(right.name))
+  }, [items, search, category, sort])
+  const totalPages = pageCount(filtered.length)
+  const currentPage = clampPage(page, filtered.length)
+  const visibleItems = pageItems(filtered, currentPage)
+  const firstResult = filtered.length ? (currentPage - 1) * COLLECTION_PAGE_SIZE + 1 : 0
+  const lastResult = Math.min(currentPage * COLLECTION_PAGE_SIZE, filtered.length)
+  useEffect(() => setPage(1), [search, category, sort])
+  useEffect(() => setPage(value => clampPage(value, filtered.length)), [filtered.length])
+
+  return <section className="page" aria-labelledby="mastery-title">
+    <div className="mark-head">
+      <h1 id="mastery-title" className="mark">Mastery</h1>
+      <p className="prose">Every piece of masterable equipment this account has yet to master: rank what it holds, find what it has never held.</p>
+    </div>
+
+    {!available
+      ? <EmptyState title="Mastery needs an inventory read under Full access" detail="Refresh the inventory once under Full access. Companion and Overlay show the saved snapshot only."/>
+      : <>
+        <div className="assay-band">
+          <BandCell kind="items" value={items.length} label="Remaining" note="Equipment this account has never mastered"/>
+          <BandCell kind="mastered" value={mastered} label="Mastered" note={total ? `${Math.round(mastered / total * 100)}% of ${total} masterable items` : 'No masterable items'}/>
+          <BandCell kind="arsenal" value={inArsenal} label="In arsenal" note="Held and unranked: the quickest progress"/>
+          <BandCell kind="missing" value={items.length - inArsenal} label="Never held"/>
+        </div>
+
+        <div className="register">
+          <div className="register-controls">
+            <label className="search-slot">
+              <Mark name="search" className="punch-glyph"/>
+              <span className="sr-only">Search mastery</span>
+              <input type="search" aria-label="Search mastery" placeholder="Search canonical item names…" value={search} onChange={event => setSearch(event.target.value)}/>
+            </label>
+            <div className="sort-slot" role="group" aria-label="Sort mastery">
+              <span>Sort</span>
+              <div className="tally">
+                {masterySortOptions.map(option => <button
+                  type="button"
+                  key={option.value}
+                  aria-pressed={sort === option.value}
+                  onClick={() => setSort(option.value)}
+                >{option.label}</button>)}
+              </div>
+            </div>
+          </div>
+
+          {/* The category shields carry the progress: mastered over total, as the profile would. */}
+          <div className="shield-strip" role="group" aria-label="Mastery categories">
+            <button
+              type="button"
+              className="shield"
+              aria-label="All categories"
+              aria-pressed={category === 'all'}
+              onClick={() => setCategory('all')}
+            ><span className="shield-face"><b aria-hidden="true">✳</b>All categories</span></button>
+            {totals.map(entry => <button
+              type="button"
+              key={entry.category}
+              className="shield"
+              aria-label={`${categoryName[entry.category]} ${entry.mastered}/${entry.total}`}
+              aria-pressed={category === entry.category}
+              onClick={() => setCategory(entry.category)}
+            ><span className="shield-face"><b aria-hidden="true">{entry.mastered}/{entry.total}</b>{categoryName[entry.category]}</span></button>)}
+          </div>
+
+          <div className="register-bar">
+            <div className="provenance-row">
+              <div className="register-status">
+                <span className="register-line">{firstResult}–{lastResult} of {filtered.length}</span>
+              </div>
+            </div>
+          </div>
+
+          {filtered.length
+            ? <>
+              <ul className="collection-grid" aria-label="Mastery items">{visibleItems.map(item => <li key={item.id}><CollectionEntry item={item} ownershipVerified showDucats={false} listedOrder={null} sellable={false} onSell={onSell} onUpdate={onUpdate} busy={ordersBusy}/></li>)}</ul>
+              <Pagination current={currentPage} total={totalPages} onChange={setPage}/>
+            </>
+            : <EmptyState title="Nothing left in this view" detail={items.length ? 'Try another search or clear a filter.' : 'Every masterable item the catalog knows is mastered.'}/>}
+        </div>
+      </>}
+  </section>
+}
+
 function BandCell({ kind, value, unit, aside, label, note }: { kind: string; value: number; unit?: ReactNode; aside?: ReactNode; label: string; note?: string }) {
   return <div className={`band-cell ${kind}`} data-summary={kind} data-testid={`band-${kind}`}>
     <span className="band-figure">{figure(value)}{unit}</span>
@@ -790,7 +908,7 @@ function CollectionEntry({ item, ownershipVerified, showDucats, listedOrder, sel
   // mean. A listing that covers part of the holding keeps the control, as an edit of the listing
   // that already stands. Raising the count is the only honest way to sell the remainder.
   const remaining = sellable && (!listedOrder || listedOrder.quantity < item.quantity)
-  return <article className={`entry cat-${item.category}`} aria-label={label}>
+  return <article className={`entry cat-${item.category}`} aria-label={label} data-held={item.quantity > 0 ? 'true' : 'false'}>
     <div className="entry-well">
       {item.image_url && !artFailed
         ? <img src={item.image_url} alt={item.name} loading="lazy" decoding="async" onError={() => setArtFailed(true)}/>

@@ -839,7 +839,7 @@ where
         .access_mode
         .map(AccessMode::policy)
         .unwrap_or_else(|| AccessMode::Companion.policy());
-    retire_mastery_facts(&mut runtime, &installed);
+    apply_inventory_access(&mut runtime, &installed);
     runtime.setup = effective_setup;
     runtime.monitor = lifecycle;
     persistence_restore.and(restart_result)
@@ -934,15 +934,18 @@ fn transition_monitor(
     let mut runtime = shared
         .lock()
         .map_err(|_| "application state is unavailable".to_owned())?;
-    retire_mastery_facts(&mut runtime, &policy);
+    apply_inventory_access(&mut runtime, &policy);
     runtime.setup = stored.clone();
     runtime.monitor = lifecycle;
     Ok(current_setup_status(stored, runtime.game_running))
 }
 
-/// Drop this run's inventory facts once the mode can no longer read the inventory: they were
-/// read under the old mode's permission, and marks fall back to what a saved collection proves.
-fn retire_mastery_facts(runtime: &mut Runtime, policy: &AccessPolicy) {
+/// Tell the core whether the installed mode reads the inventory, and drop this run's inventory
+/// facts once it cannot: they were read under the old mode's permission, and marks fall back to
+/// what a saved collection proves. The collection's catalogue padding follows the same switch,
+/// so a downgrade withdraws it as surely as it retires the facts.
+fn apply_inventory_access(runtime: &mut Runtime, policy: &AccessPolicy) {
+    runtime.core.set_reads_inventory(policy.acquire_inventory);
     if !policy.acquire_inventory {
         runtime.core.clear_mastery_facts();
     }
@@ -2168,6 +2171,16 @@ pub fn run() {
             app.manage(kiosk_view::KioskState::default());
             if let Some(access_mode) = startup.access_mode {
                 start_collection_prices(Arc::clone(app.state::<SharedRuntime>().inner()));
+                // The stored mode is installed here without a transition, so the switch a
+                // transition would throw is thrown here.
+                {
+                    let mut runtime = app
+                        .state::<SharedRuntime>()
+                        .inner()
+                        .lock()
+                        .map_err(|_| "application state unavailable")?;
+                    apply_inventory_access(&mut runtime, &access_mode.policy());
+                }
                 if access_mode.policy().starts_monitor() {
                     let shared = Arc::clone(app.state::<SharedRuntime>().inner());
                     let mut lifecycle = {
@@ -2292,7 +2305,7 @@ mod live_bench {
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
-    use warframe_acquisition::{MasteryEvidence, MasteryFacts};
+    use warframe_acquisition::{CatalogIndex, MasteryEvidence, MasteryFacts};
     use warframe_domain::{
         CatalogItem, Category, Collection, InventoryEntry, InventorySnapshot, ItemId,
     };
@@ -2450,18 +2463,76 @@ mod tests {
         let mut runtime = shared.lock().expect("runtime");
         runtime.core.set_mastery_facts(MasteryFacts::default());
 
-        retire_mastery_facts(&mut runtime, &AccessMode::Full.policy());
+        apply_inventory_access(&mut runtime, &AccessMode::Full.policy());
         assert_eq!(
             runtime.core.mastery_view().expect("view").evidence(),
             MasteryEvidence::Live,
             "a policy that still acquires the inventory keeps the facts it read"
         );
 
-        retire_mastery_facts(&mut runtime, &AccessMode::Overlay.policy());
+        apply_inventory_access(&mut runtime, &AccessMode::Overlay.policy());
         assert_ne!(
             runtime.core.mastery_view().expect("view").evidence(),
             MasteryEvidence::Live,
             "an overlay-only policy must not answer from live inventory reads"
+        );
+    }
+
+    /// The mastery checklist is a claim about the account as it stands, so it goes with inventory
+    /// access the way the facts do: Companion and Overlay get no checklist, and the collection is
+    /// the saved snapshot either way.
+    #[test]
+    fn losing_inventory_access_withdraws_the_mastery_checklist() {
+        let directory = tempfile::tempdir().expect("temporary runtime");
+        let shared = test_runtime(directory.path());
+        let mut runtime = shared.lock().expect("runtime");
+        let braton = CatalogItem::new(
+            ItemId::new("/Lotus/Weapons/Tenno/Rifle/Braton").expect("id"),
+            "Braton",
+            Category::Weapon,
+        )
+        .expect("item");
+        runtime
+            .core
+            .apply_inventory_snapshot(
+                InventorySnapshot::coherent(vec![InventoryEntry::new(braton, 1)])
+                    .expect("snapshot"),
+                SnapshotMeta::fake("saved").expect("meta"),
+            )
+            .expect("snapshot applies");
+        runtime.core.set_mastery_catalog(Arc::new(
+            CatalogIndex::from_wfcd_json(
+                br#"[{"uniqueName":"/Lotus/Weapons/Tenno/Pistol/Lato","name":"Lato","type":"Pistol","category":"Secondary","masterable":true}]"#,
+            )
+            .expect("catalogue parses"),
+        ));
+        let checklist = |runtime: &Runtime| {
+            let view = runtime.core.current_view().expect("view");
+            let ids: Vec<String> = view
+                .mastery()
+                .items()
+                .iter()
+                .map(|item| item.id().to_owned())
+                .collect();
+            (
+                view.mastery().available(),
+                ids,
+                view.collection().items().len(),
+            )
+        };
+
+        apply_inventory_access(&mut runtime, &AccessMode::Full.policy());
+        assert_eq!(
+            checklist(&runtime),
+            (true, vec!["/Lotus/Weapons/Tenno/Pistol/Lato".to_owned()], 1),
+            "Full access lists the never-ranked Lato to master; the collection stays the held Braton"
+        );
+
+        apply_inventory_access(&mut runtime, &AccessMode::Overlay.policy());
+        assert_eq!(
+            checklist(&runtime),
+            (false, Vec::new(), 1),
+            "an overlay-only policy gets no checklist and shows the saved snapshot as itself"
         );
     }
 

@@ -51,6 +51,16 @@ type CollectionTotals = {
 
 const MASTERY_ELIGIBLE_CATEGORIES = new Set(['frame', 'weapon', 'companion', 'vehicle'])
 
+/**
+ * Where a card sits when the collection is read as a to-do: unmastered equipment first, mastered
+ * equipment next, and last everything that earns no mastery, whatever its flag says. The same
+ * category rule the mastery band counts by, so the sort and the percentage agree on what counts.
+ */
+export function masteryOrder(item: { category: string; mastered: boolean }): 0 | 1 | 2 {
+  if (!MASTERY_ELIGIBLE_CATEGORIES.has(item.category)) return 2
+  return item.mastered ? 1 : 0
+}
+
 /** The collection's ownership, mastery and exchange-value bands. */
 export function collectionTotals(items: readonly CollectionItem[], priceFloor: number): CollectionTotals {
   const totals: CollectionTotals = {
