@@ -247,6 +247,43 @@ fn a_ranked_row_keeps_its_rank_and_ceiling_across_a_reopen() {
     );
 }
 
+/// The Unequipped filter treats `Some(0)` as every copy free to sell, so a row stored as unknown
+/// must come back unknown rather than as zero.
+#[test]
+fn an_equipped_count_survives_a_reopen_and_unknown_stays_unknown() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("store.sqlite3");
+    let mut store = SqliteStore::open(&path).unwrap();
+    store
+        .replace_collection(
+            &snapshot(vec![
+                entry("redirection", "Redirection", Category::Mod, 175, false)
+                    .with_equipped(Some(2)),
+                entry("vitality", "Vitality", Category::Mod, 2, false).with_equipped(Some(0)),
+                entry("braton", "Braton", Category::Weapon, 1, false),
+            ]),
+            &SnapshotMeta::fake("build").unwrap(),
+        )
+        .unwrap();
+    drop(store);
+
+    let reopened = SqliteStore::open(&path).unwrap();
+    let collection = reopened.load_collection().unwrap();
+    let equipped: Vec<_> = collection
+        .entries()
+        .map(|entry| (entry.item.id.as_str().to_owned(), entry.equipped))
+        .collect();
+
+    assert_eq!(
+        equipped,
+        vec![
+            ("braton".to_owned(), None),
+            ("redirection".to_owned(), Some(2)),
+            ("vitality".to_owned(), Some(0)),
+        ]
+    );
+}
+
 /// A database written before ranks existed must open and keep its rows. Refusing it would throw
 /// away a collection over a column, and rebuilding it costs a game session.
 #[test]
@@ -284,6 +321,46 @@ fn a_database_from_before_ranks_migrates_with_its_rows_intact() {
     let entries: Vec<_> = collection
         .entries()
         .map(|entry| (entry.item.name.clone(), entry.quantity, entry.rank))
+        .collect();
+
+    assert_eq!(entries, vec![("Paris".to_owned(), 2, None)]);
+}
+
+/// The oldest schema still in the ladder, from before item artwork. It runs every migration.
+#[test]
+fn a_database_from_before_artwork_migrates_with_its_rows_intact() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("store.sqlite3");
+    {
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE inventory (
+                    item_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                    mastered INTEGER NOT NULL CHECK (mastered IN (0, 1))
+                 );
+                 CREATE TABLE snapshot_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    observed_at TEXT NOT NULL CHECK (length(trim(observed_at)) > 0),
+                    game_build TEXT NOT NULL CHECK (length(trim(game_build)) > 0),
+                    source TEXT NOT NULL CHECK (length(trim(source)) > 0),
+                    item_count INTEGER NOT NULL CHECK (item_count >= 0)
+                 );
+                 INSERT INTO inventory (item_id, name, category, quantity, mastered)
+                 VALUES ('paris', 'Paris', 'weapon', 2, 1);
+                 PRAGMA user_version = 1;",
+            )
+            .unwrap();
+    }
+
+    let store = SqliteStore::open(&path).unwrap();
+    let collection = store.load_collection().unwrap();
+    let entries: Vec<_> = collection
+        .entries()
+        .map(|entry| (entry.item.name.clone(), entry.quantity, entry.equipped))
         .collect();
 
     assert_eq!(entries, vec![("Paris".to_owned(), 2, None)]);
@@ -346,10 +423,10 @@ fn clearing_removes_the_credential() {
     assert_eq!(store.market_credential().expect("credential reads"), None);
 }
 
-/// A version 3 database opens and migrates rather than being rejected. Every existing installation
-/// is at version 3, so a migration that failed here would lose a working collection.
+/// A version 3 database opens and migrates rather than being rejected. A migration that failed here
+/// would lose a working collection.
 #[test]
-fn a_version_three_database_migrates_to_four() {
+fn a_version_three_database_migrates_to_the_current_schema() {
     let directory = tempfile::tempdir().expect("temporary directory");
     let path = directory.path().join("store.sqlite3");
     {
@@ -379,4 +456,54 @@ fn a_version_three_database_migrates_to_four() {
             .quantity(&ItemId::new("paris").unwrap()),
         2
     );
+}
+
+/// Nothing stored before the count existed was ever measured, so every row reads unknown. Zero
+/// would offer every copy of every mod as free to sell.
+#[test]
+fn a_version_four_database_migrates_to_five_with_equip_state_unknown() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("store.sqlite3");
+    {
+        let connection = rusqlite::Connection::open(&path).expect("connection opens");
+        connection
+            .execute_batch(include_str!("../src/schema_v4.sql"))
+            .expect("v4 schema applies");
+        connection
+            .execute(
+                "INSERT INTO inventory (item_id, name, category, quantity, mastered)
+                 VALUES ('paris', 'Paris', 'weapon', 2, 1)",
+                [],
+            )
+            .expect("existing inventory row inserts");
+        connection
+            .pragma_update(None, "user_version", 4)
+            .expect("version set");
+    }
+
+    let mut store = SqliteStore::open(&path).expect("v4 database migrates");
+    let migrated: Vec<_> = store
+        .load_collection()
+        .expect("collection loads")
+        .entries()
+        .map(|entry| (entry.item.name.clone(), entry.quantity, entry.equipped))
+        .collect();
+    assert_eq!(migrated, vec![("Paris".to_owned(), 2, None)]);
+
+    // The migrated table holds the count from the next read on.
+    store
+        .replace_collection(
+            &snapshot(vec![
+                entry("vitality", "Vitality", Category::Mod, 2, false).with_equipped(Some(1)),
+            ]),
+            &SnapshotMeta::fake("build").unwrap(),
+        )
+        .expect("a migrated store takes a snapshot");
+    let stored: Vec<_> = store
+        .load_collection()
+        .expect("collection loads")
+        .entries()
+        .map(|entry| entry.equipped)
+        .collect();
+    assert_eq!(stored, vec![Some(1)]);
 }

@@ -22,6 +22,12 @@ pub struct InventoryEntry {
     /// limit is a sentinel rather than a rank.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_rank: Option<u32>,
+    /// Copies of this holding installed in a build when the inventory was read. `None` when that
+    /// read did not establish it: a row stored before the app counted, gear whose use is a loadout
+    /// rather than a slot, or a response whose builds could not be read. Never shown or filtered as
+    /// zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equipped: Option<u32>,
 }
 
 impl InventoryEntry {
@@ -32,6 +38,7 @@ impl InventoryEntry {
             mastered: false,
             rank: None,
             max_rank: None,
+            equipped: None,
         }
     }
 
@@ -43,6 +50,11 @@ impl InventoryEntry {
     pub fn with_rank(mut self, rank: u32, max_rank: Option<u32>) -> Self {
         self.rank = Some(rank);
         self.max_rank = max_rank;
+        self
+    }
+
+    pub fn with_equipped(mut self, equipped: Option<u32>) -> Self {
+        self.equipped = equipped;
         self
     }
 

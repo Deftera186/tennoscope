@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, io::Read, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    io::Read,
+    time::Duration,
+};
 
 use reqwest::{blocking::Client, redirect::Policy};
 use serde::Deserialize;
@@ -210,13 +214,50 @@ struct RawInventory {
     /// Built Railjack armaments.
     #[serde(default, deserialize_with = "rows")]
     crew_ship_weapons: Vec<serde_json::Value>,
+    // Read for their builds only, never as holdings: an exalted weapon, the Parazon, a K-Drive, a
+    // Railjack or the Operator keeps its mods here.
+    #[serde(default, deserialize_with = "rows")]
+    special_items: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    hoverboards: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    antiques: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    moa_pets: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    scoops: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    horses: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    drifter_guns: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    drifter_melee: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    motorcycles: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    crew_ships: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    data_knives: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    crew_ship_harnesses: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    crew_ship_salvaged_weapons: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    operator_suits: Vec<serde_json::Value>,
+    /// Loadouts whose rows are themselves configs, rather than items carrying `Configs`.
+    #[serde(default, deserialize_with = "rows")]
+    operator_load_outs: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    adult_operator_load_outs: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "rows")]
+    kahl_load_outs: Vec<serde_json::Value>,
 }
 
 /// A section, tolerating the two shapes that are not a list of rows.
 ///
 /// `null` is not the same as absent to serde. `#[serde(default)]` covers a missing key and
 /// nothing else, and the endpoint emits both. Anything that is neither a list nor null is a
-/// section we did not understand, and reads as empty rather than failing its nineteen siblings.
+/// section we did not understand, and reads as empty rather than failing its siblings.
 fn rows<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<serde_json::Value>, D::Error> {
@@ -295,6 +336,9 @@ struct AccumulatedEntry {
     rank: Option<u32>,
     fusion_limit: Option<u32>,
     image_name: Option<String>,
+    /// Copies installed in a build. Stays `None` unless the read established it; see
+    /// `installed_copies`.
+    equipped: Option<u32>,
 }
 
 impl SnapshotDecoder for InventoryJsonDecoder<'_> {
@@ -333,6 +377,8 @@ impl InventoryJsonDecoder<'_> {
             );
             return Err(AcquisitionError::SnapshotInvalid);
         }
+        // Before the `add_*` calls below take the sections.
+        let installed = installed_copies(&raw);
         let mut entries = BTreeMap::<String, AccumulatedEntry>::new();
         let report = &mut DecodeReport::default();
 
@@ -506,6 +552,37 @@ impl InventoryJsonDecoder<'_> {
             }
         }
 
+        // Zero in use is a claim. Unless some build reference lands on a held row, every row
+        // stays unknown: a young account's empty builds, or a shape this no longer reads.
+        let resolved = installed
+            .counts
+            .keys()
+            .any(|key| entries.get(key).is_some_and(|entry| entry.quantity > 0));
+        if resolved {
+            for (key, entry) in &mut entries {
+                entry.equipped = match entry.category {
+                    // Gear is in use by sitting in a loadout, which this does not read.
+                    Category::Frame
+                    | Category::Weapon
+                    | Category::Companion
+                    | Category::Vehicle => None,
+                    Category::PrimePart
+                    | Category::Relic
+                    | Category::Resource
+                    | Category::Blueprint
+                    | Category::Mod
+                    | Category::Arcane => Some(installed.counts.get(key).copied().unwrap_or(0)),
+                };
+            }
+        }
+        // An unread slot shape undercounts what is in use, which offers an installed copy for sale.
+        if installed.not_understood > 0 || (!resolved && installed.slots > 0) {
+            trace_decode(&format!(
+                "[decode] installed copies: resolved={resolved} slots={} not_understood={}",
+                installed.slots, installed.not_understood
+            ));
+        }
+
         let domain_entries = entries
             .into_iter()
             .filter(|(_, accumulated)| accumulated.quantity >= 0)
@@ -543,12 +620,155 @@ fn build_entry(path: String, accumulated: AccumulatedEntry) -> Option<InventoryE
         Some(image_name) => item.with_image_name(image_name).ok()?,
         None => item,
     };
-    let entry = InventoryEntry::new(item, u32::try_from(accumulated.quantity).ok()?)
-        .with_mastered(accumulated.mastered);
+    let quantity = u32::try_from(accumulated.quantity).ok()?;
+    let entry = InventoryEntry::new(item, quantity)
+        .with_mastered(accumulated.mastered)
+        // A path slot and an id slot can both land on a stack that holds a single copy.
+        .with_equipped(accumulated.equipped.map(|count| count.min(quantity)));
     Some(match accumulated.rank {
         Some(rank) => entry.with_rank(rank, accumulated.fusion_limit),
         None => entry,
     })
+}
+
+/// Copies installed in some build, keyed the way `add_upgrade_section` keys their holdings.
+struct InstalledCopies {
+    counts: HashMap<String, u32>,
+    /// References read from slots, before deduplication.
+    slots: usize,
+    /// Slots holding something that is neither a copy nor empty.
+    not_understood: usize,
+}
+
+/// Copies slotted in any build, counted once each: one copy serves every build that names it, by
+/// instance id or, for an unranked copy, by path. The ids are per-account and never leave here.
+fn installed_copies(raw: &RawInventory) -> InstalledCopies {
+    let mut ids = HashSet::<&str>::new();
+    let mut paths = HashSet::<&str>::new();
+    let mut slots = 0;
+    let mut not_understood = 0;
+    let equipment = [
+        &raw.suits,
+        &raw.long_guns,
+        &raw.pistols,
+        &raw.melee,
+        &raw.special_items,
+        &raw.sentinels,
+        &raw.sentinel_weapons,
+        &raw.space_suits,
+        &raw.space_guns,
+        &raw.space_melee,
+        &raw.hoverboards,
+        &raw.operator_amps,
+        &raw.antiques,
+        &raw.moa_pets,
+        &raw.scoops,
+        &raw.horses,
+        &raw.drifter_guns,
+        &raw.drifter_melee,
+        &raw.motorcycles,
+        &raw.crew_ships,
+        &raw.data_knives,
+        &raw.mech_suits,
+        &raw.crew_ship_harnesses,
+        &raw.kubrow_pets,
+        &raw.crew_ship_weapons,
+        &raw.crew_ship_salvaged_weapons,
+        &raw.operator_suits,
+    ];
+    let configs = equipment
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row.get("Configs")?.as_array())
+        .flatten()
+        .chain(
+            [
+                &raw.operator_load_outs,
+                &raw.adult_operator_load_outs,
+                &raw.kahl_load_outs,
+            ]
+            .into_iter()
+            .flatten(),
+        );
+    for config in configs {
+        // Conclave builds keep their own slots, and a copy used only there is still in use.
+        for key in ["Upgrades", "PvpUpgrades"] {
+            let Some(slotted) = config.get(key).and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for slot in slotted {
+                match slot {
+                    serde_json::Value::Null => {}
+                    serde_json::Value::String(text) if text.is_empty() => {}
+                    serde_json::Value::String(text) if is_object_id(text) => {
+                        slots += 1;
+                        ids.insert(text);
+                    }
+                    serde_json::Value::String(text) if text.starts_with("/Lotus/") => {
+                        slots += 1;
+                        paths.insert(text);
+                    }
+                    serde_json::Value::Object(_) => match instance_id(slot) {
+                        Some(id) => {
+                            slots += 1;
+                            ids.insert(id);
+                        }
+                        None => not_understood += 1,
+                    },
+                    _ => not_understood += 1,
+                }
+            }
+        }
+    }
+
+    let mut counts = HashMap::<String, u32>::new();
+    for row in &raw.upgrades {
+        if ids.is_empty() {
+            break;
+        }
+        let Some(id) = row.get("ItemId").and_then(instance_id) else {
+            continue;
+        };
+        // Removed as it is found, so a duplicated row cannot count the same copy twice.
+        if !ids.remove(id) {
+            continue;
+        }
+        let Some(path) = row.get("ItemType").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let fingerprint = row
+            .get("UpgradeFingerprint")
+            .and_then(serde_json::Value::as_str);
+        let key = match fused_rank(fingerprint) {
+            0 => path.to_owned(),
+            rank => format!("{path}#{rank}"),
+        };
+        *counts.entry(key).or_default() += 1;
+    }
+    for path in paths {
+        *counts.entry(path.to_owned()).or_default() += 1;
+    }
+    InstalledCopies {
+        counts,
+        slots,
+        not_understood,
+    }
+}
+
+/// An `Upgrades` row's id as a slot or an `ItemId` writes it: bare, or as `{"$oid"}` or `{"$id"}`.
+fn instance_id(value: &serde_json::Value) -> Option<&str> {
+    match value {
+        serde_json::Value::String(text) => Some(text),
+        serde_json::Value::Object(object) => {
+            object.get("$oid").or_else(|| object.get("$id"))?.as_str()
+        }
+        _ => None,
+    }
+}
+
+/// Whether a bare slot string is an instance id rather than an item path.
+fn is_object_id(text: &str) -> bool {
+    text.len() == 24 && text.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 /// One line about what a decode had to throw away.
@@ -795,6 +1015,7 @@ fn accumulated_entry(
         image_name: metadata
             .and_then(|metadata| metadata.image_name())
             .map(str::to_owned),
+        equipped: None,
     }
 }
 

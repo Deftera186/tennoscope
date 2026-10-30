@@ -255,8 +255,8 @@
 .search-slot input::placeholder { color: var(--platinum-deep); letter-spacing: .1em; text-transform: uppercase; font-size: .62rem; }
 .search-slot input:hover { border-color: var(--platinum-deep); }
 
-.sort-slot { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-.sort-slot > span { font-family: var(--face-register); font-size: .6rem; letter-spacing: .14em; text-transform: uppercase; color: var(--platinum-deep); }
+.sort-slot, .min-price-slot { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.sort-slot > span, .min-price-slot > span { font-family: var(--face-register); font-size: .6rem; letter-spacing: .14em; text-transform: uppercase; color: var(--platinum-deep); }
 .sort-slot select {
   height: 3rem; min-width: 10rem; padding: 0 .8rem;
   color: var(--platinum); border: 1px solid var(--rule-control); border-radius: 0;
@@ -314,6 +314,8 @@
 /* The pass's own readout, last in the row so the two standing statements (which day, which
    slice) keep their order and the transient one appends rather than displaces. */
 .register-line.pricing { color: var(--platinum-dim); }
+/* The filter groups wrap whole: a tally broken across two lines would read as two rows of choices. */
+.register-filters { display: flex; flex-wrap: wrap; align-items: center; gap: var(--tight) var(--step); }
 .tally { display: flex; gap: 0; }
 .tally button {
   display: inline-flex; align-items: center; justify-content: center; gap: .38rem;
@@ -328,6 +330,10 @@
 /* The value sorts wear their own currency, at the size the price readings use, so "Platinum" and
    "Ducats" are told apart by metal at a glance the way the cards' figures already are. */
 .tally button .metal-mark { height: 1.15rem; width: auto; }
+/* Forced colours drop the strike and repaint the fill, so the pressed chip takes the system's own selection colours. */
+@media (forced-colors: active) {
+  .tally button[aria-pressed="true"] { background: Highlight; color: HighlightText; }
+}
 
 /* The ducat layer's valve. A switch, not a mode chip: the tally rows beside it choose one of
    several readings, while this turns one reading on and off, and only its own two states are its
@@ -1039,6 +1045,7 @@ svg.set-glyph { background: none; fill: currentColor; padding: .125rem; }
   /* A switch keeps its own width where the tally chips stretch: it is one control with a label,
      not one option among a row of them. */
   .display-switch { align-self: flex-start; }
+  .register-filters { flex-direction: column; align-items: stretch; }
   .register-bar { gap: var(--tight); }
   .tally { width: 100%; }
   .tally button { flex: 1; padding-inline: .3rem; }

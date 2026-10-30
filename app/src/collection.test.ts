@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { atMaxRank, collectionTotals, masteryOrder, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
+import { atMaxRank, collectionTotals, hasEquipData, hasUnequippedCopy, isUnrankedUpgrade, masteryOrder, meetsMinPrice, pageCount, pageItems, pageNumbers, rankLabel, sellableValue, stackValue } from './collection'
 
 describe('collection pagination', () => {
   it('renders at most 48 items and returns the expected range', () => {
@@ -142,5 +142,40 @@ describe('masteryOrder', () => {
     expect(masteryOrder({ category: 'mod', mastered: false })).toBe(2)
     expect(masteryOrder({ category: 'prime_part', mastered: false })).toBe(2)
     expect(masteryOrder({ category: 'relic', mastered: true })).toBe(2)
+  })
+})
+
+describe('copy filters', () => {
+  // A copy installed in a build is one the player relies on. Unknown is not "none in use": a row
+  // read before the app counted must never be offered as spare.
+  it('finds a row with a copy installed nowhere, and never guesses one', () => {
+    expect(hasUnequippedCopy({ quantity: 3, equipped: 1 })).toBe(true)
+    expect(hasUnequippedCopy({ quantity: 2, equipped: 0 })).toBe(true)
+    expect(hasUnequippedCopy({ quantity: 1, equipped: 1 })).toBe(false)
+    expect(hasUnequippedCopy({ quantity: 0, equipped: 0 })).toBe(false)
+    expect(hasUnequippedCopy({ quantity: 2 })).toBe(false)
+  })
+
+  it('knows equip state once any row carries it', () => {
+    expect(hasEquipData([])).toBe(false)
+    expect(hasEquipData([{}])).toBe(false)
+    expect(hasEquipData([{}, { equipped: 0 }])).toBe(true)
+  })
+
+  it('takes the unranked stack of mods and arcanes, and nothing without ranks', () => {
+    expect(isUnrankedUpgrade({ category: 'mod' })).toBe(true)
+    expect(isUnrankedUpgrade({ category: 'arcane' })).toBe(true)
+    expect(isUnrankedUpgrade({ category: 'mod', rank: 5 })).toBe(false)
+    expect(isUnrankedUpgrade({ category: 'prime_part' })).toBe(false)
+  })
+
+  // Above Any an unpriced row fails, as Tradeable does: hundreds of resources and blueprints have
+  // no market, and keeping them would bury the copies the floor is set to find.
+  it('keeps a copy priced at or over the floor, and nothing unpriced above Any', () => {
+    expect(meetsMinPrice({}, 0)).toBe(true)
+    expect(meetsMinPrice({ platinum: 0 }, 0)).toBe(true)
+    expect(meetsMinPrice({}, 3)).toBe(false)
+    expect(meetsMinPrice({ platinum: 2 }, 3)).toBe(false)
+    expect(meetsMinPrice({ platinum: 3 }, 3)).toBe(true)
   })
 })

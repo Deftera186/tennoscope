@@ -4,7 +4,7 @@ export type HealthState = 'ready' | 'idle' | 'degraded' | 'failed'
 export interface BackendHealth { state: HealthState; message: string; last_success: string | null }
 export interface AcquisitionStageHealth { stage: string; state: HealthState; message: string }
 export type ItemCategory = 'frame' | 'weapon' | 'companion' | 'prime_part' | 'relic' | 'resource' | 'blueprint' | 'vehicle' | 'mod' | 'arcane'
-export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; platinum_ceiling?: number; ducats?: number; rank?: number; max_rank?: number; live: boolean; priceable: boolean; monthly_trades?: number }
+export interface CollectionItem { id: string; name: string; category: ItemCategory; quantity: number; mastered: boolean; image_url?: string; platinum?: number; platinum_ceiling?: number; ducats?: number; rank?: number; max_rank?: number; equipped?: number; live: boolean; priceable: boolean; monthly_trades?: number }
 /** Mastered and total for one equipment category, counted as the game's profile counts: an item mastered and since sold is still mastered. */
 export interface MasteryCategoryTotal { category: ItemCategory; mastered: number; total: number }
 /** What is left to master. `available` is false until an inventory has been read under Full access and the catalog has loaded. */

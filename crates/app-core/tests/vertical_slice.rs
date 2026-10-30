@@ -148,8 +148,8 @@ fn fake_session_is_deterministic_and_uses_domain_ranking() {
 
     let view = core.load_fake_session().unwrap();
 
-    assert_eq!(view.collection().total_entries(), 5);
-    assert_eq!(view.collection().items().len(), 5);
+    assert_eq!(view.collection().total_entries(), 6);
+    assert_eq!(view.collection().items().len(), 6);
     assert_eq!(
         view.collection()
             .items()
@@ -161,7 +161,8 @@ fn fake_session_is_deterministic_and_uses_domain_ranking() {
             "lex-prime-receiver",
             "lith-a1",
             "rhino",
-            "saryn-prime-chassis"
+            "saryn-prime-chassis",
+            "serration"
         ]
     );
     assert!(view.collection().items().iter().any(|item| item.mastered()));
@@ -325,7 +326,7 @@ fn file_backed_collection_persists_but_rewards_are_ephemeral() {
     let reopened = AppCore::open(&path).unwrap();
     let view = reopened.current_view().unwrap();
 
-    assert_eq!(view.collection().total_entries(), 5);
+    assert_eq!(view.collection().total_entries(), 6);
     assert!(view.reward().cards().is_empty());
     assert_eq!(view.reward().best_value_index(), None);
 }
@@ -343,12 +344,13 @@ fn serialized_view_has_stable_wire_values_and_consistent_derived_fields() {
             "collection": {
                 "items": [
                     {"id": "braton", "name": "Braton", "category": "weapon", "quantity": 3, "mastered": true, "live": false, "priceable": false},
-                    {"id": "lex-prime-receiver", "name": "Lex Prime Receiver", "category": "prime_part", "quantity": 1, "mastered": false, "live": false, "priceable": false},
-                    {"id": "lith-a1", "name": "Lith A1 Relic", "category": "relic", "quantity": 7, "mastered": false, "live": false, "priceable": false},
+                    {"id": "lex-prime-receiver", "name": "Lex Prime Receiver", "category": "prime_part", "quantity": 1, "mastered": false, "equipped": 0, "live": false, "priceable": false},
+                    {"id": "lith-a1", "name": "Lith A1 Relic", "category": "relic", "quantity": 7, "mastered": false, "equipped": 0, "live": false, "priceable": false},
                     {"id": "rhino", "name": "Rhino", "category": "frame", "quantity": 1, "mastered": true, "live": false, "priceable": false},
-                    {"id": "saryn-prime-chassis", "name": "Saryn Prime Chassis", "category": "prime_part", "quantity": 2, "mastered": false, "live": false, "priceable": false}
+                    {"id": "saryn-prime-chassis", "name": "Saryn Prime Chassis", "category": "prime_part", "quantity": 2, "mastered": false, "equipped": 0, "live": false, "priceable": false},
+                    {"id": "serration", "name": "Serration", "category": "mod", "quantity": 3, "mastered": false, "equipped": 1, "live": false, "priceable": false}
                 ],
-                "total_entries": 5,
+                "total_entries": 6,
                 "snapshot": {
                     "observed_at": 946684800,
                     "game_build": "fake-build",

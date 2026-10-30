@@ -47,8 +47,9 @@ mastered, built or started building read Unmastered beside the price.
 </div>
 
 Open one screen for gear, Prime parts, relics, resources, blueprints, mods and arcanes.
-Search by name, or filter to owned, mastered or missing gear. Full mode synchronizes when
-the game starts; Companion and Overlay keep the last collection visible as a timestamped
+Search by name, or filter to owned, mastered or missing gear, to rows you hold more than
+one copy of, to unequipped or unranked copies, or to a minimum price. Full mode synchronizes
+when the game starts; Companion and Overlay keep the last collection visible as a timestamped
 saved snapshot.
 
 ![The collection browser, with tracked, mastered and missing counts, a collection worth in platinum and ducats at stake across the top, and platinum and ducat values on every item card](docs/screenshots/collection.png)

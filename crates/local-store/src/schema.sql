@@ -8,7 +8,8 @@ CREATE TABLE inventory (
     mastered INTEGER NOT NULL CHECK (mastered IN (0, 1)),
     image_name TEXT,
     rank INTEGER CHECK (rank IS NULL OR rank >= 0),
-    max_rank INTEGER CHECK (max_rank IS NULL OR max_rank >= 0)
+    max_rank INTEGER CHECK (max_rank IS NULL OR max_rank >= 0),
+    equipped INTEGER CHECK (equipped IS NULL OR equipped >= 0)
 );
 
 CREATE TABLE market_credential (

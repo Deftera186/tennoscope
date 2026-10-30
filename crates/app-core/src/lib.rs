@@ -509,8 +509,9 @@ impl AppCore {
                 if let Some(image_name) = metadata.image_name() {
                     item = item.with_image_name(image_name)?;
                 }
-                let enriched =
-                    InventoryEntry::new(item, entry.quantity).with_mastered(entry.mastered);
+                let enriched = InventoryEntry::new(item, entry.quantity)
+                    .with_mastered(entry.mastered)
+                    .with_equipped(entry.equipped);
                 // Enrichment is about the card, not the copies. Dropping the rank here put both
                 // rows of a mod back on one price.
                 Ok(match entry.rank {
@@ -968,6 +969,9 @@ pub struct CollectionItemView {
     rank: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_rank: Option<u32>,
+    /// Copies installed in a build, absent when the inventory read did not establish it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    equipped: Option<u32>,
     live: bool,
     /// Whether warframe.market can be asked about this item at all.
     priceable: bool,
@@ -1022,6 +1026,10 @@ impl CollectionItemView {
 
     pub fn max_rank(&self) -> Option<u32> {
         self.max_rank
+    }
+
+    pub fn equipped(&self) -> Option<u32> {
+        self.equipped
     }
 
     /// Whether this price came from warframe.market just now, rather than from the daily dump.
@@ -1089,6 +1097,7 @@ impl From<&warframe_domain::InventoryEntry> for CollectionItemView {
             ducats: None,
             rank: entry.rank,
             max_rank: entry.max_rank,
+            equipped: entry.equipped,
             live: false,
             priceable: false,
             monthly_trades: None,

@@ -526,3 +526,271 @@ fn mastery_rank_follows_the_affinity_curve_and_caps_at_max_rank() {
     assert_eq!(mastery_rank(Category::Frame, 196_000, 30), Some(14));
     assert_eq!(mastery_rank(Category::PrimePart, 10, 30), None);
 }
+
+const SERRATION: &str = "/Lotus/Upgrades/Mods/Rifle/WeaponDamageAmountMod";
+const VITALITY: &str = "/Lotus/Upgrades/Mods/Warframe/AvatarHealthMaxMod";
+
+/// One `Upgrades` row: a fused copy, named in a build by its id.
+fn fused_copy(id: &str, path: &str, rank: u32) -> serde_json::Value {
+    serde_json::json!({
+        "ItemId": {"$oid": id},
+        "ItemType": path,
+        "UpgradeFingerprint": format!("{{\"lvl\":{rank}}}"),
+    })
+}
+
+fn decode_value(payload: &serde_json::Value) -> warframe_domain::InventorySnapshot {
+    InventoryJsonDecoder::default()
+        .decode(&serde_json::to_vec(payload).unwrap())
+        .unwrap()
+}
+
+fn equipped(snapshot: &warframe_domain::InventorySnapshot, id: &str) -> Option<u32> {
+    snapshot
+        .entries()
+        .iter()
+        .find(|entry| entry.item.id.as_str() == id)
+        .unwrap_or_else(|| panic!("no entry for {id}"))
+        .equipped
+}
+
+/// One copy serves every build it is slotted in, so a copy in three builds is still one copy in
+/// use. Counted per slot, a seller is told they have fewer spare copies than they do.
+#[test]
+fn installed_copies_count_once_per_copy_on_the_row_they_belong_to() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["RawUpgrades"] = serde_json::json!([{"ItemType": SERRATION, "ItemCount": 3}]);
+    payload["Upgrades"] = serde_json::json!([
+        fused_copy("6889f4a4a1b2c3d4e5f60a01", SERRATION, 10),
+        fused_copy("6889f4a4a1b2c3d4e5f60a02", SERRATION, 10),
+        fused_copy("6889f4a4a1b2c3d4e5f60a03", SERRATION, 0),
+        fused_copy("6889f4a4a1b2c3d4e5f60a04", VITALITY, 3),
+    ]);
+    payload["Suits"][0]["Configs"] = serde_json::json!([
+        {"Upgrades": ["6889f4a4a1b2c3d4e5f60a01", {"$oid": "6889f4a4a1b2c3d4e5f60a04"}, SERRATION, "", null]},
+        {"Upgrades": ["6889f4a4a1b2c3d4e5f60a01"]},
+    ]);
+    // A Conclave build is still a build: a copy slotted only there is not free to sell.
+    payload["LongGuns"][0]["Configs"] = serde_json::json!([
+        {"Upgrades": ["6889f4a4a1b2c3d4e5f60a01", SERRATION],
+         "PvpUpgrades": [{"$id": "6889f4a4a1b2c3d4e5f60a03"}]},
+    ]);
+
+    let snapshot = decode_value(&payload);
+
+    // The unranked stack holds the three raw copies and the rank-0 instance: the raw path is one
+    // copy however many slots name it, and the instance is another.
+    assert_eq!(equipped(&snapshot, SERRATION), Some(2));
+    assert_eq!(
+        equipped(&snapshot, &format!("{SERRATION}#10")),
+        Some(1),
+        "one id in three slots is one copy"
+    );
+    assert_eq!(equipped(&snapshot, &format!("{VITALITY}#3")), Some(1));
+    // Gear is in use by sitting in a loadout, which this count does not read.
+    assert_eq!(
+        equipped(&snapshot, "/Lotus/Powersuits/Excalibur/Excalibur"),
+        None
+    );
+    assert_eq!(
+        equipped(&snapshot, "/Lotus/Weapons/Tenno/Rifle/Braton"),
+        None
+    );
+    // Nothing can be installed in a resource, a relic or a blueprint, so none of one is in use.
+    for id in [
+        "/Lotus/Types/Items/MiscItems/ArgonCrystal",
+        "/Lotus/Types/Projections/LithA1Bronze",
+        "/Lotus/Types/Recipes/Weapons/LexPrimeBlueprint",
+    ] {
+        assert_eq!(equipped(&snapshot, id), Some(0), "{id}");
+    }
+}
+
+/// Exalted weapons, the Parazon and the Operator keep their mods in sections that hold no
+/// tradeable gear of their own. Missing them would offer their mods for sale as spares.
+#[test]
+fn builds_on_exalted_weapons_the_parazon_and_operator_loadouts_count() {
+    let requiem = "/Lotus/Upgrades/Mods/DataSpike/Potency/GainAntivirusAndSpeedOnUseMod";
+    let pressure_point = "/Lotus/Upgrades/Mods/Melee/WeaponMeleeDamageMod";
+    let arcane = "/Lotus/Upgrades/CosmeticEnhancers/OperatorArmour/ArmourOnOperatorMode";
+    let exalted = "/Lotus/Powersuits/Excalibur/DoomSword";
+    let parazon = "/Lotus/Weapons/Tenno/HackingDevices/TnHackingDevice/TnHackingDeviceWeapon";
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["RawUpgrades"] = serde_json::json!([{"ItemType": requiem, "ItemCount": 2}]);
+    payload["Upgrades"] = serde_json::json!([
+        fused_copy("6889f4a4a1b2c3d4e5f60a05", pressure_point, 5),
+        fused_copy("6889f4a4a1b2c3d4e5f60a06", arcane, 2),
+    ]);
+    payload["SpecialItems"] = serde_json::json!([{
+        "ItemType": exalted,
+        "ItemId": {"$oid": "6889f4a4a1b2c3d4e5f60b01"},
+        "Configs": [{"Upgrades": [{"$oid": "6889f4a4a1b2c3d4e5f60a05"}]}],
+    }]);
+    payload["DataKnives"] = serde_json::json!([{
+        "ItemType": parazon,
+        "Configs": [{"Upgrades": [requiem]}],
+    }]);
+    payload["OperatorLoadOuts"] = serde_json::json!([{
+        "ItemId": {"$oid": "6889f4a4a1b2c3d4e5f60b02"},
+        "Upgrades": ["6889f4a4a1b2c3d4e5f60a06"],
+    }]);
+
+    let snapshot = decode_value(&payload);
+
+    assert_eq!(equipped(&snapshot, &format!("{pressure_point}#5")), Some(1));
+    assert_eq!(equipped(&snapshot, requiem), Some(1));
+    let arcane_row = snapshot
+        .entries()
+        .iter()
+        .find(|entry| entry.item.id.as_str() == format!("{arcane}#2"))
+        .unwrap();
+    assert_eq!(arcane_row.item.category, Category::Arcane);
+    assert_eq!(arcane_row.equipped, Some(1));
+    // Read for their builds only: neither is a holding the collection lists.
+    for id in [exalted, parazon] {
+        assert!(
+            snapshot
+                .entries()
+                .iter()
+                .all(|entry| entry.item.id.as_str() != id),
+            "{id} must not become a holding"
+        );
+    }
+}
+
+/// A slot written in a shape this decoder has not seen is skipped, and so is a build that is not a
+/// list. Failing the read over one would cost the account its snapshot.
+#[test]
+fn an_unreadable_slot_or_build_changes_no_row() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["RawUpgrades"] = serde_json::json!([{"ItemType": SERRATION, "ItemCount": 2}]);
+    payload["Suits"][0]["Configs"] = serde_json::json!([
+        {"Upgrades": ["6889f4a4a1b2c3d4e5f60aff", 42, {"foo": 1}, ["x"], "NotAPath", SERRATION]},
+        {"Upgrades": 7},
+    ]);
+    payload["LongGuns"][0]["Configs"] = serde_json::json!("not a list");
+
+    let snapshot = decode_value(&payload);
+
+    assert_eq!(equipped(&snapshot, SERRATION), Some(1));
+    assert_eq!(
+        equipped(&snapshot, "/Lotus/Types/Items/MiscItems/ArgonCrystal"),
+        Some(0)
+    );
+}
+
+/// Zero in use is a claim. A response in which no build names anything held cannot support it: a
+/// young account with empty builds, or a format the decoder no longer reads.
+#[test]
+fn equip_state_stays_unknown_when_no_build_reference_resolves() {
+    let base = || {
+        let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+        payload["RawUpgrades"] = serde_json::json!([{"ItemType": SERRATION, "ItemCount": 2}]);
+        payload
+    };
+    let no_configs = base();
+    let mut empty_builds = base();
+    // What a post-tutorial account sends.
+    empty_builds["Suits"][0]["Configs"] = serde_json::json!([{}, {}, {}]);
+    let mut nothing_held = base();
+    nothing_held["Suits"][0]["Configs"] = serde_json::json!([
+        {"Upgrades": ["6889f4a4a1b2c3d4e5f60aff", "/Lotus/Upgrades/Mods/Never/Held"]},
+    ]);
+
+    for (case, payload) in [
+        ("no Configs", no_configs),
+        ("empty builds", empty_builds),
+        ("nothing held", nothing_held),
+    ] {
+        let snapshot = decode_value(&payload);
+        for entry in snapshot.entries() {
+            assert_eq!(entry.equipped, None, "{case}: {}", entry.item.id.as_str());
+        }
+    }
+}
+
+/// The path form and the instance form can name the same single copy once an attach converts it.
+#[test]
+fn installed_copies_never_exceed_the_copies_held() {
+    let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+    payload["Upgrades"] = serde_json::json!([fused_copy("6889f4a4a1b2c3d4e5f60a03", VITALITY, 0)]);
+    payload["Suits"][0]["Configs"] = serde_json::json!([
+        {"Upgrades": ["6889f4a4a1b2c3d4e5f60a03"]},
+        {"Upgrades": [VITALITY]},
+    ]);
+
+    let snapshot = decode_value(&payload);
+
+    let vitality = snapshot
+        .entries()
+        .iter()
+        .find(|entry| entry.item.id.as_str() == VITALITY)
+        .unwrap();
+    assert_eq!(vitality.quantity, 1);
+    assert_eq!(vitality.equipped, Some(1));
+}
+
+/// A section the decoder never walks hides its builds, and their copies are then offered as spare.
+/// The names are SpaceNinjaServer's `equipmentKeys` and the three Operator loadouts; a misspelt one
+/// reads as an empty section.
+#[test]
+fn every_section_that_holds_a_build_is_read() {
+    let equipment = [
+        "Suits",
+        "LongGuns",
+        "Pistols",
+        "Melee",
+        "SpecialItems",
+        "Sentinels",
+        "SentinelWeapons",
+        "SpaceSuits",
+        "SpaceGuns",
+        "SpaceMelee",
+        "Hoverboards",
+        "OperatorAmps",
+        "Antiques",
+        "MoaPets",
+        "Scoops",
+        "Horses",
+        "DrifterGuns",
+        "DrifterMelee",
+        "Motorcycles",
+        "CrewShips",
+        "DataKnives",
+        "MechSuits",
+        "CrewShipHarnesses",
+        "KubrowPets",
+        "CrewShipWeapons",
+        "CrewShipSalvagedWeapons",
+        "OperatorSuits",
+    ];
+    let loadouts = ["OperatorLoadOuts", "AdultOperatorLoadOuts", "KahlLoadOuts"];
+    let base = || {
+        let mut payload: serde_json::Value = serde_json::from_slice(&complete_payload()).unwrap();
+        payload["RawUpgrades"] = serde_json::json!([{"ItemType": SERRATION, "ItemCount": 1}]);
+        payload
+    };
+    let builds = equipment
+        .into_iter()
+        .map(|section| {
+            let mut payload = base();
+            payload[section] = serde_json::json!([{
+                "ItemType": "/Lotus/Types/Game/BuildHolder",
+                "Configs": [{"Upgrades": [SERRATION]}],
+            }]);
+            (section, payload)
+        })
+        .chain(loadouts.into_iter().map(|section| {
+            let mut payload = base();
+            payload[section] = serde_json::json!([{"Upgrades": [SERRATION]}]);
+            (section, payload)
+        }));
+
+    for (section, payload) in builds {
+        assert_eq!(
+            equipped(&decode_value(&payload), SERRATION),
+            Some(1),
+            "{section}"
+        );
+    }
+}

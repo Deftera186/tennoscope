@@ -20,17 +20,28 @@ pub(crate) fn build() -> Result<FakeSession, AppError> {
             Category::PrimePart,
             2,
             false,
+            Some(0),
         )?,
-        entry("lith-a1", "Lith A1 Relic", Category::Relic, 7, false)?,
-        entry("rhino", "Rhino", Category::Frame, 1, true)?,
-        entry("braton", "Braton", Category::Weapon, 3, true)?,
+        entry(
+            "lith-a1",
+            "Lith A1 Relic",
+            Category::Relic,
+            7,
+            false,
+            Some(0),
+        )?,
+        entry("rhino", "Rhino", Category::Frame, 1, true, None)?,
+        entry("braton", "Braton", Category::Weapon, 3, true, None)?,
         entry(
             "lex-prime-receiver",
             "Lex Prime Receiver",
             Category::PrimePart,
             1,
             false,
+            Some(0),
         )?,
+        // A held mod with a copy in a build, so the debug session shows the copy filters.
+        entry("serration", "Serration", Category::Mod, 3, false, Some(1))?,
     ])?;
     let rewards = vec![
         RewardCandidate::new("Forma Blueprint", 12, 25, 0, None, 1.0)?,
@@ -85,7 +96,10 @@ fn entry(
     category: Category,
     quantity: u32,
     mastered: bool,
+    equipped: Option<u32>,
 ) -> Result<InventoryEntry, AppError> {
     let item = CatalogItem::new(ItemId::new(id)?, name, category)?;
-    Ok(InventoryEntry::new(item, quantity).with_mastered(mastered))
+    Ok(InventoryEntry::new(item, quantity)
+        .with_mastered(mastered)
+        .with_equipped(equipped))
 }

@@ -122,6 +122,42 @@ export function rankLabel(item: { rank?: number; max_rank?: number }): string | 
   return item.max_rank === undefined ? `Rank ${item.rank}` : `Rank ${item.rank}/${item.max_rank}`
 }
 
+/**
+ * The minimum-price steps, per copy. Each cuts off a band of a real account's held mods: 47 sit
+ * under 3p, 328 at 3-4p, 299 at 5-9p, 104 at 10-19p and 41 at 20p or more. The last step is where
+ * the Settings price floor stops, and for the same reason.
+ */
+export const MIN_PRICE_STEPS = [0, 3, 5, 10, 20] as const
+
+/** Whether the last inventory read counted installed copies. A read counts every row it can or none, so one count settles it. */
+export function hasEquipData(items: readonly { equipped?: number }[]): boolean {
+  return items.some(item => item.equipped !== undefined)
+}
+
+/**
+ * Whether some copy on this row sits in no build. An unknown count never passes: a row stored
+ * before the app counted, or gear, whose use is a loadout rather than a slot, must not be offered
+ * as spare.
+ */
+export function hasUnequippedCopy(item: { quantity: number; equipped?: number }): boolean {
+  return item.equipped !== undefined && item.equipped < item.quantity
+}
+
+/** The unranked stack of a mod or arcane, which also holds every rank-0 copy. Nothing else is ranked, so nothing else is unranked. */
+export function isUnrankedUpgrade(item: { category: string; rank?: number }): boolean {
+  return item.rank === undefined && (item.category === 'mod' || item.category === 'arcane')
+}
+
+/**
+ * Whether one copy is priced at `minPrice` or more. A part-ranked copy is held to the low end of
+ * its range, the figure the sellable total counts. Above zero an unpriced row fails, as Tradeable
+ * does: 653 of a real account's 731 held resources and blueprints have no price, and keeping them
+ * would bury the copies the step is set to find.
+ */
+export function meetsMinPrice(item: { platinum?: number }, minPrice: number): boolean {
+  return minPrice === 0 || (item.platinum !== undefined && item.platinum >= minPrice)
+}
+
 export function pageCount(itemCount: number): number {
   return Math.max(1, Math.ceil(itemCount / COLLECTION_PAGE_SIZE))
 }

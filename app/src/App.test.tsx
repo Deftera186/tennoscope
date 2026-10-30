@@ -28,7 +28,7 @@ vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: vi.fn(() => Promise.res
 
 import App from './App'
 import { resetUpdateStoreForTests } from './updateStore'
-import type { AppView } from './backend'
+import type { AppView, CollectionItem } from './backend'
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (reason?: unknown) => void
@@ -117,6 +117,33 @@ const view: AppView = {
       { stage: 'authorization_scan', state: 'ready', message: 'Authorization discovered' },
       { stage: 'inventory_fetch', state: 'ready', message: 'Inventory fetched' },
       { stage: 'schema_validation', state: 'failed', message: 'Inventory snapshot was invalid' },
+    ],
+  },
+}
+
+const redirection: CollectionItem = { id: 'redirection', name: 'Redirection', category: 'mod', quantity: 175, mastered: false, equipped: 1, platinum: 4, live: false, priceable: true }
+const vitality: CollectionItem = { id: 'vitality', name: 'Vitality', category: 'mod', quantity: 2, mastered: false, equipped: 0, platinum: 6, live: false, priceable: true }
+const vigor: CollectionItem = { id: 'vigor', name: 'Vigor', category: 'mod', quantity: 2, mastered: false, equipped: 2, platinum: 5, live: false, priceable: true }
+const serration10: CollectionItem = { id: 'serration#10', name: 'Serration', category: 'mod', quantity: 1, mastered: false, equipped: 1, rank: 10, max_rank: 10, platinum: 48, live: false, priceable: true }
+// Sixty-four rows, so a narrowed result still spans two pages: a filter that forgot to return to
+// page one would leave page two on screen.
+const equipView: AppView = {
+  ...view,
+  collection: {
+    ...view.collection,
+    total_entries: 64,
+    items: [
+      ...Array.from({ length: 60 }, (_, index): CollectionItem => ({
+        id: `mod-${index.toString().padStart(2, '0')}`,
+        name: `Mod ${index.toString().padStart(2, '0')}`,
+        category: 'mod',
+        quantity: 2,
+        mastered: false,
+        equipped: index === 0 ? 1 : 0,
+        live: false,
+        priceable: true,
+      })),
+      redirection, vitality, vigor, serration10,
     ],
   },
 }
@@ -532,6 +559,84 @@ describe('MVP desktop interface', () => {
     expect(screen.queryByRole('searchbox', { name: 'Search collection' })).not.toBeInTheDocument()
     expect(screen.queryByRole('group', { name: 'Sort collection' })).not.toBeInTheDocument()
     expect(screen.queryByRole('group', { name: 'Item categories' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Copy filters' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: 'Minimum price' })).not.toBeInTheDocument()
+  })
+
+  it('combinable copy filters narrow the collection and return to page one', async () => {
+    backend.getView.mockResolvedValue(equipView)
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: 'Go to page 2' }))
+    expect(screen.getByText('49–64 of 64')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '2+ copies' }))
+    expect(screen.getByText('1–48 of 63'), 'the single ranked Serration is not a spare').toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Go to page 2' }))
+    expect(screen.getByText('49–63 of 63')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Unequipped' }))
+    expect(screen.getByText('1–48 of 62'), 'both Vigor copies are in use').toBeInTheDocument()
+
+    expect(screen.getByRole('button', { name: '2+ copies' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: 'Unequipped' })).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  // A snapshot stored before the app counted installed copies says nothing about them. A toggle
+  // reading that count would pass every row or none, so it is absent until the count exists.
+  it('hides the unequipped filter until the snapshot knows what is equipped', async () => {
+    render(<App/>)
+    const copies = await screen.findByRole('group', { name: 'Copy filters' })
+    expect(within(copies).getByRole('button', { name: '2+ copies' })).toBeInTheDocument()
+    expect(within(copies).queryByRole('button', { name: 'Unequipped' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Equipped ×/)).not.toBeInTheDocument()
+  })
+
+  it('marks equipped copies on the card', async () => {
+    backend.getView.mockResolvedValue({ ...view, collection: { ...view.collection, items: [...view.collection.items, redirection, vitality] } })
+    render(<App/>)
+    expect(within(await screen.findByRole('article', { name: 'Redirection' })).getByText('Equipped ×1')).toBeInTheDocument()
+    expect(screen.getByRole('article', { name: 'Vitality' }), 'none in use is no mark').not.toHaveTextContent('Equipped')
+    expect(screen.getByRole('article', { name: 'Braton' }), 'gear is never counted').not.toHaveTextContent('Equipped')
+  })
+
+  // The copy count is on the card only under Full, so a filter on it below Full would act on a
+  // number nobody can see. Rank and price are on every card, so their filters stay.
+  it('drops the copy filters and their marks when access falls below Full, and keeps the rest', async () => {
+    vi.useFakeTimers()
+    backend.getSetupStatus
+      .mockResolvedValueOnce({ setup_complete: true, access_mode: 'full', desktop_capture_action_available: false })
+      .mockResolvedValueOnce({ setup_complete: true, access_mode: 'companion', desktop_capture_action_available: false })
+    backend.getView.mockResolvedValue(equipView)
+    render(<App/>)
+    await act(async () => {})
+    expect(screen.getByRole('article', { name: 'Mod 00' })).toHaveTextContent('Equipped ×1')
+    fireEvent.click(screen.getByRole('button', { name: '2+ copies' }))
+    expect(screen.getByText('1–48 of 63')).toBeInTheDocument()
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+
+    expect(screen.queryByRole('button', { name: '2+ copies' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Unequipped' })).not.toBeInTheDocument()
+    expect(screen.getByText('1–48 of 64'), 'a hidden toggle no longer filters').toBeInTheDocument()
+    expect(screen.queryByText(/Equipped ×/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Unranked' }))
+    expect(screen.getByText('1–48 of 63')).toBeInTheDocument()
+    expect(screen.getByRole('group', { name: 'Minimum price' })).toBeInTheDocument()
+  })
+
+  // Each step contains the ones above it, so two pressed at once could only mean the higher.
+  it('minimum price is one choice at a time and drops unpriced items', async () => {
+    const user = userEvent.setup()
+    render(<App/>)
+    await user.click(await screen.findByRole('button', { name: 'platinum 5+' }))
+    const steps = within(screen.getByRole('group', { name: 'Minimum price' })).getAllByRole('button')
+    expect(steps.filter(step => step.getAttribute('aria-pressed') === 'true').map(step => step.textContent)).toEqual(['5+'])
+    expect(screen.queryByRole('article', { name: 'Argon Crystal' }), 'an unpriced row').not.toBeInTheDocument()
+    expect(screen.queryByRole('article', { name: 'Zenith Prime Receiver' }), 'priced at 0').not.toBeInTheDocument()
+    expect(screen.getByRole('article', { name: 'Lex Prime Receiver' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Any' }))
+    expect(screen.getByRole('article', { name: 'Argon Crystal' })).toBeInTheDocument()
   })
 
   it('shows all diagnostics and acquisition stages without credential labels', async () => {

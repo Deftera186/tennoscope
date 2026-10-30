@@ -10,7 +10,7 @@ use warframe_domain::{
     CatalogItem, Category, Collection, DomainError, InventoryEntry, InventorySnapshot, ItemId,
 };
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 const SCHEMA_SQL: &str = include_str!("schema.sql");
 
 /// One moment shared by persistence, market ingest, reconciliation, and the frontend adapter.
@@ -247,12 +247,18 @@ impl SqliteStore {
                 migrate_v1_to_v2(&mut connection)?;
                 migrate_v2_to_v3(&mut connection)?;
                 migrate_v3_to_v4(&mut connection)?;
+                migrate_v4_to_v5(&mut connection)?;
             }
             2 => {
                 migrate_v2_to_v3(&mut connection)?;
                 migrate_v3_to_v4(&mut connection)?;
+                migrate_v4_to_v5(&mut connection)?;
             }
-            3 => migrate_v3_to_v4(&mut connection)?,
+            3 => {
+                migrate_v3_to_v4(&mut connection)?;
+                migrate_v4_to_v5(&mut connection)?;
+            }
+            4 => migrate_v4_to_v5(&mut connection)?,
             SCHEMA_VERSION => validate_schema(&connection)?,
             other => return Err(StoreError::UnsupportedSchemaVersion(other)),
         }
@@ -282,8 +288,9 @@ impl SqliteStore {
         {
             let mut statement = transaction.prepare(
                 "INSERT INTO inventory \
-                 (item_id, name, category, quantity, mastered, image_name, rank, max_rank) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                 (item_id, name, category, quantity, mastered, image_name, rank, max_rank, \
+                 equipped) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for entry in snapshot.entries() {
                 let category = encode_category(entry.item.category)?;
@@ -296,6 +303,7 @@ impl SqliteStore {
                     entry.item.image_name,
                     entry.rank,
                     entry.max_rank,
+                    entry.equipped,
                 ])?;
             }
         }
@@ -317,8 +325,8 @@ impl SqliteStore {
 
     pub fn load_collection(&self) -> Result<Collection, StoreError> {
         let mut statement = self.connection.prepare(
-            "SELECT item_id, name, category, quantity, mastered, image_name, rank, max_rank \
-             FROM inventory ORDER BY item_id",
+            "SELECT item_id, name, category, quantity, mastered, image_name, rank, max_rank, \
+             equipped FROM inventory ORDER BY item_id",
         )?;
         let rows = statement.query_map([], |row| {
             Ok((
@@ -330,21 +338,23 @@ impl SqliteStore {
                 row.get::<_, Value>(5)?,
                 row.get::<_, Value>(6)?,
                 row.get::<_, Value>(7)?,
+                row.get::<_, Value>(8)?,
             ))
         })?;
         let raw_entries = rows.collect::<Result<Vec<_>, _>>()?;
         let entries = raw_entries
             .into_iter()
             .map(
-                |(id, name, category, quantity, mastered, image_name, rank, max_rank)| {
+                |(id, name, category, quantity, mastered, image_name, rank, max_rank, equipped)| {
                     let id = expect_text(id, "<unknown>", "item_id")?;
                     let name = expect_text(name, &id, "name")?;
                     let category = expect_text(category, &id, "category")?;
                     let quantity = expect_integer(quantity, &id, "quantity")?;
                     let mastered = expect_integer(mastered, &id, "mastered")?;
                     let image_name = expect_optional_text(image_name, &id, "image_name")?;
-                    let rank = expect_optional_rank(rank, &id, "rank")?;
-                    let max_rank = expect_optional_rank(max_rank, &id, "max_rank")?;
+                    let rank = expect_optional_u32(rank, &id, "rank")?;
+                    let max_rank = expect_optional_u32(max_rank, &id, "max_rank")?;
+                    let equipped = expect_optional_u32(equipped, &id, "equipped")?;
                     let category = decode_category(&id, category)?;
                     let quantity = u32::try_from(quantity)
                         .map_err(|error| corrupt_row(&id, "quantity", error))?;
@@ -369,7 +379,9 @@ impl SqliteStore {
                             .map_err(|error| corrupt_row(&id, "image_name", error))?,
                         None => item,
                     };
-                    let entry = InventoryEntry::new(item, quantity).with_mastered(mastered);
+                    let entry = InventoryEntry::new(item, quantity)
+                        .with_mastered(mastered)
+                        .with_equipped(equipped);
                     Ok(match rank {
                         Some(rank) => entry.with_rank(rank, max_rank),
                         None => entry,
@@ -523,6 +535,21 @@ fn migrate_v3_to_v4(connection: &mut Connection) -> Result<(), StoreError> {
             token TEXT NOT NULL CHECK (length(trim(token)) > 0)
         );",
     )?;
+    transaction.pragma_update(None, "user_version", 4)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// Adds how many copies of a holding were installed in a build when it was read.
+///
+/// Every existing row is unknown rather than zero: nothing stored before this migration was ever
+/// measured, and zero would mark every copy free to sell. The next sync fills it in.
+fn migrate_v4_to_v5(connection: &mut Connection) -> Result<(), StoreError> {
+    let transaction = connection.transaction()?;
+    transaction.execute(
+        "ALTER TABLE inventory ADD COLUMN equipped INTEGER CHECK (equipped IS NULL OR equipped >= 0)",
+        [],
+    )?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     validate_schema(&transaction)?;
     transaction.commit()?;
@@ -550,6 +577,7 @@ fn validate_schema(connection: &Connection) -> Result<(), StoreError> {
             ("image_name", "TEXT", false, 0),
             ("rank", "INTEGER", false, 0),
             ("max_rank", "INTEGER", false, 0),
+            ("equipped", "INTEGER", false, 0),
         ],
     )?;
     validate_table(
@@ -807,8 +835,9 @@ fn expect_text(value: Value, item_id: &str, field: &'static str) -> Result<Strin
     }
 }
 
-/// A stored rank, or nothing for the unranked stack and for everything that cannot be ranked.
-fn expect_optional_rank(
+/// A stored count that may be absent: a rank or ceiling the row has none of, or an equipped count
+/// no read established.
+fn expect_optional_u32(
     value: Value,
     item_id: &str,
     field: &'static str,

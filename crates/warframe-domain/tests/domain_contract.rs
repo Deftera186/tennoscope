@@ -396,3 +396,29 @@ fn a_reward_without_a_mastery_mark_omits_the_field_and_reads_back() {
         None
     );
 }
+
+/// The Unequipped filter shows every copy of a row read `Some(0)` as free to sell, so an entry from
+/// before the app counted (`None`) must not come back from the wire as zero.
+#[test]
+fn a_known_zero_in_use_stays_distinct_from_unknown() {
+    let unknown = InventoryEntry::new(item("lex", "Lex"), 2);
+    let none_in_use = unknown.clone().with_equipped(Some(0));
+
+    let wire = serde_json::to_value(&none_in_use).unwrap();
+    assert_eq!(wire["equipped"], json!(0));
+    assert_eq!(
+        serde_json::from_value::<InventoryEntry>(wire)
+            .unwrap()
+            .equipped,
+        Some(0)
+    );
+
+    let wire = serde_json::to_value(&unknown).unwrap();
+    assert!(wire.get("equipped").is_none());
+    assert_eq!(
+        serde_json::from_value::<InventoryEntry>(wire)
+            .unwrap()
+            .equipped,
+        None
+    );
+}
