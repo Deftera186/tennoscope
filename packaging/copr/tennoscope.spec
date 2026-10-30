@@ -3,7 +3,7 @@ Name:           tennoscope
 # tarball, so an untagged version has nothing to build, and rpm.vercmp sorts
 # v0.12.1-rc1 above v0.12.0, which would have dnf serving a release candidate
 # as the newest build in a channel documented as the stable install path.
-Version:        0.13.1
+Version:        0.14.0
 Release:        1%{?dist}
 Summary:        Local-first Warframe collection and relic companion
 License:        GPL-3.0-only
@@ -100,6 +100,8 @@ pnpm --dir app check
 %{_datadir}/doc/%{name}/THIRD_PARTY_NOTICES.md
 
 %changelog
+* Fri Oct 30 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.14.0-1
+- Track the newest stable tag, v0.14.0
 * Sun Oct 11 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.13.1-1
 - Track the newest stable tag, v0.13.1
 * Fri Oct 02 2026 Deftera186 <https://github.com/Deftera186/tennoscope/issues> - 0.13.0-1

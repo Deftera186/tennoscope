@@ -14,6 +14,8 @@ see the difference.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-30
+
 ### Added
 
 - **A Mastery tab lists every masterable item the account has yet to master.** Under Full
@@ -808,7 +810,8 @@ First release.
 - Raw inventory responses are validated in memory and are not persisted.
 - No telemetry, no analytics, no remote account, no secret persistence.
 
-[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/Deftera186/tennoscope/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/Deftera186/tennoscope/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/Deftera186/tennoscope/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/Deftera186/tennoscope/compare/v0.12.1-rc1...v0.13.0
 [0.12.1-rc1]: https://github.com/Deftera186/tennoscope/compare/v0.12.0...v0.12.1-rc1
