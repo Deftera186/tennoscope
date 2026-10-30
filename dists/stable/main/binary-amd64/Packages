@@ -101,6 +101,23 @@ Description: Local-first Warframe collection and relic companion
  TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
 
 Package: tenno-scope
+Version: 0.14.0
+Architecture: amd64
+Maintainer: Deftera186
+Installed-Size: 45812
+Depends: libpipewire-0.3-0 | libpipewire-0.3-0t64, libwebkit2gtk-4.1-0, libgtk-3-0
+Recommends: tesseract-ocr, tesseract-ocr-eng, x11-utils
+Filename: pool/main/TennoScope_0.14.0_amd64.deb
+Size: 14852368
+MD5sum: 0c896ecc74a33f78906133add2247df0
+SHA1: 7c4f413b0067ebef587fff41a4cbc93bca7f4dec
+SHA256: f4d9230cdce684515db25d05a9e12d5c52e9d380d2e58d1d7754dbf54162a7a9
+Priority: optional
+Homepage: https://github.com/Deftera186/tennoscope
+Description: Local-first Warframe collection and relic companion
+ TennoScope reads a running Warframe process without modifying it and keeps a local copy of your collection. When a relic cracks it recognises the rewards on screen and prices them in platinum and ducats from warframe.market, counting only sellers who are online. No account, no telemetry, no Overwolf.
+
+Package: tenno-scope
 Version: 0.2.0
 Architecture: amd64
 Maintainer: Deftera186
