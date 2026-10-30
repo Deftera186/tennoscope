@@ -122,9 +122,10 @@ document: substitute the version you are cutting.
    - **APT.** Nothing to run: the workflow publishes the pool itself. Confirm the new `.deb` is in
      `dists/stable/main/binary-amd64/Packages` as
      [packaging/apt/README.md](packaging/apt/README.md) describes.
-   - **AppImage catalog.** Post `/retest` on the existing pull request in
-     [appimage.github.io](https://github.com/AppImage/appimage.github.io) so the listed AppImage
-     is the new one, and read the bot's verdict before calling the channel updated.
+
+   The AppImage catalog needs no per-release step. The one listing pull request in
+   [appimage.github.io](https://github.com/AppImage/appimage.github.io) was merged once, and its
+   test fetches whatever the latest GitHub release attaches, so it tracks new releases on its own.
 
 ## Packaging
 
